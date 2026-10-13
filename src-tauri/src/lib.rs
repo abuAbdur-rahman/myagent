@@ -106,6 +106,7 @@ pub fn run() {
             llm::list_models,
             llm::cancel_stream,
             llm::chat_stream,
+            llm::suggest_title,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

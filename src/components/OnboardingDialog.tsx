@@ -97,7 +97,7 @@ export function OnboardingDialog() {
               <span className="grid h-14 w-14 place-items-center rounded-full bg-accent text-accent-contrast">
                 <Asterisk size={28} />
               </span>
-              <h1 className="m-0 font-serif text-[28px] font-semibold">Welcome to myagent</h1>
+              <h1 className="m-0 font-serif text-[28px] font-semibold">Welcome to MyAgent</h1>
               <ul className="m-0 flex list-none flex-col gap-2.5 p-0 text-left text-sm">
                 <li className="flex items-center gap-2.5">
                   <KeyRound size={16} className="text-accent" /> Bring your own keys

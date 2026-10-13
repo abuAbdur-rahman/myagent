@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { applyCompactWindow, buildSystemPrompt } from "./context";
+import { applyCompactWindow, buildSystemPrompt, estimateContext } from "./context";
 import { toast } from "./toast";
 import { memoryInputSchema } from "./types";
 import { newId } from "./utils";
@@ -142,6 +142,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const reportError = useCallback((cause: unknown) => {
+    console.error(cause);
+    setError(api.formatInvokeError(cause));
+  }, []);
+
   const [connections, setConnections] = useState<Connection[]>([]);
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
     () => localStorage.getItem(ACTIVE_CONNECTION_KEY),
@@ -149,6 +154,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [model, setModelState] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
+  const [displayName, setDisplayNameState] = useState(
+    () => localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
+  );
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(
@@ -181,6 +189,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const connRef = useRef<Connection | null>(null);
   const projectRef = useRef<Project | null>(null);
+  const displayNameRef = useRef("");
   const modelRef = useRef(model);
   const convIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -203,6 +212,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     projectRef.current = activeProject;
   }, [activeProject]);
   useEffect(() => {
+    displayNameRef.current = displayName;
+  }, [displayName]);
+  useEffect(() => {
     modelRef.current = model;
   }, [model]);
   useEffect(() => {
@@ -211,6 +223,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  const conversationsRef = useRef<Conversation[]>([]);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
   useEffect(() => {
     globalMemoriesRef.current = globalMemories;
   }, [globalMemories]);
@@ -252,7 +268,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await refreshMemories();
         setConversations(await db.listConversations());
       } catch (e) {
-        setError(String(e));
+        reportError(e);
       } finally {
         setReady(true);
       }
@@ -370,9 +386,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [panelArtifact]);
 
   const setPanelTab = useCallback((tab: PanelTab) => setPanelTabState(tab), []);
-  const [displayName, setDisplayNameState] = useState(
-    () => localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
-  );
   const [settingsPage, setSettingsPage] = useState<string | null>(null);
 
   const refreshModels = useCallback(async () => {
@@ -395,7 +408,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       setModels([]);
-      setError(String(e));
+      reportError(e);
     } finally {
       setLoadingModels(false);
     }
@@ -571,7 +584,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       : db.deleteMessage(assistantId);
     persist
       .then(() => db.touchConversation(conversationId, {}))
-      .catch((e) => setError(String(e)));
+      .catch(reportError);
   }, []);
 
   const withSystem = useCallback(
@@ -580,6 +593,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         globalMemories: globalMemoriesRef.current,
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
+        userName: displayNameRef.current || undefined,
       });
       return [...(system ? [{ role: "system", content: system }] : []), ...turns];
     },
@@ -621,7 +635,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         );
       } catch (e) {
-        if (requestIdRef.current === requestId) setError(String(e));
+        if (requestIdRef.current === requestId) reportError(e);
       } finally {
         if (requestIdRef.current === requestId) {
           requestIdRef.current = null;
@@ -632,6 +646,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     },
     [finalize],
+  );
+
+  const resolveCompact = useCallback(
+    (conversationId: string | null, turns: { role: string; content: string }[]) => {
+      const conversation = conversationId
+        ? conversationsRef.current.find((c) => c.id === conversationId)
+        : undefined;
+      if (conversation?.compacted === 1) return true;
+      const system = buildSystemPrompt({
+        globalMemories: globalMemoriesRef.current,
+        project: projectRef.current,
+        projectMemories: projectMemoriesRef.current,
+        userName: displayNameRef.current || undefined,
+      });
+      if (estimateContext(turns, system).pct > 80) {
+        toast("Context is over 80% full — sending recent messages only.");
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
+  const maybeGenerateTitle = useCallback(
+    async (
+      conversationId: string,
+      provisionalTitle: string,
+      userText: string,
+      assistantText: string,
+    ) => {
+      const connection = connRef.current;
+      if (!connection || !modelRef.current || !assistantText.trim()) return;
+      try {
+        const title = await api.suggestTitle(
+          connection.base_url,
+          connection.id,
+          modelRef.current,
+          userText,
+          assistantText,
+        );
+        const trimmed = title.trim();
+        if (!trimmed) return;
+        if (
+          conversationsRef.current.find((c) => c.id === conversationId)?.title !==
+          provisionalTitle
+        ) {
+          return;
+        }
+        await db.touchConversation(conversationId, { title: trimmed });
+        setConversations((prev) =>
+          prev.map((c) => (c.id === conversationId ? { ...c, title: trimmed } : c)),
+        );
+      } catch {
+        // best-effort; the user-text title stays
+      }
+    },
+    [],
   );
 
   const sendMessage = useCallback(
@@ -652,6 +723,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       let conversationId = convIdRef.current;
       let assistantMsg: Message;
+      let provisionalTitle: string | null = null;
       try {
         if (!conversationId) {
           const created = await db.createConversation(
@@ -671,30 +743,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const current = conversations.find((c) => c.id === conversationId);
         if (!current || current.title === "New chat") {
-          const title = text.slice(0, 48) || "New chat";
-          await db.touchConversation(conversationId, { title, model: modelRef.current });
+          provisionalTitle = text.slice(0, 48) || "New chat";
+          await db.touchConversation(conversationId, {
+            title: provisionalTitle,
+            model: modelRef.current,
+          });
           setConversations((prev) =>
-            prev.map((c) => (c.id === conversationId ? { ...c, title } : c)),
+            prev.map((c) =>
+              c.id === conversationId ? { ...c, title: provisionalTitle as string } : c,
+            ),
           );
         } else {
           await db.touchConversation(conversationId, { model: modelRef.current });
         }
       } catch (e) {
-        setError(String(e));
+        reportError(e);
         return false;
       }
 
-      const payload = withSystem(
-        applyCompactWindow(
-          [...history, { role: "user", content: text }],
-          conversations.find((c) => c.id === conversationId)?.compacted === 1,
-        ),
-      );
+      const turns = [...history, { role: "user", content: text }];
+      const payload = withSystem(applyCompactWindow(turns, resolveCompact(conversationId, turns)));
 
       await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
+      if (provisionalTitle) {
+        void maybeGenerateTitle(conversationId, provisionalTitle, text, bufferRef.current);
+      }
       return true;
     },
-    [conversations, finalize, messages, streaming, streamTurn, withSystem],
+    [
+      conversations,
+      finalize,
+      messages,
+      streaming,
+      streamTurn,
+      withSystem,
+      resolveCompact,
+      maybeGenerateTitle,
+    ],
   );
 
   const regenerate = useCallback(async () => {
@@ -708,7 +793,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       await db.deleteMessage(dropped.id);
     } catch (e) {
-      setError(String(e));
+      reportError(e);
       return;
     }
     setMessages(kept);
@@ -716,7 +801,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       assistantMsg = await db.addMessage(conversationId, "assistant", "");
     } catch (e) {
-      setError(String(e));
+      reportError(e);
       return;
     }
     setMessages([...kept, assistantMsg]);
@@ -724,15 +809,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       conversationId,
       connection,
       modelRef.current,
-      withSystem(
-        applyCompactWindow(
-          kept,
-          conversations.find((c) => c.id === conversationId)?.compacted === 1,
-        ),
-      ),
+      withSystem(applyCompactWindow(kept, resolveCompact(conversationId, kept))),
       assistantMsg,
     );
-  }, [streaming, streamTurn, withSystem, conversations]);
+  }, [streaming, streamTurn, withSystem, resolveCompact]);
 
   const editAndResubmit = useCallback(
     async (userId: string, text: string): Promise<boolean> => {
@@ -745,7 +825,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await db.updateMessage(userId, trimmed);
         await db.truncateConversation(conversationId, userId);
       } catch (e) {
-        setError(String(e));
+        reportError(e);
         return false;
       }
       const kept = (await db.listMessages(conversationId)).filter(
@@ -755,7 +835,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         assistantMsg = await db.addMessage(conversationId, "assistant", "");
       } catch (e) {
-        setError(String(e));
+        reportError(e);
         return false;
       }
       setMessages([...kept, assistantMsg]);
@@ -763,17 +843,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         conversationId,
         connection,
         modelRef.current,
-        withSystem(
-          applyCompactWindow(
-            kept,
-            conversations.find((c) => c.id === conversationId)?.compacted === 1,
-          ),
-        ),
+        withSystem(applyCompactWindow(kept, resolveCompact(conversationId, kept))),
         assistantMsg,
       );
       return true;
     },
-    [conversations, streaming, streamTurn, withSystem],
+    [streaming, streamTurn, withSystem, resolveCompact],
   );
 
   const branchFrom = useCallback(
@@ -793,7 +868,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages(await db.listMessages(branched.id));
         toast("Branched into new chat");
       } catch (e) {
-        setError(String(e));
+        reportError(e);
       }
     },
     [conversations, streaming],
@@ -817,20 +892,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setActiveProjectId(projectId);
         setView("chat");
         setMessages([userMsg, assistantMsg]);
+        const firstTurns = [{ role: "user", content: trimmed }];
         await streamTurn(
           created.id,
           connection,
           modelRef.current,
-          withSystem([{ role: "user", content: trimmed }]),
+          withSystem(applyCompactWindow(firstTurns, resolveCompact(created.id, firstTurns))),
           assistantMsg,
         );
+        void maybeGenerateTitle(created.id, title, trimmed, bufferRef.current);
         return true;
       } catch (e) {
-        setError(String(e));
+        reportError(e);
         return false;
       }
     },
-    [streaming, streamTurn, withSystem],
+    [streaming, streamTurn, withSystem, resolveCompact, maybeGenerateTitle],
   );
 
   const clearActiveConversation = useCallback(async () => {
@@ -841,7 +918,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages([]);
       await db.touchConversation(id, {});
     } catch (e) {
-      setError(String(e));
+      reportError(e);
     }
   }, []);
 
@@ -852,7 +929,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         prev.map((c) => (c.id === id ? { ...c, compacted: value ? 1 : 0 } : c)),
       );
     } catch (e) {
-      setError(String(e));
+      reportError(e);
     }
   }, []);
 
@@ -873,7 +950,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!id) return;
     requestIdRef.current = null;
     setStreaming(false);
-    api.cancelStream(id).catch((e) => setError(String(e)));
+    api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
     const conversationId = convIdRef.current;
     assistantMsgIdRef.current = null;

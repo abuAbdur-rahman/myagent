@@ -64,7 +64,7 @@ export function TitleBar() {
     >
       <div data-tauri-drag-region className="flex min-w-0 max-w-[60%] items-center gap-2 pl-2.5">
         <Asterisk size={16} className="shrink-0 text-accent" aria-hidden="true" />
-        <b className="text-[13px]">myagent</b>
+        <b className="text-[13px]">MyAgent</b>
         <span className="truncate text-[13px] text-muted">· {title}</span>
       </div>
       <div data-tauri-drag-region className="h-full flex-1" />

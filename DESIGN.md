@@ -86,7 +86,7 @@ components:
     padding: "8px 10px"
 ---
 
-# Design System: myagent
+# Design System: MyAgent
 
 ## Overview
 

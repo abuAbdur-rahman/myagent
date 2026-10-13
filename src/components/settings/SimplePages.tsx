@@ -340,7 +340,7 @@ export function AboutPage() {
   return (
     <div>
       <SettingRow label="App name" description="">
-        <span className="text-sm">myagent</span>
+        <span className="text-sm">MyAgent</span>
       </SettingRow>
       <SettingRow label="Version" description="">
         <span className="text-sm">0.1.0</span>

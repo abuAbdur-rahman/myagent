@@ -31,6 +31,24 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
 }
 
+#[derive(Deserialize)]
+pub struct TitleRequest {
+    pub base_url: String,
+    pub connection_id: String,
+    pub model: String,
+    pub user_text: String,
+    pub assistant_text: String,
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    let truncated: String = text.chars().take(max).collect();
+    if text.chars().count() > max {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
 fn endpoint(base_url: &str, path: &str) -> String {
     format!(
         "{}/{}",
@@ -87,6 +105,59 @@ pub async fn list_models(
 #[tauri::command]
 pub fn cancel_stream(request_id: String, state: State<'_, StreamState>) -> AppResult<()> {
     state.cancel(&request_id)
+}
+
+#[tauri::command]
+pub async fn suggest_title(
+    req: TitleRequest,
+    client: State<'_, reqwest::Client>,
+) -> AppResult<String> {
+    let key = vault::get_api_key(&req.connection_id)?;
+    let body = serde_json::json!({
+        "model": req.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Title this conversation in 6 words or fewer. Plain text only: no quotes, no punctuation, no preamble.",
+            },
+            {
+                "role": "user",
+                "content": format!(
+                    "User asked: {}\n\nAssistant answered (excerpt): {}",
+                    truncate_chars(req.user_text.trim(), 300),
+                    truncate_chars(req.assistant_text.trim(), 500),
+                ),
+            },
+        ],
+        "max_tokens": 24,
+        "temperature": 0.3,
+        "stream": false,
+    });
+
+    let resp = client
+        .post(endpoint(&req.base_url, "chat/completions"))
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+
+    let value: serde_json::Value = resp.json().await?;
+    let title = value["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'' || c == '.' || c == ':')
+        .trim()
+        .to_string();
+    let title: String = title.chars().take(60).collect();
+    if title.is_empty() {
+        return Err(AppError::Upstream("empty title".to_string()));
+    }
+    Ok(title)
 }
 
 #[tauri::command]

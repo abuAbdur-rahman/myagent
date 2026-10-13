@@ -4,18 +4,17 @@ export interface Artifact {
   code: string;
 }
 
-const FENCE = /```([\w+-]*)\n([\s\S]*?)```/g;
+const HTML_FENCE = /```(html|htm)\n([\s\S]*?)```/g;
 
 export function extractArtifacts(content: string): Artifact[] {
   const artifacts: Artifact[] = [];
   let match: RegExpExecArray | null;
   let index = 0;
-  FENCE.lastIndex = 0;
-  while ((match = FENCE.exec(content)) !== null) {
-    const lang = match[1] || "text";
+  HTML_FENCE.lastIndex = 0;
+  while ((match = HTML_FENCE.exec(content)) !== null) {
     const code = match[2].trimEnd();
     if (code.length < 40) continue;
-    artifacts.push({ index: index++, lang, code });
+    artifacts.push({ index: index++, lang: "html", code });
   }
   return artifacts;
 }

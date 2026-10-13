@@ -9,7 +9,16 @@ export interface ContextInput {
   globalMemories: Memory[];
   project: Project | null;
   projectMemories: Memory[];
+  userName?: string;
 }
+
+const IDENTITY_LINES = [
+  "You are the assistant inside MyAgent, a local-first Windows desktop chat app.",
+  "The user's API keys and chats never leave this machine; there is no cloud account.",
+  "Answer with Markdown. Wrap code in fenced blocks with a language tag.",
+  "For an interactive deliverable, emit ONE fenced html block with a complete self-contained page; it opens in a preview pane.",
+  "Durable user facts use short lines; the client stores and re-sends them, so never invent memories.",
+];
 
 function renderMemories(memories: Memory[]): string {
   return memories
@@ -21,7 +30,12 @@ function renderMemories(memories: Memory[]): string {
 }
 
 export function buildSystemPrompt(input: ContextInput): string | null {
-  const blocks: string[] = [];
+  const blocks: string[] = [
+    input.userName?.trim()
+      ? `${IDENTITY_LINES[0]} The user's name is ${input.userName.trim()}.`
+      : IDENTITY_LINES[0],
+    ...IDENTITY_LINES.slice(1),
+  ];
 
   const global = renderMemories(input.globalMemories);
   if (global) {

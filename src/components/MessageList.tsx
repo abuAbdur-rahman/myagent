@@ -142,8 +142,11 @@ function AssistantMessage({
 }) {
   const { openArtifact } = useApp();
   const artifacts = useMemo(() => extractArtifacts(message.content), [message.content]);
+  const [showAllArtifacts, setShowAllArtifacts] = useState(false);
   const [rememberLabel, setRememberLabel] = useState("Remember");
   const busy = streaming && message.content.length === 0;
+  const visibleArtifacts = showAllArtifacts ? artifacts : artifacts.slice(0, 3);
+  const hiddenCount = artifacts.length - visibleArtifacts.length;
 
   const remember = async () => {
     try {
@@ -178,26 +181,37 @@ function AssistantMessage({
         )}
       </div>
       {!busy && (
-        <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
-            <Copy size={14} />
-          </ActionButton>
-          {isLast && <RegenButton />}
-          <BranchButton messageId={message.id} />
-          {artifacts.map((artifact) => (
-            <Button
-              key={artifact.index}
-              variant="default"
-              size="sm"
-              onClick={() => openArtifact(artifact)}
-            >
-              Artifact · {artifact.lang}
+        <>
+          <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
+              <Copy size={14} />
+            </ActionButton>
+            {isLast && <RegenButton />}
+            <BranchButton messageId={message.id} />
+            <Button variant="ghost" size="sm" onClick={() => void remember()}>
+              {rememberLabel}
             </Button>
-          ))}
-          <Button variant="ghost" size="sm" onClick={() => void remember()}>
-            {rememberLabel}
-          </Button>
-        </div>
+          </div>
+          {artifacts.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {visibleArtifacts.map((artifact, position) => (
+                <Button
+                  key={artifact.index}
+                  variant="default"
+                  size="sm"
+                  onClick={() => openArtifact(artifact)}
+                >
+                  {artifacts.length > 1 ? `${position + 1} · ` : ""}Artifact · {artifact.lang}
+                </Button>
+              ))}
+              {hiddenCount > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setShowAllArtifacts(true)}>
+                  +{hiddenCount} more
+                </Button>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

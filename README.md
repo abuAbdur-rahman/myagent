@@ -1,4 +1,4 @@
-# myagent
+# MyAgent
 
 A Windows-only desktop chat client with bring-your-own-key (BYOK) providers.
 
