@@ -5,10 +5,11 @@ import { Composer } from "./Composer";
 const SUGGESTIONS = ["Explain a concept", "Draft an email", "Debug my code", "Plan a project"];
 
 function greeting(name: string): string {
+  const who = name.trim() || "there";
   const hour = new Date().getHours();
   if (hour >= 18) return "Evening thoughts";
-  if (hour < 12) return `Good morning, ${name}`;
-  return `Good afternoon, ${name}`;
+  if (hour < 12) return `Good morning, ${who}`;
+  return `Good afternoon, ${who}`;
 }
 
 export function Welcome() {
