@@ -17,6 +17,7 @@ import {
 import { useApp } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { extractArtifacts } from "../lib/artifacts";
+import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
 import { Button } from "./ui";
 import type { Message } from "../lib/types";
@@ -26,13 +27,13 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   return (
     <div
       role="alert"
-      className="flex items-start justify-between gap-3 rounded-control border border-destroy/60 bg-destroy/10 px-3 py-2 text-sm text-alarm"
+      className="flex items-start justify-between gap-3 rounded-control border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger"
     >
       <span className="break-words">{message}</span>
       <button
         type="button"
         onClick={onDismiss}
-        className="rounded-control px-1 text-alarm hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        className="rounded-control px-1 text-danger hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         aria-label="Dismiss error"
       >
         ✕
@@ -43,11 +44,20 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
 
 function ToolIcon({ name }: { name: string }) {
   const props = { size: 14 } as const;
-  if (name === "run_powershell") return <Terminal {...props} />;
-  if (name === "get_time") return <Clock {...props} />;
-  if (name === "save_artifact") return <FileCode {...props} />;
-  if (name === "remember" || name === "recall_memory") return <FileText {...props} />;
-  return <Wrench {...props} />;
+  if (!isKnownTool(name)) return <Wrench {...props} />;
+  switch (name) {
+    case "run_powershell":
+      return <Terminal {...props} />;
+    case "get_time":
+      return <Clock {...props} />;
+    case "save_artifact":
+      return <FileCode {...props} />;
+    case "remember":
+    case "recall_memory":
+      return <FileText {...props} />;
+    default:
+      return <Wrench {...props} />;
+  }
 }
 
 function ToolLogView() {
@@ -61,13 +71,11 @@ function ToolLogView() {
       {toolLog.map((entry) => (
         <details key={entry.id} className="text-[13px]">
           <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
-            {entry.status === "running" ? (
+            {entry.status === "running" && (
               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent" />
-            ) : entry.status === "ok" ? (
-              <Check size={14} className="text-success" />
-            ) : (
-              <X size={14} className="text-danger" />
             )}
+            {entry.status === "ok" && <Check size={14} className="text-success" />}
+            {entry.status === "err" && <X size={14} className="text-danger" />}
             <ToolIcon name={entry.name} />
             <span className="truncate">{entry.summary}</span>
           </summary>

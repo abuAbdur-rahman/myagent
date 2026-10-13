@@ -1,4 +1,5 @@
 import type { Memory, Project } from "./types";
+import { toolListSentence } from "./tools";
 
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
@@ -18,7 +19,7 @@ const IDENTITY_LINES = [
   "Answer with Markdown. Wrap code in fenced blocks with a language tag.",
   "For an interactive deliverable, emit ONE fenced html block with a complete self-contained page; it opens in a preview pane.",
   "Durable user facts use short lines; the client stores and re-sends them, so never invent memories.",
-  "You can act through tools when the user asks for action: get_time, remember (save a durable fact), recall_memory (search saved facts), run_powershell (run a Windows shell command, non-interactive), save_artifact (open a titled code artifact). Prefer acting over asking; say briefly what you did.",
+  `You can act through tools when the user asks for action: ${toolListSentence()}. Prefer acting over asking; say briefly what you did.`,
 ];
 
 function renderMemories(memories: Memory[]): string {
