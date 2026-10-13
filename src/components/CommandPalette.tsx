@@ -69,7 +69,7 @@ export function CommandPalette({
         section: "Chats" as const,
         label: c.title,
         icon: <MessageSquare size={16} />,
-        run: () => void selectConversation(c.id),
+        run: () => void selectConversation(c.id).catch(() => undefined),
       })),
       ...projects.map((p) => ({
         section: "Projects" as const,
@@ -99,7 +99,10 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === "ArrowDown") {
         e.preventDefault();
         setIndex((i) => Math.min(i + 1, filtered.length - 1));
       } else if (e.key === "ArrowUp") {

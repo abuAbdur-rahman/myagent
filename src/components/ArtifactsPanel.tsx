@@ -1,10 +1,9 @@
-import { Code, Copy, Download, Eye, X } from "lucide-react";
+import { BookOpen, Code, Copy, Download, Eye, X } from "lucide-react";
 import { useApp, type PanelTab } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { Badge } from "./ui";
-import { copyText, downloadText } from "../lib/utils";
+import { cn, copyText, downloadText } from "../lib/utils";
 import { toast } from "../lib/toast";
-import { cn } from "../lib/utils";
 
 const EXTENSIONS: Record<string, string> = {
   html: "html",
@@ -116,18 +115,20 @@ export function ArtifactsPanel() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "preview" ? (
+        {activeTab === "preview" && (
           <iframe
             sandbox="allow-scripts"
             srcDoc={panelArtifact.code}
             title="Artifact preview"
             className="h-full w-full flex-1 border-0 bg-white"
           />
-        ) : activeTab === "doc" ? (
+        )}
+        {activeTab === "doc" && (
           <div className="flex-1 overflow-auto px-6 py-5">
             <Markdown content={panelArtifact.code} />
           </div>
-        ) : (
+        )}
+        {activeTab !== "preview" && activeTab !== "doc" && (
           <pre className="m-0 flex-1 overflow-auto p-3.5 font-mono text-[13px] leading-relaxed">
             <code>{panelArtifact.code}</code>
           </pre>
@@ -135,11 +136,17 @@ export function ArtifactsPanel() {
       </div>
 
       <div className="flex-none border-t border-border px-3.5 py-2 text-xs text-muted">
-        {activeTab === "preview" ? (
+        {activeTab === "preview" && (
           <span className="inline-flex items-center gap-1.5">
             <Eye size={12} /> Sandboxed preview
           </span>
-        ) : (
+        )}
+        {activeTab === "doc" && (
+          <span className="inline-flex items-center gap-1.5">
+            <BookOpen size={12} /> Rendered document
+          </span>
+        )}
+        {activeTab !== "preview" && activeTab !== "doc" && (
           <span className="inline-flex items-center gap-1.5">
             <Code size={12} /> Source view
           </span>

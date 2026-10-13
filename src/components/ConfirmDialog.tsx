@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Button } from "./ui";
 
 interface ConfirmOpts {
@@ -22,6 +22,9 @@ function emit() {
 
 export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
   return new Promise((resolve) => {
+    if (pending) {
+      pending.resolve(false);
+    }
     pending = { opts, resolve };
     emit();
   });
@@ -46,21 +49,17 @@ function settle(value: boolean) {
 }
 
 export function ConfirmHost() {
-  const [current, setCurrent] = useState<PendingConfirm | null>(null);
+  const current = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const okRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(
-    () =>
-      subscribe(() => {
-        setCurrent(snapshot());
-      }),
-    [],
-  );
+  useEffect(() => {
+    okRef.current?.focus();
+  }, [current]);
 
   useEffect(() => {
     if (!current) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") settle(false);
-      if (e.key === "Enter") settle(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -89,7 +88,11 @@ export function ConfirmHost() {
           <Button variant="default" onClick={() => settle(false)}>
             Cancel
           </Button>
-          <Button variant={opts.danger ? "dangerFill" : "primary"} onClick={() => settle(true)}>
+          <Button
+            ref={okRef}
+            variant={opts.danger ? "dangerFill" : "primary"}
+            onClick={() => settle(true)}
+          >
             {opts.ok ?? "Confirm"}
           </Button>
         </div>

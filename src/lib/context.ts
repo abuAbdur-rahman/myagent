@@ -3,7 +3,7 @@ import type { Memory, Project } from "./types";
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const DEFAULT_MODEL_CONTEXT = 128_000;
-const COMPACT_WINDOW = 4;
+export const COMPACT_WINDOW = 4;
 
 export interface ContextInput {
   globalMemories: Memory[];

@@ -45,6 +45,13 @@ interface PanelArtifact {
   code: string;
 }
 
+function defaultPanelTab(lang: string): PanelTab {
+  const normalized = lang.toLowerCase();
+  if (normalized === "html" || normalized === "htm") return "preview";
+  if (normalized === "md" || normalized === "markdown") return "doc";
+  return "code";
+}
+
 interface AppContextValue {
   ready: boolean;
   error: string | null;
@@ -277,7 +284,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [model]);
 
   useEffect(() => {
-    localStorage.setItem(THEME_KEY, theme);    const apply = () => {
+    localStorage.setItem(THEME_KEY, theme);
+    const apply = () => {
       const dark =
         theme === "dark" ||
         (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -345,13 +353,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
   const [panelTab, setPanelTabState] = useState<PanelTab>("code");
-
-  const defaultPanelTab = (lang: string): PanelTab => {
-    const normalized = lang.toLowerCase();
-    if (normalized === "html" || normalized === "htm") return "preview";
-    if (normalized === "md" || normalized === "markdown") return "doc";
-    return "code";
-  };
 
   const openArtifact = useCallback((artifact: PanelArtifact) => {
     setPanelArtifact(artifact);
@@ -832,7 +833,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [streaming, streamTurn, withSystem],
   );
 
-  const clearActiveConversation = useCallback(async () => {    const id = convIdRef.current;
+  const clearActiveConversation = useCallback(async () => {
+    const id = convIdRef.current;
     if (!id) return;
     try {
       await db.clearConversation(id);

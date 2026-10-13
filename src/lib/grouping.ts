@@ -52,7 +52,11 @@ export function projectColor(projectId: string): string {
 }
 
 export function timeAgo(timestamp: number, now = Date.now()): string {
-  const days = Math.round((now - timestamp) / DAY);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfTimestamp = new Date(timestamp);
+  startOfTimestamp.setHours(0, 0, 0, 0);
+  const days = Math.round((startOfToday.getTime() - startOfTimestamp.getTime()) / DAY);
   if (days <= 0) return "today";
   if (days === 1) return "yesterday";
   if (days < 7) return `${days} days ago`;

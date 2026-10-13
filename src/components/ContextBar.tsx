@@ -1,7 +1,7 @@
 import { useApp } from "../lib/store";
-import { estimateContext } from "../lib/context";
-import { cn } from "../lib/utils";
+import { buildSystemPrompt, COMPACT_WINDOW, estimateContext } from "../lib/context";
 import { Button } from "./ui";
+import { cn } from "../lib/utils";
 
 export function ContextBar() {
   const {
@@ -11,6 +11,9 @@ export function ContextBar() {
     streaming,
     compactActive,
     uncompactActive,
+    globalMemories,
+    activeProject,
+    projectMemories,
   } = useApp();
 
   const conversation = conversations.find((c) => c.id === activeConversationId) ?? null;
@@ -28,28 +31,45 @@ export function ContextBar() {
     );
   }
 
-  const info = estimateContext(messages, null);
-  const tone = info.pct > 90 ? "danger" : info.pct > 70 ? "warn" : "";
+  const system = buildSystemPrompt({
+    globalMemories,
+    project: activeProject,
+    projectMemories,
+  });
+  const info = estimateContext(messages, system);
+
+  let tone = "";
+  if (info.pct > 90) {
+    tone = "danger";
+  } else if (info.pct > 70) {
+    tone = "warn";
+  }
+
+  let labelClass = "";
+  if (tone === "danger") {
+    labelClass = "text-danger";
+  } else if (tone === "warn") {
+    labelClass = "text-warn";
+  }
+
+  let fillClass = "bg-accent";
+  if (tone === "danger") {
+    fillClass = "bg-danger";
+  } else if (tone === "warn") {
+    fillClass = "bg-warn";
+  }
 
   return (
     <div className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted">
-      <span className={cn(tone === "danger" && "text-danger", tone === "warn" && "text-warn")}>
-        Context {info.pct}% used
-      </span>
+      <span className={cn(labelClass)}>Context {info.pct}% used</span>
       <div className="h-1 max-w-[240px] flex-1 overflow-hidden rounded bg-active">
-        <div
-          className={cn(
-            "h-full",
-            tone === "danger" ? "bg-danger" : tone === "warn" ? "bg-warn" : "bg-accent",
-          )}
-          style={{ width: `${info.pct}%` }}
-        />
+        <div className={cn("h-full", fillClass)} style={{ width: `${info.pct}%` }} />
       </div>
       <span className="flex-1" />
       <Button
         size="sm"
         variant="default"
-        disabled={streaming || messages.length < 3}
+        disabled={streaming || messages.length <= COMPACT_WINDOW}
         onClick={() => void compactActive()}
       >
         Compact

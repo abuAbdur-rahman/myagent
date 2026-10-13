@@ -23,6 +23,7 @@ export function ChatHeader() {
     model,
     messages,
     togglePanel,
+    panelArtifact,
   } = useApp();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
@@ -187,8 +188,9 @@ export function ChatHeader() {
       )}
       <IconButton
         label="Toggle artifact panel"
-        title="Artifacts (Ctrl+Shift+A)"
+        title={panelArtifact ? "Artifacts (Ctrl+Shift+A)" : "No artifacts yet"}
         onClick={togglePanel}
+        disabled={!panelArtifact}
       >
         <PanelRight size={16} />
       </IconButton>

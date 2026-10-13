@@ -12,8 +12,14 @@ interface ToastItem {
 let nextId = 1;
 const items = new Map<number, ToastItem>();
 const listeners = new Set<() => void>();
+let snapshot: ToastItem[] = [];
+
+function rebuild() {
+  snapshot = [...items.values()];
+}
 
 function emit() {
+  rebuild();
   listeners.forEach((listener) => listener());
 }
 
@@ -40,5 +46,5 @@ export function subscribeToasts(listener: () => void) {
 }
 
 export function getToasts(): ToastItem[] {
-  return [...items.values()];
+  return snapshot;
 }

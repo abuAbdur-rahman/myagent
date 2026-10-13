@@ -70,6 +70,10 @@ export function Composer() {
     : [];
 
   useEffect(() => {
+    setSlashIndex(0);
+  }, [composerDraft]);
+
+  useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
@@ -78,15 +82,15 @@ export function Composer() {
   }, [composerDraft]);
 
   const canSend =
-    (composerDraft.trim().length > 0 && !!activeConnection && !!model && !streaming) ||
-    streaming;
+    !streaming && !!activeConnection && !!model && composerDraft.trim().length > 0;
 
   const submit = async () => {
     const text = composerDraft.trim();
-    if (!text || streaming) return;
-    if (!activeConnection || !model) return;
-    setComposerDraft("");
-    await sendMessage(text);
+    if (!canSend) return;
+    const accepted = await sendMessage(text);
+    if (accepted) {
+      setComposerDraft("");
+    }
   };
 
   const runSlash = (name: string) => {
@@ -116,10 +120,15 @@ export function Composer() {
       }
       if (e.key === "Enter") {
         e.preventDefault();
-        runSlash(slashItems[slashIndex][0]);
+        runSlash(slashItems[Math.min(slashIndex, slashItems.length - 1)][0]);
         return;
       }
       if (e.key === "Escape") {
+        if (streaming) {
+          e.preventDefault();
+          stopStream();
+          return;
+        }
         setComposerDraft("");
         return;
       }
@@ -212,7 +221,7 @@ export function Composer() {
               type="button"
               onClick={() => void submit()}
               aria-label="Send"
-              disabled={!canSend || !composerDraft.trim()}
+              disabled={!canSend}
               className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-accent-contrast disabled:bg-active disabled:text-muted"
             >
               <ArrowUp size={16} />

@@ -6,12 +6,14 @@ const SUGGESTIONS = ["Explain a concept", "Draft an email", "Debug my code", "Pl
 
 function greeting(name: string): string {
   const hour = new Date().getHours();
-  const part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Evening thoughts";
-  return part === "Evening thoughts" ? part : `${part}, ${name || "there"}`;
+  if (hour >= 18) return "Evening thoughts";
+  if (hour < 12) return `Good morning, ${name}`;
+  return `Good afternoon, ${name}`;
 }
 
 export function Welcome() {
   const { displayName, setComposerDraft } = useApp();
+  const heading = displayName ? `Hey there, ${displayName}` : greeting("");
 
   const pick = (text: string) => {
     setComposerDraft(text);
@@ -25,7 +27,7 @@ export function Welcome() {
           <Asterisk size={24} aria-hidden="true" />
         </div>
         <h1 className="mb-1 mt-2.5 font-serif text-[28px] font-semibold">
-          {displayName ? `Hey there, ${displayName}` : greeting(displayName)}
+          {heading}
         </h1>
         <p className="mb-5 text-muted">What can I help with?</p>
         <div className="text-left">
