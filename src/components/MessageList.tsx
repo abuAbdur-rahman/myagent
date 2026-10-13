@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useApp } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { extractArtifacts, type Artifact } from "../lib/artifacts";
@@ -29,17 +29,27 @@ function MessageItem({
   message,
   streaming,
   onOpenArtifact,
+  onRemember,
 }: {
   message: Message;
   streaming: boolean;
   onOpenArtifact: (artifact: Artifact) => void;
+  onRemember: (content: string) => Promise<void>;
 }) {
   const isAssistant = message.role === "assistant";
   const artifacts = useMemo(
     () => (isAssistant ? extractArtifacts(message.content) : []),
     [isAssistant, message.content],
   );
+  const [remembered, setRemembered] = useState(false);
   const emptyStreaming = isAssistant && message.content.length === 0 && streaming;
+  const hasContent = message.content.length > 0;
+
+  const remember = async () => {
+    await onRemember(message.content);
+    setRemembered(true);
+    setTimeout(() => setRemembered(false), 1500);
+  };
 
   let body: ReactNode;
   if (emptyStreaming) {
@@ -72,8 +82,8 @@ function MessageItem({
         {body}
       </div>
 
-      {artifacts.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
+      {isAssistant && hasContent && !streaming && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           {artifacts.map((artifact) => (
             <Button
               key={artifact.index}
@@ -84,6 +94,9 @@ function MessageItem({
               Artifact · {artifact.lang}
             </Button>
           ))}
+          <Button variant="ghost" size="sm" onClick={() => void remember()}>
+            {remembered ? "Remembered" : "Remember"}
+          </Button>
         </div>
       )}
     </div>
@@ -95,7 +108,7 @@ export function MessageList({
 }: {
   onOpenArtifact: (artifact: Artifact) => void;
 }) {
-  const { messages, streaming, error, clearError, ready } = useApp();
+  const { messages, streaming, error, clearError, ready, activeProject, addMemory } = useApp();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -104,6 +117,18 @@ export function MessageList({
       block: "end",
     });
   }, [messages, streaming]);
+
+  const remember = useCallback(
+    async (content: string) => {
+      await addMemory({
+        scope: activeProject ? "project" : "global",
+        project_id: activeProject ? activeProject.id : null,
+        kind: "summary",
+        content: content.slice(0, 2000),
+      });
+    },
+    [addMemory, activeProject],
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
@@ -129,6 +154,7 @@ export function MessageList({
           message={message}
           streaming={streaming}
           onOpenArtifact={onOpenArtifact}
+          onRemember={remember}
         />
       ))}
 

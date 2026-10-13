@@ -10,15 +10,24 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
+import { buildSystemPrompt } from "./context";
+import { memoryInputSchema } from "./types";
 import { newId } from "./utils";
 import type {
   Connection,
   ConnectionInput,
   Conversation,
+  Memory,
+  MemoryDraft,
+  MemoryInput,
+  MemoryScope,
+  Project,
+  ProjectInput,
   Message,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
+const ACTIVE_PROJECT_KEY = "activeProjectId";
 const MODEL_KEY = "model";
 
 interface AppContextValue {
@@ -39,6 +48,21 @@ interface AppContextValue {
   refreshModels: () => Promise<void>;
   model: string;
   setModel: (model: string) => void;
+
+  projects: Project[];
+  activeProject: Project | null;
+  activeProjectId: string | null;
+  selectProject: (id: string | null) => void;
+  saveProject: (input: ProjectInput, id?: string) => Promise<Project>;
+  removeProject: (id: string) => Promise<void>;
+
+  globalMemories: Memory[];
+  projectMemories: Memory[];
+  refreshMemories: () => Promise<void>;
+  loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
+  addMemory: (input: MemoryInput) => Promise<void>;
+  editMemory: (id: string, draft: MemoryDraft) => Promise<void>;
+  deleteMemory: (id: string) => Promise<void>;
 
   conversations: Conversation[];
   activeConversationId: string | null;
@@ -66,6 +90,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loadingModels, setLoadingModels] = useState(false);
   const [model, setModelState] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
 
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(
+    () => localStorage.getItem(ACTIVE_PROJECT_KEY),
+  );
+  const [globalMemories, setGlobalMemories] = useState<Memory[]>([]);
+  const [projectMemories, setProjectMemories] = useState<Memory[]>([]);
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -75,10 +106,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => connections.find((c) => c.id === activeConnectionId) ?? null,
     [connections, activeConnectionId],
   );
+  const activeProject = useMemo(
+    () => projects.find((p) => p.id === activeProjectId) ?? null,
+    [projects, activeProjectId],
+  );
 
   const connRef = useRef<Connection | null>(null);
+  const projectRef = useRef<Project | null>(null);
   const modelRef = useRef(model);
   const convIdRef = useRef<string | null>(null);
+  const globalMemoriesRef = useRef<Memory[]>([]);
+  const projectMemoriesRef = useRef<Memory[]>([]);
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
   const assistantMsgIdRef = useRef<string | null>(null);
@@ -87,11 +125,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     connRef.current = activeConnection;
   }, [activeConnection]);
   useEffect(() => {
+    projectRef.current = activeProject;
+  }, [activeProject]);
+  useEffect(() => {
     modelRef.current = model;
   }, [model]);
   useEffect(() => {
     convIdRef.current = activeConversationId;
   }, [activeConversationId]);
+  useEffect(() => {
+    globalMemoriesRef.current = globalMemories;
+  }, [globalMemories]);
+  useEffect(() => {
+    projectMemoriesRef.current = projectMemories;
+  }, [projectMemories]);
 
   const refreshConnections = useCallback(async () => {
     const rows = await db.listConnections();
@@ -101,10 +148,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const refreshProjects = useCallback(async () => {
+    const rows = await db.listProjects();
+    setProjects(rows);
+    setActiveProjectId((prev) =>
+      prev && rows.some((row) => row.id === prev) ? prev : null,
+    );
+  }, []);
+
+  const refreshMemories = useCallback(async () => {
+    const projectId = projectRef.current?.id ?? null;
+    const [global, project] = await Promise.all([
+      db.listMemories("global", null),
+      projectId ? db.listMemories("project", projectId) : Promise.resolve<Memory[]>([]),
+    ]);
+    setGlobalMemories(global);
+    setProjectMemories(project);
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
         await refreshConnections();
+        await refreshProjects();
+        await refreshMemories();
         setConversations(await db.listConversations());
       } catch (e) {
         setError(String(e));
@@ -112,7 +179,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setReady(true);
       }
     })();
-  }, [refreshConnections]);
+  }, [refreshConnections, refreshProjects, refreshMemories]);
 
   useEffect(() => {
     if (activeConnectionId) {
@@ -121,6 +188,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(ACTIVE_CONNECTION_KEY);
     }
   }, [activeConnectionId]);
+
+  useEffect(() => {
+    if (activeProjectId) {
+      localStorage.setItem(ACTIVE_PROJECT_KEY, activeProjectId);
+    } else {
+      localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    }
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (model) {
@@ -196,6 +271,78 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setModel = useCallback((value: string) => setModelState(value), []);
 
+  const selectProject = useCallback(
+    (id: string | null) => {
+      setActiveProjectId(id);
+      setActiveConversationId(null);
+      setMessages([]);
+      setError(null);
+    },
+    [],
+  );
+
+  const saveProject = useCallback(
+    async (input: ProjectInput, id?: string): Promise<Project> => {
+      let saved: Project;
+      if (id) {
+        const existing = projects.find((p) => p.id === id);
+        if (!existing) throw new Error("Project no longer exists");
+        saved = { ...existing, ...input };
+        await db.updateProject(saved);
+      } else {
+        saved = await db.createProject(input);
+        setActiveProjectId(saved.id);
+      }
+      await refreshProjects();
+      return saved;
+    },
+    [projects, refreshProjects],
+  );
+
+  const removeProject = useCallback(
+    async (id: string) => {
+      await db.deleteProject(id);
+      if (activeProjectId === id) setActiveProjectId(null);
+      await refreshProjects();
+      await refreshMemories();
+      setConversations(await db.listConversations());
+    },
+    [activeProjectId, refreshProjects, refreshMemories],
+  );
+
+  const saveMemoryToScope = useCallback(
+    async (input: MemoryInput) => {
+      const parsed = memoryInputSchema.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message ?? "Invalid memory");
+      }
+      await db.createMemory(parsed.data);
+      await refreshMemories();
+    },
+    [refreshMemories],
+  );
+
+  const editMemory = useCallback(
+    async (id: string, draft: MemoryDraft) => {
+      await db.updateMemory(id, draft.content.trim(), draft.kind);
+      await refreshMemories();
+    },
+    [refreshMemories],
+  );
+
+  const deleteMemory = useCallback(
+    async (id: string) => {
+      await db.deleteMemory(id);
+      await refreshMemories();
+    },
+    [refreshMemories],
+  );
+
+  const loadMemories = useCallback(
+    (scope: MemoryScope, projectId: string | null) => db.listMemories(scope, projectId),
+    [],
+  );
+
   const selectConversation = useCallback(async (id: string | null) => {
     setActiveConversationId(id);
     setError(null);
@@ -257,7 +404,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       let assistantMsg: Message;
       try {
         if (!conversationId) {
-          const created = await db.createConversation(connection.id, modelRef.current);
+          const created = await db.createConversation(
+            connection.id,
+            modelRef.current,
+            projectRef.current?.id ?? null,
+          );
           conversationId = created.id;
           setConversations((prev) => [created, ...prev]);
           setActiveConversationId(created.id);
@@ -283,10 +434,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const payload = [...history, { role: "user" as const, content: text }].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      const system = buildSystemPrompt({
+        globalMemories: globalMemoriesRef.current,
+        project: projectRef.current,
+        projectMemories: projectMemoriesRef.current,
+      });
+
+      const payload = [
+        ...(system ? [{ role: "system" as const, content: system }] : []),
+        ...history,
+        { role: "user" as const, content: text },
+      ].map((m) => ({ role: m.role, content: m.content }));
 
       const requestId = newId();
       requestIdRef.current = requestId;
@@ -358,6 +516,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshModels,
     model,
     setModel,
+    projects,
+    activeProject,
+    activeProjectId,
+    selectProject,
+    saveProject,
+    removeProject,
+    globalMemories,
+    projectMemories,
+    refreshMemories,
+    loadMemories,
+    addMemory: saveMemoryToScope,
+    editMemory,
+    deleteMemory,
     conversations,
     activeConversationId,
     selectConversation,

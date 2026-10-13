@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::ipc::Channel;
 use tauri::State;
+use tauri::ipc::Channel;
 use tokio::sync::Notify;
 
 use crate::error::{AppError, AppResult};
@@ -72,7 +72,11 @@ pub async fn list_models(
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(str::to_string))
+                .filter_map(|item| {
+                    item.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(str::to_string)
+                })
                 .collect()
         })
         .unwrap_or_default();
