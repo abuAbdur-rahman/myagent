@@ -12,8 +12,9 @@ export interface ContextInput {
 function renderMemories(memories: Memory[]): string {
   return memories
     .slice(0, MAX_MEMORIES)
-    .map((memory) => `- (${memory.kind}) ${memory.content.trim()}`)
-    .filter((line) => line.length > `- (${"note"}) `.length)
+    .map((memory) => ({ kind: memory.kind, content: memory.content.trim() }))
+    .filter(({ content }) => content.length > 0)
+    .map(({ kind, content }) => `- (${kind}) ${content}`)
     .join("\n");
 }
 

@@ -41,15 +41,32 @@ function MessageItem({
     () => (isAssistant ? extractArtifacts(message.content) : []),
     [isAssistant, message.content],
   );
-  const [remembered, setRemembered] = useState(false);
+  const [rememberStatus, setRememberStatus] = useState<"idle" | "saved" | "failed">("idle");
+  const rememberTimer = useRef<number | null>(null);
   const emptyStreaming = isAssistant && message.content.length === 0 && streaming;
   const hasContent = message.content.length > 0;
 
+  useEffect(
+    () => () => {
+      if (rememberTimer.current !== null) window.clearTimeout(rememberTimer.current);
+    },
+    [],
+  );
+
   const remember = async () => {
-    await onRemember(message.content);
-    setRemembered(true);
-    setTimeout(() => setRemembered(false), 1500);
+    try {
+      await onRemember(message.content);
+      setRememberStatus("saved");
+    } catch {
+      setRememberStatus("failed");
+    }
+    if (rememberTimer.current !== null) window.clearTimeout(rememberTimer.current);
+    rememberTimer.current = window.setTimeout(() => setRememberStatus("idle"), 1500);
   };
+
+  let rememberLabel = "Remember";
+  if (rememberStatus === "saved") rememberLabel = "Remembered";
+  else if (rememberStatus === "failed") rememberLabel = "Remember failed";
 
   let body: ReactNode;
   if (emptyStreaming) {
@@ -95,7 +112,7 @@ function MessageItem({
             </Button>
           ))}
           <Button variant="ghost" size="sm" onClick={() => void remember()}>
-            {remembered ? "Remembered" : "Remember"}
+            {rememberLabel}
           </Button>
         </div>
       )}

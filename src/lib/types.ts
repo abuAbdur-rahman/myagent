@@ -86,7 +86,7 @@ export const memoryInputSchema = memorySchema.omit({
 });
 export type MemoryInput = z.infer<typeof memoryInputSchema>;
 
-export const MEMORY_KINDS: MemoryKind[] = ["fact", "preference", "summary", "note"];
+export const MEMORY_KINDS: MemoryKind[] = [...memoryKindSchema.options];
 
 export const memoryDraftSchema = z.object({
   content: z.string().min(1, "Memory cannot be empty").max(2000),
