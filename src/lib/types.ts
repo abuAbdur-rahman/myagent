@@ -39,6 +39,8 @@ const conversationSchema = z.object({
   title: z.string(),
   connection_id: z.string().nullable(),
   project_id: z.string().nullable(),
+  pinned: z.number(),
+  compacted: z.number(),
   model: z.string().nullable(),
   created_at: z.number(),
   updated_at: z.number(),

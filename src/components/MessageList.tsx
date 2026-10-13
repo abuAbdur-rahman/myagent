@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowDown,
+  Copy,
+  GitBranch,
+  Pencil,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
 import { useApp } from "../lib/store";
 import { Markdown } from "./Markdown";
-import { extractArtifacts, type Artifact } from "../lib/artifacts";
+import { extractArtifacts } from "../lib/artifacts";
+import { copyWithToast } from "./ChatHeader";
 import { Button } from "./ui";
 import type { Message } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -10,13 +19,13 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   return (
     <div
       role="alert"
-      className="flex items-start justify-between gap-3 rounded-control border border-destroy/60 bg-destroy/10 px-3 py-2 text-sm text-alarm"
+      className="flex items-start justify-between gap-3 rounded-card border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-alarm"
     >
       <span className="break-words">{message}</span>
       <button
         type="button"
         onClick={onDismiss}
-        className="rounded-control px-1 text-alarm hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        className="rounded-control px-1 text-alarm hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         aria-label="Dismiss error"
       >
         ✕
@@ -25,88 +34,162 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   );
 }
 
-function MessageItem({
+function ActionButton({
+  label,
+  title,
+  onClick,
+  active,
+  children,
+}: {
+  label: string;
+  title: string;
+  onClick: () => void;
+  active?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title}
+      onClick={onClick}
+      className={cn(
+        "grid h-7 w-7 place-items-center rounded-control",
+        active ? "text-accent" : "text-muted hover:text-text",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function UserMessage({
   message,
-  streaming,
-  onOpenArtifact,
-  onRemember,
+  onEdit,
 }: {
   message: Message;
-  streaming: boolean;
-  onOpenArtifact: (artifact: Artifact) => void;
-  onRemember: (content: string) => Promise<void>;
+  onEdit: (id: string, text: string) => void;
 }) {
-  const isAssistant = message.role === "assistant";
-  const artifacts = useMemo(
-    () => (isAssistant ? extractArtifacts(message.content) : []),
-    [isAssistant, message.content],
-  );
-  const [rememberStatus, setRememberStatus] = useState<"idle" | "saved" | "failed">("idle");
-  const rememberTimer = useRef<number | null>(null);
-  const emptyStreaming = isAssistant && message.content.length === 0 && streaming;
-  const hasContent = message.content.length > 0;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.content);
 
-  useEffect(
-    () => () => {
-      if (rememberTimer.current !== null) window.clearTimeout(rememberTimer.current);
-    },
-    [],
-  );
-
-  const remember = async () => {
-    try {
-      await onRemember(message.content);
-      setRememberStatus("saved");
-    } catch {
-      setRememberStatus("failed");
-    }
-    if (rememberTimer.current !== null) window.clearTimeout(rememberTimer.current);
-    rememberTimer.current = window.setTimeout(() => setRememberStatus("idle"), 1500);
-  };
-
-  let rememberLabel = "Remember";
-  if (rememberStatus === "saved") rememberLabel = "Remembered";
-  else if (rememberStatus === "failed") rememberLabel = "Remember failed";
-
-  let body: ReactNode;
-  if (emptyStreaming) {
-    body = (
-      <span className="inline-flex gap-1 text-text-faint" aria-label="Waiting for response">
-        <span className="animate-pulse">●</span>
-        <span className="animate-pulse [animation-delay:150ms]">●</span>
-        <span className="animate-pulse [animation-delay:300ms]">●</span>
-      </span>
-    );
-  } else if (isAssistant) {
-    body = <Markdown content={message.content} />;
-  } else {
-    body = (
-      <p className="whitespace-pre-wrap text-sm text-text-primary">{message.content}</p>
+  if (editing) {
+    return (
+      <div className="msg user flex flex-col items-end">
+        <div className="w-[80%]">
+          <textarea
+            rows={3}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            aria-label="Edit message"
+            className="w-full resize-y rounded-card border border-accent bg-surface-2 p-2 text-[15px] outline-none"
+          />
+          <div className="mt-1.5 flex justify-end gap-2">
+            <Button variant="default" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setEditing(false);
+                void onEdit(message.id, draft);
+              }}
+            >
+              Save &amp; Resubmit
+            </Button>
+          </div>
+        </div>
+      </div>
     );
   }
 
   return (
-    <div className="group">
-      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-text-faint">
-        {isAssistant ? "Assistant" : "You"}
+    <div className="msg user group flex flex-col items-end" data-mid={message.id}>
+      <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-composer border border-border bg-surface-2 px-3.5 py-2.5 text-[15px]">
+        {message.content}
       </div>
-      <div
-        className={cn(
-          "rounded-panel border border-vault-line px-4 py-3",
-          isAssistant ? "bg-vault-black" : "bg-vault-surface/60",
-        )}
-      >
-        {body}
+      <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
+          <Copy size={14} />
+        </ActionButton>
+        <ActionButton
+          label="Edit"
+          title="Edit"
+          onClick={() => {
+            setDraft(message.content);
+            setEditing(true);
+          }}
+        >
+          <Pencil size={14} />
+        </ActionButton>
       </div>
+    </div>
+  );
+}
 
-      {isAssistant && hasContent && !streaming && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+function AssistantMessage({
+  message,
+  modelName,
+  isLast,
+  streaming,
+  onRemember,
+}: {
+  message: Message;
+  modelName: string;
+  isLast: boolean;
+  streaming: boolean;
+  onRemember: (content: string) => Promise<void>;
+}) {
+  const { openArtifact } = useApp();
+  const artifacts = useMemo(() => extractArtifacts(message.content), [message.content]);
+  const [rememberLabel, setRememberLabel] = useState("Remember");
+  const busy = streaming && message.content.length === 0;
+
+  const remember = async () => {
+    try {
+      await onRemember(message.content);
+      setRememberLabel("Remembered");
+    } catch {
+      setRememberLabel("Remember failed");
+    }
+    setTimeout(() => setRememberLabel("Remember"), 1500);
+  };
+
+  return (
+    <div className="msg group" data-mid={message.id}>
+      <div className="mb-1.5 flex items-center gap-2 text-xs">
+        <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent text-accent-contrast">
+          <Sparkles size={12} />
+        </span>
+        <span className="text-muted">{modelName}</span>
+      </div>
+      <div className="md">
+        {busy ? (
+          <span className="dots" aria-label="Waiting for response">
+            <i />
+            <i />
+            <i />
+          </span>
+        ) : (
+          <>
+            <Markdown content={message.content} />
+            {streaming && <span className="caret" aria-hidden="true" />}
+          </>
+        )}
+      </div>
+      {!busy && (
+        <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
+            <Copy size={14} />
+          </ActionButton>
+          {isLast && <RegenButton />}
+          <BranchButton messageId={message.id} />
           {artifacts.map((artifact) => (
             <Button
               key={artifact.index}
-              variant="secondary"
+              variant="default"
               size="sm"
-              onClick={() => onOpenArtifact(artifact)}
+              onClick={() => openArtifact(artifact)}
             >
               Artifact · {artifact.lang}
             </Button>
@@ -120,20 +203,60 @@ function MessageItem({
   );
 }
 
-export function MessageList({
-  onOpenArtifact,
-}: {
-  onOpenArtifact: (artifact: Artifact) => void;
-}) {
-  const { messages, streaming, error, clearError, ready, activeProject, addMemory } = useApp();
-  const bottomRef = useRef<HTMLDivElement>(null);
+function RegenButton() {
+  const { regenerate, streaming } = useApp();
+  if (streaming) return null;
+  return (
+    <ActionButton label="Regenerate" title="Regenerate" onClick={() => void regenerate()}>
+      <RefreshCw size={14} />
+    </ActionButton>
+  );
+}
+
+function BranchButton({ messageId }: { messageId: string }) {
+  const { branchFrom, streaming } = useApp();
+  if (streaming) return null;
+  return (
+    <ActionButton label="Branch" title="Branch" onClick={() => void branchFrom(messageId)}>
+      <GitBranch size={14} />
+    </ActionButton>
+  );
+}
+
+export function MessageList() {
+  const {
+    messages,
+    streaming,
+    error,
+    clearError,
+    ready,
+    activeProject,
+    addMemory,
+    editAndResubmit,
+    conversations,
+    activeConversationId,
+  } = useApp();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(true);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      setStuck(true);
+    }
+  }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({
-      behavior: streaming ? "auto" : "smooth",
-      block: "end",
-    });
-  }, [messages, streaming]);
+    if (stuck) scrollToBottom();
+  }, [messages, streaming, stuck, scrollToBottom]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    setStuck(nearBottom);
+  };
 
   const remember = useCallback(
     async (content: string) => {
@@ -147,35 +270,56 @@ export function MessageList({
     [addMemory, activeProject],
   );
 
+  const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
+  const activeModel =
+    conversations.find((c) => c.id === activeConversationId)?.model ?? null;
+
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
-      {error && <ErrorBanner message={error} onDismiss={clearError} />}
-
-      {ready && messages.length === 0 && !error && (
-        <div className="flex flex-1 items-center justify-center py-24">
-          <div className="max-w-md text-center">
-            <h2 className="mb-2 text-lg font-semibold text-text-primary">
-              Start a conversation
-            </h2>
-            <p className="text-sm text-text-muted">
-              Pick a model, type a message, and responses stream in from your
-              provider. Keys stay in Windows Credential Manager.
-            </p>
+    <div ref={scrollRef} onScroll={onScroll} className="relative h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-[760px] px-4 py-6">
+        {error && (
+          <div className="mb-6">
+            <ErrorBanner message={error} onDismiss={clearError} />
           </div>
-        </div>
+        )}
+
+        {ready && messages.length === 0 && !error && (
+          <div className="flex items-center justify-center py-24">
+            <p className="text-sm text-muted">No messages yet.</p>
+          </div>
+        )}
+
+        {messages.map((message) =>
+          message.role === "user" ? (
+            <div key={message.id} className="mb-6">
+              <UserMessage
+                message={message}
+                onEdit={(id, text) => editAndResubmit(id, text)}
+              />
+            </div>
+          ) : (
+            <div key={message.id} className="mb-6">
+              <AssistantMessage
+                message={message}
+                modelName={activeModel ?? "assistant"}
+                isLast={message.id === lastAssistantId}
+                streaming={streaming}
+                onRemember={remember}
+              />
+            </div>
+          ),
+        )}
+      </div>
+
+      {!stuck && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute bottom-[150px] left-1/2 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-control border border-border bg-surface px-3 text-[13px] shadow-[var(--shadow)] hover:bg-hover"
+        >
+          <ArrowDown size={14} /> Jump to latest
+        </button>
       )}
-
-      {messages.map((message) => (
-        <MessageItem
-          key={message.id}
-          message={message}
-          streaming={streaming}
-          onOpenArtifact={onOpenArtifact}
-          onRemember={remember}
-        />
-      ))}
-
-      <div ref={bottomRef} />
     </div>
   );
 }

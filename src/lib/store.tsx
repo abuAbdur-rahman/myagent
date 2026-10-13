@@ -10,7 +10,8 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { buildSystemPrompt } from "./context";
+import { applyCompactWindow, buildSystemPrompt } from "./context";
+import { toast } from "./toast";
 import { memoryInputSchema } from "./types";
 import { newId } from "./utils";
 import type {
@@ -29,6 +30,20 @@ import type {
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
 const ACTIVE_PROJECT_KEY = "activeProjectId";
 const MODEL_KEY = "model";
+const SIDEBAR_KEY = "sidebarCollapsed";
+const THEME_KEY = "theme";
+const DISPLAY_NAME_KEY = "displayName";
+
+export type ThemeMode = "system" | "light" | "dark";
+
+type View = "chat" | "projects" | "project";
+
+export type PanelTab = "preview" | "code" | "doc" | "source";
+
+interface PanelArtifact {
+  lang: string;
+  code: string;
+}
 
 interface AppContextValue {
   ready: boolean;
@@ -53,6 +68,9 @@ interface AppContextValue {
   activeProject: Project | null;
   activeProjectId: string | null;
   selectProject: (id: string | null) => void;
+  view: View;
+  setView: (view: View) => void;
+  startProjectChat: (projectId: string, text: string) => Promise<boolean>;
   saveProject: (input: ProjectInput, id?: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
 
@@ -69,11 +87,46 @@ interface AppContextValue {
   selectConversation: (id: string | null) => Promise<void>;
   newConversation: () => Promise<void>;
   removeConversation: (id: string) => Promise<void>;
+  renameConversation: (id: string, title: string) => Promise<void>;
+  togglePin: (id: string) => Promise<void>;
+  moveConversation: (id: string, projectId: string | null) => Promise<void>;
+
+  theme: ThemeMode;
+  setTheme: (mode: ThemeMode) => void;
+  accent: string;
+  setAccent: (value: string) => void;
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
+  onboarded: boolean;
+  completeOnboarding: () => void;
+  displayName: string;
+  setDisplayName: (name: string) => void;
+  settingsPage: string | null;
+  setSettingsPage: (page: string | null) => void;
 
   messages: Message[];
   streaming: boolean;
   sendMessage: (text: string) => Promise<boolean>;
+  regenerate: () => Promise<void>;
+  editAndResubmit: (userId: string, text: string) => Promise<boolean>;
+  branchFrom: (messageId: string) => Promise<void>;
+  clearActiveConversation: () => Promise<void>;
+  compactActive: () => Promise<void>;
+  uncompactActive: () => Promise<void>;
   stopStream: () => void;
+  composerDraft: string;
+  setComposerDraft: (value: string) => void;
+  sendWith: "enter" | "ctrl";
+  setSendWith: (mode: "enter" | "ctrl") => void;
+  panelOpen: boolean;
+  panelArtifact: PanelArtifact | null;
+  panelTab: PanelTab;
+  openArtifact: (artifact: PanelArtifact) => void;
+  closePanel: () => void;
+  togglePanel: () => void;
+  setPanelTab: (tab: PanelTab) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -94,6 +147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(
     () => localStorage.getItem(ACTIVE_PROJECT_KEY),
   );
+  const [view, setView] = useState<View>("chat");
   const [globalMemories, setGlobalMemories] = useState<Memory[]>([]);
   const [projectMemories, setProjectMemories] = useState<Memory[]>([]);
 
@@ -101,6 +155,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_KEY) === "1",
+  );
+  const [theme, setThemeState] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem(THEME_KEY);
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
 
   const activeConnection = useMemo(
     () => connections.find((c) => c.id === activeConnectionId) ?? null,
@@ -115,6 +176,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const projectRef = useRef<Project | null>(null);
   const modelRef = useRef(model);
   const convIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const [composerDraft, setComposerDraftState] = useState(
+    () => localStorage.getItem("composerDraft") ?? "",
+  );
+  const [sendWith, setSendWithState] = useState<"enter" | "ctrl">(() =>
+    localStorage.getItem("sendWith") === "ctrl" ? "ctrl" : "enter",
+  );
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
   const requestIdRef = useRef<string | null>(null);
@@ -133,6 +201,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     convIdRef.current = activeConversationId;
   }, [activeConversationId]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   useEffect(() => {
     globalMemoriesRef.current = globalMemories;
   }, [globalMemories]);
@@ -204,6 +275,104 @@ export function AppProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(MODEL_KEY);
     }
   }, [model]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);    const apply = () => {
+      const dark =
+        theme === "dark" ||
+        (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if (dark) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      } else {
+        document.documentElement.removeAttribute("data-theme");
+      }
+    };
+    apply();
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, [theme]);
+
+  const setTheme = useCallback((mode: ThemeMode) => setThemeState(mode), []);
+
+  const [accent, setAccentState] = useState(() => localStorage.getItem("accent") ?? "#c96442");
+  const setAccent = useCallback((value: string) => {
+    setAccentState(value);
+    localStorage.setItem("accent", value);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--accent", accent);
+  }, [accent]);
+
+  const setComposerDraft = useCallback((value: string) => {
+    setComposerDraftState(value);
+    if (value) {
+      localStorage.setItem("composerDraft", value);
+    } else {
+      localStorage.removeItem("composerDraft");
+    }
+  }, []);
+
+  const setSendWith = useCallback((mode: "enter" | "ctrl") => {
+    setSendWithState(mode);
+    localStorage.setItem("sendWith", mode);
+  }, []);
+
+  const setDisplayName = useCallback((name: string) => {
+    setDisplayNameState(name);
+    if (name.trim()) {
+      localStorage.setItem(DISPLAY_NAME_KEY, name.trim());
+    } else {
+      localStorage.removeItem(DISPLAY_NAME_KEY);
+    }
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      localStorage.setItem(SIDEBAR_KEY, prev ? "0" : "1");
+      return !prev;
+    });
+  }, []);
+
+  const [paletteOpen, setPaletteOpenState] = useState(false);
+  const setPaletteOpen = useCallback((open: boolean) => setPaletteOpenState(open), []);
+  const [onboarded, setOnboarded] = useState(() => localStorage.getItem("onboarded") === "1");
+  const completeOnboarding = useCallback(() => {
+    localStorage.setItem("onboarded", "1");
+    setOnboarded(true);
+  }, []);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
+  const [panelTab, setPanelTabState] = useState<PanelTab>("code");
+
+  const defaultPanelTab = (lang: string): PanelTab => {
+    const normalized = lang.toLowerCase();
+    if (normalized === "html" || normalized === "htm") return "preview";
+    if (normalized === "md" || normalized === "markdown") return "doc";
+    return "code";
+  };
+
+  const openArtifact = useCallback((artifact: PanelArtifact) => {
+    setPanelArtifact(artifact);
+    setPanelTabState(defaultPanelTab(artifact.lang));
+    setPanelOpen(true);
+  }, []);
+
+  const closePanel = useCallback(() => setPanelOpen(false), []);
+
+  const togglePanel = useCallback(() => {
+    setPanelOpen((prev) => {
+      if (prev) return false;
+      return panelArtifact !== null;
+    });
+  }, [panelArtifact]);
+
+  const setPanelTab = useCallback((tab: PanelTab) => setPanelTabState(tab), []);
+  const [displayName, setDisplayNameState] = useState(
+    () => localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
+  );
+  const [settingsPage, setSettingsPage] = useState<string | null>(null);
 
   const refreshModels = useCallback(async () => {
     const connection = connRef.current;
@@ -277,6 +446,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveConversationId(null);
       setMessages([]);
       setError(null);
+      setView(id ? "project" : "chat");
     },
     [],
   );
@@ -346,6 +516,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const selectConversation = useCallback(async (id: string | null) => {
     setActiveConversationId(id);
     setError(null);
+    setView("chat");
     if (!id) {
       setMessages([]);
       return;
@@ -357,6 +528,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveConversationId(null);
     setMessages([]);
     setError(null);
+    setView("chat");
   }, []);
 
   const removeConversation = useCallback(
@@ -371,6 +543,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeConversationId],
   );
 
+  const renameConversation = useCallback(async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    await db.touchConversation(id, { title: trimmed });
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c)));
+  }, []);
+
+  const togglePin = useCallback(async (id: string) => {
+    await db.toggleConversationPin(id);
+    setConversations(await db.listConversations());
+  }, []);
+
+  const moveConversation = useCallback(async (id: string, projectId: string | null) => {
+    await db.touchConversation(id, { project_id: projectId });
+    setConversations(await db.listConversations());
+  }, []);
+
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     const content = bufferRef.current;
     if (!content) {
@@ -383,6 +572,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then(() => db.touchConversation(conversationId, {}))
       .catch((e) => setError(String(e)));
   }, []);
+
+  const withSystem = useCallback(
+    (turns: { role: string; content: string }[]) => {
+      const system = buildSystemPrompt({
+        globalMemories: globalMemoriesRef.current,
+        project: projectRef.current,
+        projectMemories: projectMemoriesRef.current,
+      });
+      return [...(system ? [{ role: "system", content: system }] : []), ...turns];
+    },
+    [],
+  );
+
+  const streamTurn = useCallback(
+    async (
+      conversationId: string,
+      connection: Connection,
+      modelName: string,
+      payload: { role: string; content: string }[],
+      assistantMsg: Message,
+    ): Promise<void> => {
+      const requestId = newId();
+      requestIdRef.current = requestId;
+      bufferRef.current = "";
+      assistantMsgIdRef.current = assistantMsg.id;
+      setStreaming(true);
+
+      try {
+        await api.chatStream(
+          {
+            requestId,
+            baseUrl: connection.base_url,
+            connectionId: connection.id,
+            model: modelName,
+            messages: payload,
+          },
+          (event) => {
+            if (requestIdRef.current !== requestId) return;
+            if (event.type === "delta") {
+              bufferRef.current += event.text;
+              const buffered = bufferRef.current;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
+              );
+            }
+          },
+        );
+      } catch (e) {
+        if (requestIdRef.current === requestId) setError(String(e));
+      } finally {
+        if (requestIdRef.current === requestId) {
+          requestIdRef.current = null;
+          assistantMsgIdRef.current = null;
+          setStreaming(false);
+          finalize(assistantMsg.id, conversationId);
+        }
+      }
+    },
+    [finalize],
+  );
 
   const sendMessage = useCallback(
     async (text: string): Promise<boolean> => {
@@ -434,59 +683,188 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const system = buildSystemPrompt({
-        globalMemories: globalMemoriesRef.current,
-        project: projectRef.current,
-        projectMemories: projectMemoriesRef.current,
-      });
+      const payload = withSystem(
+        applyCompactWindow(
+          [...history, { role: "user", content: text }],
+          conversations.find((c) => c.id === conversationId)?.compacted === 1,
+        ),
+      );
 
-      const payload = [
-        ...(system ? [{ role: "system" as const, content: system }] : []),
-        ...history,
-        { role: "user" as const, content: text },
-      ].map((m) => ({ role: m.role, content: m.content }));
-
-      const requestId = newId();
-      requestIdRef.current = requestId;
-      bufferRef.current = "";
-      assistantMsgIdRef.current = assistantMsg.id;
-      setStreaming(true);
-
-      try {
-        await api.chatStream(
-          {
-            requestId,
-            baseUrl: connection.base_url,
-            connectionId: connection.id,
-            model: modelRef.current,
-            messages: payload,
-          },
-          (event) => {
-            if (requestIdRef.current !== requestId) return;
-            if (event.type === "delta") {
-              bufferRef.current += event.text;
-              const buffered = bufferRef.current;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
-              );
-            }
-          },
-        );
-      } catch (e) {
-        if (requestIdRef.current === requestId) setError(String(e));
-      } finally {
-        if (requestIdRef.current === requestId) {
-          requestIdRef.current = null;
-          assistantMsgIdRef.current = null;
-          setStreaming(false);
-          finalize(assistantMsg.id, conversationId);
-        }
-      }
-
+      await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
       return true;
     },
-    [conversations, finalize, messages, streaming],
+    [conversations, finalize, messages, streaming, streamTurn, withSystem],
   );
+
+  const regenerate = useCallback(async () => {
+    const conversationId = convIdRef.current;
+    const connection = connRef.current;
+    if (!conversationId || !connection || !modelRef.current || streaming) return;
+    const turns = messagesRef.current.filter((m) => m.content.length > 0);
+    if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
+    const dropped = turns[turns.length - 1];
+    const kept = turns.slice(0, -1);
+    try {
+      await db.deleteMessage(dropped.id);
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    setMessages(kept);
+    let assistantMsg: Message;
+    try {
+      assistantMsg = await db.addMessage(conversationId, "assistant", "");
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    setMessages([...kept, assistantMsg]);
+    await streamTurn(
+      conversationId,
+      connection,
+      modelRef.current,
+      withSystem(
+        applyCompactWindow(
+          kept,
+          conversations.find((c) => c.id === conversationId)?.compacted === 1,
+        ),
+      ),
+      assistantMsg,
+    );
+  }, [streaming, streamTurn, withSystem, conversations]);
+
+  const editAndResubmit = useCallback(
+    async (userId: string, text: string): Promise<boolean> => {
+      const conversationId = convIdRef.current;
+      const connection = connRef.current;
+      if (!conversationId || !connection || !modelRef.current || streaming) return false;
+      const trimmed = text.trim();
+      if (!trimmed) return false;
+      try {
+        await db.updateMessage(userId, trimmed);
+        await db.truncateConversation(conversationId, userId);
+      } catch (e) {
+        setError(String(e));
+        return false;
+      }
+      const kept = (await db.listMessages(conversationId)).filter(
+        (m) => m.content.length > 0,
+      );
+      let assistantMsg: Message;
+      try {
+        assistantMsg = await db.addMessage(conversationId, "assistant", "");
+      } catch (e) {
+        setError(String(e));
+        return false;
+      }
+      setMessages([...kept, assistantMsg]);
+      await streamTurn(
+        conversationId,
+        connection,
+        modelRef.current,
+        withSystem(
+          applyCompactWindow(
+            kept,
+            conversations.find((c) => c.id === conversationId)?.compacted === 1,
+          ),
+        ),
+        assistantMsg,
+      );
+      return true;
+    },
+    [conversations, streaming, streamTurn, withSystem],
+  );
+
+  const branchFrom = useCallback(
+    async (messageId: string) => {
+      const conversationId = convIdRef.current;
+      if (!conversationId || streaming) return;
+      const source = conversations.find((c) => c.id === conversationId);
+      if (!source) return;
+      try {
+        const branched = await db.branchConversation(
+          conversationId,
+          messageId,
+          `${source.title} (branch)`,
+        );
+        setConversations((prev) => [branched, ...prev]);
+        setActiveConversationId(branched.id);
+        setMessages(await db.listMessages(branched.id));
+        toast("Branched into new chat");
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [conversations, streaming],
+  );
+
+  const startProjectChat = useCallback(
+    async (projectId: string, text: string): Promise<boolean> => {
+      const connection = connRef.current;
+      if (!connection || !modelRef.current || streaming) return false;
+      const trimmed = text.trim();
+      if (!trimmed) return false;
+      setError(null);
+      try {
+        const created = await db.createConversation(connection.id, modelRef.current, projectId);
+        const userMsg = await db.addMessage(created.id, "user", trimmed);
+        const assistantMsg = await db.addMessage(created.id, "assistant", "");
+        const title = trimmed.slice(0, 48) || "New chat";
+        await db.touchConversation(created.id, { title });
+        setConversations((prev) => [{ ...created, title }, ...prev]);
+        setActiveConversationId(created.id);
+        setActiveProjectId(projectId);
+        setView("chat");
+        setMessages([userMsg, assistantMsg]);
+        await streamTurn(
+          created.id,
+          connection,
+          modelRef.current,
+          withSystem([{ role: "user", content: trimmed }]),
+          assistantMsg,
+        );
+        return true;
+      } catch (e) {
+        setError(String(e));
+        return false;
+      }
+    },
+    [streaming, streamTurn, withSystem],
+  );
+
+  const clearActiveConversation = useCallback(async () => {    const id = convIdRef.current;
+    if (!id) return;
+    try {
+      await db.clearConversation(id);
+      setMessages([]);
+      await db.touchConversation(id, {});
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const setCompacted = useCallback(async (id: string, value: boolean) => {
+    try {
+      await db.setConversationCompacted(id, value);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, compacted: value ? 1 : 0 } : c)),
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const compactActive = useCallback(async () => {
+    const id = convIdRef.current;
+    if (!id) return;
+    await setCompacted(id, true);
+  }, [setCompacted]);
+
+  const uncompactActive = useCallback(async () => {
+    const id = convIdRef.current;
+    if (!id) return;
+    await setCompacted(id, false);
+  }, [setCompacted]);
 
   const stopStream = useCallback(() => {
     const id = requestIdRef.current;
@@ -520,6 +898,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeProject,
     activeProjectId,
     selectProject,
+    view,
+    setView,
+    startProjectChat,
     saveProject,
     removeProject,
     globalMemories,
@@ -534,10 +915,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     selectConversation,
     newConversation,
     removeConversation,
+    renameConversation,
+    togglePin,
+    moveConversation,
+    displayName,
+    setDisplayName,
+    theme,
+    setTheme,
+    accent,
+    setAccent,
+    sidebarCollapsed,
+    toggleSidebar,
+    paletteOpen,
+    setPaletteOpen,
+    onboarded,
+    completeOnboarding,
+    settingsPage,
+    setSettingsPage,
     messages,
     streaming,
     sendMessage,
+    regenerate,
+    editAndResubmit,
+    branchFrom,
+    clearActiveConversation,
+    compactActive,
+    uncompactActive,
     stopStream,
+    composerDraft,
+    setComposerDraft,
+    sendWith,
+    setSendWith,
+    panelOpen,
+    panelArtifact,
+    panelTab,
+    openArtifact,
+    closePanel,
+    togglePanel,
+    setPanelTab,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

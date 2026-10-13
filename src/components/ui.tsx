@@ -11,26 +11,26 @@ import {
 } from "react";
 import { cn } from "../lib/utils";
 
-const focusRing =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-0";
+const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-0";
 
 const buttonVariants = cva(
   cn(
-    "inline-flex items-center justify-center gap-2 rounded-control text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+    "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-control border px-3 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
     focusRing,
   ),
   {
     variants: {
       variant: {
-        default: "bg-text-primary text-vault-black hover:bg-white",
-        secondary: "bg-vault-raised text-text-primary hover:bg-neutral-700",
-        ghost: "text-text-muted hover:bg-vault-raised hover:text-text-primary",
-        destructive: "bg-destroy text-white hover:bg-destroy-hover",
+        default: "border-border bg-surface hover:bg-hover",
+        primary: "border-accent bg-accent text-accent-contrast hover:brightness-110",
+        ghost: "border-transparent text-muted hover:bg-hover hover:text-text",
+        danger: "border-danger text-danger hover:bg-hover",
+        dangerFill: "border-danger bg-danger text-white hover:brightness-110",
       },
       size: {
-        default: "h-9 px-4",
-        sm: "h-8 px-3",
-        icon: "h-9 w-9",
+        default: "h-8 px-3",
+        sm: "h-7 px-2.5 text-xs",
+        icon: "h-8 w-8 p-0",
       },
     },
     defaultVariants: { variant: "default", size: "default" },
@@ -48,13 +48,47 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
+export function IconButton({
+  className,
+  label,
+  title,
+  size = 32,
+  active,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  title?: string;
+  size?: 32 | 28 | 24;
+  active?: boolean;
+}) {
+  const dims = size === 24 ? "h-6 w-6" : size === 28 ? "h-7 w-7" : "h-8 w-8";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title ?? label}
+      className={cn(
+        "grid flex-none place-items-center rounded-control transition-colors hover:bg-hover",
+        dims,
+        active ? "text-accent" : "text-muted",
+        focusRing,
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
 const fieldBase = cn(
-  "w-full rounded-control border border-vault-line bg-vault-surface px-3 text-sm text-text-primary placeholder:text-text-faint focus:border-text-faint focus:outline-none focus:ring-2 focus:ring-focus",
+  "w-full rounded-card border border-border bg-surface-2 px-2.5 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent",
 );
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => (
-    <input ref={ref} className={cn("h-9", fieldBase, className)} {...props} />
+    <input ref={ref} className={cn("h-8", fieldBase, className)} {...props} />
   ),
 );
 Input.displayName = "Input";
@@ -63,27 +97,63 @@ export const Textarea = forwardRef<
   HTMLTextAreaElement,
   TextareaHTMLAttributes<HTMLTextAreaElement>
 >(({ className, ...props }, ref) => (
-  <textarea ref={ref} className={cn("resize-none py-2", fieldBase, className)} {...props} />
+  <textarea ref={ref} className={cn("py-2", fieldBase, className)} {...props} />
 ));
 Textarea.displayName = "Textarea";
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   ({ className, ...props }, ref) => (
-    <select ref={ref} className={cn("h-9 px-2", fieldBase, className)} {...props} />
+    <select ref={ref} className={cn("h-8", fieldBase, className)} {...props} />
   ),
 );
 Select.displayName = "Select";
+
+export function Badge({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn("rounded bg-hover px-1.5 py-px text-[11px] text-muted", className)}
+    >
+      {children}
+    </span>
+  );
+}
+
+export function Avatar({ initials, size = 28 }: { initials: string; size?: number }) {
+  return (
+    <span
+      className="grid flex-none place-items-center rounded-full bg-accent font-semibold text-accent-contrast"
+      style={{ width: size, height: size, fontSize: size <= 22 ? 10 : 12 }}
+      aria-hidden="true"
+    >
+      {initials}
+    </span>
+  );
+}
+
+export function Spinner({ label = "Loading" }: { label?: string }) {
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent"
+    />
+  );
+}
 
 export function Dialog({
   open,
   onClose,
   title,
   children,
+  wide,
+  noBackdropClose,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  wide?: boolean;
+  noBackdropClose?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -101,8 +171,10 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !noBackdropClose) onClose();
+      }}
       role="presentation"
     >
       <div
@@ -110,17 +182,28 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-2xl rounded-panel border border-vault-line bg-vault-black"
-        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          "flex max-h-[90vh] w-full flex-col overflow-hidden rounded-composer border border-border bg-surface shadow-[var(--shadow)]",
+          wide ? "max-w-[960px]" : "max-w-[480px]",
+        )}
+        onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-vault-line px-4 py-3">
-          <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
-            ✕
-          </Button>
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <IconButton label="Close" size={24} onClick={onClose}>
+            <CloseGlyph />
+          </IconButton>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
       </div>
     </div>
+  );
+}
+
+function CloseGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
   );
 }

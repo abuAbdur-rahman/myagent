@@ -173,8 +173,8 @@ export function ProjectDialog({
             {status}
           </div>
           <div className="flex gap-2">
-            {currentId && (
-              <Button variant="destructive" onClick={() => void remove()} disabled={busy}>
+              {currentId && (
+                <Button variant="dangerFill" onClick={() => void remove()} disabled={busy}>
                 Delete
               </Button>
             )}

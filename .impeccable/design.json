@@ -4,201 +4,131 @@
   "title": "Design System: myagent",
   "extensions": {
     "colorMeta": {
-      "vault-black": {
+      "window-bg": {
         "role": "neutral",
-        "displayName": "Vault Black",
-        "canonical": "#0a0a0a",
-        "tonalRamp": [
-          "#0a0a0a",
-          "#0f0f0f",
-          "#141414",
-          "#1a1a1a",
-          "#202020",
-          "#2a2a2a",
-          "#3a3a3a",
-          "#505050"
-        ]
+        "displayName": "Window",
+        "canonical": "#202020",
+        "tonalRamp": ["#101010", "#161616", "#1b1b1b", "#202020", "#262626", "#2e2e2e", "#383838", "#484848"]
       },
-      "vault-surface": {
+      "sidebar": {
         "role": "neutral",
-        "displayName": "Vault Surface",
-        "canonical": "#171717",
-        "tonalRamp": [
-          "#0d0d0d",
-          "#121212",
-          "#171717",
-          "#1d1d1d",
-          "#242424",
-          "#2e2e2e",
-          "#3d3d3d",
-          "#525252"
-        ]
+        "displayName": "Sidebar",
+        "canonical": "#1b1b1b",
+        "tonalRamp": ["#0e0e0e", "#131313", "#1b1b1b", "#202020", "#262626", "#2e2e2e", "#383838", "#484848"]
       },
-      "vault-surface-raised": {
+      "surface": {
         "role": "neutral",
-        "displayName": "Vault Surface Raised",
-        "canonical": "#262626",
-        "tonalRamp": [
-          "#141414",
-          "#191919",
-          "#1f1f1f",
-          "#262626",
-          "#2d2d2d",
-          "#373737",
-          "#454545",
-          "#585858"
-        ]
-      },
-      "vault-line": {
-        "role": "neutral",
-        "displayName": "Vault Line",
-        "canonical": "#404040",
-        "tonalRamp": [
-          "#1a1a1a",
-          "#232323",
-          "#2c2c2c",
-          "#353535",
-          "#404040",
-          "#4d4d4d",
-          "#5c5c5c",
-          "#6e6e6e"
-        ]
+        "displayName": "Surface",
+        "canonical": "#2b2b2b",
+        "tonalRamp": ["#141414", "#1a1a1a", "#222222", "#2b2b2b", "#323232", "#3d3d3d", "#4a4a4a", "#5c5c5c"]
       },
       "accent": {
         "role": "primary",
-        "displayName": "Outbound Blue",
-        "canonical": "#60a5fa",
-        "tonalRamp": [
-          "#172554",
-          "#1e3a8a",
-          "#1d4ed8",
-          "#2563eb",
-          "#3b82f6",
-          "#60a5fa",
-          "#93c5fd",
-          "#bfdbfe"
-        ]
+        "displayName": "Vault Clay",
+        "canonical": "#c96442",
+        "tonalRamp": ["#3a1c10", "#5c2c16", "#7d3d1e", "#9c4e28", "#c96442", "#d97e5c", "#e59a7d", "#f0b69e"]
       },
       "danger": {
         "role": "tertiary",
-        "displayName": "Destroy Red",
-        "canonical": "#dc2626",
-        "tonalRamp": [
-          "#450a0a",
-          "#7f1d1d",
-          "#991b1b",
-          "#b91c1c",
-          "#dc2626",
-          "#ef4444",
-          "#f87171",
-          "#fca5a5"
-        ]
+        "displayName": "Danger Red",
+        "canonical": "#c42b1c",
+        "tonalRamp": ["#3a0d08", "#5c130c", "#7d1a10", "#9c2115", "#c42b1c", "#d94f3f", "#e67f72", "#f2aaa1"]
       }
     },
     "typographyMeta": {
-      "body": { "displayName": "Body", "purpose": "Message text, form copy, labels with values." },
-      "heading": { "displayName": "Heading", "purpose": "Empty-state and dialog titles only." },
-      "label": { "displayName": "Label", "purpose": "Uppercase role markers and section eyebrows." }
+      "body": { "displayName": "Body", "purpose": "UI chrome, lists, form copy at 14px." },
+      "chat": { "displayName": "Chat", "purpose": "Message and composer text at 15px." },
+      "greeting": { "displayName": "Greeting", "purpose": "Georgia serif welcome and view titles." },
+      "label": { "displayName": "Label", "purpose": "Uppercase micro headers and badges." }
     },
-    "shadows": [],
-    "motion": [
-      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Default easing for color and opacity state changes." },
-      { "name": "duration-fast", "value": "150ms", "purpose": "Hover and focus tone steps." }
+    "shadows": [
+      { "name": "floating", "value": "0 8px 24px rgba(0,0,0,0.5)", "purpose": "Dialogs, popovers, palette and toasts only." }
     ],
-    "breakpoints": []
+    "motion": [
+      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Default easing for state changes." },
+      { "name": "duration-fast", "value": "150ms", "purpose": "Hover, focus and grid column transitions." }
+    ],
+    "breakpoints": [
+      { "name": "min-window", "value": "900px" }
+    ]
   },
   "components": [
     {
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "The single high-contrast action on a screen (Send, Save).",
-      "html": "<button class=\"ds-btn-primary\">Send</button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 16px; border: none; border-radius: 6px; background: #f5f5f5; color: #0a0a0a; font: 500 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-primary:hover { background: #ffffff; } .ds-btn-primary:focus-visible { outline: 2px solid #737373; outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: default; }"
+      "description": "The single main action on a screen (Send is a round variant).",
+      "html": "<button class=\"ds-btn-primary\">New chat</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid #c96442; border-radius: 4px; background: #c96442; color: #fff; font: 500 13px ui-sans-serif, system-ui, 'Segoe UI', sans-serif; cursor: pointer; } .ds-btn-primary:hover { filter: brightness(1.1); } .ds-btn-primary:focus-visible { outline: 2px solid #c96442; outline-offset: 1px; }"
     },
     {
-      "name": "Secondary Button",
+      "name": "Default Button",
       "kind": "button",
-      "refersTo": "button-secondary",
-      "description": "Supporting actions: New chat, Store key, artifact openers.",
-      "html": "<button class=\"ds-btn-secondary\">New</button>",
-      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 16px; border: none; border-radius: 6px; background: #262626; color: #f5f5f5; font: 500 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-secondary:hover { background: #404040; } .ds-btn-secondary:focus-visible { outline: 2px solid #737373; outline-offset: 2px; }"
-    },
-    {
-      "name": "Ghost Button",
-      "kind": "button",
-      "refersTo": "button-ghost",
-      "description": "Icon and tertiary actions: Close, Copy, Refresh.",
-      "html": "<button class=\"ds-btn-ghost\">Copy</button>",
-      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 16px; border: none; border-radius: 6px; background: transparent; color: #a3a3a3; font: 500 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1), color 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-ghost:hover { background: #262626; color: #f5f5f5; } .ds-btn-ghost:focus-visible { outline: 2px solid #737373; outline-offset: 2px; }"
-    },
-    {
-      "name": "Destructive Button",
-      "kind": "button",
-      "refersTo": "button-destructive",
-      "description": "Stop streaming and Delete actions.",
-      "html": "<button class=\"ds-btn-destroy\">Stop</button>",
-      "css": ".ds-btn-destroy { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 16px; border: none; border-radius: 6px; background: #dc2626; color: #ffffff; font: 500 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-destroy:hover { background: #ef4444; } .ds-btn-destroy:focus-visible { outline: 2px solid #737373; outline-offset: 2px; }"
+      "refersTo": "button-default",
+      "description": "Supporting actions on a surface with a hairline border.",
+      "html": "<button class=\"ds-btn\">Cancel</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid #3d3d3d; border-radius: 4px; background: #2b2b2b; color: #f2f2f2; font: 500 13px ui-sans-serif, system-ui, 'Segoe UI', sans-serif; cursor: pointer; } .ds-btn:hover { background: rgba(255,255,255,.06); } .ds-btn:focus-visible { outline: 2px solid #c96442; outline-offset: 1px; }"
     },
     {
       "name": "Text Input",
       "kind": "input",
       "refersTo": "input",
-      "description": "Single-line fields in the connection settings dialog.",
-      "html": "<input class=\"ds-input\" placeholder=\"https://openrouter.ai/api/v1\" />",
-      "css": ".ds-input { height: 36px; width: 100%; padding: 0 12px; border: 1px solid #404040; border-radius: 6px; background: #171717; color: #f5f5f5; font: 400 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; } .ds-input::placeholder { color: #737373; } .ds-input:focus { outline: none; border-color: #737373; box-shadow: 0 0 0 2px rgba(115,115,115,0.35); } .ds-input:disabled { opacity: 0.5; }"
+      "description": "Single-line fields with an accent focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search models\" />",
+      "css": ".ds-input { height: 32px; width: 100%; padding: 0 10px; border: 1px solid #3d3d3d; border-radius: 8px; background: #323232; color: #f2f2f2; font: 400 14px ui-sans-serif, system-ui, 'Segoe UI', sans-serif; } .ds-input::placeholder { color: #a0a0a0; } .ds-input:focus { outline: none; border-color: #c96442; box-shadow: 0 0 0 1px #c96442; }"
     },
     {
-      "name": "Message Block",
+      "name": "Message Bubble",
       "kind": "card",
-      "refersTo": "panel",
-      "description": "A single chat message; assistant on Vault Black, user on Vault Surface.",
-      "html": "<div class=\"ds-msg\"><div class=\"ds-msg-role\">Assistant</div><div class=\"ds-msg-body\">Here is the plan for the vault.</div></div>",
-      "css": ".ds-msg { border: 1px solid #404040; border-radius: 8px; padding: 12px 16px; background: #0a0a0a; color: #f5f5f5; font: 400 14px/1.625 ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; } .ds-msg-role { margin-bottom: 4px; font-size: 12px; font-weight: 500; letter-spacing: 0.025em; text-transform: uppercase; color: #737373; } .ds-msg-body a { color: #60a5fa; }"
+      "refersTo": "message-bubble",
+      "description": "A user message, right aligned, on the raised surface.",
+      "html": "<div class=\"ds-msg\">Short answer: yes, start with the simplest version.</div>",
+      "css": ".ds-msg { max-width: 80%; padding: 10px 14px; border: 1px solid #3d3d3d; border-radius: 12px; background: #323232; color: #f2f2f2; font: 400 15px/1.6 ui-sans-serif, system-ui, 'Segoe UI', sans-serif; white-space: pre-wrap; }"
     },
     {
       "name": "Sidebar Row",
       "kind": "nav",
       "refersTo": "panel",
-      "description": "A conversation row in the chat list; active fills neutral-800.",
-      "html": "<div class=\"ds-row\"><span class=\"ds-row-label\">Vault migration plan</span></div>",
-      "css": ".ds-row { display: flex; align-items: center; gap: 4px; padding: 8px; border-radius: 6px; color: #e5e5e5; font: 400 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; } .ds-row:hover { background: rgba(38,38,38,0.6); } .ds-row:focus-visible { outline: 2px solid #737373; outline-offset: -2px; } .ds-row-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }"
+      "description": "A conversation row; the active one carries a 3px accent bar.",
+      "html": "<div class=\"ds-row ds-row-active\"><span class=\"ds-row-label\">Vault migration plan</span></div>",
+      "css": ".ds-row { position: relative; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border-radius: 4px; color: #f2f2f2; font: 400 14px ui-sans-serif, system-ui, 'Segoe UI', sans-serif; } .ds-row:hover { background: rgba(255,255,255,.06); } .ds-row-active { background: rgba(255,255,255,.1); } .ds-row-active::before { content: \"\"; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: #c96442; } .ds-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }"
     },
     {
       "name": "Artifact Panel",
       "kind": "custom",
       "refersTo": "panel",
-      "description": "Signature right-hand pane holding one extracted code artifact.",
-      "html": "<section class=\"ds-artifact\"><header class=\"ds-artifact-head\"><span>Artifact &middot; ts</span></header><pre class=\"ds-artifact-code\">const key = await vault.get(id);</pre></section>",
-      "css": ".ds-artifact { display: flex; flex-direction: column; width: 420px; border-left: 1px solid #404040; background: rgba(23,23,23,0.4); } .ds-artifact-head { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 12px; border-bottom: 1px solid #404040; font: 500 14px ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif; color: #e5e5e5; } .ds-artifact-code { margin: 0; padding: 16px; overflow: auto; background: #262626; color: #e5e5e5; font: 400 12px/1.7 Consolas, ui-monospace, monospace; }"
+      "description": "Signature 420px right-hand pane with Preview/Code or Doc/Source tabs.",
+      "html": "<section class=\"ds-artifact\"><header class=\"ds-artifact-head\"><b>Artifact</b></header><pre class=\"ds-artifact-code\">const key = await vault.get(id);</pre></section>",
+      "css": ".ds-artifact { display: flex; flex-direction: column; width: 420px; border-left: 1px solid #3d3d3d; background: #2b2b2b; } .ds-artifact-head { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 8px 0 14px; border-bottom: 1px solid #3d3d3d; font: 500 14px ui-sans-serif, system-ui, 'Segoe UI', sans-serif; } .ds-artifact-code { margin: 0; padding: 14px; overflow: auto; font: 400 13px/1.5 Consolas, monospace; white-space: pre-wrap; }"
     }
   ],
   "narrative": {
     "northStar": "The Local Vault",
-    "overview": "The interface is a sealed room the user controls. Nothing glows for attention, nothing announces itself. Surfaces are quiet and near-black; a single hairline border is the only separation between one region and the next. The mood is calm custody rather than productivity theater. The system is deliberately monochrome: color is a signal, not decoration — blue means an outbound link, red means destruction, green means a stored secret. Restraint is the identity.",
+    "overview": "A Windows desktop room the user controls: a 32px title bar with real caption buttons, a quiet sidebar, a centered reading column, and an artifact pane beside the chat. Surfaces are flat charcoal steps separated by hairline borders; a single terracotta accent marks the few things that act. The system ships in light and dark themes sharing one structure; dark is the reference. Type is the system UI stack except the Georgia serif greeting and Cascadia Code.",
     "keyCharacteristics": [
-      "Near-black tonal ladder, no shadows, hairline borders only.",
-      "One accent color (blue) reserved for outbound links.",
-      "Sentence-light labels, uppercase only for status micro-labels.",
-      "Flat at rest and flat on interaction; state is shown by tone, not lift or glow."
+      "Windows-native shell: custom title bar, 900px minimum width, Ctrl-first shortcuts.",
+      "Flat tonal ladder, hairline borders, one terracotta accent.",
+      "32px controls, 8px cards, 12px composer and bubbles.",
+      "Serif greeting, system UI body, monospace code."
     ],
     "rules": [
-      { "name": "The One Signal Rule", "body": "Color appears only to carry meaning — a link, a destruction, a stored secret. If a color would merely make something prettier, it is not used.", "section": "colors" },
-      { "name": "The No-Accent-For-Emphasis Rule", "body": "Never tint a button, a selected row, or a heading with the accent. Selection is shown with neutral-800; the accent is for links alone.", "section": "colors" },
-      { "name": "The System-Font Rule", "body": "No webfont is loaded, ever. Type must be identical offline and must not add a network request.", "section": "typography" },
-      { "name": "The No-Shadow Rule", "body": "No box-shadow outside the dialog's least-necessary case. If a region needs to separate, step the tone or add a border.", "section": "elevation" },
-      { "name": "The Flat-By-Default Rule", "body": "Depth is conveyed entirely by the neutral ladder and 1px borders. A raised region is a lighter fill, never a floating card.", "section": "elevation" }
+      { "name": "The One Signal Rule", "body": "Color appears only to carry meaning. If a color would merely decorate, it is not used.", "section": "colors" },
+      { "name": "The Accent-Is-Action Rule", "body": "The accent marks things the user can act on — never plain text, never selection alone.", "section": "colors" },
+      { "name": "The System-Font Rule", "body": "No webfont is loaded, ever.", "section": "typography" },
+      { "name": "The Serif-Is-Greeting Rule", "body": "Serif appears only in the welcome greeting and top-level view titles.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "No shadows on surfaces; floating layers alone may cast one.", "section": "elevation" }
     ],
     "dos": [
-      "Do separate regions with a 1px Vault Line border or a step on the neutral ladder — never a shadow.",
-      "Do reserve text-primary buttons for the single most important action on a screen.",
-      "Do keep the reading column to a 768px measure.",
-      "Do show keyboard focus with a visible 2px ring on every interactive element."
+      "Do separate regions with a 1px Line border or a step on the tonal ladder.",
+      "Do reserve the primary button for the single main action on a screen.",
+      "Do keep the reading column at 760px and the welcome column at 720px.",
+      "Do show keyboard focus with a visible 2px accent ring on every control.",
+      "Do keep destructive actions behind the confirm dialog."
     ],
     "donts": [
-      "Don't introduce a second accent hue or tint a selection with blue.",
-      "Don't add hover transforms, lifts, or glows; hover is a tone step only.",
-      "Don't load a webfont — the system stack is the identity.",
+      "Don't add shadows to surfaces; floating layers only.",
+      "Don't load a webfont or use serif outside greetings and view titles.",
+      "Don't ship a control that does nothing.",
       "Don't use color as the only cue for state."
     ]
   }

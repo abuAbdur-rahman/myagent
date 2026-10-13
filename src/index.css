@@ -1,36 +1,88 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+:root {
+  --bg: #f3f3f3;
+  --sidebar: #eeeeee;
+  --surface: #ffffff;
+  --surface-2: #f9f9f9;
+  --border: #e0e0e0;
+  --text: #1b1b1b;
+  --muted: #6b6b6b;
+  --hover: rgba(0, 0, 0, 0.05);
+  --active: rgba(0, 0, 0, 0.09);
+  --accent: #c96442;
+  --accent-contrast: #fff;
+  --danger: #c42b1c;
+  --success: #0f7b0f;
+  --warn: #9d5d00;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --fs: 15px;
+  color-scheme: light;
+}
 
-  /* Vault ladder — the neutral scale IS the brand */
-  --color-neutral-950: #0a0a0a;
-  --color-neutral-900: #171717;
-  --color-neutral-800: #262626;
-  --color-neutral-700: #404040;
-  --color-neutral-600: #525252;
-  --color-neutral-500: #737373;
-  --color-neutral-400: #a3a3a3;
-  --color-neutral-300: #d4d4d4;
-  --color-neutral-200: #e5e5e5;
-  --color-neutral-100: #f5f5f5;
+:root[data-theme="dark"] {
+  --bg: #202020;
+  --sidebar: #1b1b1b;
+  --surface: #2b2b2b;
+  --surface-2: #323232;
+  --border: #3d3d3d;
+  --text: #f2f2f2;
+  --muted: #a0a0a0;
+  --hover: rgba(255, 255, 255, 0.06);
+  --active: rgba(255, 255, 255, 0.1);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --warn: #e0a040;
+  color-scheme: dark;
+}
 
-  /* Semantic tokens */
-  --color-vault-black: #0a0a0a;
-  --color-vault-surface: #171717;
-  --color-vault-raised: #262626;
-  --color-vault-line: #404040;
-  --color-text-primary: #f5f5f5;
-  --color-text-muted: #a3a3a3;
-  --color-text-faint: #737373;
-  --color-accent-link: #60a5fa;
-  --color-destroy: #dc2626;
-  --color-destroy-hover: #ef4444;
-  --color-alarm: #fca5a5;
-  --color-stored: #4ade80;
-  --color-focus: #737373;
+@theme inline {
+  --color-bg: var(--bg);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
 
-  --radius-control: 6px;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-mono: "Cascadia Code", Consolas, monospace;
+
+  --radius-control: 4px;
+  --radius-card: 8px;
+  --radius-composer: 12px;
+
+  /* Interim compat: pre-overhaul token names used by dialogs/panels that
+     U7/U8/U10 rebuild. Remove once those files use semantic tokens. */
+  --color-vault-black: var(--bg);
+  --color-vault-surface: var(--surface);
+  --color-vault-raised: var(--surface-2);
+  --color-vault-line: var(--border);
+  --color-text-primary: var(--text);
+  --color-text-muted: var(--muted);
+  --color-text-faint: var(--muted);
+  --color-accent-link: var(--accent);
+  --color-destroy: var(--danger);
+  --color-destroy-hover: var(--danger);
+  --color-alarm: var(--danger);
+  --color-stored: var(--success);
+  --color-focus: var(--accent);
+  --color-neutral-100: var(--text);
+  --color-neutral-200: var(--text);
+  --color-neutral-300: var(--text);
+  --color-neutral-400: var(--muted);
+  --color-neutral-500: var(--muted);
+  --color-neutral-700: var(--border);
+  --color-neutral-800: var(--surface-2);
+  --color-neutral-900: var(--surface);
+  --color-neutral-950: var(--bg);
   --radius-panel: 8px;
 }
 
@@ -41,7 +93,117 @@ body,
 }
 
 body {
-  color-scheme: dark;
-  background-color: var(--color-vault-black);
-  color: var(--color-text-primary);
+  overflow: hidden;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  pointer-events: none;
+  z-index: 999;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+kbd {
+  font: 12px var(--font-mono);
+  border: 1px solid var(--color-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 5px;
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+}
+
+.shell-grid {
+  transition: grid-template-columns 0.15s ease-out;
+}
+
+.dots i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-muted);
+  margin-right: 4px;
+  animation: typing-blink 1s infinite;
+}
+.dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background: var(--color-accent);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: caret-blink 1s steps(2) infinite;
+}
+
+@keyframes typing-blink {  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

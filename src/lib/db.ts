@@ -92,17 +92,21 @@ export async function createConversation(
     title: "New chat",
     connection_id: connectionId,
     project_id: projectId,
+    pinned: 0,
+    compacted: 0,
     model,
     created_at: now,
     updated_at: now,
   };
   await db.execute(
-    "INSERT INTO conversations (id, title, connection_id, project_id, model, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    "INSERT INTO conversations (id, title, connection_id, project_id, pinned, compacted, model, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     [
       conversation.id,
       conversation.title,
       conversation.connection_id,
       conversation.project_id,
+      conversation.pinned,
+      conversation.compacted,
       conversation.model,
       conversation.created_at,
       conversation.updated_at,
@@ -183,6 +187,94 @@ export async function updateMessage(id: string, content: string): Promise<void> 
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE id = $1", [id]);
+}
+
+export async function truncateConversation(
+  conversationId: string,
+  keepThroughId: string,
+): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<{ id: string }[]>(
+    "SELECT id FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
+    [conversationId],
+  );
+  const index = rows.findIndex((row) => row.id === keepThroughId);
+  const after = index >= 0 ? rows.slice(index + 1) : rows;
+  for (const row of after) {
+    await db.execute("DELETE FROM messages WHERE id = $1", [row.id]);
+  }
+}
+
+export async function clearConversation(conversationId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM messages WHERE conversation_id = $1", [conversationId]);
+}
+
+export async function branchConversation(
+  sourceId: string,
+  upToMessageId: string,
+  title: string,
+): Promise<Conversation> {
+  const db = await getDb();
+  const [source] = await db.select<Conversation[]>(
+    "SELECT * FROM conversations WHERE id = $1",
+    [sourceId],
+  );
+  if (!source) throw new Error("Conversation not found");
+  const now = Date.now();
+  const branched: Conversation = {
+    ...source,
+    id: newId(),
+    title,
+    pinned: 0,
+    compacted: 0,
+    created_at: now,
+    updated_at: now,
+  };
+  await db.execute(
+    "INSERT INTO conversations (id, title, connection_id, project_id, pinned, compacted, model, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    [
+      branched.id,
+      branched.title,
+      branched.connection_id,
+      branched.project_id,
+      branched.pinned,
+      branched.compacted,
+      branched.model,
+      branched.created_at,
+      branched.updated_at,
+    ],
+  );
+  const rows = await db.select<Message[]>(
+    "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
+    [sourceId],
+  );
+  const index = rows.findIndex((m) => m.id === upToMessageId);
+  const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
+  for (const m of keep) {
+    await db.execute(
+      "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
+      [newId(), branched.id, m.role, m.content, m.created_at],
+    );
+  }
+  return branched;
+}
+
+export async function toggleConversationPin(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE conversations SET pinned = CASE WHEN pinned = 1 THEN 0 ELSE 1 END, updated_at = $1 WHERE id = $2",
+    [Date.now(), id],
+  );
+}
+
+export async function setConversationCompacted(id: string, compacted: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE conversations SET compacted = $1, updated_at = $2 WHERE id = $3", [
+    compacted ? 1 : 0,
+    Date.now(),
+    id,
+  ]);
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -297,4 +389,26 @@ export async function updateMemory(
 export async function deleteMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM memories WHERE id = $1", [id]);
+}
+
+export interface DatabaseStats {
+  conversations: number;
+  messages: number;
+  memories: number;
+  projects: number;
+}
+
+export async function stats(): Promise<DatabaseStats> {
+  const db = await getDb();
+  const count = async (table: string) => {
+    const rows = await db.select<{ n: number }[]>(`SELECT COUNT(*) AS n FROM ${table}`);
+    return rows[0]?.n ?? 0;
+  };
+  const [conversations, messages, memories, projects] = await Promise.all([
+    count("conversations"),
+    count("messages"),
+    count("memories"),
+    count("projects"),
+  ]);
+  return { conversations, messages, memories, projects };
 }

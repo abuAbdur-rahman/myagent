@@ -2,6 +2,8 @@ import type { Memory, Project } from "./types";
 
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
+const DEFAULT_MODEL_CONTEXT = 128_000;
+const COMPACT_WINDOW = 4;
 
 export interface ContextInput {
   globalMemories: Memory[];
@@ -44,4 +46,20 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   if (blocks.length === 0) return null;
 
   return blocks.join("\n\n").slice(0, MAX_CHARS);
+}
+
+export function applyCompactWindow<T extends { content: string }>(turns: T[], compacted: boolean): T[] {
+  if (!compacted) return turns;
+  return turns.slice(-COMPACT_WINDOW);
+}
+
+export function estimateContext(
+  turns: { content: string }[],
+  system: string | null,
+): { tokens: number; limit: number; pct: number } {
+  const chars =
+    (system ?? "").length + turns.reduce((sum, turn) => sum + turn.content.length, 0);
+  const tokens = Math.round(chars / 4);
+  const pct = Math.min(100, Math.round((tokens / DEFAULT_MODEL_CONTEXT) * 100));
+  return { tokens, limit: DEFAULT_MODEL_CONTEXT, pct };
 }
