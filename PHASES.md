@@ -72,18 +72,22 @@ Goal: every push and PR to `main` is verified automatically.
 
 ---
 
-## Phase 6 — Release workflow
+## Phase 6 — Release workflow ✅
 Goal: tagging a version produces an NSIS installer and a GitHub Release.
 
-- [ ] `.github/workflows/release.yml` on `v*` tags.
-- [ ] `tauri-apps/tauri-action` builds the NSIS bundle and drafts the release.
-- [ ] Version is taken from the tag.
+- [x] `.github/workflows/release.yml` on `v*` tags.
+- [x] `tauri-apps/tauri-action` builds the NSIS bundle and drafts the release.
+- [x] Version is taken from the tag.
+
+Note: `ci.yml` and `release.yml` landed in the same commit (both were staged at
+once); the follow-up commit pinned every action to a full commit SHA and added
+job timeouts and release concurrency.
 
 ---
 
-## Phase 7 — Docs, verification, and the RE close-out
+## Phase 7 — Docs, verification, and the RE close-out ✅
 Goal: the repo explains itself and the whole flow is proven.
 
-- [ ] `AGENTS.md` and `docs/references/*` cover memory, projects, and release.
-- [ ] `README.md` gives install, BYOK, memory, and project usage.
-- [ ] Full local gate green; branch pushed.
+- [x] `AGENTS.md` and `docs/references/*` cover memory, projects, and release.
+- [x] `README.md` gives install, BYOK, memory, and project usage.
+- [x] Full local gate green; branch pushed.

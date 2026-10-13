@@ -54,6 +54,16 @@ or run it via `npx -y`.
 - Never commit secrets, `.env`, `node_modules/`, `dist/`, `src-tauri/target/`.
 - Pre-push sanity: `git diff --cached` shows no key material.
 
+## GitHub Actions
+
+- `.github/workflows/ci.yml` — on push/PR to `main`: `npm ci`, `tsc --noEmit`,
+  `vite build`, `cargo fmt/clippy/check`, `fallow dead-code` on
+  `windows-latest`.
+- `.github/workflows/release.yml` — on a `v*` tag: `tauri-action` builds the NSIS
+  installer and drafts a GitHub Release.
+- All third-party actions are pinned to full commit SHAs. Do not introduce a
+  mutable tag; resolve the SHA and add the version as a comment.
+
 ## Change summary
 
 After a change, report:

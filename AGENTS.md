@@ -5,7 +5,8 @@
 Windows-only desktop chat client. Local-first BYOK: the user's API keys live in
 the Windows Credential Manager and never reach the webview; a Rust process
 proxies OpenAI-compatible streaming to OpenRouter or a custom base URL; chats
-persist in local SQLite.
+persist in local SQLite. Chats can be grouped under **Projects**, and durable
+**Memory** (global or per-project) is injected as bounded context on each send.
 
 ---
 
@@ -27,10 +28,15 @@ npm run tauri dev        # run the app
 npm run tauri build      # NSIS installer
 npx tsc --noEmit         # frontend types
 npm run build            # tsc + vite build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo check --manifest-path src-tauri/Cargo.toml
 fallow dead-code         # unused code + dependency hygiene
 ocr review -c <sha>      # AI review gate (see Workflow)
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same checks on push/PR to `main`.
+Releases are cut by tagging `v*` (see `.github/workflows/release.yml`).
 
 Run every check before saying "done".
 

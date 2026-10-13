@@ -40,17 +40,29 @@ key up in the Credential Manager and attaches it to the outbound request.
 | `src-tauri/src/state.rs` | Per-request cancel tokens, cleaned up on completion |
 | `src-tauri/src/error.rs` | `AppError` enum (Vault / Network / Upstream / Internal) |
 | `src/lib/store.tsx` | App state, send/stop, persistence orchestration |
-| `src/lib/db.ts` | SQLite access layer (connections, conversations, messages) |
+| `src/lib/context.ts` | `buildSystemPrompt` — bounded global + project context |
+| `src/lib/db.ts` | SQLite access layer (connections, conversations, messages, projects, memories) |
 | `src/lib/api.ts` | Typed `invoke` wrappers |
 | `src/lib/types.ts` | Zod schemas + inferred types |
+
+## Context assembly
+
+Before each send, `buildSystemPrompt` assembles a single leading system message
+from global memory, the active project's description/instructions, and project
+memory. It is bounded (`MAX_MEMORIES` 24, `MAX_CHARS` 6000) and returns `null`
+when there is nothing to add, so a context-free request is identical to the
+baseline. The injected message is sent to the provider but never written to the
+`messages` table.
 
 ## Database schema (`sqlite:myagent.db`)
 
 ```sql
 connections(id PK, name, base_url, kind, default_model, created_at)
-conversations(id PK, title, connection_id, model, created_at, updated_at)
+conversations(id PK, title, connection_id, project_id, model, created_at, updated_at)
 messages(id PK, conversation_id FK→conversations, role, content, created_at)
--- index: messages(conversation_id, created_at)
+projects(id PK, name, description, instructions, created_at, updated_at)
+memories(id PK, scope, project_id, kind, content, created_at, updated_at)
+-- indexes: messages(conversation_id, created_at), memories(scope, project_id)
 ```
 
 Secrets are **not** in the database. The `connections` row holds only metadata;
@@ -63,11 +75,15 @@ connection's `id` as the account name.
 - The assistant message row is created (empty) before streaming so the final
   update is never a no-op.
 - Cancellation is cooperative and cleaned up; the registry does not grow.
+- The injected system message is derived at send time and never persisted.
 - All frontend state that cross-checks the DB treats the DB as truth on read.
 
-## Not yet built (product-required)
+## Built
 
-- **Memory** — durable cross-chat context.
-- **Projects** — grouping work with shared context.
+- **Memory** — global and per-project, user-managed.
+- **Projects** — group chats with shared instructions and memory.
 
-Both are recorded in `PRODUCT.md`; design for them, do not scaffold speculatively.
+## Not yet built
+
+- Automatic memory extraction from conversations.
+- Attaching files or images to a project as shared context.
