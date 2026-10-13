@@ -4,7 +4,7 @@ export interface Artifact {
   code: string;
 }
 
-const HTML_FENCE = /```(html|htm)\n([\s\S]*?)```/g;
+const HTML_FENCE = /```\s*(html|htm)\b[^\n]*\n([\s\S]*?)```/gi;
 
 export function extractArtifacts(content: string): Artifact[] {
   const artifacts: Artifact[] = [];
