@@ -2,6 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import {
   forwardRef,
   useEffect,
+  useRef,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -10,15 +11,21 @@ import {
 } from "react";
 import { cn } from "../lib/utils";
 
+const focusRing =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-0";
+
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500",
+  cn(
+    "inline-flex items-center justify-center gap-2 rounded-control text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+    focusRing,
+  ),
   {
     variants: {
       variant: {
-        default: "bg-neutral-100 text-neutral-900 hover:bg-white",
-        secondary: "bg-neutral-800 text-neutral-100 hover:bg-neutral-700",
-        ghost: "text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100",
-        destructive: "bg-red-600 text-white hover:bg-red-500",
+        default: "bg-text-primary text-vault-black hover:bg-white",
+        secondary: "bg-vault-raised text-text-primary hover:bg-neutral-700",
+        ghost: "text-text-muted hover:bg-vault-raised hover:text-text-primary",
+        destructive: "bg-destroy text-white hover:bg-destroy-hover",
       },
       size: {
         default: "h-9 px-4",
@@ -36,25 +43,18 @@ export interface ButtonProps
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, ...props }, ref) => (
-    <button
-      ref={ref}
-      className={cn(buttonVariants({ variant, size }), className)}
-      {...props}
-    />
+    <button ref={ref} className={cn(buttonVariants({ variant, size }), className)} {...props} />
   ),
 );
 Button.displayName = "Button";
 
+const fieldBase = cn(
+  "w-full rounded-control border border-vault-line bg-vault-surface px-3 text-sm text-text-primary placeholder:text-text-faint focus:border-text-faint focus:outline-none focus:ring-2 focus:ring-focus",
+);
+
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => (
-    <input
-      ref={ref}
-      className={cn(
-        "h-9 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none",
-        className,
-      )}
-      {...props}
-    />
+    <input ref={ref} className={cn("h-9", fieldBase, className)} {...props} />
   ),
 );
 Input.displayName = "Input";
@@ -63,27 +63,13 @@ export const Textarea = forwardRef<
   HTMLTextAreaElement,
   TextareaHTMLAttributes<HTMLTextAreaElement>
 >(({ className, ...props }, ref) => (
-  <textarea
-    ref={ref}
-    className={cn(
-      "w-full resize-none rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none",
-      className,
-    )}
-    {...props}
-  />
+  <textarea ref={ref} className={cn("resize-none py-2", fieldBase, className)} {...props} />
 ));
 Textarea.displayName = "Textarea";
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   ({ className, ...props }, ref) => (
-    <select
-      ref={ref}
-      className={cn(
-        "h-9 w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none",
-        className,
-      )}
-      {...props}
-    />
+    <select ref={ref} className={cn("h-9 px-2", fieldBase, className)} {...props} />
   ),
 );
 Select.displayName = "Select";
@@ -99,8 +85,11 @@ export function Dialog({
   title: string;
   children: ReactNode;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>("input, button, select, textarea")?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -117,14 +106,15 @@ export function Dialog({
       role="presentation"
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-2xl rounded-lg border border-neutral-800 bg-neutral-950 shadow-xl"
+        className="w-full max-w-2xl rounded-panel border border-vault-line bg-vault-black"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
-          <h2 className="text-sm font-semibold text-neutral-100">{title}</h2>
+        <div className="flex items-center justify-between border-b border-vault-line px-4 py-3">
+          <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             ✕
           </Button>

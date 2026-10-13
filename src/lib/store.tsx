@@ -18,6 +18,9 @@ import type {
   Message,
 } from "./types";
 
+const ACTIVE_CONNECTION_KEY = "activeConnectionId";
+const MODEL_KEY = "model";
+
 interface AppContextValue {
   ready: boolean;
   error: string | null;
@@ -28,7 +31,7 @@ interface AppContextValue {
   activeConnectionId: string | null;
   selectConnection: (id: string | null) => void;
   refreshConnections: () => Promise<void>;
-  saveConnection: (input: ConnectionInput, id?: string) => Promise<void>;
+  saveConnection: (input: ConnectionInput, id?: string) => Promise<Connection>;
   removeConnection: (id: string) => Promise<void>;
 
   models: string[];
@@ -45,7 +48,7 @@ interface AppContextValue {
 
   messages: Message[];
   streaming: boolean;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string) => Promise<boolean>;
   stopStream: () => void;
 }
 
@@ -57,11 +60,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [connections, setConnections] = useState<Connection[]>([]);
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
-    () => localStorage.getItem("activeConnectionId"),
+    () => localStorage.getItem(ACTIVE_CONNECTION_KEY),
   );
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
-  const [model, setModelState] = useState(() => localStorage.getItem("model") ?? "");
+  const [model, setModelState] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -93,10 +96,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshConnections = useCallback(async () => {
     const rows = await db.listConnections();
     setConnections(rows);
-    if (!activeConnectionId && rows.length > 0) {
-      setActiveConnectionId(rows[0].id);
-    }
-  }, [activeConnectionId]);
+    setActiveConnectionId((prev) =>
+      prev && rows.some((row) => row.id === prev) ? prev : (rows[0]?.id ?? null),
+    );
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -109,16 +112,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setReady(true);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshConnections]);
 
   useEffect(() => {
-    if (activeConnectionId) localStorage.setItem("activeConnectionId", activeConnectionId);
-    else localStorage.removeItem("activeConnectionId");
+    if (activeConnectionId) {
+      localStorage.setItem(ACTIVE_CONNECTION_KEY, activeConnectionId);
+    } else {
+      localStorage.removeItem(ACTIVE_CONNECTION_KEY);
+    }
   }, [activeConnectionId]);
 
   useEffect(() => {
-    if (model) localStorage.setItem("model", model);
+    if (model) {
+      localStorage.setItem(MODEL_KEY, model);
+    } else {
+      localStorage.removeItem(MODEL_KEY);
+    }
   }, [model]);
 
   const refreshModels = useCallback(async () => {
@@ -149,23 +158,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (ready) void refreshModels();
-  }, [ready, activeConnectionId, refreshModels]);
+  }, [ready, activeConnection, refreshModels]);
 
   const selectConnection = useCallback((id: string | null) => {
     setActiveConnectionId(id);
     setModels([]);
+    setModelState("");
   }, []);
 
   const saveConnection = useCallback(
-    async (input: ConnectionInput, id?: string) => {
+    async (input: ConnectionInput, id?: string): Promise<Connection> => {
+      let saved: Connection;
       if (id) {
         const existing = connections.find((c) => c.id === id);
-        if (existing) await db.updateConnection({ ...existing, ...input });
+        if (!existing) throw new Error("Connection no longer exists");
+        saved = { ...existing, ...input };
+        await db.updateConnection(saved);
       } else {
-        const created = await db.createConnection(input);
-        setActiveConnectionId(created.id);
+        saved = await db.createConnection(input);
+        setActiveConnectionId(saved.id);
       }
       await refreshConnections();
+      return saved;
     },
     [connections, refreshConnections],
   );
@@ -182,18 +196,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setModel = useCallback((value: string) => setModelState(value), []);
 
-  const selectConversation = useCallback(
-    async (id: string | null) => {
-      setActiveConversationId(id);
-      setError(null);
-      if (!id) {
-        setMessages([]);
-        return;
-      }
-      setMessages(await db.listMessages(id));
-    },
-    [],
-  );
+  const selectConversation = useCallback(async (id: string | null) => {
+    setActiveConversationId(id);
+    setError(null);
+    if (!id) {
+      setMessages([]);
+      return;
+    }
+    setMessages(await db.listMessages(id));
+  }, []);
 
   const newConversation = useCallback(async () => {
     setActiveConversationId(null);
@@ -215,61 +226,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     const content = bufferRef.current;
-    if (content) {
-      void db.updateMessage(assistantId, content);
-    } else {
+    if (!content) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     }
-    void db.touchConversation(conversationId, {});
+    const persist = content
+      ? db.updateMessage(assistantId, content)
+      : db.deleteMessage(assistantId);
+    persist
+      .then(() => db.touchConversation(conversationId, {}))
+      .catch((e) => setError(String(e)));
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
-      if (streaming) return;
+    async (text: string): Promise<boolean> => {
+      if (streaming) return false;
       const connection = connRef.current;
       if (!connection) {
         setError("Add a connection in Settings first.");
-        return;
+        return false;
       }
       if (!modelRef.current) {
         setError("Select a model first.");
-        return;
+        return false;
       }
 
       setError(null);
       const history = messages.filter((m) => m.content.length > 0);
 
       let conversationId = convIdRef.current;
-      if (!conversationId) {
-        const created = await db.createConversation(connection.id, modelRef.current);
-        conversationId = created.id;
-        setConversations((prev) => [created, ...prev]);
-        setActiveConversationId(created.id);
-        setMessages([]);
+      let assistantMsg: Message;
+      try {
+        if (!conversationId) {
+          const created = await db.createConversation(connection.id, modelRef.current);
+          conversationId = created.id;
+          setConversations((prev) => [created, ...prev]);
+          setActiveConversationId(created.id);
+          setMessages([]);
+        }
+
+        const userMsg = await db.addMessage(conversationId, "user", text);
+        assistantMsg = await db.addMessage(conversationId, "assistant", "");
+        setMessages((prev) => [...prev, userMsg, assistantMsg]);
+
+        const current = conversations.find((c) => c.id === conversationId);
+        if (!current || current.title === "New chat") {
+          const title = text.slice(0, 48) || "New chat";
+          await db.touchConversation(conversationId, { title, model: modelRef.current });
+          setConversations((prev) =>
+            prev.map((c) => (c.id === conversationId ? { ...c, title } : c)),
+          );
+        } else {
+          await db.touchConversation(conversationId, { model: modelRef.current });
+        }
+      } catch (e) {
+        setError(String(e));
+        return false;
       }
 
-      const userMsg = await db.addMessage(conversationId, "user", text);
-      const assistantMsg: Message = {
-        id: newId(),
-        conversation_id: conversationId,
-        role: "assistant",
-        content: "",
-        created_at: Date.now(),
-      };
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-
-      const currentConversation = conversations.find((c) => c.id === conversationId);
-      if (!currentConversation || currentConversation.title === "New chat") {
-        const title = text.slice(0, 48) || "New chat";
-        await db.touchConversation(conversationId, { title, model: modelRef.current });
-        setConversations((prev) =>
-          prev.map((c) => (c.id === conversationId ? { ...c, title } : c)),
-        );
-      } else {
-        await db.touchConversation(conversationId, { model: modelRef.current });
-      }
-
-      const payload = [...history, userMsg].map((m) => ({
+      const payload = [...history, { role: "user" as const, content: text }].map((m) => ({
         role: m.role,
         content: m.content,
       }));
@@ -297,8 +311,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
               setMessages((prev) =>
                 prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
               );
-            } else if (event.type === "error") {
-              setError(event.message);
             }
           },
         );
@@ -312,6 +324,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           finalize(assistantMsg.id, conversationId);
         }
       }
+
+      return true;
     },
     [conversations, finalize, messages, streaming],
   );
@@ -321,7 +335,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!id) return;
     requestIdRef.current = null;
     setStreaming(false);
-    void api.cancelStream(id);
+    api.cancelStream(id).catch((e) => setError(String(e)));
     const assistantId = assistantMsgIdRef.current;
     const conversationId = convIdRef.current;
     assistantMsgIdRef.current = null;

@@ -5,6 +5,7 @@ pub enum AppError {
     Vault(String),
     Network(String),
     Upstream(String),
+    Internal(String),
 }
 
 impl fmt::Display for AppError {
@@ -13,6 +14,7 @@ impl fmt::Display for AppError {
             AppError::Vault(m) => write!(f, "vault error: {m}"),
             AppError::Network(m) => write!(f, "network error: {m}"),
             AppError::Upstream(m) => write!(f, "upstream error: {m}"),
+            AppError::Internal(m) => write!(f, "internal error: {m}"),
         }
     }
 }
@@ -22,12 +24,6 @@ impl std::error::Error for AppError {}
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         AppError::Network(e.to_string())
-    }
-}
-
-impl From<tauri::Error> for AppError {
-    fn from(e: tauri::Error) -> Self {
-        AppError::Upstream(e.to_string())
     }
 }
 

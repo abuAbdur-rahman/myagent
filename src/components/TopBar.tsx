@@ -14,7 +14,7 @@ export function TopBar() {
   } = useApp();
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-neutral-800 px-4">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-vault-line px-4">
       <Select
         className="w-48"
         value={activeConnectionId ?? ""}

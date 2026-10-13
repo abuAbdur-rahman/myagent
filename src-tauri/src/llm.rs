@@ -1,6 +1,8 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use tauri::State;
+use tokio::sync::Notify;
 
 use crate::error::{AppError, AppResult};
 use crate::state::StreamState;
@@ -11,7 +13,6 @@ use crate::vault;
 pub enum StreamEvent {
     Delta { text: String },
     Done,
-    Error { message: String },
 }
 
 #[derive(Deserialize)]
@@ -31,39 +32,56 @@ pub struct ChatRequest {
 }
 
 fn endpoint(base_url: &str, path: &str) -> String {
-    format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+async fn error_body(resp: reqwest::Response) -> String {
+    let status = resp.status();
+    match resp.text().await {
+        Ok(body) if !body.is_empty() => format!("{status}: {body}"),
+        Ok(_) => status.to_string(),
+        Err(e) => format!("{status} (unreadable body: {e})"),
+    }
 }
 
 #[tauri::command]
-pub async fn list_models(base_url: String, connection_id: String) -> AppResult<Vec<String>> {
+pub async fn list_models(
+    base_url: String,
+    connection_id: String,
+    client: State<'_, reqwest::Client>,
+) -> AppResult<Vec<String>> {
     let key = vault::get_api_key(&connection_id)?;
-    let resp = reqwest::Client::new()
+    let resp = client
         .get(endpoint(&base_url, "models"))
         .bearer_auth(key)
         .send()
         .await?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::Upstream(format!("{status}: {body}")));
+        return Err(AppError::Upstream(error_body(resp).await));
     }
 
     let value: serde_json::Value = resp.json().await?;
-    let mut models = Vec::new();
-    if let Some(data) = value.get("data").and_then(|d| d.as_array()) {
-        for item in data {
-            if let Some(id) = item.get("id").and_then(|i| i.as_str()) {
-                models.push(id.to_string());
-            }
-        }
-    }
+    let mut models: Vec<String> = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     models.sort();
     Ok(models)
 }
 
 #[tauri::command]
-pub fn cancel_stream(request_id: String, state: tauri::State<'_, StreamState>) -> AppResult<()> {
+pub fn cancel_stream(request_id: String, state: State<'_, StreamState>) -> AppResult<()> {
     state.cancel(&request_id)
 }
 
@@ -71,10 +89,24 @@ pub fn cancel_stream(request_id: String, state: tauri::State<'_, StreamState>) -
 pub async fn chat_stream(
     req: ChatRequest,
     on_event: Channel<StreamEvent>,
-    state: tauri::State<'_, StreamState>,
+    state: State<'_, StreamState>,
+    client: State<'_, reqwest::Client>,
 ) -> AppResult<()> {
     let key = vault::get_api_key(&req.connection_id)?;
+    let cancel = state.register(&req.request_id)?;
 
+    let result = stream_completion(&client, &req, key, &on_event, &cancel).await;
+    state.finish(&req.request_id);
+    result
+}
+
+async fn stream_completion(
+    client: &reqwest::Client,
+    req: &ChatRequest,
+    key: String,
+    on_event: &Channel<StreamEvent>,
+    cancel: &Notify,
+) -> AppResult<()> {
     let messages: Vec<serde_json::Value> = req
         .messages
         .iter()
@@ -90,7 +122,7 @@ pub async fn chat_stream(
         body["temperature"] = serde_json::json!(temperature);
     }
 
-    let resp = reqwest::Client::new()
+    let resp = client
         .post(endpoint(&req.base_url, "chat/completions"))
         .bearer_auth(key)
         .json(&body)
@@ -98,27 +130,25 @@ pub async fn chat_stream(
         .await?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        let message = format!("{status}: {text}");
-        let _ = on_event.send(StreamEvent::Error {
-            message: message.clone(),
-        });
-        return Err(AppError::Upstream(message));
+        return Err(AppError::Upstream(error_body(resp).await));
     }
 
     let mut stream = resp.bytes_stream();
-    let mut buffer = String::new();
+    let mut buffer: Vec<u8> = Vec::new();
+    let notified = cancel.notified();
+    tokio::pin!(notified);
 
-    while let Some(chunk) = stream.next().await {
-        if state.take_cancelled(&req.request_id) {
-            return Ok(());
-        }
-        let chunk = chunk?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+    loop {
+        let next = tokio::select! {
+            _ = &mut notified => return Ok(()),
+            next = stream.next() => next,
+        };
 
-        while let Some(pos) = buffer.find('\n') {
-            let line = buffer[..pos].trim().to_string();
+        let Some(chunk) = next else { break };
+        buffer.extend_from_slice(&chunk?);
+
+        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+            let line = String::from_utf8_lossy(&buffer[..pos]).trim().to_string();
             buffer.drain(..=pos);
 
             let Some(data) = line.strip_prefix("data:") else {
@@ -139,10 +169,11 @@ pub async fn chat_stream(
                         text: text.to_string(),
                     });
                 }
-                if let Some(err) = value.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
-                    let _ = on_event.send(StreamEvent::Error {
-                        message: err.to_string(),
-                    });
+                if let Some(err) = value
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                {
                     return Err(AppError::Upstream(err.to_string()));
                 }
             }

@@ -6,14 +6,18 @@ export function MessageInput() {
   const { sendMessage, stopStream, streaming, activeConnection, model } = useApp();
   const [value, setValue] = useState("");
 
-  const canSend =
-    value.trim().length > 0 && !!activeConnection && !!model && !streaming;
+  const canSubmit = value.trim().length > 0 && !!activeConnection && !!model && !streaming;
 
   const submit = async () => {
     const text = value.trim();
-    if (!text || !canSend) return;
+    if (!canSubmit) return;
     setValue("");
-    await sendMessage(text);
+    try {
+      const accepted = await sendMessage(text);
+      if (!accepted) setValue(text);
+    } catch {
+      setValue(text);
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -24,7 +28,7 @@ export function MessageInput() {
   };
 
   return (
-    <div className="border-t border-neutral-800 p-4">
+    <div className="border-t border-vault-line p-4">
       <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
         <Textarea
           value={value}
@@ -37,6 +41,7 @@ export function MessageInput() {
               : "Add a connection in Settings to start"
           }
           disabled={!activeConnection}
+          aria-label="Message"
           className="max-h-40"
         />
         {streaming ? (
@@ -44,7 +49,7 @@ export function MessageInput() {
             Stop
           </Button>
         ) : (
-          <Button onClick={() => void submit()} disabled={!canSend} className="h-auto self-stretch">
+          <Button onClick={() => void submit()} disabled={!canSubmit} className="h-auto self-stretch">
             Send
           </Button>
         )}

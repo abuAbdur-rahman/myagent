@@ -12,7 +12,10 @@ let dbPromise: Promise<Database> | null = null;
 
 function getDb() {
   if (!dbPromise) {
-    dbPromise = Database.load("sqlite:myagent.db");
+    dbPromise = Database.load("sqlite:myagent.db").catch((error) => {
+      dbPromise = null;
+      throw error;
+    });
   }
   return dbPromise;
 }
@@ -104,21 +107,19 @@ export async function touchConversation(
   patch: Partial<Pick<Conversation, "title" | "model" | "connection_id">>,
 ): Promise<void> {
   const db = await getDb();
-  const current = await db.select<Conversation[]>(
-    "SELECT * FROM conversations WHERE id = $1",
-    [id],
-  );
-  if (!current[0]) return;
-  const merged = { ...current[0], ...patch, updated_at: Date.now() };
+  const assignments: string[] = [];
+  const values: unknown[] = [];
+  for (const [column, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    values.push(value);
+    assignments.push(`${column} = $${values.length}`);
+  }
+  values.push(Date.now());
+  assignments.push(`updated_at = $${values.length}`);
+  values.push(id);
   await db.execute(
-    "UPDATE conversations SET title = $1, model = $2, connection_id = $3, updated_at = $4 WHERE id = $5",
-    [
-      merged.title,
-      merged.model,
-      merged.connection_id,
-      merged.updated_at,
-      id,
-    ],
+    `UPDATE conversations SET ${assignments.join(", ")} WHERE id = $${values.length}`,
+    values,
   );
 }
 

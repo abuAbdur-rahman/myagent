@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import githubDark from "shiki/themes/github-dark.mjs";
@@ -84,6 +85,14 @@ export function Markdown({ content }: { content: string }) {
   const raw = marked.parse(content, { async: false }) as string;
   const html = DOMPurify.sanitize(raw);
 
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    const anchor = (event.target as HTMLElement).closest("a");
+    const href = anchor?.getAttribute("href");
+    if (!href || !/^https?:\/\//i.test(href)) return;
+    event.preventDefault();
+    void openUrl(href);
+  };
+
   useEffect(() => {
     let cancelled = false;
     const root = ref.current;
@@ -123,7 +132,8 @@ export function Markdown({ content }: { content: string }) {
   return (
     <div
       ref={ref}
-      className="markdown text-sm leading-relaxed text-neutral-200 [&_a]:text-blue-400 [&_code]:rounded [&_code]:bg-neutral-800 [&_code]:px-1 [&_h1]:mt-4 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:mb-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:p-3 [&_table]:w-full [&_td]:border [&_td]:border-neutral-700 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-neutral-700 [&_th]:px-2 [&_th]:py-1 [&_ul]:mb-2"
+      className="markdown text-sm leading-relaxed text-neutral-200 [&_a]:text-accent-link [&_code]:rounded-control [&_code]:bg-vault-raised [&_code]:px-1 [&_h1]:mt-4 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:mb-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-panel [&_pre]:p-3 [&_table]:w-full [&_td]:border [&_td]:border-vault-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-vault-line [&_th]:px-2 [&_th]:py-1 [&_ul]:mb-2"
+      onClick={handleClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

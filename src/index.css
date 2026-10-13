@@ -2,6 +2,36 @@
 
 @theme {
   --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+
+  /* Vault ladder — the neutral scale IS the brand */
+  --color-neutral-950: #0a0a0a;
+  --color-neutral-900: #171717;
+  --color-neutral-800: #262626;
+  --color-neutral-700: #404040;
+  --color-neutral-600: #525252;
+  --color-neutral-500: #737373;
+  --color-neutral-400: #a3a3a3;
+  --color-neutral-300: #d4d4d4;
+  --color-neutral-200: #e5e5e5;
+  --color-neutral-100: #f5f5f5;
+
+  /* Semantic tokens */
+  --color-vault-black: #0a0a0a;
+  --color-vault-surface: #171717;
+  --color-vault-raised: #262626;
+  --color-vault-line: #404040;
+  --color-text-primary: #f5f5f5;
+  --color-text-muted: #a3a3a3;
+  --color-text-faint: #737373;
+  --color-accent-link: #60a5fa;
+  --color-destroy: #dc2626;
+  --color-destroy-hover: #ef4444;
+  --color-alarm: #fca5a5;
+  --color-stored: #4ade80;
+  --color-focus: #737373;
+
+  --radius-control: 6px;
+  --radius-panel: 8px;
 }
 
 html,
@@ -11,6 +41,7 @@ body,
 }
 
 body {
-  background-color: var(--color-neutral-950);
-  color: var(--color-neutral-100);
+  color-scheme: dark;
+  background-color: var(--color-vault-black);
+  color: var(--color-text-primary);
 }

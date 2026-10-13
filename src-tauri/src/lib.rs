@@ -3,6 +3,8 @@ mod llm;
 mod state;
 mod vault;
 
+use std::time::Duration;
+
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,6 +49,13 @@ pub fn run() {
             tauri_plugin_sql::Builder::default()
                 .add_migrations("sqlite:myagent.db", migrations)
                 .build(),
+        )
+        .manage(
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .read_timeout(Duration::from_secs(60))
+                .build()
+                .expect("failed to build HTTP client"),
         )
         .manage(state::StreamState::default())
         .invoke_handler(tauri::generate_handler![

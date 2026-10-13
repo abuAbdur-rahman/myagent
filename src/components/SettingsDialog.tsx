@@ -25,7 +25,13 @@ export function SettingsDialog({
   open: boolean;
   onClose: () => void;
 }) {
-  const { connections, saveConnection, removeConnection, refreshModels } = useApp();
+  const {
+    connections,
+    activeConnectionId,
+    saveConnection,
+    removeConnection,
+    refreshModels,
+  } = useApp();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [apiKey, setApiKey] = useState("");
@@ -35,23 +41,37 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setStatus(null);
     setApiKey("");
-    if (editingId) {
-      const connection = connections.find((c) => c.id === editingId);
-      if (connection) {
-        setForm({
-          name: connection.name,
-          kind: connection.kind,
-          base_url: connection.base_url,
-          default_model: connection.default_model ?? "",
+
+    const connection = editingId
+      ? connections.find((c) => c.id === editingId)
+      : undefined;
+
+    if (connection) {
+      setForm({
+        name: connection.name,
+        kind: connection.kind,
+        base_url: connection.base_url,
+        default_model: connection.default_model ?? "",
+      });
+      void api
+        .hasApiKey(connection.id)
+        .then((has) => {
+          if (!cancelled) setKeyStored(has);
+        })
+        .catch(() => {
+          if (!cancelled) setKeyStored(false);
         });
-        void api.hasApiKey(connection.id).then(setKeyStored).catch(() => setKeyStored(false));
-      }
     } else {
       setForm(emptyForm);
       setKeyStored(false);
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [open, editingId, connections]);
 
   const startNew = () => {
@@ -75,7 +95,8 @@ export function SettingsDialog({
     }
     setBusy(true);
     try {
-      await saveConnection(parsed.data, editingId ?? undefined);
+      const saved = await saveConnection(parsed.data, editingId ?? undefined);
+      setEditingId(saved.id);
       setStatus("Saved.");
     } catch (e) {
       setStatus(String(e));
@@ -99,7 +120,7 @@ export function SettingsDialog({
       setApiKey("");
       setKeyStored(true);
       setStatus("Key stored in Windows Credential Manager.");
-      await refreshModels();
+      if (editingId === activeConnectionId) await refreshModels();
     } catch (e) {
       setStatus(String(e));
     } finally {
@@ -123,10 +144,20 @@ export function SettingsDialog({
 
   const remove = async () => {
     if (!editingId) return;
+    const target = connections.find((c) => c.id === editingId);
+    if (
+      !window.confirm(
+        `Delete "${target?.name ?? "this connection"}" and its stored API key? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     try {
       await removeConnection(editingId);
       startNew();
+    } catch (e) {
+      setStatus(String(e));
     } finally {
       setBusy(false);
     }
@@ -144,10 +175,10 @@ export function SettingsDialog({
               key={connection.id}
               type="button"
               onClick={() => setEditingId(connection.id)}
-              className={`w-full truncate rounded-md px-2 py-2 text-left text-sm ${
+              className={`w-full truncate rounded-control px-2 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${
                 editingId === connection.id
-                  ? "bg-neutral-800 text-neutral-100"
-                  : "text-neutral-400 hover:bg-neutral-800/60"
+                  ? "bg-vault-raised text-text-primary"
+                  : "text-text-muted hover:bg-vault-raised/60"
               }`}
             >
               {connection.name}
@@ -157,7 +188,7 @@ export function SettingsDialog({
 
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Name</label>
+            <label className="mb-1 block text-xs text-text-muted">Name</label>
             <Input
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -166,16 +197,12 @@ export function SettingsDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Provider</label>
+            <label className="mb-1 block text-xs text-text-muted">Provider</label>
             <Select
               value={form.kind}
               onChange={(e) => {
                 const kind = e.target.value as ProviderKind;
-                setForm({
-                  ...form,
-                  kind,
-                  base_url: DEFAULT_BASE_URLS[kind],
-                });
+                setForm({ ...form, kind, base_url: DEFAULT_BASE_URLS[kind] });
               }}
             >
               <option value="openrouter">OpenRouter</option>
@@ -184,7 +211,7 @@ export function SettingsDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Base URL</label>
+            <label className="mb-1 block text-xs text-text-muted">Base URL</label>
             <Input
               value={form.base_url}
               onChange={(e) => setForm({ ...form, base_url: e.target.value })}
@@ -193,7 +220,7 @@ export function SettingsDialog({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Default model</label>
+            <label className="mb-1 block text-xs text-text-muted">Default model</label>
             <Input
               value={form.default_model}
               onChange={(e) => setForm({ ...form, default_model: e.target.value })}
@@ -201,12 +228,10 @@ export function SettingsDialog({
             />
           </div>
 
-          <div className="rounded-md border border-neutral-800 p-3">
+          <div className="rounded-control border border-vault-line p-3">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs text-neutral-400">API key (BYOK)</span>
-              <span
-                className={`text-xs ${keyStored ? "text-green-400" : "text-neutral-500"}`}
-              >
+              <span className="text-xs text-text-muted">API key (BYOK)</span>
+              <span className={`text-xs ${keyStored ? "text-stored" : "text-text-faint"}`}>
                 {keyStored ? "Stored" : "Not stored"}
               </span>
             </div>
@@ -219,11 +244,7 @@ export function SettingsDialog({
                 disabled={!editingId}
                 autoComplete="off"
               />
-              <Button
-                variant="secondary"
-                onClick={() => void storeKey()}
-                disabled={!editingId || busy}
-              >
+              <Button variant="secondary" onClick={() => void storeKey()} disabled={!editingId || busy}>
                 Store
               </Button>
               <Button
@@ -237,7 +258,9 @@ export function SettingsDialog({
           </div>
 
           <div className="flex items-center justify-between pt-1">
-            <div className="text-xs text-neutral-400">{status}</div>
+            <div className="text-xs text-text-muted" role="status">
+              {status}
+            </div>
             <div className="flex gap-2">
               {editingId && (
                 <Button variant="destructive" onClick={() => void remove()} disabled={busy}>
