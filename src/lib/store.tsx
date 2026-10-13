@@ -36,6 +36,14 @@ const DISPLAY_NAME_KEY = "displayName";
 
 export type ThemeMode = "system" | "light" | "dark";
 
+interface ToolEntry {
+  id: string;
+  name: string;
+  summary: string;
+  status: "running" | "ok" | "err";
+  preview: string | null;
+}
+
 type View = "chat" | "projects" | "project";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
@@ -115,6 +123,7 @@ interface AppContextValue {
 
   messages: Message[];
   streaming: boolean;
+  toolLog: ToolEntry[];
   sendMessage: (text: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
@@ -170,6 +179,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === "1",
   );
@@ -530,6 +540,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const selectConversation = useCallback(async (id: string | null) => {
     setActiveConversationId(id);
     setError(null);
+    setToolLog([]);
     setView("chat");
     if (!id) {
       setMessages([]);
@@ -541,6 +552,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const newConversation = useCallback(async () => {
     setActiveConversationId(null);
     setMessages([]);
+    setToolLog([]);
     setError(null);
     setView("chat");
   }, []);
@@ -613,6 +625,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       bufferRef.current = "";
       assistantMsgIdRef.current = assistantMsg.id;
       setStreaming(true);
+      setToolLog([]);
 
       try {
         await api.chatStream(
@@ -622,6 +635,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             connectionId: connection.id,
             model: modelName,
             messages: payload,
+            enableTools: true,
+            projectId: projectRef.current?.id ?? null,
           },
           (event) => {
             if (requestIdRef.current !== requestId) return;
@@ -631,6 +646,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
               setMessages((prev) =>
                 prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
               );
+            } else if (event.type === "tool_start") {
+              setToolLog((prev) => [
+                ...prev,
+                {
+                  id: event.id,
+                  name: event.name,
+                  summary: event.summary,
+                  status: "running" as const,
+                  preview: null,
+                },
+              ]);
+            } else if (event.type === "tool_result") {
+              setToolLog((prev) =>
+                prev.map((entry) =>
+                  entry.id === event.id
+                    ? { ...entry, status: event.ok ? ("ok" as const) : ("err" as const), preview: event.preview }
+                    : entry,
+                ),
+              );
+            } else if (event.type === "artifact") {
+              openArtifact({ lang: event.lang, code: event.code });
+              toast(`Artifact saved: ${event.title}`);
             }
           },
         );
@@ -645,7 +682,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [finalize],
+    [finalize, openArtifact],
   );
 
   const resolveCompact = useCallback(
@@ -1013,6 +1050,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSettingsPage,
     messages,
     streaming,
+    toolLog,
     sendMessage,
     regenerate,
     editAndResubmit,

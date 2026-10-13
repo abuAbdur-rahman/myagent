@@ -72,6 +72,9 @@ export interface ChatStreamArgs {
   model: string;
   messages: { role: string; content: string }[];
   temperature?: number;
+  enableTools?: boolean;
+  maxIterations?: number;
+  projectId?: string | null;
 }
 
 export async function chatStream(
@@ -88,6 +91,9 @@ export async function chatStream(
       model: args.model,
       messages: args.messages,
       temperature: args.temperature,
+      enable_tools: args.enableTools ?? false,
+      max_iterations: args.maxIterations ?? null,
+      project_id: args.projectId ?? null,
     },
     onEvent: channel,
   });

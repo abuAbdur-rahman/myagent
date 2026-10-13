@@ -1,5 +1,7 @@
 # Round 3 — Composer, awareness, tools, identity, release 0.1.1
 
+**Status: T1–T7 shipped. T8 (release 0.1.1) and T9 (in-app updater) remain.**
+
 Follows the UI overhaul. Goal: a composer that behaves like Claude's, a model
 that knows the app and can act in it, correct errors, real titles, guarded
 context, product identity, and a tagged release.

@@ -99,6 +99,9 @@ export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delta"), text: z.string() }),
   z.object({ type: z.literal("done") }),
+  z.object({ type: z.literal("tool_start"), id: z.string(), name: z.string(), summary: z.string() }),
+  z.object({ type: z.literal("tool_result"), id: z.string(), ok: z.boolean(), preview: z.string() }),
+  z.object({ type: z.literal("artifact"), title: z.string(), lang: z.string(), code: z.string() }),
 ]);
 export type StreamEvent = z.infer<typeof streamEventSchema>;
 

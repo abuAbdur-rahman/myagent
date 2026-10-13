@@ -33,6 +33,9 @@ key is never returned to JavaScript.
 - **Projects** — group chats and give them shared description and instructions.
 - **Memory** — durable notes that are sent with your chats, globally or scoped to
   a project; save an assistant reply with one click.
+- **Agent tools** — the model can check the time, save and search memories, run
+  PowerShell commands, and open titled artifacts in the side panel. Every call
+  is shown inline as it runs.
 
 Memory and project context are assembled into a bounded system message on every
 send (max 24 notes, 6000 characters). Nothing is injected when there is no

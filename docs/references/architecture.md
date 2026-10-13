@@ -35,7 +35,8 @@ key up in the Credential Manager and attaches it to the outbound request.
 | File | Responsibility |
 |---|---|
 | `src-tauri/src/lib.rs` | Builder, SQLite migrations, managed `reqwest::Client` + `StreamState` |
-| `src-tauri/src/llm.rs` | `list_models`, `chat_stream`, `cancel_stream`; SSE parsing |
+| `src-tauri/src/llm.rs` | `list_models`, `chat_stream`, `cancel_stream`, `suggest_title`; SSE parsing; the agentic tool loop |
+| `src-tauri/src/tools.rs` | Tool specs, executors, SQLite access for memory tools |
 | `src-tauri/src/vault.rs` | Credential Manager set/get/has/delete by connection id |
 | `src-tauri/src/state.rs` | Per-request cancel tokens, cleaned up on completion |
 | `src-tauri/src/error.rs` | `AppError` enum (Vault / Network / Upstream / Internal) |
@@ -77,6 +78,31 @@ connection's `id` as the account name.
 - Cancellation is cooperative and cleaned up; the registry does not grow.
 - The injected system message is derived at send time and never persisted.
 - All frontend state that cross-checks the DB treats the DB as truth on read.
+- Every tool call is shown inline as it runs; nothing executes silently.
+
+## Acting through tools
+
+`chat_stream` runs an agentic loop when the request enables tools (the UI always
+does). Each round is a non-streaming completion with the tool specs; `tool_calls`
+are executed in Rust, appended as `tool` messages, and the loop repeats (max 8
+rounds) before one final streamed answer. If the provider rejects the `tools`
+parameter, the request degrades once to a plain streaming completion.
+
+| Tool | What it does | Limits |
+|---|---|---|
+| `get_time` | Current UTC time + Unix timestamp | — |
+| `remember` | Writes a memory (global or current project) | 2000 chars; project scope needs an active project |
+| `recall_memory` | Keyword search over global + project memories | 20 results max |
+| `run_powershell` | Runs a non-interactive command, returns output | 60s default timeout (5–300s), 32KB output cap, home directory |
+| `save_artifact` | Opens a titled code artifact in the side panel | 120-char title, 200KB code cap |
+
+Memory tools open the same SQLite file through a direct connection with a busy
+timeout, alongside the `tauri-plugin-sql` pool. Both writers are local and the
+volume is tiny; a busy database surfaces as a tool error, never corruption.
+
+New channel events: `tool_start {id, name, summary}`, `tool_result
+{id, ok, preview}`, `artifact {title, lang, code}`. The frontend renders the
+running log under the pending reply and opens artifact events in the panel.
 
 ## Built
 

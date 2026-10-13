@@ -41,4 +41,11 @@ impl StreamState {
             active.remove(request_id);
         }
     }
+
+    pub fn take_cancelled(&self, request_id: &str) -> bool {
+        let Ok(mut active) = self.active.lock() else {
+            return false;
+        };
+        active.remove(request_id).is_some()
+    }
 }

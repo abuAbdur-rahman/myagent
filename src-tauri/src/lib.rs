@@ -1,6 +1,7 @@
 mod error;
 mod llm;
 mod state;
+mod tools;
 mod vault;
 
 use std::time::Duration;

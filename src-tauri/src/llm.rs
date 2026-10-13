@@ -1,18 +1,36 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use tauri::ipc::Channel;
+use tauri::{AppHandle, State};
 use tokio::sync::Notify;
 
 use crate::error::{AppError, AppResult};
 use crate::state::StreamState;
+use crate::tools;
 use crate::vault;
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
-    Delta { text: String },
+    Delta {
+        text: String,
+    },
     Done,
+    ToolStart {
+        id: String,
+        name: String,
+        summary: String,
+    },
+    ToolResult {
+        id: String,
+        ok: bool,
+        preview: String,
+    },
+    Artifact {
+        title: String,
+        lang: String,
+        code: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -29,6 +47,12 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     pub temperature: Option<f32>,
+    #[serde(default)]
+    pub enable_tools: bool,
+    #[serde(default)]
+    pub max_iterations: Option<u8>,
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +73,10 @@ fn truncate_chars(text: &str, max: usize) -> String {
     }
 }
 
+fn truncate_preview(text: &str) -> String {
+    truncate_chars(text.trim(), 500)
+}
+
 fn endpoint(base_url: &str, path: &str) -> String {
     format!(
         "{}/{}",
@@ -64,6 +92,10 @@ async fn error_body(resp: reqwest::Response) -> String {
         Ok(_) => status.to_string(),
         Err(e) => format!("{status} (unreadable body: {e})"),
     }
+}
+
+fn is_tool_rejection(error: &AppError) -> bool {
+    matches!(error, AppError::Upstream(message) if message.to_lowercase().contains("tool"))
 }
 
 #[tauri::command]
@@ -166,31 +198,177 @@ pub async fn chat_stream(
     on_event: Channel<StreamEvent>,
     state: State<'_, StreamState>,
     client: State<'_, reqwest::Client>,
+    app: AppHandle,
 ) -> AppResult<()> {
     let key = vault::get_api_key(&req.connection_id)?;
     let cancel = state.register(&req.request_id)?;
 
-    let result = stream_completion(&client, &req, key, &on_event, &cancel).await;
+    let result = if req.enable_tools {
+        run_agentic(&client, &app, &req, key, &on_event, &cancel, &state).await
+    } else {
+        let history: Vec<serde_json::Value> = req
+            .messages
+            .iter()
+            .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+            .collect();
+        stream_completion(&client, &req, key, history, &on_event, &cancel).await
+    };
     state.finish(&req.request_id);
     result
+}
+
+async fn post_completion(
+    client: &reqwest::Client,
+    url: &str,
+    key: &str,
+    body: &serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let resp = client.post(url).bearer_auth(key).json(body).send().await?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+    resp.json().await.map_err(AppError::from)
+}
+
+fn tool_calls_of(message: &serde_json::Value) -> Vec<serde_json::Value> {
+    message
+        .get("tool_calls")
+        .and_then(|calls| calls.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+async fn run_agentic(
+    client: &reqwest::Client,
+    app: &AppHandle,
+    req: &ChatRequest,
+    key: String,
+    on_event: &Channel<StreamEvent>,
+    cancel: &Notify,
+    state: &State<'_, StreamState>,
+) -> AppResult<()> {
+    let url = endpoint(&req.base_url, "chat/completions");
+    let mut history: Vec<serde_json::Value> = req
+        .messages
+        .iter()
+        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .collect();
+    let tools = tools::tool_specs();
+    let max = req.max_iterations.unwrap_or(8).clamp(1, 16);
+
+    for _ in 0..max {
+        if state.take_cancelled(&req.request_id) {
+            return Ok(());
+        }
+        let mut body = serde_json::json!({
+            "model": req.model,
+            "messages": history,
+            "tools": tools,
+            "stream": false,
+        });
+        if let Some(temperature) = req.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+
+        let value = match post_completion(client, &url, &key, &body).await {
+            Ok(value) => value,
+            Err(error) if is_tool_rejection(&error) => {
+                return stream_completion(client, req, key, history, on_event, cancel).await;
+            }
+            Err(error) => return Err(error),
+        };
+
+        let message = value["choices"][0]["message"].clone();
+        let calls = tool_calls_of(&message);
+        if calls.is_empty() {
+            break;
+        }
+
+        history.push(serde_json::json!({
+            "role": "assistant",
+            "content": message.get("content"),
+            "tool_calls": calls,
+        }));
+
+        for call in &calls {
+            if state.take_cancelled(&req.request_id) {
+                return Ok(());
+            }
+            let id = call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = call
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let args: serde_json::Value = call
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(serde_json::Value::Null);
+
+            let _ = on_event.send(StreamEvent::ToolStart {
+                id: id.clone(),
+                name: name.clone(),
+                summary: tools::summarize_call(&name, &args),
+            });
+
+            match tools::execute(app, &name, args, req.project_id.as_deref()).await {
+                Ok(done) => {
+                    if let Some(artifact) = done.artifact {
+                        let _ = on_event.send(StreamEvent::Artifact {
+                            title: artifact.title,
+                            lang: artifact.lang,
+                            code: artifact.code,
+                        });
+                    }
+                    let _ = on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: true,
+                        preview: truncate_preview(&done.output),
+                    });
+                    history.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": id,
+                        "content": done.output,
+                    }));
+                }
+                Err(message) => {
+                    let _ = on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: false,
+                        preview: truncate_preview(&message),
+                    });
+                    history.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": id,
+                        "content": format!("Error: {message}"),
+                    }));
+                }
+            }
+        }
+    }
+
+    stream_completion(client, req, key, history, on_event, cancel).await
 }
 
 async fn stream_completion(
     client: &reqwest::Client,
     req: &ChatRequest,
     key: String,
+    history: Vec<serde_json::Value>,
     on_event: &Channel<StreamEvent>,
     cancel: &Notify,
 ) -> AppResult<()> {
-    let messages: Vec<serde_json::Value> = req
-        .messages
-        .iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-        .collect();
-
     let mut body = serde_json::json!({
         "model": req.model,
-        "messages": messages,
+        "messages": history,
         "stream": true,
     });
     if let Some(temperature) = req.temperature {

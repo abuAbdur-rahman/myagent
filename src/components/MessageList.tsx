@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
+  Check,
   Copy,
+  FileCode,
+  FileText,
   GitBranch,
   Pencil,
   RefreshCw,
   Sparkles,
+  Terminal,
+  Clock,
+  X,
+  Wrench,
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { Markdown } from "./Markdown";
@@ -19,17 +26,58 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   return (
     <div
       role="alert"
-      className="flex items-start justify-between gap-3 rounded-card border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-alarm"
+      className="flex items-start justify-between gap-3 rounded-control border border-destroy/60 bg-destroy/10 px-3 py-2 text-sm text-alarm"
     >
       <span className="break-words">{message}</span>
       <button
         type="button"
         onClick={onDismiss}
-        className="rounded-control px-1 text-alarm hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="rounded-control px-1 text-alarm hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         aria-label="Dismiss error"
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+function ToolIcon({ name }: { name: string }) {
+  const props = { size: 14 } as const;
+  if (name === "run_powershell") return <Terminal {...props} />;
+  if (name === "get_time") return <Clock {...props} />;
+  if (name === "save_artifact") return <FileCode {...props} />;
+  if (name === "remember" || name === "recall_memory") return <FileText {...props} />;
+  return <Wrench {...props} />;
+}
+
+function ToolLogView() {
+  const { toolLog } = useApp();
+  if (toolLog.length === 0) return null;
+  return (
+    <div
+      className="mb-6 flex flex-col gap-1 rounded-card border border-border bg-surface px-3 py-2"
+      aria-live="polite"
+    >
+      {toolLog.map((entry) => (
+        <details key={entry.id} className="text-[13px]">
+          <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
+            {entry.status === "running" ? (
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent" />
+            ) : entry.status === "ok" ? (
+              <Check size={14} className="text-success" />
+            ) : (
+              <X size={14} className="text-danger" />
+            )}
+            <ToolIcon name={entry.name} />
+            <span className="truncate">{entry.summary}</span>
+          </summary>
+          {entry.preview && (
+            <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
+              {entry.preview}
+            </pre>
+          )}
+        </details>
+      ))}
     </div>
   );
 }
@@ -323,6 +371,8 @@ export function MessageList() {
             </div>
           ),
         )}
+
+        <ToolLogView />
       </div>
 
       {!stuck && (
