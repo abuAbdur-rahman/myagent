@@ -61,14 +61,14 @@ Goal: memories and project context reach the model, safely and boundedly.
 
 ---
 
-## Phase 5 — CI workflow
+## Phase 5 — CI workflow ✅
 Goal: every push and PR to `main` is verified automatically.
 
-- [ ] `.github/workflows/ci.yml` on `windows-latest` (Windows-only app).
-- [ ] Steps: Node + Rust setup, `npm ci`, `tsc --noEmit`, `vite build`,
+- [x] `.github/workflows/ci.yml` on `windows-latest` (Windows-only app).
+- [x] Steps: Node + Rust setup, `npm ci`, `tsc --noEmit`, `vite build`,
       `cargo fmt --check`, `cargo clippy -D warnings`, `cargo check`,
       `fallow dead-code`.
-- [ ] Cargo + npm caches.
+- [x] Cargo + npm caches.
 
 ---
 
