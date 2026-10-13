@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   MEMORY_KINDS,
   memoryDraftSchema,
@@ -6,7 +6,7 @@ import {
   type MemoryDraft,
 } from "../lib/types";
 import { Button, Select, Textarea } from "./ui";
-import { cn } from "../lib/utils";
+import { cn, errorText } from "../lib/utils";
 
 function KindChip({ kind }: { kind: string }) {
   return (
@@ -63,64 +63,87 @@ export function MemoryEditor({
   const [editKind, setEditKind] = useState<MemoryDraft["kind"]>("fact");
   const [editError, setEditError] = useState<string | null>(null);
 
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
-  const add = async () => {
-    const parsed = memoryDraftSchema.safeParse({ content: content.trim(), kind });
+  const parseDraft = (
+    rawContent: string,
+    rawKind: MemoryDraft["kind"],
+    setError: (message: string) => void,
+  ): MemoryDraft | null => {
+    const parsed = memoryDraftSchema.safeParse({ content: rawContent.trim(), kind: rawKind });
     if (!parsed.success) {
-      setAddError(parsed.error.issues[0]?.message ?? "Invalid memory");
-      return;
+      setError(parsed.error.issues[0]?.message ?? "Invalid memory");
+      return null;
     }
+    return parsed.data;
+  };
+
+  const runLocked = async (
+    setError: (message: string | null) => void,
+    task: () => Promise<boolean>,
+  ) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
-      await onAdd(parsed.data);
-      setAddError(null);
-      setContent("");
-      setKind("fact");
+      const ok = await task();
+      if (ok) setError(null);
     } catch (e) {
-      setAddError(String(e));
+      setError(errorText(e));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
+  const add = () =>
+    runLocked(setAddError, async () => {
+      const draft = parseDraft(content, kind, setAddError);
+      if (!draft) return false;
+      await onAdd(draft);
+      setDeleteError(null);
+      setContent("");
+      setKind("fact");
+      return true;
+    });
+
   const startEdit = (memory: Memory) => {
+    if (busyRef.current) return;
     setEditingId(memory.id);
     setEditContent(memory.content);
     setEditKind(memory.kind);
     setEditError(null);
   };
 
-  const saveEdit = async () => {
-    if (!editingId) return;
-    const parsed = memoryDraftSchema.safeParse({ content: editContent.trim(), kind: editKind });
-    if (!parsed.success) {
-      setEditError(parsed.error.issues[0]?.message ?? "Invalid memory");
-      return;
-    }
-    setBusy(true);
-    try {
-      await onUpdate(editingId, parsed.data);
-      setEditError(null);
+  const cancelEdit = () => {
+    if (busyRef.current) return;
+    setEditingId(null);
+    setEditError(null);
+  };
+
+  const saveEdit = () => {
+    const id = editingId;
+    if (!id) return Promise.resolve();
+    return runLocked(setEditError, async () => {
+      const draft = parseDraft(editContent, editKind, setEditError);
+      if (!draft) return false;
+      await onUpdate(id, draft);
+      setDeleteError(null);
       setEditingId(null);
       setEditContent("");
-    } catch (e) {
-      setEditError(String(e));
-    } finally {
-      setBusy(false);
-    }
+      return true;
+    });
   };
 
   const remove = async (id: string) => {
-    setBusy(true);
-    try {
+    if (busyRef.current) return;
+    if (!window.confirm("Delete this memory? This cannot be undone.")) return;
+    await runLocked(setDeleteError, async () => {
       await onDelete(id);
-      setAddError(null);
-    } catch (e) {
-      setAddError(String(e));
-    } finally {
-      setBusy(false);
-    }
+      return true;
+    });
   };
 
   return (
@@ -140,7 +163,7 @@ export function MemoryEditor({
           aria-label="New memory"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-alarm" role="status">
+          <span className="text-xs text-alarm" role="alert">
             {addError}
           </span>
           <Button size="sm" onClick={() => void add()} disabled={busy}>
@@ -148,6 +171,12 @@ export function MemoryEditor({
           </Button>
         </div>
       </div>
+
+      {deleteError && (
+        <p className="text-xs text-alarm" role="alert">
+          {deleteError}
+        </p>
+      )}
 
       <div className="space-y-1">
         {memories.length === 0 && <p className="px-1 py-3 text-xs text-text-faint">{emptyHint}</p>}
@@ -170,7 +199,7 @@ export function MemoryEditor({
                 <div className="flex items-center justify-between gap-2">
                   <KindSelect value={editKind} onChange={setEditKind} label="Memory kind" />
                   <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
+                    <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={busy}>
                       Cancel
                     </Button>
                     <Button size="sm" onClick={() => void saveEdit()} disabled={busy}>
@@ -179,7 +208,7 @@ export function MemoryEditor({
                   </div>
                 </div>
                 {editError && (
-                  <span className="block text-xs text-alarm" role="status">
+                  <span className="block text-xs text-alarm" role="alert">
                     {editError}
                   </span>
                 )}
@@ -193,7 +222,12 @@ export function MemoryEditor({
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => startEdit(memory)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => startEdit(memory)}
+                    disabled={busy}
+                  >
                     Edit
                   </Button>
                   <Button

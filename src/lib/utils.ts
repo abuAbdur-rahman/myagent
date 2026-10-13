@@ -8,3 +8,10 @@ export function cn(...inputs: ClassValue[]) {
 export function newId() {
   return crypto.randomUUID();
 }
+
+export function errorText(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return "Something went wrong. Please try again.";
+}
