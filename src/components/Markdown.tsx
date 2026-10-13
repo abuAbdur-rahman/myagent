@@ -90,7 +90,9 @@ export function Markdown({ content }: { content: string }) {
     const href = anchor?.getAttribute("href");
     if (!href || !/^https?:\/\//i.test(href)) return;
     event.preventDefault();
-    void openUrl(href);
+    openUrl(href).catch((error) => {
+      console.error("Failed to open link", error);
+    });
   };
 
   useEffect(() => {

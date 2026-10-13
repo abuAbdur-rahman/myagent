@@ -19,6 +19,10 @@ export function ArtifactsPanel({
 
   if (!artifact) return null;
 
+  let copyLabel = "Copy";
+  if (copied) copyLabel = "Copied";
+  else if (copyFailed) copyLabel = "Copy failed";
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(artifact.code);
@@ -38,7 +42,7 @@ export function ArtifactsPanel({
         </span>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" onClick={() => void copy()}>
-            {copied ? "Copied" : copyFailed ? "Copy failed" : "Copy"}
+            {copyLabel}
           </Button>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close artifact">
             ✕
