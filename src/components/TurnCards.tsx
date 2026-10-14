@@ -156,7 +156,7 @@ function QuestionCard() {
       <div className="mt-2 flex flex-col gap-1">
         {question.options.map((option, i) => (
           <button
-            key={option}
+            key={`${i}-${option}`}
             type="button"
             onClick={() => void answerQuestion(option)}
             onMouseEnter={() => setHighlight(i)}

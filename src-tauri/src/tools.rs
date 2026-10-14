@@ -131,7 +131,7 @@ pub fn tool_specs() -> Value {
                     "type": "object",
                     "properties": {
                         "question": { "type": "string", "description": "The question, one or two sentences." },
-                        "options": { "type": "array", "items": { "type": "string" }, "description": "Two to four short options.", "minItems": 2, "maxItems": 4 },
+                        "options": { "type": "array", "items": { "type": "string" }, "description": "Up to four short options. May be empty when free text suffices.", "maxItems": 4 },
                         "allow_custom": { "type": "boolean", "description": "Offer a free-text answer too (default true)." },
                     },
                     "required": ["question", "options"],
@@ -229,8 +229,8 @@ pub fn parse_question(args: &Value) -> Result<Question, String> {
                 .collect()
         })
         .unwrap_or_default();
-    if options.len() < 2 || options.len() > 4 {
-        return Err("options must have 2 to 4 non-empty entries".to_string());
+    if options.len() > 4 {
+        return Err("options must have at most 4 non-empty entries".to_string());
     }
     if options.iter().any(|o| o.chars().count() > 200) {
         return Err("each option must be at most 200 chars".to_string());
@@ -239,6 +239,9 @@ pub fn parse_question(args: &Value) -> Result<Question, String> {
         .get("allow_custom")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
+    if options.is_empty() && !allow_custom {
+        return Err("a question with no options must allow a custom answer".to_string());
+    }
     Ok(Question {
         question,
         options,
@@ -447,11 +450,21 @@ mod tests {
     #[test]
     fn rejects_bad_questions() {
         assert!(parse_question(&json!({"options": ["A", "B"]})).is_err());
-        assert!(parse_question(&json!({"question": "Q?", "options": ["Only"]})).is_err());
-        assert!(parse_question(&json!({"question": "Q?", "options": ["", "  "]})).is_err());
+        assert!(parse_question(&json!({"question": "", "options": ["A"]})).is_err());
         assert!(
             parse_question(&json!({"question": "Q?", "options": ["A", "B", "C", "D", "E"]}))
                 .is_err()
         );
+        assert!(
+            parse_question(&json!({"question": "Q?", "options": [], "allow_custom": false}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn allows_options_free_question() {
+        let question = parse_question(&json!({"question": "Q?", "options": []})).unwrap();
+        assert!(question.options.is_empty());
+        assert!(question.allow_custom);
     }
 }

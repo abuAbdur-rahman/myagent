@@ -159,7 +159,8 @@ mod tests {
     }
 
     #[test]
-    fn joins_multiline_data_and_detects_done() {        let raw = "data: line1\ndata: line2\n\n";
+    fn joins_multiline_data_and_detects_done() {
+        let raw = "data: line1\ndata: line2\n\n";
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 100);
         assert_eq!(payloads(items), vec!["line1\nline2"]);
