@@ -416,6 +416,21 @@ export async function unhideModel(connectionId: string, modelId: string): Promis
   ]);
 }
 
+export async function hideAllModels(connectionId: string, modelIds: string[]): Promise<void> {
+  const db = await getDb();
+  for (const modelId of modelIds) {
+    await db.execute(
+      "INSERT OR IGNORE INTO hidden_models (connection_id, model_id) VALUES ($1, $2)",
+      [connectionId, modelId],
+    );
+  }
+}
+
+export async function unhideAllModels(connectionId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM hidden_models WHERE connection_id = $1", [connectionId]);
+}
+
 export interface DatabaseStats {
   conversations: number;
   messages: number;

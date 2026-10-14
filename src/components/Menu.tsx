@@ -3,6 +3,7 @@ import { cn } from "../lib/utils";
 
 interface MenuState {
   content: ReactNode;
+  anchor: HTMLElement;
   x: number;
   y: number;
   width: number;
@@ -20,16 +21,17 @@ export function showMenu(
   content: ReactNode,
   opts?: { align?: "left" | "right"; above?: boolean; width?: number },
 ) {
+  if (current && current.anchor === anchor) {
+    closeMenu();
+    return;
+  }
   closeMenu();
   const rect = anchor.getBoundingClientRect();
   const width = opts?.width ?? 240;
   let x = opts?.align === "right" ? rect.right - width : rect.left;
   x = Math.min(Math.max(8, x), window.innerWidth - width - 8);
-  let y = rect.bottom + 4;
-  if (opts?.above || rect.bottom + 320 > window.innerHeight) {
-    y = Math.max(8, rect.top - 4 - 320);
-  }
-  current = { content, x, y, width };
+  const y = opts?.above ? Math.max(8, rect.top - 4 - 320) : rect.bottom + 4;
+  current = { content, anchor, x, y, width };
   emit();
 }
 
@@ -58,6 +60,11 @@ export function MenuHost() {
     if (overRight > 0) {
       el.style.left = `${Math.max(8, state.x - overRight - 8)}px`;
     }
+    const rect = state.anchor.getBoundingClientRect();
+    const overflowBottom = el.getBoundingClientRect().bottom - window.innerHeight;
+    if (state.y < rect.top || overflowBottom > 0) {
+      el.style.top = `${Math.max(8, rect.top - 4 - el.offsetHeight)}px`;
+    }
   }, [state]);
 
   useLayoutEffect(() => {
@@ -66,7 +73,10 @@ export function MenuHost() {
       if (e.key === "Escape") closeMenu();
     };
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) closeMenu();
+      const target = e.target as Node;
+      if (ref.current?.contains(target)) return;
+      if (state.anchor.contains(target)) return;
+      closeMenu();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("mousedown", onDown);

@@ -84,6 +84,11 @@ interface AppContextValue {
   refreshModels: () => Promise<void>;
   hiddenModels: string[];
   toggleModelVisibility: (connectionId: string, modelId: string, hidden: boolean) => Promise<void>;
+  setAllModelsVisibility: (
+    connectionId: string,
+    modelIds: string[],
+    hidden: boolean,
+  ) => Promise<void>;
   model: string;
   setModel: (model: string) => void;
   reasoningEffort: string | null;
@@ -493,6 +498,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await db.hideModel(connectionId, modelId);
       } else {
         await db.unhideModel(connectionId, modelId);
+      }
+      if (connectionId === connRef.current?.id) {
+        await refreshModels();
+      }
+    },
+    [refreshModels],
+  );
+
+  const setAllModelsVisibility = useCallback(
+    async (connectionId: string, modelIds: string[], hidden: boolean) => {
+      if (hidden) {
+        await db.hideAllModels(connectionId, modelIds);
+      } else {
+        await db.unhideAllModels(connectionId);
       }
       if (connectionId === connRef.current?.id) {
         await refreshModels();
@@ -1144,6 +1163,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshModels,
     hiddenModels,
     toggleModelVisibility,
+    setAllModelsVisibility,
     model,
     setModel,
     reasoningEffort,

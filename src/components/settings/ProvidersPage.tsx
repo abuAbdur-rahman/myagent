@@ -181,13 +181,14 @@ function ProviderDialog({
 }
 
 function ProviderModels({ connection }: { connection: Connection }) {
-  const { toggleModelVisibility } = useApp();
+  const { toggleModelVisibility, setAllModelsVisibility } = useApp();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [models, setModels] = useState<string[] | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     if (!open || models !== null) return;
@@ -235,6 +236,22 @@ function ProviderModels({ connection }: { connection: Connection }) {
   const filtered = (models ?? []).filter((m) =>
     m.toLowerCase().includes(search.trim().toLowerCase()),
   );
+  const setAll = async (hide: boolean) => {
+    setBulkBusy(true);
+    try {
+      await setAllModelsVisibility(connection.id, filtered, hide);
+      setHidden((prev) => {
+        if (!hide) return new Set<string>();
+        const copy = new Set(prev);
+        for (const m of filtered) copy.add(m);
+        return copy;
+      });
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   return (
     <div className="mt-1.5 border-t border-border pt-1.5">
@@ -258,6 +275,27 @@ function ProviderModels({ connection }: { connection: Connection }) {
                 placeholder="Filter models…"
                 aria-label="Filter models"
               />
+              <div className="flex items-center gap-2 px-1.5">
+                <span className="flex-1 text-xs text-muted">
+                  {hidden.size} of {models.length} hidden
+                </span>
+                <button
+                  type="button"
+                  disabled={bulkBusy || filtered.length === 0}
+                  onClick={() => void setAll(true)}
+                  className="text-xs text-muted hover:text-text disabled:opacity-50"
+                >
+                  Hide all
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkBusy || hidden.size === 0}
+                  onClick={() => void setAll(false)}
+                  className="text-xs text-muted hover:text-text disabled:opacity-50"
+                >
+                  Show all
+                </button>
+              </div>
               <div className="flex max-h-56 flex-col gap-0.5 overflow-y-auto">
                 {filtered.map((modelId) => (
                   <div

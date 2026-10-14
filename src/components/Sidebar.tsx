@@ -379,13 +379,14 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 aria-label={expandedProjects.has(entry.project.id) ? "Collapse" : "Expand"}
                 aria-expanded={expandedProjects.has(entry.project.id)}
                 onClick={() => toggleProjectExpanded(entry.project.id)}
-                className="grid h-6 w-6 flex-none place-items-center rounded text-muted hover:text-text"
+                className="invisible grid h-6 w-6 flex-none place-items-center rounded text-muted hover:text-text focus-visible:visible group-hover:visible"
               >
                 <ChevronDown
                   size={14}
                   className={expandedProjects.has(entry.project.id) ? "" : "-rotate-90"}
                 />
               </button>
+              <Folder size={14} className="flex-none text-muted" />
               <button
                 type="button"
                 onClick={() => selectProject(entry.project.id)}
