@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const providerKindSchema = z.enum(["openrouter", "custom"]);
+const providerKindSchema = z.enum(["openrouter", "agentrouter", "custom"]);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
 
 const connectionSchema = z.object({
@@ -107,5 +107,6 @@ export type StreamEvent = z.infer<typeof streamEventSchema>;
 
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
   openrouter: "https://openrouter.ai/api/v1",
+  agentrouter: "https://agentrouter.org/v1",
   custom: "https://api.openai.com/v1",
 };

@@ -75,6 +75,7 @@ export interface ChatStreamArgs {
   enableTools?: boolean;
   maxIterations?: number;
   projectId?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export async function chatStream(
@@ -94,6 +95,7 @@ export async function chatStream(
       enable_tools: args.enableTools ?? false,
       max_iterations: args.maxIterations ?? null,
       project_id: args.projectId ?? null,
+      reasoning_effort: args.reasoningEffort ?? null,
     },
     onEvent: channel,
   });

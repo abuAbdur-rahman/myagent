@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, PlugZap, Plus } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, PlugZap, Plus } from "lucide-react";
 import { useApp } from "../../lib/store";
 import * as api from "../../lib/api";
+import * as db from "../../lib/db";
 import {
   DEFAULT_BASE_URLS,
   connectionInputSchema,
@@ -100,12 +101,19 @@ function ProviderDialog({
               const next = e.target.value as ProviderKind;
               setKind(next);
               setBaseUrl(DEFAULT_BASE_URLS[next]);
-              if (!name.trim() || name === "OpenRouter" || name === "Custom") {
-                setName(next === "openrouter" ? "OpenRouter" : "Custom");
+              if (!name.trim() || name === "OpenRouter" || name === "Agent Router" || name === "Custom") {
+                setName(
+                  next === "openrouter"
+                    ? "OpenRouter"
+                    : next === "agentrouter"
+                      ? "Agent Router"
+                      : "Custom",
+                );
               }
             }}
           >
             <option value="openrouter">OpenRouter</option>
+            <option value="agentrouter">Agent Router</option>
             <option value="custom">Custom (OpenAI-compatible)</option>
           </Select>
         </label>
@@ -169,6 +177,115 @@ function ProviderDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function ProviderModels({ connection }: { connection: Connection }) {
+  const { toggleModelVisibility } = useApp();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [models, setModels] = useState<string[] | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || models !== null) return;
+    let live = true;
+    setLoading(true);
+    Promise.all([
+      api.listModels(connection.base_url, connection.id),
+      db.listHiddenModels(connection.id),
+    ])
+      .then(([list, hiddenList]) => {
+        if (!live) return;
+        setModels(list);
+        setHidden(new Set(hiddenList));
+      })
+      .catch((e) => {
+        if (live) toast(errorText(e));
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, connection.id]);
+
+  const toggle = async (modelId: string) => {
+    const next = !hidden.has(modelId);
+    setBusyId(modelId);
+    try {
+      await toggleModelVisibility(connection.id, modelId, next);
+      setHidden((prev) => {
+        const copy = new Set(prev);
+        if (next) copy.add(modelId);
+        else copy.delete(modelId);
+        return copy;
+      });
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const filtered = (models ?? []).filter((m) =>
+    m.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+
+  return (
+    <div className="mt-1.5 border-t border-border pt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-1 text-xs text-muted hover:text-text"
+      >
+        <ChevronDown size={14} className={open ? "rotate-180" : ""} />
+        Models{models !== null && ` (${models.length - hidden.size} shown)`}
+      </button>
+      {open && (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {loading && <Spinner label="Loading models…" />}
+          {!loading && models !== null && (
+            <>
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter models…"
+                aria-label="Filter models"
+              />
+              <div className="flex max-h-56 flex-col gap-0.5 overflow-y-auto">
+                {filtered.map((modelId) => (
+                  <div
+                    key={modelId}
+                    className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-hover"
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono">{modelId}</span>
+                    <button
+                      type="button"
+                      disabled={busyId === modelId}
+                      onClick={() => void toggle(modelId)}
+                      aria-label={hidden.has(modelId) ? `Show ${modelId}` : `Hide ${modelId}`}
+                      title={hidden.has(modelId) ? "Show in picker" : "Hide from picker"}
+                      className="grid h-6 w-6 flex-none place-items-center rounded text-muted hover:bg-active hover:text-text"
+                    >
+                      {hidden.has(modelId) ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                ))}
+                {filtered.length === 0 && (
+                  <p className="px-1.5 py-2 text-xs text-muted">No models match.</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -245,8 +362,9 @@ export function ProvidersPage() {
         {connections.map((connection) => (
           <div
             key={connection.id}
-            className="flex items-center gap-2.5 rounded-card border border-border bg-surface p-3"
+            className="rounded-card border border-border bg-surface p-3"
           >
+            <div className="flex items-center gap-2.5">
             <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-xs font-semibold text-accent-contrast">
               {connection.name.slice(0, 2).toUpperCase()}
             </span>
@@ -273,6 +391,8 @@ export function ProvidersPage() {
             <Button variant="danger" size="sm" onClick={() => void remove(connection)}>
               Delete
             </Button>
+            </div>
+          <ProviderModels connection={connection} />
           </div>
         ))}
       </div>

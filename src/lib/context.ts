@@ -4,7 +4,7 @@ import { toolListSentence } from "./tools";
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const DEFAULT_MODEL_CONTEXT = 128_000;
-export const COMPACT_WINDOW = 4;
+const COMPACT_WINDOW = 4;
 
 export interface ContextInput {
   globalMemories: Memory[];
@@ -72,10 +72,11 @@ export function applyCompactWindow<T extends { content: string }>(turns: T[], co
 export function estimateContext(
   turns: { content: string }[],
   system: string | null,
+  limit = DEFAULT_MODEL_CONTEXT,
 ): { tokens: number; limit: number; pct: number } {
   const chars =
     (system ?? "").length + turns.reduce((sum, turn) => sum + turn.content.length, 0);
   const tokens = Math.round(chars / 4);
-  const pct = Math.min(100, Math.round((tokens / DEFAULT_MODEL_CONTEXT) * 100));
-  return { tokens, limit: DEFAULT_MODEL_CONTEXT, pct };
+  const pct = Math.min(100, Math.round((tokens / limit) * 100));
+  return { tokens, limit, pct };
 }

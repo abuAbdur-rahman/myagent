@@ -16,8 +16,15 @@ const SUGGESTIONS = [
 
 const PROVIDER_TILES: { id: ProviderKind; label: string; initials: string }[] = [
   { id: "openrouter", label: "OpenRouter", initials: "OR" },
+  { id: "agentrouter", label: "Agent Router", initials: "AR" },
   { id: "custom", label: "Custom", initials: "CU" },
 ];
+
+const PROVIDER_NAMES: Record<ProviderKind, string> = {
+  openrouter: "OpenRouter",
+  agentrouter: "Agent Router",
+  custom: "Custom",
+};
 
 export function OnboardingDialog() {
   const {
@@ -29,6 +36,8 @@ export function OnboardingDialog() {
     model,
     setModel,
     setComposerDraft,
+    displayName,
+    setDisplayName,
   } = useApp();
 
   const [step, setStep] = useState(0);
@@ -51,7 +60,7 @@ export function OnboardingDialog() {
       return;
     }
     const parsed = connectionInputSchema.safeParse({
-      name: kind === "openrouter" ? "OpenRouter" : "Custom",
+      name: PROVIDER_NAMES[kind],
       kind,
       base_url: baseUrl.trim(),
       default_model: null,
@@ -98,6 +107,15 @@ export function OnboardingDialog() {
                 <Asterisk size={28} />
               </span>
               <h1 className="m-0 font-serif text-[28px] font-semibold">Welcome to MyAgent</h1>
+              <label className="flex w-full max-w-[300px] flex-col gap-1 text-left text-xs text-muted">
+                What should I call you?
+                <Input
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Your name"
+                  autoComplete="given-name"
+                />
+              </label>
               <ul className="m-0 flex list-none flex-col gap-2.5 p-0 text-left text-sm">
                 <li className="flex items-center gap-2.5">
                   <KeyRound size={16} className="text-accent" /> Bring your own keys
@@ -177,8 +195,8 @@ export function OnboardingDialog() {
                   No provider connected. You can add one later in Settings.
                 </p>
               ) : (
-                <div className="flex w-full max-w-[360px] flex-col gap-2">
-                  {models.slice(0, 8).map((id) => (
+                <div className="flex max-h-64 w-full max-w-[360px] flex-col gap-2 overflow-y-auto">
+                  {models.map((id) => (
                     <button
                       key={id}
                       type="button"

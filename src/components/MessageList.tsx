@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { Markdown } from "./Markdown";
+import { MarkdownEditor } from "./composer/MarkdownEditor";
 import { extractArtifacts } from "../lib/artifacts";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
@@ -133,13 +134,13 @@ function UserMessage({
     return (
       <div className="msg user flex flex-col items-end">
         <div className="w-[80%]">
-          <textarea
-            rows={3}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            aria-label="Edit message"
-            className="w-full resize-y rounded-card border border-accent bg-surface-2 p-2 text-[15px] outline-none"
-          />
+          <div className="rounded-card border border-accent bg-surface-2 px-2.5 py-2">
+            <MarkdownEditor
+              initialMarkdown={message.content}
+              placeholder="Edit message"
+              onChangeMarkdown={setDraft}
+            />
+          </div>
           <div className="mt-1.5 flex justify-end gap-2">
             <Button variant="default" onClick={() => setEditing(false)}>
               Cancel
@@ -161,8 +162,8 @@ function UserMessage({
 
   return (
     <div className="msg user group flex flex-col items-end" data-mid={message.id}>
-      <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-composer border border-border bg-surface-2 px-3.5 py-2.5 text-[15px]">
-        {message.content}
+      <div className="max-w-[80%] break-words rounded-composer border border-border bg-surface-2 px-3.5 py-2.5">
+        <Markdown content={message.content} />
       </div>
       <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>

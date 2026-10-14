@@ -13,11 +13,11 @@ function greeting(name: string): string {
 }
 
 export function Welcome() {
-  const { displayName, setComposerDraft } = useApp();
+  const { displayName, setComposerText } = useApp();
   const heading = displayName ? `Hey there, ${displayName}` : greeting("");
 
   const pick = (text: string) => {
-    setComposerDraft(text);
+    setComposerText(text);
     setTimeout(() => document.getElementById("composer")?.focus(), 0);
   };
 
@@ -32,7 +32,7 @@ export function Welcome() {
         </h1>
         <p className="mb-5 text-muted">What can I help with?</p>
         <div className="text-left">
-          <Composer />
+          <Composer autoFocus />
         </div>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
           {SUGGESTIONS.map((suggestion) => (

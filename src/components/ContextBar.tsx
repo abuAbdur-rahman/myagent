@@ -1,7 +1,12 @@
 import { useApp } from "../lib/store";
-import { buildSystemPrompt, COMPACT_WINDOW, estimateContext } from "../lib/context";
 import { Button } from "./ui";
 import { cn } from "../lib/utils";
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return `${tokens}`;
+}
 
 export function ContextBar() {
   const {
@@ -11,9 +16,7 @@ export function ContextBar() {
     streaming,
     compactActive,
     uncompactActive,
-    globalMemories,
-    activeProject,
-    projectMemories,
+    contextInfo,
   } = useApp();
 
   const conversation = conversations.find((c) => c.id === activeConversationId) ?? null;
@@ -31,45 +34,36 @@ export function ContextBar() {
     );
   }
 
-  const system = buildSystemPrompt({
-    globalMemories,
-    project: activeProject,
-    projectMemories,
-  });
-  const info = estimateContext(messages, system);
-
-  let tone = "";
-  if (info.pct > 90) {
-    tone = "danger";
-  } else if (info.pct > 70) {
-    tone = "warn";
-  }
+  const { tokens, limit, pct } = contextInfo;
 
   let labelClass = "";
-  if (tone === "danger") {
+  if (pct > 90) {
     labelClass = "text-danger";
-  } else if (tone === "warn") {
+  } else if (pct > 70) {
     labelClass = "text-warn";
   }
 
   let fillClass = "bg-accent";
-  if (tone === "danger") {
+  if (pct > 90) {
     fillClass = "bg-danger";
-  } else if (tone === "warn") {
+  } else if (pct > 70) {
     fillClass = "bg-warn";
   }
 
   return (
-    <div className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted">
-      <span className={cn(labelClass)}>Context {info.pct}% used</span>
+    <div
+      className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted"
+      title={`≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens`}
+    >
+      <span className={cn(labelClass)}>Context {pct}% used</span>
       <div className="h-1 max-w-[240px] flex-1 overflow-hidden rounded bg-active">
-        <div className={cn("h-full", fillClass)} style={{ width: `${info.pct}%` }} />
+        <div className={cn("h-full", fillClass)} style={{ width: `${pct}%` }} />
       </div>
       <span className="flex-1" />
       <Button
         size="sm"
         variant="default"
-        disabled={streaming || messages.length <= COMPACT_WINDOW}
+        disabled={streaming || messages.length <= 4}
         onClick={() => void compactActive()}
       >
         Compact

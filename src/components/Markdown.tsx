@@ -92,7 +92,7 @@ function unescapeMarked(text: string): string {
 }
 
 function renderHtml(content: string, highlighter: HighlighterCore | null): string {
-  const raw = marked.parse(content, { async: false }) as string;
+  const raw = marked.parse(content, { async: false, breaks: true }) as string;
   let html = DOMPurify.sanitize(raw);
   if (!highlighter) return html;
 

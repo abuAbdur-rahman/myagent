@@ -83,6 +83,18 @@ pub fn run() {
             sql: "ALTER TABLE conversations ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "add_hidden_models",
+            sql: "
+                CREATE TABLE IF NOT EXISTS hidden_models (
+                    connection_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    PRIMARY KEY (connection_id, model_id)
+                );
+            ",
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

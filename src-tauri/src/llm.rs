@@ -53,6 +53,8 @@ pub struct ChatRequest {
     pub max_iterations: Option<u8>,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +64,19 @@ pub struct TitleRequest {
     pub model: String,
     pub user_text: String,
     pub assistant_text: String,
+}
+
+fn apply_optional_params(body: &mut serde_json::Value, req: &ChatRequest) {
+    if let Some(temperature) = req.temperature {
+        body["temperature"] = serde_json::json!(temperature);
+    }
+    if let Some(effort) = req
+        .reasoning_effort
+        .as_deref()
+        .filter(|e| !e.is_empty() && *e != "none")
+    {
+        body["reasoning"] = serde_json::json!({ "effort": effort });
+    }
 }
 
 fn truncate_chars(text: &str, max: usize) -> String {
@@ -295,9 +310,7 @@ async fn run_agentic(
             "tools": tools,
             "stream": false,
         });
-        if let Some(temperature) = req.temperature {
-            body["temperature"] = serde_json::json!(temperature);
-        }
+        apply_optional_params(&mut body, req);
 
         let value = match post_completion(client, &url, &key, &body).await {
             Ok(value) => value,
@@ -402,9 +415,7 @@ async fn stream_completion(
         "messages": history,
         "stream": true,
     });
-    if let Some(temperature) = req.temperature {
-        body["temperature"] = serde_json::json!(temperature);
-    }
+    apply_optional_params(&mut body, req);
 
     let resp = client
         .post(endpoint(&req.base_url, "chat/completions"))

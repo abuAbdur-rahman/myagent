@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   Folder,
@@ -134,9 +135,37 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
 
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const groups = groupChats(conversations);
+
+  const threadsByProject = new Map<string, Conversation[]>();
+  for (const chat of conversations) {
+    if (!chat.project_id) continue;
+    const list = threadsByProject.get(chat.project_id) ?? [];
+    list.push(chat);
+    threadsByProject.set(chat.project_id, list);
+  }
+  const topProjects = projects
+    .map((project) => {
+      const threads = (threadsByProject.get(project.id) ?? [])
+        .slice()
+        .sort((a, b) => b.updated_at - a.updated_at);
+      const activity = threads[0]?.updated_at ?? project.updated_at;
+      return { project, threads: threads.slice(0, 5), activity };
+    })
+    .sort((a, b) => b.activity - a.activity)
+    .slice(0, 2);
+
+  const toggleProjectExpanded = (id: string) => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const openChat = (id: string) => {
     void selectConversation(id).catch(() => undefined);
@@ -337,30 +366,64 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted">
           Projects
         </div>
-        {projects.map((project) => (
-          <div
-            key={project.id}
-            className={cn(
-              "group flex h-8 items-center gap-1 rounded-control px-2",
-              activeProjectId === project.id ? "bg-active" : "hover:bg-hover",
+        {topProjects.map((entry) => (
+          <div key={entry.project.id}>
+            <div
+              className={cn(
+                "group flex h-8 items-center gap-1 rounded-control px-2",
+                activeProjectId === entry.project.id ? "bg-active" : "hover:bg-hover",
+              )}
+            >
+              <button
+                type="button"
+                aria-label={expandedProjects.has(entry.project.id) ? "Collapse" : "Expand"}
+                aria-expanded={expandedProjects.has(entry.project.id)}
+                onClick={() => toggleProjectExpanded(entry.project.id)}
+                className="grid h-6 w-6 flex-none place-items-center rounded text-muted hover:text-text"
+              >
+                <ChevronDown
+                  size={14}
+                  className={expandedProjects.has(entry.project.id) ? "" : "-rotate-90"}
+                />
+              </button>
+              <button
+                type="button"
+                onClick={() => selectProject(entry.project.id)}
+                className="min-w-0 flex-1 truncate text-left text-sm"
+                title={entry.project.name}
+              >
+                {entry.project.name}
+              </button>
+              <button
+                type="button"
+                aria-label={`Edit ${entry.project.name}`}
+                onClick={() => onOpenProject(entry.project.id)}
+                className="invisible rounded-control px-1 text-muted hover:text-text focus-visible:visible group-hover:visible"
+              >
+                <Settings size={14} />
+              </button>
+            </div>
+            {expandedProjects.has(entry.project.id) && (
+              <div className="ml-7 flex flex-col">
+                {entry.threads.map((thread) => (
+                  <button
+                    key={thread.id}
+                    type="button"
+                    onClick={() => openChat(thread.id)}
+                    title={thread.title}
+                    className={cn(
+                      "h-7 truncate rounded-control px-2 text-left text-[13px] text-muted hover:bg-hover hover:text-text",
+                      activeConversationId === thread.id && "bg-active text-text",
+                    )}
+                  >
+                    {thread.title}
+                  </button>
+                ))}
+                {entry.threads.length === 0 && (
+                  <span className="px-2 py-1 text-xs text-muted">No chats yet</span>
+                )}
+              </div>
             )}
-          >
-            <button
-              type="button"
-              onClick={() => selectProject(project.id)}
-              className="min-w-0 flex-1 truncate text-left text-sm"
-              title={project.name}
-            >
-              {project.name}
-            </button>
-            <button
-              type="button"
-              aria-label={`Edit ${project.name}`}
-              onClick={() => onOpenProject(project.id)}
-              className="invisible rounded-control px-1 text-muted hover:text-text focus-visible:visible group-hover:visible"
-            >
-              <Settings size={14} />
-            </button>
           </div>
         ))}
         <button

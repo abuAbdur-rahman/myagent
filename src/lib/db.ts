@@ -391,6 +391,31 @@ export async function deleteMemory(id: string): Promise<void> {
   await db.execute("DELETE FROM memories WHERE id = $1", [id]);
 }
 
+export async function listHiddenModels(connectionId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.select<{ model_id: string }[]>(
+    "SELECT model_id FROM hidden_models WHERE connection_id = $1",
+    [connectionId],
+  );
+  return rows.map((row) => row.model_id);
+}
+
+export async function hideModel(connectionId: string, modelId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT OR IGNORE INTO hidden_models (connection_id, model_id) VALUES ($1, $2)",
+    [connectionId, modelId],
+  );
+}
+
+export async function unhideModel(connectionId: string, modelId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM hidden_models WHERE connection_id = $1 AND model_id = $2", [
+    connectionId,
+    modelId,
+  ]);
+}
+
 export interface DatabaseStats {
   conversations: number;
   messages: number;

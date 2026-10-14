@@ -11,6 +11,12 @@ import {
 import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, buildSystemPrompt, estimateContext } from "./context";
+import {
+  fetchCatalog,
+  lookupContextLength,
+  lookupEfforts,
+  type ModelCapabilities,
+} from "./catalog";
 import { toast } from "./toast";
 import { memoryInputSchema } from "./types";
 import { newId } from "./utils";
@@ -76,8 +82,15 @@ interface AppContextValue {
   models: string[];
   loadingModels: boolean;
   refreshModels: () => Promise<void>;
+  hiddenModels: string[];
+  toggleModelVisibility: (connectionId: string, modelId: string, hidden: boolean) => Promise<void>;
   model: string;
   setModel: (model: string) => void;
+  reasoningEffort: string | null;
+  setReasoningEffort: (effort: string | null) => void;
+  supportedEfforts: string[] | null;
+  modelContextLimit: number | null;
+  contextInfo: { tokens: number; limit: number; pct: number };
 
   projects: Project[];
   activeProject: Project | null;
@@ -134,6 +147,8 @@ interface AppContextValue {
   stopStream: () => void;
   composerDraft: string;
   setComposerDraft: (value: string) => void;
+  composerSignal: { id: number; text: string | null } | null;
+  setComposerText: (text: string) => void;
   sendWith: "enter" | "ctrl";
   setSendWith: (mode: "enter" | "ctrl") => void;
   panelOpen: boolean;
@@ -163,6 +178,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [model, setModelState] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
+  const [reasoningEffort, setReasoningEffortState] = useState<string | null>(() =>
+    localStorage.getItem("reasoningEffort"),
+  );
+  const [catalog, setCatalog] = useState<ModelCapabilities[] | null>(null);
+  const [hiddenModels, setHiddenModels] = useState<string[]>([]);
   const [displayName, setDisplayNameState] = useState(
     () => localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
   );
@@ -348,6 +368,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const [composerSignal, setComposerSignal] = useState<{
+    id: number;
+    text: string | null;
+  } | null>(null);
+  const signalId = useRef(0);
+
+  const setComposerText = useCallback(
+    (text: string) => {
+      setComposerDraft(text);
+      signalId.current += 1;
+      setComposerSignal({ id: signalId.current, text });
+    },
+    [setComposerDraft],
+  );
+
   const setSendWith = useCallback((mode: "enter" | "ctrl") => {
     setSendWithState(mode);
     localStorage.setItem("sendWith", mode);
@@ -411,10 +446,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       setLoadingModels(true);
-      const list = await api.listModels(connection.base_url, connection.id);
-      setModels(list);
-      if (!modelRef.current && list.length > 0) {
-        setModelState(list[0]);
+      const [list, hidden] = await Promise.all([
+        api.listModels(connection.base_url, connection.id),
+        db.listHiddenModels(connection.id),
+      ]);
+      const hiddenSet = new Set(hidden);
+      const visible = list.filter((id) => !hiddenSet.has(id));
+      setHiddenModels(hidden);
+      setModels(visible);
+      if (!modelRef.current && visible.length > 0) {
+        setModelState(visible[0]);
       }
     } catch (e) {
       setModels([]);
@@ -427,6 +468,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (ready) void refreshModels();
   }, [ready, activeConnection, refreshModels]);
+
+  useEffect(() => {
+    if (!activeConnection || activeConnection.kind !== "openrouter") {
+      setCatalog(null);
+      return;
+    }
+    let live = true;
+    fetchCatalog()
+      .then((rows) => {
+        if (live) setCatalog(rows);
+      })
+      .catch(() => {
+        if (live) setCatalog(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [activeConnection]);
+
+  const toggleModelVisibility = useCallback(
+    async (connectionId: string, modelId: string, hidden: boolean) => {
+      if (hidden) {
+        await db.hideModel(connectionId, modelId);
+      } else {
+        await db.unhideModel(connectionId, modelId);
+      }
+      if (connectionId === connRef.current?.id) {
+        await refreshModels();
+      }
+    },
+    [refreshModels],
+  );
 
   const selectConnection = useCallback((id: string | null) => {
     setActiveConnectionId(id);
@@ -463,6 +536,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const setModel = useCallback((value: string) => setModelState(value), []);
+
+  const setReasoningEffort = useCallback((effort: string | null) => {
+    setReasoningEffortState(effort);
+    if (effort) {
+      localStorage.setItem("reasoningEffort", effort);
+    } else {
+      localStorage.removeItem("reasoningEffort");
+    }
+  }, []);
+
+  const reasoningEffortRef = useRef<string | null>(null);
+  useEffect(() => {
+    reasoningEffortRef.current = reasoningEffort;
+  }, [reasoningEffort]);
+
+  const supportedEfforts = useMemo(
+    () => (model ? lookupEfforts(catalog, model) : null),
+    [catalog, model],
+  );
+  const supportedEffortsRef = useRef<string[] | null>(null);
+  useEffect(() => {
+    supportedEffortsRef.current = supportedEfforts;
+  }, [supportedEfforts]);
+
+  const modelContextLimit = useMemo(
+    () => (model ? (lookupContextLength(catalog, model) ?? null) : null),
+    [catalog, model],
+  );
+  const contextLimitRef = useRef(128_000);
+  useEffect(() => {
+    contextLimitRef.current = modelContextLimit ?? 128_000;
+  }, [modelContextLimit]);
+
+  const contextInfo = useMemo(() => {
+    const system = buildSystemPrompt({
+      globalMemories,
+      project: activeProject,
+      projectMemories,
+      userName: displayName || undefined,
+    });
+    return estimateContext(
+      messages.filter((m) => m.content.length > 0),
+      system,
+      modelContextLimit ?? 128_000,
+    );
+  }, [messages, globalMemories, activeProject, projectMemories, displayName, modelContextLimit]);
+
+  const resolveEffort = useCallback((): string | null => {
+    const selected = reasoningEffortRef.current;
+    if (!selected || selected === "none") return null;
+    const supported = supportedEffortsRef.current;
+    if (supported && !supported.includes(selected)) return null;
+    return selected;
+  }, []);
 
   const selectProject = useCallback(
     (id: string | null) => {
@@ -637,6 +764,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             messages: payload,
             enableTools: true,
             projectId: projectRef.current?.id ?? null,
+            reasoningEffort: resolveEffort(),
           },
           (event) => {
             if (requestIdRef.current !== requestId) return;
@@ -682,7 +810,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [finalize, openArtifact],
+    [finalize, openArtifact, resolveEffort],
   );
 
   const resolveCompact = useCallback(
@@ -697,7 +825,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
       });
-      if (estimateContext(turns, system).pct > 80) {
+      if (estimateContext(turns, system, contextLimitRef.current).pct > 80) {
         toast("Context is over 80% full — sending recent messages only.");
         return true;
       }
@@ -1008,8 +1136,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     models,
     loadingModels,
     refreshModels,
+    hiddenModels,
+    toggleModelVisibility,
     model,
     setModel,
+    reasoningEffort,
+    setReasoningEffort,
+    supportedEfforts,
+    modelContextLimit,
+    contextInfo,
     projects,
     activeProject,
     activeProjectId,
@@ -1061,6 +1196,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     stopStream,
     composerDraft,
     setComposerDraft,
+    composerSignal,
+    setComposerText,
     sendWith,
     setSendWith,
     panelOpen,

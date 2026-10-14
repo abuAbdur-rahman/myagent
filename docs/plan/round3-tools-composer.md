@@ -4,6 +4,8 @@
 
 ## Round 4 — v0.1.2 (send fix, rich composer, reasoning, visibility, sidebar, router)
 
+**Status (2026-10-14): P0–P6 implemented and verified live where noted; P7 in progress.**
+
 **P0 — Sending is broken (critical, first).** Reproduce with a mock
 OpenAI-compatible server (plain / tool-loop / tools-rejected / 401 scenarios)
 driven through the real dev app via win-mcp. Fix root cause, verify all
@@ -18,10 +20,10 @@ registry (`active: HashMap<id, Notify>`) from the cancel flags
 (`cancelled: HashSet<id>`). Verified with a mock server: plain reply streams
 and persists; the user's own send confirmed it on the real path.
 
-- [ ] Mock server with scenario control + request log.
-- [ ] Backup dev DB, add Custom mock connection, send per scenario.
-- [ ] Fix + broaden fallback (400/404/422 → plain retry, once).
-- [ ] Verify, commit, push.
+- [x] Mock server with scenario control + request log.
+- [x] Backup dev DB, add Custom mock connection, send per scenario.
+- [x] Fix + broaden fallback (400/404/422 → plain retry, once).
+- [x] Verify, commit, push.
 
 **P1 — Rich-text composer (Lexical).** Live formatting per the accepted spec:
 paragraph/bold/italic/strike/inline-code/code-block/lists/blockquote/link;
@@ -33,24 +35,59 @@ same Markdown pipeline (`breaks` on); edit round-trips raw markdown.
 Also: single subtle focus ring, overlay scrollbar only on overflow, model chip
 tooltip (already), empty-composer ArrowUp/Down history (kept).
 
+Implemented 2026-10-14 (`MarkdownEditor.tsx`, `Composer.tsx` rewritten):
+serialize path, token counter, suggestion fill, and send all verified live
+against the dev app + mock server. Live keystroke auto-format is stock
+Lexical `MarkdownShortcutPlugin` behavior; keystroke injection was not
+possible in this session (no focused-keyboard path), so a manual spot-check
+of `**b**` / lists on first real use is recommended.
+
 **P2 — Reasoning effort.** Effort select beside the model picker, options from
 real support data (OpenRouter catalog `supported_parameters` where available,
 family map fallback); disabled when unsupported; sent as `reasoning.effort`.
 Research-backed values only.
 
+Implemented 2026-10-14: `catalog.ts` (cached fetch, 3-level fallback),
+`reasoningEffort`/`supportedEfforts`/`modelContextLimit` in store,
+`reasoning_effort` plumbed through Rust `ChatRequest` → OpenAI body,
+effort `<select>` in composer (shows "No reasoning", disabled, for the mock
+custom connection), model chip on the assistant header, per-model context
+limit in `contextInfo`, centralized `ContextBar` with Compact. Send with
+`reasoningEffort: null` verified live — no regression.
+
 **P3 — Model visibility per provider.** `hidden_models` table, searchable
 eye-toggle list under each provider, composer + settings selects filter
 hidden. Migration v5.
 
+Implemented 2026-10-14: migration v5 + `listHiddenModels`/`hideModel`/
+`unhideModel`, store filters `models` on every refresh, `ProviderModels`
+expander per provider row (search + eye toggles). `hidden_models` table
+confirmed present in the dev DB after boot.
+
 **P4 — Sidebar projects.** Two most-recently-active projects (by latest chat
 activity), chevron expands up to 5 latest threads each.
+
+Implemented 2026-10-14 and verified live: created project "Verify P4"
+renders with chevron + name under PROJECTS. (Chevron expand animation
+itself not clicked live — automation can only Invoke, the chevron needs a
+real mouse click; state logic is tsc-clean and mirrors existing toggles.)
 
 **P5 — Agent Router provider.** Research first; add as a preset kind with the
 right base URL/auth/notes or report why not.
 
+Implemented 2026-10-14: new `agentrouter` provider kind, default base
+`https://agentrouter.org/v1` (editable), preset tile in onboarding +
+Providers dialog option. OpenAI-compatible per research; `/models` shape
+and tool-calling not verified against a live key — confirm on first real
+use before advertising.
+
 **P6 — Onboarding.** Show every fetched model (scrollable, no 8-item cap);
 capture display name on welcome; confirm new/existing flag persistence
 (localStorage `onboarded` + displayName already exist — verify, don't duplicate).
+
+Implemented 2026-10-14: model list scrolls (`max-h-64`), name Input on the
+welcome step wired to the existing `displayName` store (no new persistence).
+Onboarding flow itself not re-run live (already onboarded in dev).
 
 **P7 — Release 0.1.2.** Bump, full gate, tag, watch. Includes the updater
 artifacts path proven in 0.1.1.
