@@ -21,6 +21,10 @@ export function approvalReply(id: string, reply: "once" | "always" | "deny") {
   return invoke<void>("approval_reply", { req: { id, reply } });
 }
 
+export function questionAnswer(id: string, answer: string) {
+  return invoke<void>("question_answer", { req: { id, answer } });
+}
+
 export function cancelStream(requestId: string) {
   return invoke<void>("cancel_stream", { requestId });
 }

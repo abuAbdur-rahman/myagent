@@ -28,7 +28,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Stopping mid-stream leaves partial text saved and no further tokens appear.
 
 ## A3. SSE parser
-- **Status:** Partial (naive split)
+- **Status:** Have (0.1.3: `src-tauri/src/sse.rs` + fixtures, `cargo test` in CI)
 - **Ref:** † OpenRouter sends keep-alive comment lines such as `: OPENROUTER PROCESSING`; parsing them as JSON throws. Stream ends with `data: [DONE]`. A usage chunk comes near the end.
 - **Build:** Pure function over bytes: buffer, split on blank line, support `\r\n`, keep the incomplete tail, ignore comment lines and `[DONE]`, parse `data:` JSON, check top-level `error` first. Output typed events: `Text`, `Reasoning`, `ToolCallDelta`, `Usage`, `Finish`, `Error`.
 - **Done:** Fixtures give identical events however the bytes are chopped (1 byte, random, whole).
@@ -41,19 +41,19 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** 429-then-success fixture succeeds; 400 does not retry; mid-stream failure does not retry.
 
 ## A5. Truncation and finish reasons
-- **Status:** Missing (silent short replies)
+- **Status:** Have (0.1.3: length note + Continue; no separate `interrupted` state yet)
 - **Ref:** † `finish_reason: "length"` means the token limit was hit; `"error"` means mid-stream failure; some context errors are reported as `length`.
 - **Build:** Map every finish reason to a message state: `complete`, `length`, `error`, `stopped`, `interrupted` (stream died without finish reason, partial text kept). `length` and `interrupted` show a Continue button that sends a short "continue" turn.
 - **Done:** Each state has a fixture and a visible UI treatment.
 
 ## A6. Reasoning display
-- **Status:** Missing (thinking tokens dropped)
+- **Status:** Have (0.1.3: thinking block, stored, never re-sent)
 - **Ref:** † OpenRouter normalizes reasoning into `delta.reasoning`; some providers use `reasoning_content`. OpenWebUI shows thinking blocks, even editable. Claude shows a collapsed thinking block.
 - **Build:** Accumulate reasoning separately from content. UI: collapsed block above the answer, open while streaming, "Thought for N s" when done. Store it on the message but do not send it back to the model.
 - **Done:** Reasoning fixture renders in the block, and a non-reasoning model shows nothing.
 
 ## A7. Error UI
-- **Status:** Unknown
+- **Status:** Have (0.1.3: 5 classes + Retry; class fixtures: mid-stream only)
 - **Ref:** † OpenRouter returns structured errors (code, message). Both before and during streaming.
 - **Build:** An error banner on the failed message with a human message, the raw code in a details toggle, and Retry. Distinguish: no API key, bad model, rate limit, network, provider error.
 - **Done:** Each error class has one fixture and one visible message.
@@ -209,7 +209,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** The request body contains the parameter only when supported.
 
 ## C5. Usage and cost
-- **Status:** Partial (chars/4 estimate)
+- **Status:** Have (0.1.3: real usage stored + footer; cost needs catalogue prices)
 - **Ref:** † OpenRouter returns a final usage chunk (prompt and completion tokens).
 - **Build:** Store real usage per assistant message. Footer shows tokens for the chat. Cost only if the catalogue has prices. Fall back to chars/4 labelled "estimate".
 - **Done:** Usage from the fixture is stored and displayed.
@@ -262,7 +262,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** A looping mock model is halted.
 
 ## D4. Permission engine
-- **Status:** Missing
+- **Status:** Have (0.1.3: `permissions.rs` decide + SQLite always-rules, rules UI pending)
 - **Ref:** † OpenCode: allow, ask, deny per tool with pattern rules; v2 denies if any resource denies, else asks if any asks. † A v1 bug let "Allow always" (stored as `*`) override denies. Claude Code uses the same three effects.
 - **Build:** Rust function `decide(tool, target) -> Allow | Ask | Deny`, called inside every tool handler right before execution (never only in the frontend). Deny beats ask beats allow. "Always allow" stores a rule for that exact command prefix, never `*`. Rules in a settings file.
 - **Not:** Per-agent profiles, rule-editor UI.
@@ -278,7 +278,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ```
 
 ## D5. Approval UI
-- **Status:** Missing
+- **Status:** Have (0.1.3: inline card once/always/deny; reload re-show pending)
 - **Ref:** Claude Code and OpenCode prompts show the command and offer once, always, or deny.
 - **Build:** Inline card in the chat: tool name, full command, working directory. Buttons: Allow once, Always allow this command, Deny (optional reason, returned to the model). The loop awaits the answer. Dismissing equals deny. Stop cancels the pending request.
 - **Done:** The loop pauses until a button is pressed, and survives a UI reload by re-showing the card.
@@ -291,7 +291,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** In Plan mode, write and shell tools are not even sent to the model.
 
 ## D7. Shell tool
-- **Status:** Partial (always on, no approval)
+- **Status:** Partial (0.1.3: approval + per-segment rules + kill-on-stop; cwd still home, not project)
 - **Ref:** † OpenCode parses bash with tree-sitter to apply per-command rules. Claude Code asks per command pattern.
 - **Build:** `run_powershell` goes through D4 and D5. Timeout (default 60s), working directory fixed to the project, output captured and capped (D13), kill process tree on stop. Parse the command into segments (`;`, `&&`, `|`) and evaluate each, so `ls; rm x` cannot hide behind an allowed `ls`.
 - **Not:** Persistent shell sessions, PTY.
@@ -348,7 +348,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Results render as links the model can fetch.
 
 ## D16. Question tool
-- **Status:** Missing
+- **Status:** Have (0.1.3: `ask_user` tool, loop-awaited card with options + custom text)
 - **Ref:** † OpenCode's `question` tool shows a header, question and options (with a custom answer) and waits.
 - **Build:** Tool with `question`, `options[]`; the loop pauses, the UI shows buttons plus free text, the answer returns as the tool result.
 - **Done:** The loop resumes with the chosen answer.

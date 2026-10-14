@@ -120,6 +120,13 @@ const streamEventSchema = z.discriminatedUnion("type", [
     command: z.string(),
     cwd: z.string(),
   }),
+  z.object({
+    type: z.literal("question_asked"),
+    id: z.string(),
+    question: z.string(),
+    options: z.array(z.string()),
+    allow_custom: z.boolean(),
+  }),
   z.object({ type: z.literal("tool_start"), id: z.string(), name: z.string(), summary: z.string() }),
   z.object({ type: z.literal("tool_result"), id: z.string(), ok: z.boolean(), preview: z.string() }),
   z.object({ type: z.literal("artifact"), title: z.string(), lang: z.string(), code: z.string() }),

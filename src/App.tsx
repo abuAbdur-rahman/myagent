@@ -8,6 +8,7 @@ import { ProjectsGrid } from "./components/ProjectsGrid";
 import { ProjectDetail } from "./components/ProjectDetail";
 import { Welcome } from "./components/Welcome";
 import { Composer } from "./components/Composer";
+import { TurnCards } from "./components/TurnCards";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { OnboardingDialog } from "./components/OnboardingDialog";
@@ -121,6 +122,7 @@ function Shell() {
               </div>
               <div className="flex-none px-4 pb-2">
                 <div className="mx-auto w-full max-w-[760px]">
+                  <TurnCards />
                   <ContextBar />
                   <Composer />
                 </div>

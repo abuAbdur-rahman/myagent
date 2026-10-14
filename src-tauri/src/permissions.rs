@@ -106,6 +106,11 @@ pub fn default_rules() -> Vec<Rule> {
             resource: "*".to_string(),
             effect: Effect::Allow,
         },
+        Rule {
+            action: "ask_user".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
     ]
 }
 
@@ -260,6 +265,30 @@ pub async fn approval_reply(
         }
     }
     let _ = pending.tx.send(reply);
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct AnswerRequest {
+    pub id: String,
+    pub answer: String,
+}
+
+#[tauri::command]
+pub async fn question_answer(
+    state: tauri::State<'_, crate::state::StreamState>,
+    req: AnswerRequest,
+) -> AppResult<()> {
+    let answer = req.answer.trim().to_string();
+    if answer.is_empty() || answer.chars().count() > 2000 {
+        return Err(AppError::Internal(
+            "answer must be 1 to 2000 chars".to_string(),
+        ));
+    }
+    let Some(tx) = state.take_question(&req.id) else {
+        return Err(AppError::Internal("question already resolved".to_string()));
+    };
+    let _ = tx.send(answer);
     Ok(())
 }
 

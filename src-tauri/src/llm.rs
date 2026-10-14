@@ -45,6 +45,12 @@ pub enum StreamEvent {
         command: String,
         cwd: String,
     },
+    QuestionAsked {
+        id: String,
+        question: String,
+        options: Vec<String>,
+        allow_custom: bool,
+    },
     Artifact {
         title: String,
         lang: String,
@@ -453,6 +459,46 @@ async fn run_agentic(
                     history.push(denied_tool_message(&id, "denied by user"));
                     continue;
                 }
+            }
+
+            if name == "ask_user" {
+                match tools::parse_question(&args) {
+                    Err(message) => {
+                        let _ = on_event.send(StreamEvent::ToolResult {
+                            id: id.clone(),
+                            ok: false,
+                            preview: message.clone(),
+                        });
+                        history.push(denied_tool_message(&id, &format!("Error: {message}")));
+                    }
+                    Ok(asked) => {
+                        let question_id = format!("{}:{id}", req.request_id);
+                        let _ = on_event.send(StreamEvent::QuestionAsked {
+                            id: question_id.clone(),
+                            question: asked.question,
+                            options: asked.options,
+                            allow_custom: asked.allow_custom,
+                        });
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        state.insert_question(&question_id, tx)?;
+                        let answer = tokio::select! {
+                            answer = rx => answer.unwrap_or_default(),
+                            _ = cancel.notified() => return Ok(()),
+                        };
+                        let content = if answer.trim().is_empty() {
+                            "no answer (cancelled)".to_string()
+                        } else {
+                            answer
+                        };
+                        let _ = on_event.send(StreamEvent::ToolResult {
+                            id: id.clone(),
+                            ok: true,
+                            preview: truncate_preview(&content),
+                        });
+                        history.push(denied_tool_message(&id, &content));
+                    }
+                }
+                continue;
             }
 
             match tools::execute(app, &name, args, req.project_id.as_deref(), cancel).await {

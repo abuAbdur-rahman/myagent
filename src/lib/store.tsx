@@ -74,6 +74,8 @@ interface AppContextValue {
   retryTurn: () => Promise<void>;
   approval: { id: string; tool: string; command: string; cwd: string } | null;
   replyApproval: (reply: "once" | "always" | "deny") => Promise<void>;
+  question: { id: string; question: string; options: string[]; allowCustom: boolean } | null;
+  answerQuestion: (answer: string) => Promise<void>;
 
   connections: Connection[];
   activeConnection: Connection | null;
@@ -188,6 +190,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     tool: string;
     command: string;
     cwd: string;
+  } | null>(null);
+  const [question, setQuestion] = useState<{
+    id: string;
+    question: string;
+    options: string[];
+    allowCustom: boolean;
   } | null>(null);
 
   const reportError = useCallback((cause: unknown) => {
@@ -841,6 +849,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreaming(true);
       setToolLog([]);
       setApproval(null);
+      setQuestion(null);
       let lastFlush = 0;
       const flush = () => {
         lastFlush = Date.now();
@@ -928,6 +937,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 tool: event.tool,
                 command: event.command,
                 cwd: event.cwd,
+              });
+            } else if (event.type === "question_asked") {
+              setQuestion({
+                id: event.id,
+                question: event.question,
+                options: event.options,
+                allowCustom: event.allow_custom,
               });
             }
           },
@@ -1167,6 +1183,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [approval],
   );
 
+  const answerQuestion = useCallback(
+    async (answer: string) => {
+      if (!question) return;
+      const trimmed = answer.trim();
+      if (!trimmed) return;
+      setQuestion(null);
+      try {
+        await api.questionAnswer(question.id, trimmed);
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [question],
+  );
+
   const editAndResubmit = useCallback(
     async (userId: string, text: string): Promise<boolean> => {
       const conversationId = convIdRef.current;
@@ -1318,6 +1349,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     retryTurn,
     approval,
     replyApproval,
+    question,
+    answerQuestion,
     connections,
     activeConnection,
     activeConnectionId,

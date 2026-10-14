@@ -29,11 +29,11 @@ Exit: every fixture (plain, reasoning, `length`, mid-stream error, 429) ends in 
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | A3 | SSE parser | Partial | M | H2 |
-| [x] | A5 | Truncation and finish reasons | Missing | S | A3 |
-| [x] | A7 | Error UI | Unknown | S | A5 |
+| [x] | A3 | SSE parser | Have (0.1.3) | M | H2 |
+| [x] | A5 | Truncation and finish reasons | Have (0.1.3) | S | A3 |
+| [x] | A7 | Error UI | Have (0.1.3) | S | A5 |
 | [x] | A4 | Retry with backoff | Missing | S | A3, A7 |
-| [x] | A6 | Reasoning display | Missing | S | A3 |
+| [x] | A6 | Reasoning display | Have (0.1.3) | S | A3 |
 | [x] | A2 | Stop / cancel (mid-stream) | Partial | S | A3 |
 
 ### Phase 3: Rendering
@@ -49,9 +49,9 @@ Exit: no shell call runs without approval; deny beats allow; hostile artifact re
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | D4 | Permission engine | Missing | M | H1 |
-| [x] | D5 | Approval UI | Missing | M | D4 |
-| [x] | D7 | Shell tool (gated) | Partial | M | D4, D5 |
+| [x] | D4 | Permission engine | Have (0.1.3) | M | H1 |
+| [x] | D5 | Approval UI | Have (0.1.3) | M | D4 |
+| [x] | D7 | Shell tool (gated) | Partial (0.1.3: cwd still home) | M | D4, D5 |
 | [x] | F2 | Artifact isolation | Missing | M | H1 |
 | [x] | E2 | Secret refusal in memory | Missing | S | none |
 
@@ -142,7 +142,7 @@ Exit: each added one at a time with its own tests.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | D16 | Question tool | Missing | M | D5 |
+| [x] | D16 | Question tool | Have (0.1.3) | M | D5 |
 | [ ] | D17 | Todo list tool | Missing | M | D1 |
 | [ ] | D14 | Web fetch | Missing | M | D4, D5 |
 | [ ] | D15 | Web search | Missing | M | D14 |

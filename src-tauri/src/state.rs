@@ -18,6 +18,7 @@ pub struct StreamState {
     active: Mutex<HashMap<String, Arc<Notify>>>,
     cancelled: Mutex<HashSet<String>>,
     pending: Mutex<HashMap<String, PendingApproval>>,
+    questions: Mutex<HashMap<String, oneshot::Sender<String>>>,
 }
 
 fn poisoned(context: &str) -> AppError {
@@ -55,6 +56,7 @@ impl StreamState {
             cancelled.remove(request_id);
         }
         self.fail_pending_for_request(request_id);
+        self.fail_questions_for_request(request_id);
     }
 
     pub fn take_cancelled(&self, request_id: &str) -> bool {
@@ -90,6 +92,33 @@ impl StreamState {
             if let Some(item) = pending.remove(&key) {
                 let _ = item.tx.send(ApprovalReply::Deny);
             }
+        }
+    }
+
+    pub fn insert_question(&self, key: &str, tx: oneshot::Sender<String>) -> AppResult<()> {
+        self.questions
+            .lock()
+            .map_err(|_| poisoned("question registry"))?
+            .insert(key.to_string(), tx);
+        Ok(())
+    }
+
+    pub fn take_question(&self, key: &str) -> Option<oneshot::Sender<String>> {
+        self.questions.lock().ok()?.remove(key)
+    }
+
+    pub fn fail_questions_for_request(&self, request_id: &str) {
+        let prefix = format!("{request_id}:");
+        let Ok(mut questions) = self.questions.lock() else {
+            return;
+        };
+        let keys: Vec<String> = questions
+            .keys()
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in keys {
+            questions.remove(&key);
         }
     }
 }

@@ -122,6 +122,23 @@ pub fn tool_specs() -> Value {
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "description": "Ask the user a question with fixed options and an optional free-text answer. Use when a choice blocks progress (ambiguous request, destructive scope, missing decision). The user's answer returns as the tool result.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string", "description": "The question, one or two sentences." },
+                        "options": { "type": "array", "items": { "type": "string" }, "description": "Two to four short options.", "minItems": 2, "maxItems": 4 },
+                        "allow_custom": { "type": "boolean", "description": "Offer a free-text answer too (default true)." },
+                    },
+                    "required": ["question", "options"],
+                    "additionalProperties": false,
+                },
+            },
+        },
     ])
 }
 
@@ -177,8 +194,56 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
             "Save artifact: {}",
             arg_str(args, "title").unwrap_or_default()
         ),
+        "ask_user" => {
+            let short: String = arg_str(args, "question")
+                .unwrap_or_default()
+                .chars()
+                .take(80)
+                .collect();
+            format!("Ask: {short}")
+        }
         _ => name.to_string(),
     }
+}
+
+pub struct Question {
+    pub question: String,
+    pub options: Vec<String>,
+    pub allow_custom: bool,
+}
+
+pub fn parse_question(args: &Value) -> Result<Question, String> {
+    let question = arg_str(args, "question").ok_or("missing question")?;
+    if question.chars().count() > 500 {
+        return Err("question too long (max 500 chars)".to_string());
+    }
+    let options: Vec<String> = args
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    if options.len() < 2 || options.len() > 4 {
+        return Err("options must have 2 to 4 non-empty entries".to_string());
+    }
+    if options.iter().any(|o| o.chars().count() > 200) {
+        return Err("each option must be at most 200 chars".to_string());
+    }
+    let allow_custom = args
+        .get("allow_custom")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    Ok(Question {
+        question,
+        options,
+        allow_custom,
+    })
 }
 
 pub async fn execute(
@@ -357,6 +422,36 @@ pub async fn execute(
                 }),
             })
         }
+        "ask_user" => Err("ask_user is answered by the agent loop".to_string()),
         other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_valid_question() {
+        let question = parse_question(&json!({
+            "question": "Deploy now?",
+            "options": ["Yes", "No"],
+        }))
+        .unwrap();
+        assert_eq!(question.question, "Deploy now?");
+        assert_eq!(question.options, vec!["Yes", "No"]);
+        assert!(question.allow_custom);
+    }
+
+    #[test]
+    fn rejects_bad_questions() {
+        assert!(parse_question(&json!({"options": ["A", "B"]})).is_err());
+        assert!(parse_question(&json!({"question": "Q?", "options": ["Only"]})).is_err());
+        assert!(parse_question(&json!({"question": "Q?", "options": ["", "  "]})).is_err());
+        assert!(
+            parse_question(&json!({"question": "Q?", "options": ["A", "B", "C", "D", "E"]}))
+                .is_err()
+        );
     }
 }

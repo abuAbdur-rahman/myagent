@@ -15,7 +15,7 @@ Theme: see what the model is doing, and nothing runs without asking.
 | D4 | Permission engine | M | Rust `decide()`; deny > ask > allow; no `*` allow rule |
 | D5 | Approval UI | M | Inline card (tool, command, cwd); Allow once / Always / Deny; loop awaits answer |
 | D7 | Gated shell | M | `run_powershell` through D4+D5; 60s timeout, per-segment rules, kill on stop |
-
+| D16 | Question tool | M | `ask_user` with 2-4 options + custom text; loop awaits answer, returns as tool result |
 Deferred to 0.1.4: A4 retry (needs A3+A7 anyway — reconsider), C7/C8/C9 compaction, D3 doom-loop guard, E2 secret refusal.
 
 ## Order
