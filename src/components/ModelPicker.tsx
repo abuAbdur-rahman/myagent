@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
+import * as db from "../lib/db";
 import type { Connection } from "../lib/types";
 import { showMenu } from "./Menu";
 
@@ -29,8 +30,12 @@ function ModelPickerContent({ onDone }: { onDone: () => void }) {
         try {
           const hasKey = await api.hasApiKey(connection.id);
           if (!hasKey) return { connection, hasKey, models: [] };
-          const models = await api.listModels(connection.base_url, connection.id);
-          return { connection, hasKey, models };
+          const [models, hidden] = await Promise.all([
+            api.listModels(connection.base_url, connection.id),
+            db.listHiddenModels(connection.id),
+          ]);
+          const hiddenSet = new Set(hidden);
+          return { connection, hasKey, models: models.filter((m) => !hiddenSet.has(m)) };
         } catch {
           return { connection, hasKey: true, models: [] };
         }
