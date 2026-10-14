@@ -1,10 +1,10 @@
 import { useState } from "react";
 import {
-  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   Folder,
   FolderInput,
+  FolderOpen,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -379,14 +379,14 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 aria-label={expandedProjects.has(entry.project.id) ? "Collapse" : "Expand"}
                 aria-expanded={expandedProjects.has(entry.project.id)}
                 onClick={() => toggleProjectExpanded(entry.project.id)}
-                className="invisible grid h-6 w-6 flex-none place-items-center rounded text-muted hover:text-text focus-visible:visible group-hover:visible"
+                className="grid h-6 w-6 flex-none place-items-center rounded text-muted hover:text-text"
               >
-                <ChevronDown
-                  size={14}
-                  className={expandedProjects.has(entry.project.id) ? "" : "-rotate-90"}
-                />
+                {expandedProjects.has(entry.project.id) ? (
+                  <FolderOpen size={14} />
+                ) : (
+                  <Folder size={14} />
+                )}
               </button>
-              <Folder size={14} className="flex-none text-muted" />
               <button
                 type="button"
                 onClick={() => selectProject(entry.project.id)}
