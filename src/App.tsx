@@ -121,7 +121,7 @@ function Shell() {
                 <MessageList />
               </div>
               <div className="flex-none px-4 pb-2">
-                <div className="mx-auto w-full max-w-[760px]">
+                <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
                   <ContextBar />
                   <Composer />

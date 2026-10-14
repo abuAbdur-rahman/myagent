@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   ArrowDown,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   FileCode,
   FileText,
@@ -9,7 +11,6 @@ import {
   Pencil,
   RefreshCw,
   Sparkles,
-  StepForward,
   Terminal,
   Clock,
   X,
@@ -22,7 +23,7 @@ import { TipTapEditor } from "./composer/TipTapEditor";
 import { extractArtifacts } from "../lib/artifacts";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
-import { Button } from "./ui";
+import { Button, IconButton } from "./ui";
 import type { Message } from "../lib/types";
 import { cn } from "../lib/utils";
 
@@ -32,31 +33,22 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   return (
     <div
       role="alert"
-      className="rounded-control border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger"
+      className="rounded-control border border-danger/60 bg-danger/10 px-3 py-2 text-sm"
     >
       <div className="flex items-start justify-between gap-3">
-        <span className="break-words">{hint}</span>
+        <span className="break-words font-medium text-danger">{hint}</span>
         <div className="flex shrink-0 items-center gap-1">
           {canRetry && !streaming && (
-            <button
-              type="button"
-              onClick={() => void retryTurn()}
-              className="rounded-control border border-danger/60 px-2 py-0.5 text-xs hover:bg-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
+            <Button size="sm" variant="danger" onClick={() => void retryTurn()}>
               Retry
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="rounded-control px-1 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            aria-label="Dismiss error"
-          >
-            ✕
-          </button>
+          <IconButton label="Dismiss error" size={24} onClick={onDismiss}>
+            <X size={14} />
+          </IconButton>
         </div>
       </div>
-      <details className="mt-1 text-xs opacity-80">
+      <details className="mt-1 text-xs text-danger opacity-80">
         <summary className="cursor-pointer">Raw error</summary>
         <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words">
           {message}
@@ -86,30 +78,54 @@ function ToolIcon({ name }: { name: string }) {
 
 function ToolLogView() {
   const { toolLog } = useApp();
+  const [collapsed, setCollapsed] = useState(false);
   if (toolLog.length === 0) return null;
+  const running = toolLog.filter((e) => e.status === "running").length;
+  const failed = toolLog.filter((e) => e.status === "err").length;
   return (
     <div
-      className="mb-6 flex flex-col gap-1 rounded-card border border-border bg-surface px-3 py-2"
+      className="mb-6 rounded-card border border-border bg-surface px-3 py-2"
       aria-live="polite"
     >
-      {toolLog.map((entry) => (
-        <details key={entry.id} className="text-[13px]">
-          <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
-            {entry.status === "running" && (
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent" />
-            )}
-            {entry.status === "ok" && <Check size={14} className="text-success" />}
-            {entry.status === "err" && <X size={14} className="text-danger" />}
-            <ToolIcon name={entry.name} />
-            <span className="truncate">{entry.summary}</span>
-          </summary>
-          {entry.preview && (
-            <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
-              {entry.preview}
-            </pre>
-          )}
-        </details>
-      ))}
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Show tool calls" : "Hide tool calls"}
+        className="group flex w-full items-center gap-2 py-0.5 text-left text-[13px] text-muted hover:text-text"
+      >
+        <Wrench size={14} />
+        <span className="flex-1">
+          {toolLog.length} tool call{toolLog.length === 1 ? "" : "s"}
+          {running > 0 && ` · ${running} running`}
+          {failed > 0 && ` · ${failed} failed`}
+        </span>
+        <span className="invisible grid h-5 w-5 place-items-center rounded-control focus-visible:visible group-hover:visible">
+          {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="flex flex-col gap-1">
+          {toolLog.map((entry) => (
+            <details key={entry.id} className="text-[13px]">
+              <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
+                {entry.status === "running" && (
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent" />
+                )}
+                {entry.status === "ok" && <Check size={14} className="text-success" />}
+                {entry.status === "err" && <X size={14} className="text-danger" />}
+                <ToolIcon name={entry.name} />
+                <span className="truncate">{entry.summary}</span>
+              </summary>
+              {entry.preview && (
+                <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
+                  {entry.preview}
+                </pre>
+              )}
+            </details>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -286,15 +302,15 @@ function AssistantMessage({
       {!busy && (
         <>
           {isLast && message.finish_reason === "length" && (
-            <div className="mb-1 text-xs text-warn">
-              Stopped at the token limit — the reply may be cut off.
+            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-warn">
+              <span>Stopped at the token limit — the reply may be cut off.</span>
+              <ContinueButton />
             </div>
           )}
           <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
               <Copy size={14} />
             </ActionButton>
-            {isLast && message.finish_reason === "length" && <ContinueButton />}
             {isLast && <RegenButton />}
             <BranchButton messageId={message.id} />
             <Button variant="ghost" size="sm" onClick={() => void remember()}>
@@ -340,9 +356,14 @@ function ContinueButton() {
   const { continueTurn, streaming } = useApp();
   if (streaming) return null;
   return (
-    <ActionButton label="Continue" title="Continue the cut-off reply" onClick={() => void continueTurn()}>
-      <StepForward size={14} />
-    </ActionButton>
+    <Button
+      size="sm"
+      variant="default"
+      title="Continue the cut-off reply"
+      onClick={() => void continueTurn()}
+    >
+      Continue reply
+    </Button>
   );
 }
 

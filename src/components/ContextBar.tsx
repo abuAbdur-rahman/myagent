@@ -54,6 +54,11 @@ export function ContextBar() {
     ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`
     : `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
 
+  const usageDetail =
+    real && lastIn !== null && lastOut !== null
+      ? ` · ↑${formatTokens(lastIn)} ↓${formatTokens(lastOut)}`
+      : "";
+
   return (
     <div
       className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted"
@@ -61,11 +66,23 @@ export function ContextBar() {
     >
       <span className={cn(labelClass)}>
         Context {pct}% used{real ? "" : " (est.)"}
-        {real && lastIn !== null && lastOut !== null
-          ? ` · ↑${formatTokens(lastIn)} ↓${formatTokens(lastOut)}`
-          : ""}
+        {usageDetail && (
+          <>
+            <span aria-hidden="true">{usageDetail}</span>
+            <span className="sr-only">
+              {` · last turn input ${formatTokens(lastIn ?? 0)}, output ${formatTokens(lastOut ?? 0)}`}
+            </span>
+          </>
+        )}
       </span>
-      <div className="h-1 max-w-[240px] flex-1 overflow-hidden rounded bg-active">
+      <div
+        className="h-1 max-w-[240px] flex-1 overflow-hidden rounded bg-active"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={title}
+      >
         <div className={cn("h-full", fillClass)} style={{ width: `${pct}%` }} />
       </div>
       <span className="flex-1" />

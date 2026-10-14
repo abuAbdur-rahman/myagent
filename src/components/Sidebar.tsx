@@ -1,5 +1,7 @@
 import { useState } from "react";
 import {
+  ChevronDown,
+  ChevronUp,
   ChevronsLeft,
   ChevronsRight,
   Folder,
@@ -136,6 +138,18 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(["Older"]),
+  );
+
+  const toggleGroupCollapsed = (name: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
 
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const groups = groupChats(conversations);
@@ -435,38 +449,51 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
           <Plus size={14} /> New project
         </button>
 
-        {groups.map((group) => (
-          <div key={group.name}>
-            <div className="sticky top-0 bg-sidebar px-2.5 pb-1 pt-2.5 text-[11px] font-medium uppercase tracking-wider text-muted">
-              {group.name}
+        {groups.map((group) => {
+          const collapsed = collapsedGroups.has(group.name);
+          return (
+            <div key={group.name}>
+              <button
+                type="button"
+                onClick={() => toggleGroupCollapsed(group.name)}
+                aria-expanded={!collapsed}
+                aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.name}`}
+                className="group sticky top-0 flex w-full items-center gap-1 bg-sidebar px-2.5 pb-1 pt-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-muted"
+              >
+                <span className="flex-1">{group.name}</span>
+                <span className="invisible grid h-5 w-5 place-items-center rounded-control hover:text-text focus-visible:visible group-hover:visible">
+                  {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                </span>
+              </button>
+              {!collapsed &&
+                group.items.map((chat) => {
+                  const project = chat.project_id ? projectById.get(chat.project_id) : undefined;
+                  const isActive = chat.id === activeConversationId;
+                  return (
+                    <div
+                      key={chat.id}
+                      className={cn("relative rounded-control", isActive && "bg-active")}
+                    >
+                      {isActive && (
+                        <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded bg-accent" />
+                      )}
+                      <ChatRow
+                        chat={chat}
+                        projectName={project?.name ?? null}
+                        dotColor={project ? projectColor(project.id) : null}
+                        renaming={renamingId === chat.id}
+                        onOpen={() => openChat(chat.id)}
+                        onMenu={(anchor) => openMenu(chat, anchor)}
+                        onRenameCommit={() => void commitRename()}
+                        onRenameCancel={() => setRenamingId(null)}
+                        onRenameChange={setRenameDraft}
+                      />
+                    </div>
+                  );
+                })}
             </div>
-            {group.items.map((chat) => {
-              const project = chat.project_id ? projectById.get(chat.project_id) : undefined;
-              const isActive = chat.id === activeConversationId;
-              return (
-                <div
-                  key={chat.id}
-                  className={cn("relative rounded-control", isActive && "bg-active")}
-                >
-                  {isActive && (
-                    <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded bg-accent" />
-                  )}
-                  <ChatRow
-                    chat={chat}
-                    projectName={project?.name ?? null}
-                    dotColor={project ? projectColor(project.id) : null}
-                    renaming={renamingId === chat.id}
-                    onOpen={() => openChat(chat.id)}
-                    onMenu={(anchor) => openMenu(chat, anchor)}
-                    onRenameCommit={() => void commitRename()}
-                    onRenameCancel={() => setRenamingId(null)}
-                    onRenameChange={setRenameDraft}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        ))}
+          );
+        })}
         {ready && conversations.length === 0 && (
           <p className="px-2.5 py-4 text-xs text-muted">No chats yet.</p>
         )}
