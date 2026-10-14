@@ -371,14 +371,6 @@ async fn post_with_retry(
     Err(last_error.unwrap_or_else(|| AppError::Network("retry exhausted".to_string())))
 }
 
-fn tool_calls_of(message: &serde_json::Value) -> Vec<serde_json::Value> {
-    message
-        .get("tool_calls")
-        .and_then(|calls| calls.as_array())
-        .cloned()
-        .unwrap_or_default()
-}
-
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
     if name == "run_powershell" {
         if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
@@ -398,25 +390,6 @@ fn tool_text_message(id: &str, text: &str) -> serde_json::Value {
         "tool_call_id": id,
         "content": text,
     })
-}
-
-fn message_text(message: &serde_json::Value) -> Option<String> {
-    message
-        .get("content")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .filter(|s| !s.trim().is_empty())
-}
-
-fn empty_response_error(value: &serde_json::Value) -> AppError {
-    let reason = value["choices"][0]
-        .get("finish_reason")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let excerpt = truncate_chars(&serde_json::to_string(value).unwrap_or_default(), 500);
-    AppError::Upstream(format!(
-        "empty response from provider (finish: {reason}): {excerpt}"
-    ))
 }
 
 struct RepeatGuard {
@@ -448,6 +421,110 @@ impl RepeatGuard {
     }
 }
 
+struct Iteration {
+    text: String,
+    calls: Vec<serde_json::Value>,
+}
+
+fn finish_iteration(
+    text: String,
+    accumulator: &mut sse::ToolCallAccumulator,
+    on_event: &Channel<StreamEvent>,
+) -> AppResult<Iteration> {
+    for (_, id, name) in accumulator.flush_unannounced() {
+        let _ = on_event.send(StreamEvent::ToolStart {
+            id,
+            name: name.clone(),
+            summary: tools::summarize_call(&name, &serde_json::Value::Null),
+        });
+    }
+    let calls = accumulator.calls();
+    if text.is_empty() && calls.is_empty() {
+        return Err(AppError::Upstream(
+            "empty response from provider".to_string(),
+        ));
+    }
+    Ok(Iteration { text, calls })
+}
+
+async fn stream_agentic_iteration(
+    client: &reqwest::Client,
+    url: &str,
+    key: &str,
+    body: &serde_json::Value,
+    cancel: &Notify,
+    on_event: &Channel<StreamEvent>,
+) -> AppResult<Option<Iteration>> {
+    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event)).await {
+        Ok(resp) => resp,
+        Err(error) if is_cancel_shutdown(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+
+    let mut stream = resp.bytes_stream();
+    let mut parser = sse::SseParser::new();
+    let mut accumulator = sse::ToolCallAccumulator::new();
+    let mut text = String::new();
+    let notified = cancel.notified();
+    tokio::pin!(notified);
+
+    loop {
+        let next = tokio::select! {
+            _ = &mut notified => return Ok(None),
+            next = stream.next() => next,
+        };
+
+        let Some(chunk) = next else { break };
+        for item in parser.feed(&chunk?) {
+            match item {
+                sse::SseItem::Done => {
+                    let _ = on_event.send(StreamEvent::Done);
+                    return finish_iteration(text, &mut accumulator, on_event).map(Some);
+                }
+                sse::SseItem::Payload(payload) => {
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                        continue;
+                    };
+                    let mapped = sse::map_chunk(&value);
+                    if let Some(message) = mapped.error {
+                        return Err(AppError::Upstream(message));
+                    }
+                    if !mapped.text.is_empty() {
+                        text.push_str(&mapped.text);
+                        let _ = on_event.send(StreamEvent::Delta { text: mapped.text });
+                    }
+                    if !mapped.reasoning.is_empty() {
+                        let _ = on_event.send(StreamEvent::Reasoning {
+                            text: mapped.reasoning,
+                        });
+                    }
+                    for (_, id, name) in accumulator.apply(mapped.tool_deltas) {
+                        let _ = on_event.send(StreamEvent::ToolStart {
+                            id,
+                            name: name.clone(),
+                            summary: tools::summarize_call(&name, &serde_json::Value::Null),
+                        });
+                    }
+                    if let Some(usage) = mapped.usage {
+                        let _ = on_event.send(StreamEvent::Usage {
+                            prompt_tokens: usage.prompt,
+                            completion_tokens: usage.completion,
+                            total_tokens: usage.total,
+                        });
+                    }
+                    if mapped.finish_reason.is_some() {
+                        let _ = on_event.send(StreamEvent::Finish {
+                            reason: mapped.finish_reason,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    finish_iteration(text, &mut accumulator, on_event).map(Some)
+}
+
 async fn run_agentic(
     client: &reqwest::Client,
     app: &AppHandle,
@@ -475,36 +552,30 @@ async fn run_agentic(
             "model": req.model,
             "messages": history,
             "tools": tools,
-            "stream": false,
+            "stream": true,
         });
         apply_optional_params(&mut body, req);
 
-        let value = match post_with_retry(client, &url, &key, &body, cancel, Some(on_event)).await {
-            Ok(resp) => resp
-                .json::<serde_json::Value>()
-                .await
-                .map_err(AppError::from)?,
-            Err(error) if is_cancel_shutdown(&error) => return Ok(()),
-            Err(error) if is_retryable_tools_error(&error) => {
-                return stream_completion(client, req, key, history, on_event, cancel).await;
-            }
-            Err(error) => return Err(error),
-        };
-
-        let message = value["choices"][0]["message"].clone();
-        let calls = tool_calls_of(&message);
-        if calls.is_empty() && message_text(&message).is_none() {
-            return Err(empty_response_error(&value));
-        }
-        if calls.is_empty() {
+        let iteration =
+            match stream_agentic_iteration(client, &url, &key, &body, cancel, on_event).await {
+                Ok(Some(iteration)) => iteration,
+                Ok(None) => return Ok(()),
+                Err(error) if is_retryable_tools_error(&error) => {
+                    return stream_completion(client, req, key, history, on_event, cancel).await;
+                }
+                Err(error) => return Err(error),
+            };
+        if iteration.calls.is_empty() {
             break;
         }
 
         history.push(serde_json::json!({
             "role": "assistant",
-            "content": message.get("content"),
-            "tool_calls": calls,
+            "content": iteration.text,
+            "tool_calls": iteration.calls,
         }));
+
+        let calls = iteration.calls;
 
         for call in &calls {
             if state.take_cancelled(&req.request_id) {

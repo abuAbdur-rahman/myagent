@@ -69,6 +69,125 @@ pub struct ChatChunk {
     pub usage: Option<Usage>,
     pub finish_reason: Option<String>,
     pub error: Option<String>,
+    pub tool_deltas: Vec<ToolCallDelta>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ToolCallDelta {
+    pub index: usize,
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+const MAX_TOOL_CALL_INDEX: usize = 64;
+
+fn str_of(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+pub struct ToolCallAccumulator {
+    slots: Vec<AccumulatorSlot>,
+}
+
+struct AccumulatorSlot {
+    id: String,
+    name: String,
+    arguments: String,
+    announced: bool,
+    announced_id: Option<String>,
+}
+
+impl ToolCallAccumulator {
+    pub fn new() -> Self {
+        Self { slots: Vec::new() }
+    }
+
+    fn effective_id(slot: &AccumulatorSlot, index: usize) -> String {
+        if let Some(id) = slot.announced_id.clone() {
+            return id;
+        }
+        if slot.id.is_empty() {
+            format!("stream-{index}")
+        } else {
+            slot.id.clone()
+        }
+    }
+
+    pub fn apply(&mut self, deltas: Vec<ToolCallDelta>) -> Vec<(usize, String, String)> {
+        let mut newly_named = Vec::new();
+        for delta in deltas {
+            while self.slots.len() <= delta.index {
+                self.slots.push(AccumulatorSlot {
+                    id: String::new(),
+                    name: String::new(),
+                    arguments: String::new(),
+                    announced: false,
+                    announced_id: None,
+                });
+            }
+            let slot = &mut self.slots[delta.index];
+            if !delta.id.is_empty() {
+                slot.id = delta.id;
+            }
+            if !delta.name.is_empty() {
+                slot.name = delta.name;
+            }
+            slot.arguments.push_str(&delta.arguments);
+            if !slot.name.is_empty() && !slot.id.is_empty() && !slot.announced {
+                slot.announced = true;
+                slot.announced_id = Some(slot.id.clone());
+                newly_named.push((
+                    delta.index,
+                    slot.id.clone(),
+                    slot.name.clone(),
+                ));
+            }
+        }
+        newly_named
+    }
+
+    pub fn flush_unannounced(&mut self) -> Vec<(usize, String, String)> {
+        let mut named = Vec::new();
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if slot.name.is_empty() || slot.announced {
+                continue;
+            }
+            slot.announced = true;
+            let id = Self::effective_id(slot, index);
+            slot.announced_id = Some(id.clone());
+            named.push((index, id, slot.name.clone()));
+        }
+        named
+    }
+
+    pub fn calls(&self) -> Vec<Value> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| !slot.name.is_empty())
+            .map(|(index, slot)| {
+                serde_json::json!({
+                    "id": Self::effective_id(slot, index),
+                    "type": "function",
+                    "function": {
+                        "name": slot.name,
+                        "arguments": slot.arguments,
+                    },
+                })
+            })
+            .collect()
+    }
+}
+
+impl Default for ToolCallAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn u64_of(value: &Value, keys: &[&str]) -> u64 {
@@ -95,6 +214,23 @@ pub fn map_chunk(value: &Value) -> ChatChunk {
                     chunk.reasoning = text.to_string();
                     break;
                 }
+            }
+        }
+        if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+            for (position, call) in calls.iter().enumerate() {
+                let index = call
+                    .get("index")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|i| usize::try_from(i).ok())
+                    .filter(|i| *i <= MAX_TOOL_CALL_INDEX)
+                    .unwrap_or(position);
+                let function = call.get("function").unwrap_or(&Value::Null);
+                chunk.tool_deltas.push(ToolCallDelta {
+                    index,
+                    id: str_of(call, "id"),
+                    name: str_of(function, "name"),
+                    arguments: str_of(function, "arguments"),
+                });
             }
         }
     }
@@ -260,5 +396,80 @@ mod tests {
             }
         }
         assert_eq!(error.as_deref(), Some("upstream overloaded"));
+    }
+
+    #[test]
+    fn recorded_tool_calls_fixture_assembles_split_arguments() {
+        let raw = include_str!("../tests/fixtures/tools.sse");
+        let mut parser = SseParser::new();
+        let items = feed_all(&mut parser, raw, 7);
+        let mut accumulator = ToolCallAccumulator::new();
+        let mut text = String::new();
+        let mut finish = None;
+        let mut announced = Vec::new();
+        let mut done = false;
+        for item in items {
+            match item {
+                SseItem::Payload(payload) => {
+                    let value: Value = serde_json::from_str(&payload).unwrap();
+                    let chunk = map_chunk(&value);
+                    text.push_str(&chunk.text);
+                    finish = chunk.finish_reason.or(finish);
+                    announced.extend(accumulator.apply(chunk.tool_deltas));
+                }
+                SseItem::Done => done = true,
+            }
+        }
+        assert_eq!(text, "I will check the time and list files.");
+        assert_eq!(finish.as_deref(), Some("tool_calls"));
+        assert!(done);
+        assert_eq!(
+            announced,
+            vec![
+                (0, "call_time_1".to_string(), "get_time".to_string()),
+                (1, "call_run_2".to_string(), "run_powershell".to_string()),
+            ]
+        );
+        let calls = accumulator.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["id"], serde_json::json!("call_time_1"));
+        assert_eq!(
+            calls[0]["function"]["name"],
+            serde_json::json!("get_time")
+        );
+        assert_eq!(
+            calls[1]["function"]["arguments"],
+            serde_json::json!("{\"command\":\"Get-Date\"}")
+        );
+        let args: Value =
+            serde_json::from_str(calls[1]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["command"], serde_json::json!("Get-Date"));
+    }
+
+    #[test]
+    fn accumulator_announces_once_and_falls_back_without_id() {
+        let mut accumulator = ToolCallAccumulator::new();
+        let named = accumulator.apply(vec![ToolCallDelta {
+            index: 0,
+            id: String::new(),
+            name: "get_time".to_string(),
+            arguments: String::new(),
+        }]);
+        assert!(named.is_empty());
+        let named = accumulator.apply(vec![ToolCallDelta {
+            index: 0,
+            id: String::new(),
+            name: "get_time".to_string(),
+            arguments: String::new(),
+        }]);
+        assert!(named.is_empty());
+        let flushed = accumulator.flush_unannounced();
+        assert_eq!(
+            flushed,
+            vec![(0, "stream-0".to_string(), "get_time".to_string())]
+        );
+        let calls = accumulator.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], serde_json::json!("stream-0"));
     }
 }
