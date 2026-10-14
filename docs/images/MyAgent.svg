@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Clauro">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D4704B"/>
+      <stop offset="1" stop-color="#B2512F"/>
+    </linearGradient>
+  </defs>
+  <!-- tile -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- C-shaped speech bubble: open ring with a tail at bottom-left -->
+  <path d="M169 85 A64 64 0 1 0 169 167" fill="none" stroke="#FFF7F0" stroke-width="24" stroke-linecap="round"/>
+  <path d="M62 168 L104 186 L56 214 Z" fill="#FFF7F0" stroke="#FFF7F0" stroke-width="12" stroke-linejoin="round"/>
+  <!-- caret / spark in the opening -->
+  <circle cx="176" cy="128" r="13" fill="#FFF7F0"/>
+</svg>
