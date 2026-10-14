@@ -744,11 +744,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     const rows = await db.listMessages(id);
+    if (convIdRef.current !== id) return;
     setMessages(rows);
     const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
     const restored = db.parseToolLog(lastAssistant?.tool_log).map((entry) =>
       entry.status === "running"
-        ? { ...entry, status: "err" as const, preview: "Interrupted" }
+        ? {
+            ...entry,
+            status: "err" as const,
+            preview: entry.preview ? `Interrupted · ${entry.preview}` : "Interrupted",
+          }
         : entry,
     );
     if (restored.length > 0) setToolLog(restored);
@@ -794,8 +799,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
-    const toolLogJson =
-      toolLogRef.current.length > 0 ? JSON.stringify(toolLogRef.current) : null;
+    const settledLog = toolLogRef.current.map((entry) =>
+      entry.status === "running"
+        ? {
+            ...entry,
+            status: "err" as const,
+            preview: entry.preview ? `Interrupted · ${entry.preview}` : "Interrupted",
+          }
+        : entry,
+    );
+    if (settledLog.some((e, i) => e !== toolLogRef.current[i])) {
+      setToolLog(settledLog);
+    }
+    const toolLogJson = settledLog.length > 0 ? JSON.stringify(settledLog) : null;
     if (!content && !reasoning && !toolLogJson) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     }
@@ -1261,7 +1277,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
         setConversations((prev) => [branched, ...prev]);
         setActiveConversationId(branched.id);
-        setMessages(await db.listMessages(branched.id));
+        const rows = await db.listMessages(branched.id);
+        setMessages(rows);
+        const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
+        setToolLog(db.parseToolLog(lastAssistant?.tool_log));
         toast("Branched into new chat");
       } catch (e) {
         reportError(e);

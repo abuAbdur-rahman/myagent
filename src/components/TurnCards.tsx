@@ -4,7 +4,7 @@ import { useApp } from "../lib/store";
 import { Button, Input } from "./ui";
 
 function Kbd({ children }: { children: string }) {
-  return <kbd className="border-white/40 bg-transparent text-inherit">{children}</kbd>;
+  return <kbd className="border-border bg-transparent text-inherit">{children}</kbd>;
 }
 
 function useFocusOnShow(dep: string | null) {

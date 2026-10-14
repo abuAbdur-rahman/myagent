@@ -461,7 +461,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 className="group sticky top-0 flex w-full items-center gap-1 bg-sidebar px-2.5 pb-1 pt-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-muted"
               >
                 <span className="flex-1">{group.name}</span>
-                <span className="invisible grid h-5 w-5 place-items-center rounded-control hover:text-text focus-visible:visible group-hover:visible">
+                <span className="grid h-5 w-5 place-items-center rounded-control opacity-40 hover:text-text hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100">
                   {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
                 </span>
               </button>

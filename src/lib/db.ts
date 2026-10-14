@@ -214,19 +214,24 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
 }
 
 export function parseToolLog(raw: unknown): ToolLogEntry[] {
-  if (typeof raw !== "string" || !raw) return [];
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (!Array.isArray(value)) return [];
-    const entries: ToolLogEntry[] = [];
-    for (const entry of value) {
-      const parsed = toolLogEntrySchema.safeParse(entry);
-      if (parsed.success) entries.push(parsed.data);
+  if (typeof raw !== "string" && !Array.isArray(raw)) return [];
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    if (!raw) return [];
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      console.warn("parseToolLog: invalid JSON, dropping tool log");
+      return [];
     }
-    return entries;
-  } catch {
-    return [];
   }
+  if (!Array.isArray(value)) return [];
+  const entries: ToolLogEntry[] = [];
+  for (const entry of value) {
+    const parsed = toolLogEntrySchema.safeParse(entry);
+    if (parsed.success) entries.push(parsed.data);
+  }
+  return entries;
 }
 
 export async function deleteMessage(id: string): Promise<void> {
@@ -298,8 +303,21 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
-      [newId(), branched.id, m.role, m.content, m.created_at],
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      [
+        newId(),
+        branched.id,
+        m.role,
+        m.content,
+        m.reasoning ?? null,
+        m.thinking_ms ?? null,
+        m.prompt_tokens ?? null,
+        m.completion_tokens ?? null,
+        m.total_tokens ?? null,
+        m.finish_reason ?? null,
+        m.tool_log ?? null,
+        m.created_at,
+      ],
     );
   }
   return branched;

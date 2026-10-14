@@ -76,9 +76,12 @@ function ToolIcon({ name }: { name: string }) {
   }
 }
 
-function ToolLogView() {
+function ToolLogView({ resetKey }: { resetKey: string | null }) {
   const { toolLog } = useApp();
   const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    setCollapsed(false);
+  }, [resetKey]);
   if (toolLog.length === 0) return null;
   const running = toolLog.filter((e) => e.status === "running").length;
   const failed = toolLog.filter((e) => e.status === "err").length;
@@ -100,7 +103,7 @@ function ToolLogView() {
           {running > 0 && ` · ${running} running`}
           {failed > 0 && ` · ${failed} failed`}
         </span>
-        <span className="invisible grid h-5 w-5 place-items-center rounded-control focus-visible:visible group-hover:visible">
+        <span className="visible grid h-5 w-5 place-items-center rounded-control opacity-40 focus-visible:opacity-100 group-hover:opacity-100">
           {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
         </span>
       </button>
@@ -110,12 +113,26 @@ function ToolLogView() {
             <details key={entry.id} className="text-[13px]">
               <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
                 {entry.status === "running" && (
-                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent" />
+                  <span
+                    role="status"
+                    aria-label="Running"
+                    className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent"
+                  />
                 )}
-                {entry.status === "ok" && <Check size={14} className="text-success" />}
-                {entry.status === "err" && <X size={14} className="text-danger" />}
+                {entry.status === "ok" && (
+                  <span role="img" aria-label="Succeeded">
+                    <Check size={14} className="text-success" />
+                  </span>
+                )}
+                {entry.status === "err" && (
+                  <span role="img" aria-label="Failed">
+                    <X size={14} className="text-danger" />
+                  </span>
+                )}
                 <ToolIcon name={entry.name} />
-                <span className="truncate">{entry.summary}</span>
+                <span className="truncate" title={entry.summary}>
+                  {entry.summary}
+                </span>
               </summary>
               {entry.preview && (
                 <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
@@ -249,12 +266,14 @@ function AssistantMessage({
   modelName,
   isLast,
   streaming,
+  resetKey,
   onRemember,
 }: {
   message: Message;
   modelName: string;
   isLast: boolean;
   streaming: boolean;
+  resetKey: string | null;
   onRemember: (content: string) => Promise<void>;
 }) {
   const { openArtifact } = useApp();
@@ -285,7 +304,7 @@ function AssistantMessage({
       </div>
       <div className="md">
         <ThinkingBlock message={message} live={isLast && streaming} />
-        {isLast && <ToolLogView />}
+        {isLast && <ToolLogView resetKey={resetKey} />}
         {busy ? (
           <span className="dots" aria-label="Waiting for response">
             <i />
@@ -458,6 +477,7 @@ export function MessageList() {
                 modelName={activeModel ?? "assistant"}
                 isLast={message.id === lastAssistantId}
                 streaming={streaming}
+                resetKey={activeConversationId}
                 onRemember={remember}
               />
             </div>
