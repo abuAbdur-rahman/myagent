@@ -105,12 +105,14 @@ memory.
 Tag a version to build and publish a draft release:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
-The `release` workflow builds the NSIS installer on `windows-latest` and drafts a
-GitHub Release with the artifact attached.
+The `release` workflow builds the signed NSIS installer on `windows-latest`,
+emits `latest.json`, and drafts a GitHub Release with the artifacts attached.
+The app checks that channel from About → Updates (and once quietly on launch);
+signing keys live only in the `TAURI_SIGNING_PRIVATE_KEY` repo secret.
 
 ---
 

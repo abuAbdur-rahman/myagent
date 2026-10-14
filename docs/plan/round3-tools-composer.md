@@ -2,6 +2,16 @@
 
 **Status: T1–T7 shipped. T8 (release 0.1.1) and T9 (in-app updater) remain.**
 
+### T9 — Update from inside the app ✅ (dormant)
+- `tauri-plugin-updater` wired (Rust + JS): About → version, check, download
+  with progress, install and relaunch; one silent background check on launch
+  that toasts only when an update is ready.
+- Release workflow emits signed `latest.json`; private key lives only as the
+  `TAURI_SIGNING_PRIVATE_KEY` GitHub secret.
+- Dormant by design while releases are private: the check reports the channel
+  state honestly instead of failing cryptically. Activates when releases are
+  publicly reachable.
+
 Follows the UI overhaul. Goal: a composer that behaves like Claude's, a model
 that knows the app and can act in it, correct errors, real titles, guarded
 context, product identity, and a tagged release.

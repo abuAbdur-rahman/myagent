@@ -3,12 +3,19 @@ import { Check, Moon, Sun, Monitor } from "lucide-react";
 import { useApp, type ThemeMode } from "../../lib/store";
 import * as db from "../../lib/db";
 import { MemoryEditor } from "../MemoryEditor";
-import { Button, Input, Select } from "../ui";
+import { Button, Input, Select, Spinner } from "../ui";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
+import {
+  channelMessage,
+  getAppVersion,
+  installUpdate,
+  type Update,
+} from "../../lib/updater";
 import type { Memory } from "../../lib/types";
 
 function SettingRow({
@@ -337,17 +344,101 @@ export function ShortcutsPage() {
 }
 
 export function AboutPage() {
+  const [version, setVersion] = useState("…");
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    getAppVersion().then((v) => {
+      if (live) setVersion(v);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      update?.close().catch(() => undefined);
+    },
+    [update],
+  );
+
+  const checkNow = async () => {
+    setChecking(true);
+    setStatus(null);
+    try {
+      const found = await check();
+      if (!found) {
+        setUpdate(null);
+        setStatus(`You're on the latest version (${version}).`);
+      } else {
+        setUpdate(found);
+      }
+    } catch (e) {
+      setUpdate(null);
+      setStatus(channelMessage(e));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const install = async () => {
+    if (!update) return;
+    setProgress(0);
+    try {
+      await installUpdate(update, (pct) => setProgress(pct));
+    } catch (e) {
+      setProgress(null);
+      setStatus(channelMessage(e));
+    }
+  };
+
   return (
     <div>
       <SettingRow label="App name" description="">
         <span className="text-sm">MyAgent</span>
       </SettingRow>
       <SettingRow label="Version" description="">
-        <span className="text-sm">0.1.0</span>
+        <span className="text-sm">{version}</span>
       </SettingRow>
       <SettingRow label="Status" description="Local-first BYOK desktop client">
         <span className="text-sm text-success">Ready</span>
       </SettingRow>
+      <SettingRow label="Updates" description="Signed releases from GitHub">
+        <div className="flex w-full flex-col items-end gap-1.5">
+          {update ? (
+            <>
+              <span className="text-sm">Version {update.version} is ready</span>
+              <Button variant="primary" size="sm" disabled={progress !== null} onClick={() => void install()}>
+                {progress === null ? "Download & install" : `Installing… ${progress ?? 0}%`}
+              </Button>
+              {progress !== null && (
+                <div className="h-1 w-full overflow-hidden rounded bg-active">
+                  <div className="h-full bg-accent" style={{ width: `${progress ?? 0}%` }} />
+                </div>
+              )}
+            </>
+          ) : (
+            <Button
+              variant="default"
+              size="sm"
+              disabled={checking}
+              onClick={() => void checkNow()}
+            >
+              {checking ? <Spinner label="Checking…" /> : "Check for updates"}
+            </Button>
+          )}
+        </div>
+      </SettingRow>
+      {status && (
+        <p className="px-2 pt-2 text-xs text-muted" role="status">
+          {status}
+        </p>
+      )}
       <SettingRow label="Source" description="Issues and contributions welcome">
         <Button
           variant="default"

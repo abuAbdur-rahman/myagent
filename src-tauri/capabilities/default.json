@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:app:allow-version",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
@@ -15,6 +16,9 @@
     "sql:allow-execute",
     "sql:allow-select",
     "sql:allow-load",
-    "sql:allow-close"
+    "sql:allow-close",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install"
   ]
 }

@@ -17,6 +17,8 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Toaster } from "./components/Toaster";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import { MenuHost } from "./components/Menu";
+import { check } from "@tauri-apps/plugin-updater";
+import { toast } from "./lib/toast";
 
 function Shell() {
   const {
@@ -41,6 +43,21 @@ function Shell() {
   });
 
   const showWelcome = activeConversationId === null && messages.length === 0;
+
+  useEffect(() => {
+    let live = true;
+    check()
+      .then((update) => {
+        if (live && update) {
+          toast(`MyAgent ${update.version} is ready — see About to install.`);
+        }
+        update?.close().catch(() => undefined);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
