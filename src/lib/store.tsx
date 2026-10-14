@@ -974,6 +974,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
                 thinkingMsRef.current = Date.now() - thinkingStartRef.current;
               }
+            } else if (event.type === "retrying") {
+              toast(`Retrying (${event.attempt}/${event.max})`);
             } else if (event.type === "tool_start") {
               setToolLog((prev) => [
                 ...prev,

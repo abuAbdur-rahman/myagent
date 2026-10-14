@@ -6,6 +6,7 @@ pub enum AppError {
     Network(String),
     Upstream(String),
     Internal(String),
+    Cancelled,
 }
 
 impl fmt::Display for AppError {
@@ -15,6 +16,7 @@ impl fmt::Display for AppError {
             AppError::Network(m) => write!(f, "network error: {m}"),
             AppError::Upstream(m) => write!(f, "upstream error: {m}"),
             AppError::Internal(m) => write!(f, "internal error: {m}"),
+            AppError::Cancelled => write!(f, "cancelled by user"),
         }
     }
 }

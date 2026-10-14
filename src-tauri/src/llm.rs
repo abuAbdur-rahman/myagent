@@ -1,5 +1,6 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tokio::sync::Notify;
@@ -27,6 +28,10 @@ pub enum StreamEvent {
     },
     Finish {
         reason: Option<String>,
+    },
+    Retrying {
+        attempt: u32,
+        max: u32,
     },
     Done,
     ToolStart {
@@ -132,6 +137,10 @@ async fn error_body(resp: reqwest::Response) -> String {
         Ok(_) => status.to_string(),
         Err(e) => format!("{status} (unreadable body: {e})"),
     }
+}
+
+fn is_cancel_shutdown(error: &AppError) -> bool {
+    matches!(error, AppError::Cancelled)
 }
 
 fn is_retryable_tools_error(error: &AppError) -> bool {
@@ -276,18 +285,88 @@ pub async fn chat_stream(
     result
 }
 
-async fn post_completion(
+const MAX_ATTEMPTS: u32 = 3;
+
+fn retryable_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+fn retry_after_secs(resp: &reqwest::Response) -> Option<u64> {
+    resp.headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+fn backoff_delay(attempt: u32, retry_after_secs: Option<u64>) -> Duration {
+    if let Some(secs) = retry_after_secs {
+        return Duration::from_secs(secs.min(30));
+    }
+    let base_ms = 500u64.saturating_mul(2u64.pow(attempt.min(4)));
+    let jitter_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos() % 250))
+        .unwrap_or(0);
+    Duration::from_millis(base_ms + jitter_ms)
+}
+
+async fn sleep_or_cancel(delay: Duration, cancel: &Notify) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => false,
+        _ = cancel.notified() => true,
+    }
+}
+
+async fn post_with_retry(
     client: &reqwest::Client,
     url: &str,
     key: &str,
     body: &serde_json::Value,
-) -> AppResult<serde_json::Value> {
-    let resp = client.post(url).bearer_auth(key).json(body).send().await?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::Upstream(error_body(resp).await));
+    cancel: &Notify,
+    on_event: Option<&Channel<StreamEvent>>,
+) -> AppResult<reqwest::Response> {
+    let mut last_error: Option<AppError> = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        match client.post(url).bearer_auth(key).json(body).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    return Ok(resp);
+                }
+                if retryable_status(status) && attempt + 1 < MAX_ATTEMPTS {
+                    let wait = backoff_delay(attempt, retry_after_secs(&resp));
+                    drop(resp);
+                    if let Some(ch) = on_event {
+                        let _ = ch.send(StreamEvent::Retrying {
+                            attempt: attempt + 2,
+                            max: MAX_ATTEMPTS,
+                        });
+                    }
+                    if sleep_or_cancel(wait, cancel).await {
+                        return Err(AppError::Cancelled);
+                    }
+                    continue;
+                }
+                return Err(AppError::Upstream(error_body(resp).await));
+            }
+            Err(error) => {
+                last_error = Some(AppError::from(error));
+                if attempt + 1 < MAX_ATTEMPTS {
+                    if let Some(ch) = on_event {
+                        let _ = ch.send(StreamEvent::Retrying {
+                            attempt: attempt + 2,
+                            max: MAX_ATTEMPTS,
+                        });
+                    }
+                    if sleep_or_cancel(backoff_delay(attempt, None), cancel).await {
+                        return Err(AppError::Cancelled);
+                    }
+                    continue;
+                }
+            }
+        }
     }
-    resp.json().await.map_err(AppError::from)
+    Err(last_error.unwrap_or_else(|| AppError::Network("retry exhausted".to_string())))
 }
 
 fn tool_calls_of(message: &serde_json::Value) -> Vec<serde_json::Value> {
@@ -368,8 +447,12 @@ async fn run_agentic(
         });
         apply_optional_params(&mut body, req);
 
-        let value = match post_completion(client, &url, &key, &body).await {
-            Ok(value) => value,
+        let value = match post_with_retry(client, &url, &key, &body, cancel, Some(on_event)).await {
+            Ok(resp) => resp
+                .json::<serde_json::Value>()
+                .await
+                .map_err(AppError::from)?,
+            Err(error) if is_cancel_shutdown(&error) => return Ok(()),
             Err(error) if is_retryable_tools_error(&error) => {
                 return stream_completion(client, req, key, history, on_event, cancel).await;
             }
@@ -565,16 +648,20 @@ async fn stream_completion(
     });
     apply_optional_params(&mut body, req);
 
-    let resp = client
-        .post(endpoint(&req.base_url, "chat/completions"))
-        .bearer_auth(key)
-        .json(&body)
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::Upstream(error_body(resp).await));
-    }
+    let resp = match post_with_retry(
+        client,
+        &endpoint(&req.base_url, "chat/completions"),
+        &key,
+        &body,
+        cancel,
+        Some(on_event),
+    )
+    .await
+    {
+        Ok(resp) => resp,
+        Err(error) if is_cancel_shutdown(&error) => return Ok(()),
+        Err(error) => return Err(error),
+    };
 
     let mut stream = resp.bytes_stream();
     let mut parser = sse::SseParser::new();
@@ -643,4 +730,118 @@ async fn stream_completion(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    fn serve_script(script: Vec<(&'static str, &'static str, &'static str)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        std::thread::spawn(move || {
+            for (status, headers, body) in script {
+                let Ok((stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = trimmed.split_once(':') {
+                        if name.eq_ignore_ascii_case("Content-Length") {
+                            content_length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body_buf = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut body_buf);
+                let mut stream = reader.into_inner();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .build()
+            .expect("test client")
+    }
+
+    fn body() -> serde_json::Value {
+        serde_json::json!({ "model": "test", "messages": [] })
+    }
+
+    #[test]
+    fn retryable_status_covers_429_and_5xx_only() {
+        assert!(retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(retryable_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(retryable_status(reqwest::StatusCode::BAD_GATEWAY));
+        assert!(!retryable_status(reqwest::StatusCode::BAD_REQUEST));
+        assert!(!retryable_status(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!retryable_status(reqwest::StatusCode::OK));
+    }
+
+    #[test]
+    fn backoff_honors_retry_after_and_grows() {
+        assert_eq!(
+            backoff_delay(0, Some(7)),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            backoff_delay(2, Some(99)),
+            Duration::from_secs(30)
+        );
+        let first = backoff_delay(0, None);
+        let second = backoff_delay(1, None);
+        assert!(first >= Duration::from_millis(500));
+        assert!(first < Duration::from_millis(750));
+        assert!(second >= Duration::from_millis(1000));
+        assert!(second < Duration::from_millis(1250));
+    }
+
+    #[tokio::test]
+    async fn retries_429_then_succeeds() {
+        let url = serve_script(vec![
+            (
+                "429 Too Many Requests",
+                "Retry-After: 0\r\n",
+                r#"{"error":"slow down"}"#,
+            ),
+            ("200 OK", "", r#"{"choices":[]}"#),
+        ]);
+        let cancel = Notify::new();
+        let resp = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None)
+            .await
+            .expect("retry should succeed");
+        assert!(resp.status().is_success());
+        let value: serde_json::Value = resp.json().await.expect("json body");
+        assert_eq!(value, serde_json::json!({"choices":[]}));
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_400() {
+        let url = serve_script(vec![("400 Bad Request", "", r#"{"error":"bad"}"#)]);
+        let cancel = Notify::new();
+        let error = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None)
+            .await
+            .expect_err("400 must not retry");
+        assert!(matches!(error, AppError::Upstream(_)));
+    }
 }
