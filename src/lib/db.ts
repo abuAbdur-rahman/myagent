@@ -4,6 +4,7 @@ import type {
   Connection,
   ConnectionInput,
   Conversation,
+  DeclaredArtifact,
   Memory,
   MemoryInput,
   MemoryKind,
@@ -14,7 +15,7 @@ import type {
   Role,
   ToolLogEntry,
 } from "./types";
-import { toolLogEntrySchema } from "./types";
+import { declaredArtifactSchema, toolLogEntrySchema } from "./types";
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -194,12 +195,13 @@ export interface MessageMeta {
   totalTokens: number | null;
   finishReason: string | null;
   toolLogJson: string | null;
+  artifactsJson: string | null;
 }
 
 export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7 WHERE id = $8",
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8 WHERE id = $9",
     [
       meta.reasoning,
       meta.thinkingMs,
@@ -208,9 +210,29 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
       meta.totalTokens,
       meta.finishReason,
       meta.toolLogJson,
+      meta.artifactsJson,
       id,
     ],
   );
+}
+
+export function parseDeclaredArtifacts(raw: unknown): DeclaredArtifact[] {
+  if (typeof raw !== "string") return [];
+  if (!raw) return [];
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    console.warn("parseDeclaredArtifacts: invalid JSON, dropping artifacts");
+    return [];
+  }
+  if (!Array.isArray(value)) return [];
+  const artifacts: DeclaredArtifact[] = [];
+  for (const entry of value) {
+    const parsed = declaredArtifactSchema.safeParse(entry);
+    if (parsed.success) artifacts.push(parsed.data);
+  }
+  return artifacts;
 }
 
 export function parseToolLog(raw: unknown): ToolLogEntry[] {
@@ -303,7 +325,7 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
       [
         newId(),
         branched.id,
@@ -316,6 +338,7 @@ export async function branchConversation(
         m.total_tokens ?? null,
         m.finish_reason ?? null,
         m.tool_log ?? null,
+        m.artifacts ?? null,
         m.created_at,
       ],
     );

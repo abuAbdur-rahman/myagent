@@ -20,12 +20,13 @@ import { useApp } from "../lib/store";
 import { classifyStreamError } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
-import { extractArtifacts } from "../lib/artifacts";
+import { splitArtifactSegments } from "../lib/artifacts";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
 import { Button, IconButton } from "./ui";
 import type { Message } from "../lib/types";
 import { cn } from "../lib/utils";
+import { parseDeclaredArtifacts } from "../lib/db";
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   const { canRetry, retryTurn, streaming } = useApp();
@@ -261,6 +262,39 @@ function ThinkingBlock({
   );
 }
 
+function ArtifactCard({
+  id,
+  title,
+  lang,
+  code,
+}: {
+  id: string;
+  title: string;
+  lang: string;
+  code: string;
+}) {
+  const { panelOpen, panelArtifact, openArtifact, closePanel } = useApp();
+  const isOpen = panelOpen && panelArtifact?.id === id;
+  return (
+    <div className="my-3 flex items-center gap-3 rounded-panel border border-border bg-vault px-3 py-2.5">
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-control bg-active">
+        <FileCode size={16} className="text-muted" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{title}</span>
+        <span className="block text-xs text-muted">Artifact · {lang}</span>
+      </span>
+      <Button
+        variant={isOpen ? "ghost" : "default"}
+        size="sm"
+        onClick={() => (isOpen ? closePanel() : openArtifact({ id, title, lang, code }))}
+      >
+        {isOpen ? "Hide" : "Open"}
+      </Button>
+    </div>
+  );
+}
+
 function AssistantMessage({
   message,
   modelName,
@@ -276,13 +310,11 @@ function AssistantMessage({
   resetKey: string | null;
   onRemember: (content: string) => Promise<void>;
 }) {
-  const { openArtifact } = useApp();
-  const artifacts = useMemo(() => extractArtifacts(message.content), [message.content]);
-  const [showAllArtifacts, setShowAllArtifacts] = useState(false);
+  const segments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
+  const fenceCount = segments.filter((s) => s.kind === "artifact").length;
+  const declared = useMemo(() => parseDeclaredArtifacts(message.artifacts), [message.artifacts]);
   const [rememberLabel, setRememberLabel] = useState("Remember");
   const busy = streaming && message.content.length === 0;
-  const visibleArtifacts = showAllArtifacts ? artifacts : artifacts.slice(0, 3);
-  const hiddenCount = artifacts.length - visibleArtifacts.length;
 
   const remember = async () => {
     try {
@@ -313,7 +345,28 @@ function AssistantMessage({
           </span>
         ) : (
           <>
-            <Markdown content={message.content} />
+            {segments.map((segment, i) =>
+              segment.kind === "text" ? (
+                <Markdown key={i} content={segment.text} />
+              ) : (
+                <ArtifactCard
+                  key={`fence-${segment.artifact.index}`}
+                  id={`${message.id}:fence:${segment.artifact.index}`}
+                  title={fenceCount > 1 ? `artifact-${segment.artifact.index + 1}.html` : "artifact.html"}
+                  lang={segment.artifact.lang}
+                  code={segment.artifact.code}
+                />
+              ),
+            )}
+            {declared.map((artifact, position) => (
+              <ArtifactCard
+                key={`tool-${position}`}
+                id={`${message.id}:tool:${position}`}
+                title={artifact.title}
+                lang={artifact.lang}
+                code={artifact.code}
+              />
+            ))}
             {streaming && <span className="caret" aria-hidden="true" />}
           </>
         )}
@@ -336,25 +389,6 @@ function AssistantMessage({
               {rememberLabel}
             </Button>
           </div>
-          {artifacts.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {visibleArtifacts.map((artifact, position) => (
-                <Button
-                  key={artifact.index}
-                  variant="default"
-                  size="sm"
-                  onClick={() => openArtifact(artifact)}
-                >
-                  {artifacts.length > 1 ? `${position + 1} · ` : ""}Artifact · {artifact.lang}
-                </Button>
-              ))}
-              {hiddenCount > 0 && (
-                <Button variant="ghost" size="sm" onClick={() => setShowAllArtifacts(true)}>
-                  +{hiddenCount} more
-                </Button>
-              )}
-            </div>
-          )}
         </>
       )}
     </div>

@@ -130,6 +130,12 @@ pub fn run() {
             sql: "ALTER TABLE messages ADD COLUMN tool_log TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "add_message_artifacts",
+            sql: "ALTER TABLE messages ADD COLUMN artifacts TEXT;",
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

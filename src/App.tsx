@@ -35,6 +35,8 @@ function Shell() {
     activeConversationId,
     togglePanel,
     panelOpen,
+    panelMode,
+    panelWidth,
     view,
     setView,
   } = useApp();
@@ -97,13 +99,16 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [newConversation, setPaletteOpen, setSettingsPage, stopStream, streaming, toggleSidebar, togglePanel]);
 
+  const docked = panelOpen && panelMode !== "full";
+  const panelCols = docked ? (panelMode === "mini" ? 300 : panelWidth) : 0;
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">
       <TitleBar />
       <div
         className="shell-grid grid min-h-0 flex-1"
         style={{
-          gridTemplateColumns: `${sidebarCollapsed ? 56 : 260}px minmax(0, 1fr) ${panelOpen ? 420 : 0}px`,
+          gridTemplateColumns: `${sidebarCollapsed ? 56 : 260}px minmax(0, 1fr) ${panelCols}px`,
         }}
       >
         <Sidebar onOpenProject={(id) => setProjectDialog({ open: true, id })} />
@@ -130,8 +135,13 @@ function Shell() {
             </>
           )}
         </main>
-        <ArtifactsPanel />
+        {!(panelOpen && panelMode === "full") && <ArtifactsPanel />}
       </div>
+      {panelOpen && panelMode === "full" && (
+        <div className="fixed inset-0 z-50 bg-surface">
+          <ArtifactsPanel />
+        </div>
+      )}
       <SettingsDialog />
       <OnboardingDialog />
       <ProjectDialog

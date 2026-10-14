@@ -19,6 +19,7 @@ const IDENTITY_LINES = [
   "The user's API keys and chats never leave this machine; there is no cloud account.",
   "Answer with Markdown. Wrap code in fenced blocks with a language tag.",
   "For an interactive deliverable, emit ONE fenced html block with a complete self-contained page; it opens in a preview pane.",
+  "A standalone reusable deliverable over ~50 lines is an artifact: call save_artifact with a title, language tag, and the complete content instead of pasting it. It opens beside the chat as a file card. Short snippets stay inline as fenced code.",
   "Durable user facts use short lines; the client stores and re-sends them, so never invent memories.",
   `You can act through tools when the user asks for action: ${toolListSentence()}. Prefer acting over asking; say briefly what you did.`,
 ];

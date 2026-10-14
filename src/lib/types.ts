@@ -34,6 +34,13 @@ export const toolLogEntrySchema = z.object({
 });
 export type ToolLogEntry = z.infer<typeof toolLogEntrySchema>;
 
+export const declaredArtifactSchema = z.object({
+  title: z.string(),
+  lang: z.string(),
+  code: z.string(),
+});
+export type DeclaredArtifact = z.infer<typeof declaredArtifactSchema>;
+
 const messageSchema = z.object({
   id: z.string(),
   conversation_id: z.string(),
@@ -46,6 +53,7 @@ const messageSchema = z.object({
   total_tokens: z.number().nullish(),
   finish_reason: z.string().nullish(),
   tool_log: z.string().nullish(),
+  artifacts: z.string().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;

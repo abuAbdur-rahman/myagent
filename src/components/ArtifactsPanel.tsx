@@ -1,5 +1,6 @@
-import { BookOpen, Code, Copy, Download, Eye, X } from "lucide-react";
-import { useApp, type PanelTab } from "../lib/store";
+import { useCallback, useEffect, useRef } from "react";
+import { BookOpen, Code, Copy, Download, Eye, Maximize2, Minimize2, X } from "lucide-react";
+import { useApp, type PanelMode, type PanelTab } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { Badge } from "./ui";
 import { cn, copyText, downloadText } from "../lib/utils";
@@ -43,7 +44,48 @@ function tabsFor(lang: string): { id: PanelTab; label: string }[] {
 }
 
 export function ArtifactsPanel() {
-  const { panelOpen, panelArtifact, panelTab, setPanelTab, closePanel } = useApp();
+  const {
+    panelOpen,
+    panelArtifact,
+    panelTab,
+    panelMode,
+    panelWidth,
+    setPanelTab,
+    setPanelMode,
+    setPanelWidth,
+    closePanel,
+  } = useApp();
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onDragMove = useCallback(
+    (clientX: number) => {
+      const state = dragState.current;
+      if (!state) return;
+      setPanelWidth(state.startWidth + (state.startX - clientX));
+    },
+    [setPanelWidth],
+  );
+
+  const endDrag = useCallback(() => {
+    dragState.current = null;
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+  }, []);
+
+  const onPointerMove = useCallback(
+    (e: PointerEvent) => onDragMove(e.clientX),
+    [onDragMove],
+  );
+  const onPointerUp = useCallback(() => endDrag(), [endDrag]);
+
+  const beginDrag = (e: { clientX: number; preventDefault: () => void }) => {
+    e.preventDefault();
+    dragState.current = { startX: e.clientX, startWidth: panelWidth };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
+  useEffect(() => endDrag, [endDrag]);
 
   if (!panelOpen || !panelArtifact) return null;
 
@@ -64,10 +106,31 @@ export function ArtifactsPanel() {
     toast("Artifact downloaded");
   };
 
+  const width = panelMode === "mini" ? 300 : panelWidth;
+
+  const toggleMode = (mode: PanelMode) => {
+    setPanelMode(panelMode === mode ? "dock" : mode);
+  };
+
   return (
-    <section className="flex h-full w-[420px] shrink-0 flex-col overflow-hidden border-l border-border bg-surface">
+    <section
+      className="relative flex h-full shrink-0 flex-col overflow-hidden border-l border-border bg-surface"
+      style={{ width: panelMode === "full" ? "100%" : width }}
+    >
+      {panelMode !== "full" && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize artifact panel"
+          title="Drag to resize"
+          onPointerDown={beginDrag}
+          className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1/2 cursor-ew-resize touch-none"
+        />
+      )}
       <div className="flex h-12 flex-none items-center gap-2 px-2 pl-3.5">
-        <b className="truncate text-sm">Artifact</b>
+        <b className="truncate text-sm" title={panelArtifact.title}>
+          {panelArtifact.title}
+        </b>
         <Badge>{panelArtifact.lang}</Badge>
         <div className="ml-2 flex gap-0.5">
           {tabs.map((tab) => (
@@ -102,6 +165,24 @@ export function ArtifactsPanel() {
           className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
         >
           <Download size={16} />
+        </button>
+        <button
+          type="button"
+          aria-label={panelMode === "mini" ? "Restore panel size" : "Minimize panel"}
+          title={panelMode === "mini" ? "Restore" : "Minimize"}
+          onClick={() => toggleMode("mini")}
+          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+        >
+          <Minimize2 size={16} />
+        </button>
+        <button
+          type="button"
+          aria-label={panelMode === "full" ? "Exit fullscreen" : "Fullscreen panel"}
+          title={panelMode === "full" ? "Exit fullscreen" : "Fullscreen"}
+          onClick={() => toggleMode("full")}
+          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+        >
+          <Maximize2 size={16} />
         </button>
         <button
           type="button"

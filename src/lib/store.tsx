@@ -24,6 +24,7 @@ import type {
   Connection,
   ConnectionInput,
   Conversation,
+  DeclaredArtifact,
   Memory,
   MemoryDraft,
   MemoryInput,
@@ -40,6 +41,11 @@ const MODEL_KEY = "model";
 const SIDEBAR_KEY = "sidebarCollapsed";
 const THEME_KEY = "theme";
 const DISPLAY_NAME_KEY = "displayName";
+const PANEL_WIDTH_KEY = "panelWidth";
+
+function clampPanelWidth(width: number): number {
+  return Math.min(720, Math.max(320, Math.round(width)));
+}
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -48,8 +54,11 @@ type ToolEntry = ToolLogEntry;
 type View = "chat" | "projects" | "project";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
+export type PanelMode = "dock" | "full" | "mini";
 
 interface PanelArtifact {
+  id: string;
+  title: string;
   lang: string;
   code: string;
 }
@@ -168,10 +177,14 @@ interface AppContextValue {
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
   panelTab: PanelTab;
+  panelMode: PanelMode;
+  panelWidth: number;
   openArtifact: (artifact: PanelArtifact) => void;
   closePanel: () => void;
   togglePanel: () => void;
   setPanelTab: (tab: PanelTab) => void;
+  setPanelMode: (mode: PanelMode) => void;
+  setPanelWidth: (width: number) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -289,6 +302,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     toolLogRef.current = toolLog;
   }, [toolLog]);
+  const artifactsRef = useRef<DeclaredArtifact[]>([]);
+  const panelOpenRef = useRef(false);
   const conversationsRef = useRef<Conversation[]>([]);
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -450,8 +465,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
   const [panelTab, setPanelTabState] = useState<PanelTab>("code");
+  const [panelMode, setPanelModeState] = useState<PanelMode>("dock");
+  const [panelWidth, setPanelWidthState] = useState(() => {
+    const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 420);
+  });
+
+  const setPanelWidth = useCallback((width: number) => {
+    const clamped = clampPanelWidth(width);
+    setPanelWidthState(clamped);
+    localStorage.setItem(PANEL_WIDTH_KEY, String(clamped));
+  }, []);
+
+  const setPanelMode = useCallback((mode: PanelMode) => {
+    setPanelModeState(mode);
+  }, []);
+
+  useEffect(() => {
+    panelOpenRef.current = panelOpen;
+  }, [panelOpen]);
 
   const openArtifact = useCallback((artifact: PanelArtifact) => {
+    if (!panelOpenRef.current) setPanelModeState("dock");
     setPanelArtifact(artifact);
     setPanelTabState(defaultPanelTab(artifact.lang));
     setPanelOpen(true);
@@ -812,7 +847,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setToolLog(settledLog);
     }
     const toolLogJson = settledLog.length > 0 ? JSON.stringify(settledLog) : null;
-    if (!content && !reasoning && !toolLogJson) {
+    const artifactsJson =
+      artifactsRef.current.length > 0 ? JSON.stringify(artifactsRef.current) : null;
+    if (!content && !reasoning && !toolLogJson && !artifactsJson) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     }
     const usage = usageRef.current;
@@ -824,8 +861,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       totalTokens: usage?.total ?? null,
       finishReason: finishRef.current,
       toolLogJson,
+      artifactsJson,
     };
-    const persist = content || toolLogJson
+    const persist = content || toolLogJson || artifactsJson
       ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
     persist
@@ -871,6 +909,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       thinkingMsRef.current = null;
       usageRef.current = null;
       finishRef.current = null;
+      artifactsRef.current = db.parseDeclaredArtifacts(seed?.artifacts);
       assistantMsgIdRef.current = assistantMsg.id;
       setStreaming(true);
       setToolLog([]);
@@ -955,7 +994,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ),
               );
             } else if (event.type === "artifact") {
-              openArtifact({ lang: event.lang, code: event.code });
+              const declared: DeclaredArtifact = {
+                title: event.title,
+                lang: event.lang,
+                code: event.code,
+              };
+              artifactsRef.current = [...artifactsRef.current, declared];
+              const artifactsJson = JSON.stringify(artifactsRef.current);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsg.id ? { ...m, artifacts: artifactsJson } : m,
+                ),
+              );
+              openArtifact({
+                id: `${assistantMsg.id}:tool:${artifactsRef.current.length - 1}`,
+                ...declared,
+              });
               toast(`Artifact saved: ${event.title}`);
             } else if (event.type === "approval_asked") {
               setApproval({
@@ -1461,10 +1515,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     panelOpen,
     panelArtifact,
     panelTab,
+    panelMode,
+    panelWidth,
     openArtifact,
     closePanel,
     togglePanel,
     setPanelTab,
+    setPanelMode,
+    setPanelWidth,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
