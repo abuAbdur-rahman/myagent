@@ -56,7 +56,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "MyAgent ${{ github.ref_name }}"
           releaseBody: "Windows installer (NSIS) is attached below."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
