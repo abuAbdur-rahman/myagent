@@ -805,6 +805,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const removeConversation = useCallback(
     async (id: string) => {
       await db.deleteConversation(id);
+      await api.deleteSpill(id).catch(() => {
+        toast("Spill files may remain on disk");
+      });
       setConversations(await db.listConversations());
       if (activeConversationId === id) {
         setActiveConversationId(null);
@@ -940,6 +943,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             messages: payload,
             enableTools: true,
             projectId: projectRef.current?.id ?? null,
+            conversationId,
             reasoningEffort: resolveEffort(),
           },
           (event) => {
@@ -1386,6 +1390,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!id) return;
     try {
       await db.clearConversation(id);
+      await api.deleteSpill(id).catch(() => {
+        toast("Spill files may remain on disk");
+      });
       setMessages([]);
       await db.touchConversation(id, {});
     } catch (e) {

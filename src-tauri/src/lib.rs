@@ -8,7 +8,26 @@ mod vault;
 
 use std::time::Duration;
 
+use tauri::{AppHandle, Manager};
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+#[tauri::command]
+fn delete_spill(app: AppHandle, conversation_id: String) -> Result<(), String> {
+    let safe = tools::safe_segment(&conversation_id);
+    if safe.is_empty() {
+        return Err("invalid conversation id".to_string());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("spill")
+        .join(safe);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -162,6 +181,7 @@ pub fn run() {
             llm::cancel_stream,
             llm::chat_stream,
             llm::suggest_title,
+            delete_spill,
             permissions::permission_check,
             permissions::permission_allow,
             permissions::approval_reply,

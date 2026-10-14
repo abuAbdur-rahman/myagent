@@ -46,6 +46,70 @@ fn truncate_tail(text: &str, max: usize) -> String {
     )
 }
 
+pub(crate) fn safe_segment(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect()
+}
+
+fn spill_file_path(
+    app: &AppHandle,
+    conversation_id: &str,
+    call_id: &str,
+) -> Option<std::path::PathBuf> {
+    let conversation = safe_segment(conversation_id);
+    let call = safe_segment(call_id);
+    if conversation.is_empty() || call.is_empty() {
+        return None;
+    }
+    let dir = app.path().app_data_dir().ok()?;
+    Some(
+        dir.join("spill")
+            .join(conversation)
+            .join(format!("{call}.txt")),
+    )
+}
+
+fn write_spill(
+    app: &AppHandle,
+    conversation_id: &str,
+    call_id: &str,
+    text: &str,
+) -> Option<String> {
+    let path = spill_file_path(app, conversation_id, call_id)?;
+    if let Err(error) = std::fs::create_dir_all(path.parent()?) {
+        eprintln!("spill: create dir failed: {error}");
+        return None;
+    }
+    if let Err(error) = std::fs::write(&path, text) {
+        eprintln!("spill: write failed: {error}");
+        return None;
+    }
+    path.to_str().map(str::to_string)
+}
+
+fn cap_output(text: &str, spill: Option<&str>) -> String {
+    if text.len() <= OUTPUT_CAP {
+        return text.to_string();
+    }
+    let mut end = OUTPUT_CAP;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    match spill {
+        Some(path) => format!(
+            "{}...\n[truncated, {} of {} bytes shown; full output at {}]",
+            &text[..end],
+            end,
+            text.len(),
+            path
+        ),
+        None => truncate_tail(text, OUTPUT_CAP),
+    }
+}
+
 pub fn tool_specs() -> Value {
     json!([
         {
@@ -253,6 +317,8 @@ pub async fn execute(
     app: &AppHandle,
     name: &str,
     args: Value,
+    call_id: &str,
+    conversation_id: Option<&str>,
     project_id: Option<&str>,
     cancel: &tokio::sync::Notify,
 ) -> Result<ExecOutput, String> {
@@ -391,8 +457,14 @@ pub async fn execute(
             if !stderr.trim().is_empty() {
                 text.push_str(&format!("stderr:\n{stderr}\n"));
             }
+            let full = text.trim_end().to_string();
+            let spill = if full.len() > OUTPUT_CAP {
+                conversation_id.and_then(|cid| write_spill(app, cid, call_id, &full))
+            } else {
+                None
+            };
             Ok(ExecOutput {
-                output: truncate_tail(text.trim_end(), OUTPUT_CAP),
+                output: cap_output(&full, spill.as_deref()),
                 artifact: None,
             })
         }
@@ -466,5 +538,43 @@ mod tests {
         let question = parse_question(&json!({"question": "Q?", "options": []})).unwrap();
         assert!(question.options.is_empty());
         assert!(question.allow_custom);
+    }
+
+    #[test]
+    fn safe_segment_strips_path_characters() {
+        assert_eq!(safe_segment("abc-123_X"), "abc-123_X");
+        assert_eq!(safe_segment("../../etc/passwd"), "etcpasswd");
+        assert_eq!(safe_segment("call_abc 123!"), "call_abc123");
+        assert!(safe_segment("").is_empty());
+    }
+
+    #[test]
+    fn cap_output_passes_short_text_through() {
+        assert_eq!(cap_output("small", None), "small");
+        assert_eq!(cap_output("small", Some("C:\\spill\\x.txt")), "small");
+    }
+
+    #[test]
+    fn cap_output_marks_spill_path_when_present() {
+        let long = "x".repeat(OUTPUT_CAP + 100);
+        let capped = cap_output(&long, Some("C:\\spill\\chat\\call.txt"));
+        assert!(capped.len() < long.len());
+        assert!(capped.contains("full output at C:\\spill\\chat\\call.txt"));
+        assert!(capped.contains(&format!("of {} bytes shown", long.len())));
+        let fallback = cap_output(&long, None);
+        assert!(!fallback.contains("full output at"));
+        assert!(fallback.contains("truncated"));
+    }
+
+    #[test]
+    fn cap_output_never_splits_multibyte_chars() {
+        let euro = char::from_u32(0x20AC).unwrap().to_string();
+        let mut long = "a".repeat(OUTPUT_CAP - 1);
+        long.push_str(&euro);
+        assert!(long.len() > OUTPUT_CAP);
+        let capped = cap_output(&long, None);
+        assert!(capped.is_char_boundary(capped.len()));
+        assert!(!capped.contains(&euro));
+        assert!(capped.contains("truncated"));
     }
 }

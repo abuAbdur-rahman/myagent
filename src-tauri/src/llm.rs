@@ -84,6 +84,8 @@ pub struct ChatRequest {
     #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
     pub reasoning_effort: Option<String>,
 }
 
@@ -594,7 +596,16 @@ async fn run_agentic(
                 continue;
             }
 
-            match tools::execute(app, &name, args, req.project_id.as_deref(), cancel).await {
+            match tools::execute(
+                app,
+                &name,
+                args,
+                &id,
+                req.conversation_id.as_deref(),
+                req.project_id.as_deref(),
+                cancel,
+            )
+            .await {
                 Ok(done) => {
                     if let Some(artifact) = done.artifact {
                         let _ = on_event.send(StreamEvent::Artifact {

@@ -139,6 +139,7 @@ export interface ChatStreamArgs {
   enableTools?: boolean;
   maxIterations?: number;
   projectId?: string | null;
+  conversationId?: string | null;
   reasoningEffort?: string | null;
 }
 
@@ -159,8 +160,13 @@ export async function chatStream(
       enable_tools: args.enableTools ?? false,
       max_iterations: args.maxIterations ?? null,
       project_id: args.projectId ?? null,
+      conversation_id: args.conversationId ?? null,
       reasoning_effort: args.reasoningEffort ?? null,
     },
     onEvent: channel,
   });
+}
+
+export function deleteSpill(conversationId: string) {
+  return invoke<void>("delete_spill", { conversationId });
 }
