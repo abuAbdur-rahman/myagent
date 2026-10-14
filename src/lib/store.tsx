@@ -72,6 +72,8 @@ interface AppContextValue {
   clearError: () => void;
   canRetry: boolean;
   retryTurn: () => Promise<void>;
+  approval: { id: string; tool: string; command: string; cwd: string } | null;
+  replyApproval: (reply: "once" | "always" | "deny") => Promise<void>;
 
   connections: Connection[];
   activeConnection: Connection | null;
@@ -181,6 +183,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
+  const [approval, setApproval] = useState<{
+    id: string;
+    tool: string;
+    command: string;
+    cwd: string;
+  } | null>(null);
 
   const reportError = useCallback((cause: unknown) => {
     console.error(cause);
@@ -832,6 +840,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assistantMsgIdRef.current = assistantMsg.id;
       setStreaming(true);
       setToolLog([]);
+      setApproval(null);
       let lastFlush = 0;
       const flush = () => {
         lastFlush = Date.now();
@@ -913,6 +922,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             } else if (event.type === "artifact") {
               openArtifact({ lang: event.lang, code: event.code });
               toast(`Artifact saved: ${event.title}`);
+            } else if (event.type === "approval_asked") {
+              setApproval({
+                id: event.id,
+                tool: event.tool,
+                command: event.command,
+                cwd: event.cwd,
+              });
             }
           },
         );
@@ -1122,8 +1138,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, [streaming, streamTurn, withSystem]);
 
-  const retryTurn = useCallback(async () => {
-    const conversationId = convIdRef.current;
+  const retryTurn = useCallback(async () => {    const conversationId = convIdRef.current;
     const connection = connRef.current;
     const payload = lastPayloadRef.current;
     if (!conversationId || !connection || !modelRef.current || streaming || !payload) return;
@@ -1139,7 +1154,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
   }, [streaming, streamTurn]);
 
-  const editAndResubmit = useCallback(    async (userId: string, text: string): Promise<boolean> => {
+  const replyApproval = useCallback(
+    async (reply: "once" | "always" | "deny") => {
+      if (!approval) return;
+      setApproval(null);
+      try {
+        await api.approvalReply(approval.id, reply);
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [approval],
+  );
+
+  const editAndResubmit = useCallback(
+    async (userId: string, text: string): Promise<boolean> => {
       const conversationId = convIdRef.current;
       const connection = connRef.current;
       if (!conversationId || !connection || !modelRef.current || streaming) return false;
@@ -1287,6 +1316,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearError: () => setError(null),
     canRetry,
     retryTurn,
+    approval,
+    replyApproval,
     connections,
     activeConnection,
     activeConnectionId,

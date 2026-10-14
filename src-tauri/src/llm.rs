@@ -5,8 +5,9 @@ use tauri::{AppHandle, State};
 use tokio::sync::Notify;
 
 use crate::error::{AppError, AppResult};
+use crate::permissions::{self, ApprovalReply};
 use crate::sse;
-use crate::state::StreamState;
+use crate::state::{PendingApproval, StreamState};
 use crate::tools;
 use crate::vault;
 
@@ -37,6 +38,12 @@ pub enum StreamEvent {
         id: String,
         ok: bool,
         preview: String,
+    },
+    ApprovalAsked {
+        id: String,
+        tool: String,
+        command: String,
+        cwd: String,
     },
     Artifact {
         title: String,
@@ -275,6 +282,27 @@ fn tool_calls_of(message: &serde_json::Value) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
+    if name == "run_powershell" {
+        if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
+            let segments = permissions::split_segments(command);
+            if !segments.is_empty() {
+                return segments;
+            }
+            return vec![command.to_string()];
+        }
+    }
+    vec!["*".to_string()]
+}
+
+fn denied_tool_message(id: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "role": "tool",
+        "tool_call_id": id,
+        "content": text,
+    })
+}
+
 fn message_text(message: &serde_json::Value) -> Option<String> {
     message
         .get("content")
@@ -375,7 +403,59 @@ async fn run_agentic(
                 summary: tools::summarize_call(&name, &args),
             });
 
-            match tools::execute(app, &name, args, req.project_id.as_deref()).await {
+            let resources = approval_resources(&name, &args);
+            let decision = permissions::check(app, &name, &resources, req.project_id.as_deref())
+                .await
+                .unwrap_or(permissions::Effect::Ask);
+            if decision == permissions::Effect::Deny {
+                let _ = on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: false,
+                    preview: "Denied by rule".to_string(),
+                });
+                history.push(denied_tool_message(&id, "denied by rule"));
+                continue;
+            }
+            if decision == permissions::Effect::Ask {
+                let approval_id = format!("{}:{id}", req.request_id);
+                let command = if name == "run_powershell" {
+                    resources.join("\n")
+                } else {
+                    tools::summarize_call(&name, &args)
+                };
+                let cwd = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
+                let _ = on_event.send(StreamEvent::ApprovalAsked {
+                    id: approval_id.clone(),
+                    tool: name.clone(),
+                    command,
+                    cwd,
+                });
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                state.insert_pending(
+                    &approval_id,
+                    PendingApproval {
+                        action: name.clone(),
+                        resources: resources.clone(),
+                        project_id: req.project_id.clone(),
+                        tx,
+                    },
+                )?;
+                let reply = tokio::select! {
+                    reply = rx => reply.unwrap_or(ApprovalReply::Deny),
+                    _ = cancel.notified() => return Ok(()),
+                };
+                if reply == ApprovalReply::Deny {
+                    let _ = on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: false,
+                        preview: "Denied by user".to_string(),
+                    });
+                    history.push(denied_tool_message(&id, "denied by user"));
+                    continue;
+                }
+            }
+
+            match tools::execute(app, &name, args, req.project_id.as_deref(), cancel).await {
                 Ok(done) => {
                     if let Some(artifact) = done.artifact {
                         let _ = on_event.send(StreamEvent::Artifact {

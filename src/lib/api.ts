@@ -17,6 +17,10 @@ export function listModels(baseUrl: string, connectionId: string) {
   return invoke<string[]>("list_models", { baseUrl, connectionId });
 }
 
+export function approvalReply(id: string, reply: "once" | "always" | "deny") {
+  return invoke<void>("approval_reply", { req: { id, reply } });
+}
+
 export function cancelStream(requestId: string) {
   return invoke<void>("cancel_stream", { requestId });
 }

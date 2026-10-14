@@ -186,6 +186,7 @@ pub async fn execute(
     name: &str,
     args: Value,
     project_id: Option<&str>,
+    cancel: &tokio::sync::Notify,
 ) -> Result<ExecOutput, String> {
     match name {
         "get_time" => {
@@ -297,9 +298,17 @@ pub async fn execute(
                 .kill_on_drop(true)
                 .spawn()
                 .map_err(|e| format!("spawn: {e}"))?;
-            let result =
+            let work = async move {
                 tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
-                    .await;
+                    .await
+            };
+            tokio::pin!(work);
+            let result = tokio::select! {
+                result = &mut work => result,
+                _ = cancel.notified() => {
+                    return Err("cancelled by user".to_string());
+                }
+            };
             let output = match result {
                 Ok(Ok(out)) => out,
                 Ok(Err(e)) => return Err(format!("run: {e}")),

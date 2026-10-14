@@ -15,6 +15,24 @@ pub enum Effect {
     Deny,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalReply {
+    Once,
+    Always,
+    Deny,
+}
+
+impl ApprovalReply {
+    fn from_str(raw: &str) -> Option<ApprovalReply> {
+        match raw {
+            "once" => Some(ApprovalReply::Once),
+            "always" => Some(ApprovalReply::Always),
+            "deny" => Some(ApprovalReply::Deny),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     pub action: String,
@@ -30,6 +48,17 @@ fn matches(pattern: &str, value: &str) -> bool {
         Some(prefix) => value.starts_with(prefix),
         None => pattern == value,
     }
+}
+
+pub fn split_segments(command: &str) -> Vec<String> {
+    command
+        .replace("&&", "\n")
+        .replace("||", "\n")
+        .replace(';', "\n")
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 pub fn decide(action: &str, resources: &[String], rules: &[Rule]) -> Effect {
@@ -64,6 +93,16 @@ pub fn default_rules() -> Vec<Rule> {
         },
         Rule {
             action: "recall_memory".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "remember".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "save_artifact".to_string(),
             resource: "*".to_string(),
             effect: Effect::Allow,
         },
@@ -188,6 +227,42 @@ pub async fn permission_allow(app: AppHandle, req: AllowRequest) -> AppResult<()
     allow_always(&app, &req.action, &req.resource, req.project_id.as_deref()).await
 }
 
+#[derive(Deserialize)]
+pub struct ReplyRequest {
+    pub id: String,
+    pub reply: String,
+}
+
+#[tauri::command]
+pub async fn approval_reply(
+    app: AppHandle,
+    state: tauri::State<'_, crate::state::StreamState>,
+    req: ReplyRequest,
+) -> AppResult<()> {
+    let reply = ApprovalReply::from_str(&req.reply)
+        .ok_or_else(|| AppError::Internal("unknown approval reply".to_string()))?;
+    let Some(pending) = state.take_pending(&req.id) else {
+        return Err(AppError::Internal("approval already resolved".to_string()));
+    };
+    if reply == ApprovalReply::Always {
+        for resource in &pending.resources {
+            if let Err(error) = allow_always(
+                &app,
+                &pending.action,
+                resource,
+                pending.project_id.as_deref(),
+            )
+            .await
+            {
+                let _ = pending.tx.send(ApprovalReply::Once);
+                return Err(error);
+            }
+        }
+    }
+    let _ = pending.tx.send(reply);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +273,16 @@ mod tests {
             resource: resource.to_string(),
             effect,
         }
+    }
+
+    #[test]
+    fn segments_split_compound_commands() {
+        assert_eq!(
+            split_segments("Get-ChildItem; Remove-Item C:\\tmp && Get-Date || Get-X"),
+            vec!["Get-ChildItem", "Remove-Item C:\\tmp", "Get-Date", "Get-X"]
+        );
+        assert_eq!(split_segments("  Get-X  \n\n"), vec!["Get-X"]);
+        assert!(split_segments("").is_empty());
     }
 
     #[test]
@@ -266,7 +351,19 @@ mod tests {
             Effect::Allow
         );
         assert_eq!(
+            decide("recall_memory", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("remember", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
             decide("save_artifact", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("run_powershell", &["Get-X".to_string()], &rules),
             Effect::Ask
         );
     }

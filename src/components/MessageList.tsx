@@ -209,6 +209,39 @@ function UserMessage({
   );
 }
 
+function ApprovalCard() {
+  const { approval, replyApproval } = useApp();
+  if (!approval) return null;
+  return (
+    <div
+      role="alertdialog"
+      aria-label="Tool approval"
+      className="mb-2 rounded-control border border-warn/60 bg-warn/10 px-3 py-2 text-sm"
+    >
+      <div className="font-medium">
+        Allow <span className="font-mono">{approval.tool}</span> to run?
+      </div>
+      {approval.command && (
+        <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
+          {approval.command}
+        </pre>
+      )}
+      {approval.cwd && <div className="mt-1 text-xs text-muted">in {approval.cwd}</div>}
+      <div className="mt-2 flex gap-2">
+        <Button size="sm" variant="default" onClick={() => void replyApproval("once")}>
+          Allow once
+        </Button>
+        <Button size="sm" variant="default" onClick={() => void replyApproval("always")}>
+          Always
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => void replyApproval("deny")}>
+          Deny
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ThinkingBlock({
   message,
   live,
@@ -270,6 +303,7 @@ function AssistantMessage({
       <div className="md">
         <ThinkingBlock message={message} live={isLast && streaming} />
         {isLast && <ToolLogView />}
+        {isLast && <ApprovalCard />}
         {busy ? (
           <span className="dots" aria-label="Waiting for response">
             <i />

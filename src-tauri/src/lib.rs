@@ -152,6 +152,7 @@ pub fn run() {
             llm::suggest_title,
             permissions::permission_check,
             permissions::permission_allow,
+            permissions::approval_reply,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
