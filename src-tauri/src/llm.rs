@@ -154,11 +154,13 @@ pub async fn list_models(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let key = vault::get_api_key(&connection_id)?;
-    let resp = client
-        .get(endpoint(&base_url, "models"))
-        .bearer_auth(key)
-        .send()
-        .await?;
+    let mut request = client.get(endpoint(&base_url, "models")).bearer_auth(key);
+    if base_url.contains("agentrouter.org") {
+        request = request
+            .header("User-Agent", "myagent/0.1.3")
+            .header("originator", "myagent");
+    }
+    let resp = request.send().await?;
 
     if !resp.status().is_success() {
         return Err(AppError::Upstream(error_body(resp).await));
@@ -172,9 +174,17 @@ pub async fn list_models(
             items
                 .iter()
                 .filter_map(|item| {
-                    item.get("id")
-                        .and_then(|id| id.as_str())
-                        .map(str::to_string)
+                    let id = item.get("id")?.as_str()?;
+                    if let Some(types) = item
+                        .get("supported_endpoint_types")
+                        .and_then(|t| t.as_array())
+                    {
+                        let openai = types.iter().any(|t| t.as_str() == Some("openai"));
+                        if !openai {
+                            return None;
+                        }
+                    }
+                    Some(id.to_string())
                 })
                 .collect()
         })
