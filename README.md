@@ -25,9 +25,9 @@ SQLite file. No backend, no account, no telemetry.
 
 ## Screenshots
 
-| Chat | Welcome |
+| Home | Appearance settings |
 | ---- | ------- |
-| ![MyAgent chat with tool calls](docs/images/chat.png) | ![MyAgent welcome screen](docs/images/welcome.png) |
+| ![MyAgent home screen](docs/screenshots/home.jpg) | ![MyAgent appearance settings](docs/screenshots/settings-appearance-light.jpg) |
 
 ## Features
 
