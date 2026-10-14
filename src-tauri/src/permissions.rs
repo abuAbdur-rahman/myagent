@@ -1,0 +1,273 @@
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::time::Duration;
+use tauri::AppHandle;
+use tauri::Manager;
+
+use crate::error::{AppError, AppResult};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effect {
+    Allow,
+    Ask,
+    Deny,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rule {
+    pub action: String,
+    pub resource: String,
+    pub effect: Effect,
+}
+
+fn matches(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    match pattern.strip_suffix('*') {
+        Some(prefix) => value.starts_with(prefix),
+        None => pattern == value,
+    }
+}
+
+pub fn decide(action: &str, resources: &[String], rules: &[Rule]) -> Effect {
+    let mut effect = Effect::Allow;
+    for resource in resources {
+        let mut current = Effect::Ask;
+        for rule in rules {
+            if rule.action != "*" && rule.action != action {
+                continue;
+            }
+            if !matches(&rule.resource, resource) {
+                continue;
+            }
+            if rule.effect == Effect::Deny {
+                return Effect::Deny;
+            }
+            current = rule.effect;
+        }
+        if current == Effect::Ask {
+            effect = Effect::Ask;
+        }
+    }
+    effect
+}
+
+pub fn default_rules() -> Vec<Rule> {
+    vec![
+        Rule {
+            action: "get_time".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "recall_memory".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+    ]
+}
+
+async fn rules_pool(app: &AppHandle) -> AppResult<SqlitePool> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Internal(format!("app data dir: {e}")))?;
+    let options = SqliteConnectOptions::new()
+        .filename(dir.join("myagent.db"))
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(5));
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|e| AppError::Internal(format!("rules database: {e}")))
+}
+
+fn scope_of(project_id: Option<&str>) -> String {
+    project_id.unwrap_or("").to_string()
+}
+
+pub async fn load_rules(app: &AppHandle, project_id: Option<&str>) -> AppResult<Vec<Rule>> {
+    let pool = rules_pool(app).await?;
+    let scope = scope_of(project_id);
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT action, resource, effect FROM permission_rules WHERE project_id = '' OR project_id = ? ORDER BY project_id",
+    )
+    .bind(&scope)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("load rules: {e}")))?;
+    let mut rules = default_rules();
+    for (action, resource, effect) in rows {
+        let effect = match effect.as_str() {
+            "allow" => Effect::Allow,
+            "deny" => Effect::Deny,
+            _ => Effect::Ask,
+        };
+        rules.push(Rule {
+            action,
+            resource,
+            effect,
+        });
+    }
+    Ok(rules)
+}
+
+pub async fn check(
+    app: &AppHandle,
+    action: &str,
+    resources: &[String],
+    project_id: Option<&str>,
+) -> AppResult<Effect> {
+    let rules = load_rules(app, project_id).await?;
+    Ok(decide(action, resources, &rules))
+}
+
+pub async fn allow_always(
+    app: &AppHandle,
+    action: &str,
+    resource: &str,
+    project_id: Option<&str>,
+) -> AppResult<()> {
+    if resource == "*" {
+        return Err(AppError::Internal(
+            "refusing to store a blanket allow rule".to_string(),
+        ));
+    }
+    let pool = rules_pool(app).await?;
+    sqlx::query(
+        "INSERT INTO permission_rules (action, resource, effect, project_id) VALUES (?, ?, 'allow', ?) ON CONFLICT (action, resource, project_id) DO UPDATE SET effect = 'allow'",
+    )
+    .bind(action)
+    .bind(resource)
+    .bind(scope_of(project_id))
+    .execute(&pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("save rule: {e}")))?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct CheckRequest {
+    pub action: String,
+    #[serde(default)]
+    pub resources: Vec<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CheckResponse {
+    pub effect: Effect,
+}
+
+#[tauri::command]
+pub async fn permission_check(app: AppHandle, req: CheckRequest) -> AppResult<CheckResponse> {
+    let resources = if req.resources.is_empty() {
+        vec!["*".to_string()]
+    } else {
+        req.resources
+    };
+    let effect = check(&app, &req.action, &resources, req.project_id.as_deref()).await?;
+    Ok(CheckResponse { effect })
+}
+
+#[derive(Deserialize)]
+pub struct AllowRequest {
+    pub action: String,
+    pub resource: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn permission_allow(app: AppHandle, req: AllowRequest) -> AppResult<()> {
+    allow_always(&app, &req.action, &req.resource, req.project_id.as_deref()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(action: &str, resource: &str, effect: Effect) -> Rule {
+        Rule {
+            action: action.to_string(),
+            resource: resource.to_string(),
+            effect,
+        }
+    }
+
+    #[test]
+    fn default_is_ask() {
+        assert_eq!(
+            decide("run_powershell", &["Get-X".to_string()], &[]),
+            Effect::Ask
+        );
+    }
+
+    #[test]
+    fn last_matching_rule_wins() {
+        let rules = vec![
+            rule("run_powershell", "*", Effect::Allow),
+            rule("run_powershell", "Remove-*", Effect::Ask),
+        ];
+        assert_eq!(
+            decide("run_powershell", &["Remove-Item".to_string()], &rules),
+            Effect::Ask
+        );
+        assert_eq!(
+            decide("run_powershell", &["Get-ChildItem".to_string()], &rules),
+            Effect::Allow
+        );
+    }
+
+    #[test]
+    fn deny_beats_allow_across_resources() {
+        let rules = vec![
+            rule("edit", "*", Effect::Deny),
+            rule("edit", "*", Effect::Allow),
+        ];
+        assert_eq!(
+            decide("edit", &["a.txt".to_string(), "b.txt".to_string()], &rules),
+            Effect::Deny
+        );
+        let rules = vec![
+            rule("edit", "a.txt", Effect::Deny),
+            rule("edit", "*", Effect::Allow),
+        ];
+        assert_eq!(
+            decide("edit", &["a.txt".to_string(), "b.txt".to_string()], &rules),
+            Effect::Deny
+        );
+        let rules = vec![rule("edit", "*", Effect::Allow)];
+        assert_eq!(
+            decide("edit", &["a.txt".to_string(), "b.txt".to_string()], &rules),
+            Effect::Allow
+        );
+    }
+
+    #[test]
+    fn wildcard_action_and_resource() {
+        let rules = vec![rule("*", "*", Effect::Deny)];
+        assert_eq!(
+            decide("anything", &["whatever".to_string()], &rules),
+            Effect::Deny
+        );
+    }
+
+    #[test]
+    fn default_rules_let_read_only_through() {
+        let rules = default_rules();
+        assert_eq!(
+            decide("get_time", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("save_artifact", &["*".to_string()], &rules),
+            Effect::Ask
+        );
+    }
+}

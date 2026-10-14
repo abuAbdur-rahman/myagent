@@ -70,6 +70,8 @@ interface AppContextValue {
   ready: boolean;
   error: string | null;
   clearError: () => void;
+  canRetry: boolean;
+  retryTurn: () => Promise<void>;
 
   connections: Connection[];
   activeConnection: Connection | null;
@@ -95,7 +97,14 @@ interface AppContextValue {
   setReasoningEffort: (effort: string | null) => void;
   supportedEfforts: string[] | null;
   modelContextLimit: number | null;
-  contextInfo: { tokens: number; limit: number; pct: number };
+  contextInfo: {
+    tokens: number;
+    limit: number;
+    pct: number;
+    real: boolean;
+    lastIn: number | null;
+    lastOut: number | null;
+  };
 
   projects: Project[];
   activeProject: Project | null;
@@ -144,6 +153,7 @@ interface AppContextValue {
   toolLog: ToolEntry[];
   sendMessage: (text: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
+  continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
   branchFrom: (messageId: string) => Promise<void>;
   clearActiveConversation: () => Promise<void>;
@@ -170,6 +180,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
 
   const reportError = useCallback((cause: unknown) => {
     console.error(cause);
@@ -238,6 +249,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const projectMemoriesRef = useRef<Memory[]>([]);
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
+  const reasoningRef = useRef("");
+  const thinkingStartRef = useRef<number | null>(null);
+  const thinkingMsRef = useRef<number | null>(null);
+  const usageRef = useRef<{ prompt: number; completion: number; total: number } | null>(null);
+  const finishRef = useRef<string | null>(null);
   const assistantMsgIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -595,11 +611,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       projectMemories,
       userName: displayName || undefined,
     });
-    return estimateContext(
-      messages.filter((m) => m.content.length > 0),
-      system,
-      modelContextLimit ?? 128_000,
-    );
+    const limit = modelContextLimit ?? 128_000;
+    const lastUsage = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant" && m.total_tokens != null);
+    if (lastUsage?.total_tokens != null) {
+      const tokens = lastUsage.total_tokens;
+      return {
+        tokens,
+        limit,
+        pct: Math.min(100, Math.round((tokens / limit) * 100)),
+        real: true,
+        lastIn: lastUsage.prompt_tokens ?? null,
+        lastOut: lastUsage.completion_tokens ?? null,
+      };
+    }
+    return {
+      ...estimateContext(
+        messages.filter((m) => m.content.length > 0),
+        system,
+        limit,
+      ),
+      real: false,
+      lastIn: null,
+      lastOut: null,
+    };
   }, [messages, globalMemories, activeProject, projectMemories, displayName, modelContextLimit]);
 
   const resolveEffort = useCallback((): string | null => {
@@ -734,11 +770,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     const content = bufferRef.current;
-    if (!content) {
+    const reasoning = reasoningRef.current;
+    if (!content && !reasoning) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     }
+    const usage = usageRef.current;
+    const meta = {
+      reasoning: reasoning || null,
+      thinkingMs: thinkingMsRef.current,
+      promptTokens: usage?.prompt ?? null,
+      completionTokens: usage?.completion ?? null,
+      totalTokens: usage?.total ?? null,
+      finishReason: finishRef.current,
+    };
     const persist = content
-      ? db.updateMessage(assistantId, content)
+      ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
     persist
       .then(() => db.touchConversation(conversationId, {}))
@@ -758,6 +804,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const lastPayloadRef = useRef<{ role: string; content: string }[] | null>(null);
+
   const streamTurn = useCallback(
     async (
       conversationId: string,
@@ -765,10 +813,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       modelName: string,
       payload: { role: string; content: string }[],
       assistantMsg: Message,
+      keepSeed?: boolean,
     ): Promise<void> => {
       const requestId = newId();
       requestIdRef.current = requestId;
-      bufferRef.current = "";
+      lastPayloadRef.current = payload;
+      setCanRetry(false);
+      const seed = keepSeed
+        ? messagesRef.current.find((m) => m.id === assistantMsg.id)
+        : undefined;
+      bufferRef.current = seed?.content ?? "";
+      reasoningRef.current = seed?.reasoning ?? "";
+      reasoningRef.current = "";
+      thinkingStartRef.current = null;
+      thinkingMsRef.current = null;
+      usageRef.current = null;
+      finishRef.current = null;
       assistantMsgIdRef.current = assistantMsg.id;
       setStreaming(true);
       setToolLog([]);
@@ -776,8 +836,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const flush = () => {
         lastFlush = Date.now();
         const buffered = bufferRef.current;
+        const reasoning = reasoningRef.current;
+        const thinkingMs = thinkingMsRef.current;
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
+          prev.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, content: buffered, reasoning, thinking_ms: thinkingMs }
+              : m,
+          ),
         );
       };
 
@@ -798,6 +864,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (event.type === "delta") {
               bufferRef.current += event.text;
               if (Date.now() - lastFlush >= 80) flush();
+            } else if (event.type === "reasoning") {
+              if (thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
+              reasoningRef.current += event.text;
+              if (Date.now() - lastFlush >= 80) flush();
+            } else if (event.type === "usage") {
+              usageRef.current = {
+                prompt: event.prompt_tokens,
+                completion: event.completion_tokens,
+                total: event.total_tokens,
+              };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsg.id
+                    ? {
+                        ...m,
+                        prompt_tokens: event.prompt_tokens,
+                        completion_tokens: event.completion_tokens,
+                        total_tokens: event.total_tokens,
+                      }
+                    : m,
+                ),
+              );
+            } else if (event.type === "finish") {
+              finishRef.current = event.reason;
+              if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
+                thinkingMsRef.current = Date.now() - thinkingStartRef.current;
+              }
             } else if (event.type === "tool_start") {
               setToolLog((prev) => [
                 ...prev,
@@ -824,9 +917,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         );
       } catch (e) {
-        if (requestIdRef.current === requestId) reportError(e);
+        if (requestIdRef.current === requestId) {
+          reportError(e);
+          setCanRetry(lastPayloadRef.current !== null);
+        }
       } finally {
         if (requestIdRef.current === requestId) {
+          if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
+            thinkingMsRef.current = Date.now() - thinkingStartRef.current;
+          }
           flush();
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
@@ -1004,8 +1103,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, [streaming, streamTurn, withSystem, resolveCompact]);
 
-  const editAndResubmit = useCallback(
-    async (userId: string, text: string): Promise<boolean> => {
+  const continueTurn = useCallback(async () => {
+    const conversationId = convIdRef.current;
+    const connection = connRef.current;
+    if (!conversationId || !connection || !modelRef.current || streaming) return;
+    const turns = messagesRef.current.filter((m) => m.content.length > 0);
+    if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
+    const partial = turns[turns.length - 1];
+    if (partial.finish_reason !== "length") return;
+    const payload = lastPayloadRef.current ?? withSystem(applyCompactWindow(turns, false));
+    await streamTurn(
+      conversationId,
+      connection,
+      modelRef.current,
+      payload,
+      partial,
+      true,
+    );
+  }, [streaming, streamTurn, withSystem]);
+
+  const retryTurn = useCallback(async () => {
+    const conversationId = convIdRef.current;
+    const connection = connRef.current;
+    const payload = lastPayloadRef.current;
+    if (!conversationId || !connection || !modelRef.current || streaming || !payload) return;
+    setError(null);
+    let assistantMsg: Message;
+    try {
+      assistantMsg = await db.addMessage(conversationId, "assistant", "");
+    } catch (e) {
+      reportError(e);
+      return;
+    }
+    setMessages((prev) => [...prev, assistantMsg]);
+    await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
+  }, [streaming, streamTurn]);
+
+  const editAndResubmit = useCallback(    async (userId: string, text: string): Promise<boolean> => {
       const conversationId = convIdRef.current;
       const connection = connRef.current;
       if (!conversationId || !connection || !modelRef.current || streaming) return false;
@@ -1151,6 +1285,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ready,
     error,
     clearError: () => setError(null),
+    canRetry,
+    retryTurn,
     connections,
     activeConnection,
     activeConnectionId,
@@ -1214,6 +1350,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toolLog,
     sendMessage,
     regenerate,
+    continueTurn,
     editAndResubmit,
     branchFrom,
     clearActiveConversation,

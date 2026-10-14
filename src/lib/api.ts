@@ -39,6 +39,62 @@ export function suggestTitle(
   });
 }
 
+export type StreamErrorClass = "key" | "model" | "rate-limit" | "network" | "provider";
+
+export function classifyStreamError(message: string): { cls: StreamErrorClass; hint: string } {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("401") ||
+    lower.includes("unauthor") ||
+    lower.includes("invalid api key") ||
+    lower.includes("incorrect api key") ||
+    lower.includes("invalid_api_key")
+  ) {
+    return {
+      cls: "key",
+      hint: "API key rejected. Check the key in Settings → Providers, then retry.",
+    };
+  }
+  if (
+    lower.includes("404") ||
+    lower.includes("model not found") ||
+    lower.includes("no such model") ||
+    lower.includes("does not exist")
+  ) {
+    return {
+      cls: "model",
+      hint: "Model not found — it may be renamed or retired. Pick another model, then retry.",
+    };
+  }
+  if (
+    lower.includes("429") ||
+    lower.includes("rate limit") ||
+    lower.includes("rate_limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("quota")
+  ) {
+    return {
+      cls: "rate-limit",
+      hint: "Rate limited. Wait a bit, then retry — automatic backoff lands in 0.1.4.",
+    };
+  }
+  if (
+    lower.includes("network") ||
+    lower.includes("failed to fetch") ||
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("dns") ||
+    lower.includes("connection refused") ||
+    lower.includes("offline")
+  ) {
+    return {
+      cls: "network",
+      hint: "Network error — the request never reached the provider. Check your connection, then retry.",
+    };
+  }
+  return { cls: "provider", hint: "Provider error. Raw message below." };
+}
+
 export function formatInvokeError(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message.trim() || "Something went wrong.";

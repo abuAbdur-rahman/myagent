@@ -184,6 +184,31 @@ export async function updateMessage(id: string, content: string): Promise<void> 
   ]);
 }
 
+export interface MessageMeta {
+  reasoning: string | null;
+  thinkingMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  finishReason: string | null;
+}
+
+export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6 WHERE id = $7",
+    [
+      meta.reasoning,
+      meta.thinkingMs,
+      meta.promptTokens,
+      meta.completionTokens,
+      meta.totalTokens,
+      meta.finishReason,
+      id,
+    ],
+  );
+}
+
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE id = $1", [id]);

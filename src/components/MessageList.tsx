@@ -9,12 +9,14 @@ import {
   Pencil,
   RefreshCw,
   Sparkles,
+  StepForward,
   Terminal,
   Clock,
   X,
   Wrench,
 } from "lucide-react";
 import { useApp } from "../lib/store";
+import { classifyStreamError } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { extractArtifacts } from "../lib/artifacts";
@@ -25,20 +27,41 @@ import type { Message } from "../lib/types";
 import { cn } from "../lib/utils";
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  const { canRetry, retryTurn, streaming } = useApp();
+  const { hint } = classifyStreamError(message);
   return (
     <div
       role="alert"
-      className="flex items-start justify-between gap-3 rounded-control border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger"
+      className="rounded-control border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger"
     >
-      <span className="break-words">{message}</span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="rounded-control px-1 text-danger hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        aria-label="Dismiss error"
-      >
-        ✕
-      </button>
+      <div className="flex items-start justify-between gap-3">
+        <span className="break-words">{hint}</span>
+        <div className="flex shrink-0 items-center gap-1">
+          {canRetry && !streaming && (
+            <button
+              type="button"
+              onClick={() => void retryTurn()}
+              className="rounded-control border border-danger/60 px-2 py-0.5 text-xs hover:bg-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Retry
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="rounded-control px-1 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            aria-label="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <details className="mt-1 text-xs opacity-80">
+        <summary className="cursor-pointer">Raw error</summary>
+        <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words">
+          {message}
+        </pre>
+      </details>
     </div>
   );
 }
@@ -186,6 +209,25 @@ function UserMessage({
   );
 }
 
+function ThinkingBlock({
+  message,
+  live,
+}: {
+  message: Message;
+  live: boolean;
+}) {
+  if (!message.reasoning) return null;
+  const seconds =
+    message.thinking_ms != null ? Math.max(1, Math.round(message.thinking_ms / 1000)) : null;
+  const title = live && seconds === null ? "Thinking…" : `Thought${seconds !== null ? ` for ${seconds} s` : ""}`;
+  return (
+    <details className="think" open={live}>
+      <summary>{title}</summary>
+      <Markdown content={message.reasoning} />
+    </details>
+  );
+}
+
 function AssistantMessage({
   message,
   modelName,
@@ -226,6 +268,7 @@ function AssistantMessage({
         <span className="text-muted">{modelName}</span>
       </div>
       <div className="md">
+        <ThinkingBlock message={message} live={isLast && streaming} />
         {isLast && <ToolLogView />}
         {busy ? (
           <span className="dots" aria-label="Waiting for response">
@@ -242,10 +285,16 @@ function AssistantMessage({
       </div>
       {!busy && (
         <>
+          {isLast && message.finish_reason === "length" && (
+            <div className="mb-1 text-xs text-warn">
+              Stopped at the token limit — the reply may be cut off.
+            </div>
+          )}
           <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
               <Copy size={14} />
             </ActionButton>
+            {isLast && message.finish_reason === "length" && <ContinueButton />}
             {isLast && <RegenButton />}
             <BranchButton messageId={message.id} />
             <Button variant="ghost" size="sm" onClick={() => void remember()}>
@@ -283,6 +332,16 @@ function RegenButton() {
   return (
     <ActionButton label="Regenerate" title="Regenerate" onClick={() => void regenerate()}>
       <RefreshCw size={14} />
+    </ActionButton>
+  );
+}
+
+function ContinueButton() {
+  const { continueTurn, streaming } = useApp();
+  if (streaming) return null;
+  return (
+    <ActionButton label="Continue" title="Continue the cut-off reply" onClick={() => void continueTurn()}>
+      <StepForward size={14} />
     </ActionButton>
   );
 }

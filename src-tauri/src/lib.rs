@@ -1,5 +1,7 @@
 mod error;
 mod llm;
+mod permissions;
+mod sse;
 mod state;
 mod tools;
 mod vault;
@@ -95,6 +97,33 @@ pub fn run() {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "add_message_reasoning_usage_finish",
+            sql: "
+                ALTER TABLE messages ADD COLUMN reasoning TEXT;
+                ALTER TABLE messages ADD COLUMN thinking_ms INTEGER;
+                ALTER TABLE messages ADD COLUMN prompt_tokens INTEGER;
+                ALTER TABLE messages ADD COLUMN completion_tokens INTEGER;
+                ALTER TABLE messages ADD COLUMN total_tokens INTEGER;
+                ALTER TABLE messages ADD COLUMN finish_reason TEXT;
+            ",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "add_permission_rules",
+            sql: "
+                CREATE TABLE IF NOT EXISTS permission_rules (
+                    action TEXT NOT NULL,
+                    resource TEXT NOT NULL,
+                    effect TEXT NOT NULL,
+                    project_id TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (action, resource, project_id)
+                );
+            ",
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -121,6 +150,8 @@ pub fn run() {
             llm::cancel_stream,
             llm::chat_stream,
             llm::suggest_title,
+            permissions::permission_check,
+            permissions::permission_allow,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

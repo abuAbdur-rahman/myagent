@@ -1,0 +1,6 @@
+data: {"choices": [{"delta": {"content": "truncated"}, "finish_reason": null}]}
+
+data: {"choices": [{"delta": {}, "finish_reason": "length"}], "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}}
+
+data: [DONE]
+

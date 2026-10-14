@@ -5,6 +5,7 @@ use tauri::{AppHandle, State};
 use tokio::sync::Notify;
 
 use crate::error::{AppError, AppResult};
+use crate::sse;
 use crate::state::StreamState;
 use crate::tools;
 use crate::vault;
@@ -14,6 +15,17 @@ use crate::vault;
 pub enum StreamEvent {
     Delta {
         text: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    Usage {
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+    },
+    Finish {
+        reason: Option<String>,
     },
     Done,
     ToolStart {
@@ -429,7 +441,7 @@ async fn stream_completion(
     }
 
     let mut stream = resp.bytes_stream();
-    let mut buffer: Vec<u8> = Vec::new();
+    let mut parser = sse::SseParser::new();
     let mut received: u32 = 0;
     let notified = cancel.notified();
     tokio::pin!(notified);
@@ -441,45 +453,48 @@ async fn stream_completion(
         };
 
         let Some(chunk) = next else { break };
-        buffer.extend_from_slice(&chunk?);
-
-        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-            let line = String::from_utf8_lossy(&buffer[..pos]).trim().to_string();
-            buffer.drain(..=pos);
-
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data.is_empty() {
-                continue;
-            }
-            if data == "[DONE]" {
-                let _ = on_event.send(StreamEvent::Done);
-                return if received == 0 {
-                    Err(AppError::Upstream(
-                        "empty response from provider".to_string(),
-                    ))
-                } else {
-                    Ok(())
-                };
-            }
-
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
-                if let Some(text) = value["choices"][0]["delta"]["content"].as_str() {
-                    if !text.is_empty() {
-                        received += 1;
-                    }
-                    let _ = on_event.send(StreamEvent::Delta {
-                        text: text.to_string(),
-                    });
+        for item in parser.feed(&chunk?) {
+            match item {
+                sse::SseItem::Done => {
+                    let _ = on_event.send(StreamEvent::Done);
+                    return if received == 0 {
+                        Err(AppError::Upstream(
+                            "empty response from provider".to_string(),
+                        ))
+                    } else {
+                        Ok(())
+                    };
                 }
-                if let Some(err) = value
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                {
-                    return Err(AppError::Upstream(err.to_string()));
+                sse::SseItem::Payload(payload) => {
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                        continue;
+                    };
+                    let mapped = sse::map_chunk(&value);
+                    if let Some(message) = mapped.error {
+                        return Err(AppError::Upstream(message));
+                    }
+                    if !mapped.text.is_empty() {
+                        received += 1;
+                        let _ = on_event.send(StreamEvent::Delta { text: mapped.text });
+                    }
+                    if !mapped.reasoning.is_empty() {
+                        received += 1;
+                        let _ = on_event.send(StreamEvent::Reasoning {
+                            text: mapped.reasoning,
+                        });
+                    }
+                    if let Some(usage) = mapped.usage {
+                        let _ = on_event.send(StreamEvent::Usage {
+                            prompt_tokens: usage.prompt,
+                            completion_tokens: usage.completion,
+                            total_tokens: usage.total,
+                        });
+                    }
+                    if mapped.finish_reason.is_some() {
+                        let _ = on_event.send(StreamEvent::Finish {
+                            reason: mapped.finish_reason,
+                        });
+                    }
                 }
             }
         }

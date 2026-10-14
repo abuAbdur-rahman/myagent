@@ -30,6 +30,12 @@ const messageSchema = z.object({
   conversation_id: z.string(),
   role: roleSchema,
   content: z.string(),
+  reasoning: z.string().nullish(),
+  thinking_ms: z.number().nullish(),
+  prompt_tokens: z.number().nullish(),
+  completion_tokens: z.number().nullish(),
+  total_tokens: z.number().nullish(),
+  finish_reason: z.string().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;
@@ -99,6 +105,14 @@ export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delta"), text: z.string() }),
   z.object({ type: z.literal("done") }),
+  z.object({ type: z.literal("reasoning"), text: z.string() }),
+  z.object({
+    type: z.literal("usage"),
+    prompt_tokens: z.number(),
+    completion_tokens: z.number(),
+    total_tokens: z.number(),
+  }),
+  z.object({ type: z.literal("finish"), reason: z.string().nullable() }),
   z.object({ type: z.literal("tool_start"), id: z.string(), name: z.string(), summary: z.string() }),
   z.object({ type: z.literal("tool_result"), id: z.string(), ok: z.boolean(), preview: z.string() }),
   z.object({ type: z.literal("artifact"), title: z.string(), lang: z.string(), code: z.string() }),

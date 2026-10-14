@@ -34,7 +34,7 @@ export function ContextBar() {
     );
   }
 
-  const { tokens, limit, pct } = contextInfo;
+  const { tokens, limit, pct, real, lastIn, lastOut } = contextInfo;
 
   let labelClass = "";
   if (pct > 90) {
@@ -50,12 +50,21 @@ export function ContextBar() {
     fillClass = "bg-warn";
   }
 
+  const title = real
+    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`
+    : `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
+
   return (
     <div
       className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted"
-      title={`≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens`}
+      title={title}
     >
-      <span className={cn(labelClass)}>Context {pct}% used</span>
+      <span className={cn(labelClass)}>
+        Context {pct}% used{real ? "" : " (est.)"}
+        {real && lastIn !== null && lastOut !== null
+          ? ` · ↑${formatTokens(lastIn)} ↓${formatTokens(lastOut)}`
+          : ""}
+      </span>
       <div className="h-1 max-w-[240px] flex-1 overflow-hidden rounded bg-active">
         <div className={cn("h-full", fillClass)} style={{ width: `${pct}%` }} />
       </div>

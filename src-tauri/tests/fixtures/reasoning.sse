@@ -1,0 +1,10 @@
+: keep-alive
+
+data: {"choices": [{"delta": {"reasoning_content": "Let me think."}, "finish_reason": null}]}
+
+data: {"choices": [{"delta": {"reasoning_content": " Yes."}, "finish_reason": null}]}
+
+data: {"choices": [{"delta": {"content": "42"}, "finish_reason": "stop"}]}
+
+data: [DONE]
+
