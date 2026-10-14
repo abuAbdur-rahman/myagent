@@ -419,6 +419,35 @@ fn empty_response_error(value: &serde_json::Value) -> AppError {
     ))
 }
 
+struct RepeatGuard {
+    last_key: Option<String>,
+    streak: u32,
+}
+
+impl RepeatGuard {
+    fn new() -> Self {
+        Self {
+            last_key: None,
+            streak: 0,
+        }
+    }
+
+    fn note(&mut self, key: String) -> u32 {
+        if self.last_key.as_deref() == Some(key.as_str()) {
+            self.streak += 1;
+        } else {
+            self.streak = 1;
+            self.last_key = Some(key);
+        }
+        self.streak
+    }
+
+    fn reset(&mut self) {
+        self.streak = 0;
+        self.last_key = None;
+    }
+}
+
 async fn run_agentic(
     client: &reqwest::Client,
     app: &AppHandle,
@@ -435,7 +464,8 @@ async fn run_agentic(
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
     let tools = tools::tool_specs();
-    let max = req.max_iterations.unwrap_or(8).clamp(1, 16);
+    let max = req.max_iterations.unwrap_or(25).clamp(1, 32);
+    let mut repeat = RepeatGuard::new();
 
     for _ in 0..max {
         if state.take_cancelled(&req.request_id) {
@@ -503,6 +533,43 @@ async fn run_agentic(
                 name: name.clone(),
                 summary: tools::summarize_call(&name, &args),
             });
+
+            let repeat_key = format!("{name}\n{}", serde_json::to_string(&args).unwrap_or_default());
+            if repeat.note(repeat_key) >= 3 {
+                let question_id = format!("{}:{id}:repeat", req.request_id);
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                state.insert_question(&question_id, tx)?;
+                let _ = on_event.send(StreamEvent::QuestionAsked {
+                    id: question_id.clone(),
+                    question: format!(
+                        "`{name}` was called 3 times in a row with identical arguments. The turn is paused."
+                    ),
+                    options: vec!["Keep going".to_string(), "Stop here".to_string()],
+                    allow_custom: true,
+                });
+                let answer = tokio::select! {
+                    answer = rx => answer.unwrap_or_default(),
+                    _ = cancel.notified() => return Ok(()),
+                };
+                if answer.trim().is_empty() || answer == "Stop here" {
+                    let _ = on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: false,
+                        preview: "Stopped: repeated tool call".to_string(),
+                    });
+                    history.push(tool_text_message(&id, "Stopped by user: same tool call repeated 3 times"));
+                    return Ok(());
+                }
+                if answer != "Keep going" {
+                    let _ = on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: true,
+                        preview: answer.chars().take(120).collect(),
+                    });
+                    history.push(tool_text_message(&id, &format!("User guidance: {answer}")));
+                }
+                repeat.reset();
+            }
 
             let resources = approval_resources(&name, &args);
             let decision = permissions::check(app, &name, &resources, req.project_id.as_deref())
@@ -854,5 +921,16 @@ mod tests {
             .await
             .expect_err("400 must not retry");
         assert!(matches!(error, AppError::Upstream(_)));
+    }
+
+    #[test]
+    fn repeat_guard_counts_consecutive_identical_calls() {
+        let mut guard = RepeatGuard::new();
+        assert_eq!(guard.note("read::{}".to_string()), 1);
+        assert_eq!(guard.note("read::{}".to_string()), 2);
+        assert_eq!(guard.note("read::{}".to_string()), 3);
+        assert_eq!(guard.note("other::{}".to_string()), 1);
+        guard.reset();
+        assert_eq!(guard.note("read::{}".to_string()), 1);
     }
 }
