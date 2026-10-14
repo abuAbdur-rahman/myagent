@@ -5,6 +5,7 @@ const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
+const MAX_TURNS_WINDOW = 60;
 
 export interface ContextInput {
   globalMemories: Memory[];
@@ -65,8 +66,9 @@ export function buildSystemPrompt(input: ContextInput): string | null {
 }
 
 export function applyCompactWindow<T extends { content: string }>(turns: T[], compacted: boolean): T[] {
-  if (!compacted) return turns;
-  return turns.slice(-COMPACT_WINDOW);
+  if (compacted) return turns.slice(-COMPACT_WINDOW);
+  if (turns.length > MAX_TURNS_WINDOW) return turns.slice(-MAX_TURNS_WINDOW);
+  return turns;
 }
 
 export function estimateContext(

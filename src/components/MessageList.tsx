@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { Markdown } from "./Markdown";
-import { MarkdownEditor } from "./composer/MarkdownEditor";
+import { TipTapEditor } from "./composer/TipTapEditor";
 import { extractArtifacts } from "../lib/artifacts";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
@@ -135,10 +135,12 @@ function UserMessage({
       <div className="msg user flex flex-col items-end">
         <div className="w-[80%]">
           <div className="rounded-card border border-accent bg-surface-2 px-2.5 py-2">
-            <MarkdownEditor
+            <TipTapEditor
               initialMarkdown={message.content}
               placeholder="Edit message"
+              signal={null}
               onChangeMarkdown={setDraft}
+              chat={null}
             />
           </div>
           <div className="mt-1.5 flex justify-end gap-2">
@@ -224,6 +226,7 @@ function AssistantMessage({
         <span className="text-muted">{modelName}</span>
       </div>
       <div className="md">
+        {isLast && <ToolLogView />}
         {busy ? (
           <span className="dots" aria-label="Waiting for response">
             <i />
@@ -380,8 +383,6 @@ export function MessageList() {
             </div>
           ),
         )}
-
-        <ToolLogView />
       </div>
 
       {!stuck && (

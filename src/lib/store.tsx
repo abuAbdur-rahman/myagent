@@ -753,6 +753,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assistantMsgIdRef.current = assistantMsg.id;
       setStreaming(true);
       setToolLog([]);
+      let lastFlush = 0;
+      const flush = () => {
+        lastFlush = Date.now();
+        const buffered = bufferRef.current;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
+        );
+      };
 
       try {
         await api.chatStream(
@@ -770,10 +778,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (requestIdRef.current !== requestId) return;
             if (event.type === "delta") {
               bufferRef.current += event.text;
-              const buffered = bufferRef.current;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: buffered } : m)),
-              );
+              if (Date.now() - lastFlush >= 80) flush();
             } else if (event.type === "tool_start") {
               setToolLog((prev) => [
                 ...prev,
@@ -803,6 +808,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (requestIdRef.current === requestId) reportError(e);
       } finally {
         if (requestIdRef.current === requestId) {
+          flush();
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
           setStreaming(false);

@@ -1,17 +1,11 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, Square } from "lucide-react";
-import type { LexicalEditor } from "lexical";
 import { useApp } from "../lib/store";
 import { openModelPicker } from "./ModelPicker";
 import { toast } from "../lib/toast";
 import { cn } from "../lib/utils";
-import {
-  MarkdownEditor,
-  clearEditor,
-  focusEditor,
-  getEditorMarkdown,
-  setEditorMarkdown,
-} from "./composer/MarkdownEditor";
+import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
+import type { ChatKeyCallbacks } from "./composer/chatKeys";
 
 const SLASH_COMMANDS: [string, string][] = [
   ["new", "New chat"],
@@ -19,8 +13,6 @@ const SLASH_COMMANDS: [string, string][] = [
   ["memory", "Open memory"],
   ["settings", "Open settings"],
 ];
-
-const HISTORY_LIMIT = 50;
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -67,6 +59,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     sendWith,
     activeConnection,
     model,
+    messages,
     clearActiveConversation,
     setSettingsPage,
     newConversation,
@@ -74,40 +67,55 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setReasoningEffort,
     supportedEfforts,
   } = useApp();
-  const editorRef = useRef<LexicalEditor | null>(null);
+  const editorRef = useRef<TipTapHandle | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
-  const historyRef = useRef<string[]>([]);
-  const historyPos = useRef(-1);
 
   const slashMatch = composerDraft.match(/^\/(\w*)$/);
   const slashItems = slashMatch
     ? SLASH_COMMANDS.filter(([name]) => name.startsWith(slashMatch[1].toLowerCase()))
     : [];
 
+  const historyEntries = useMemo(() => {
+    const users = messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content.trim())
+      .filter((text) => text.length > 0)
+      .reverse();
+    return users.filter((text, i) => i === 0 || text !== users[i - 1]);
+  }, [messages]);
+
   const canSend =
     !streaming && !!activeConnection && !!model && composerDraft.trim().length > 0;
 
-  const submit = async () => {
-    const text = getEditorMarkdown(editorRef.current).trim() || composerDraft.trim();
-    if (!text || streaming) return;
-    if (!activeConnection || !model) return;
-    try {
-      const accepted = await sendMessage(text);
-      if (accepted) {
-        historyRef.current = [...historyRef.current.slice(-HISTORY_LIMIT + 1), text];
-        historyPos.current = -1;
-        clearEditor(editorRef.current);
-        setComposerDraft("");
-      } else {
+  const submit = () => {
+    const handle = editorRef.current;
+    const text = (handle?.getMarkdown() ?? composerDraft).trim();
+    if (!text || streaming || !activeConnection || !model) return;
+    handle?.clear();
+    setComposerDraft("");
+    setSlashIndex(0);
+    handle?.focus();
+    void sendMessage(text).then((accepted) => {
+      if (!accepted) {
+        handle?.setMarkdown(text);
+        setComposerDraft(text);
         toast("Couldn't send that message.");
       }
-    } catch {
-      toast("Couldn't send that message.");
-    }
+    });
   };
 
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  const stateRef = useRef({ streaming, sendWith, slashItems, historyEntries });
+  stateRef.current = { streaming, sendWith, slashItems, historyEntries };
+  const actionsRef = useRef({
+    stopStream,
+    runSlash: (_name: string) => {},
+  });
+  actionsRef.current.stopStream = stopStream;
+
   const runSlash = (name: string) => {
-    clearEditor(editorRef.current);
+    editorRef.current?.clear();
     setComposerDraft("");
     setSlashIndex(0);
     if (name === "new") void newConversation().catch(() => undefined);
@@ -115,23 +123,50 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     else if (name === "memory") setSettingsPage("memory");
     else if (name === "settings") setSettingsPage("general");
   };
+  actionsRef.current.runSlash = runSlash;
 
-  const recall = (direction: 1 | -1) => {
-    const history = historyRef.current;
-    if (history.length === 0) return;
-    let pos = historyPos.current;
-    if (direction === 1) {
-      pos = pos === -1 ? history.length - 1 : Math.max(0, pos - 1);
-    } else if (pos !== -1) {
-      pos = pos + 1;
-      if (pos >= history.length) pos = -1;
-    } else {
-      return;
+  const chat = useMemo<ChatKeyCallbacks>(
+    () => ({
+      send: () => submitRef.current(),
+      onEscape: () => {
+        if (stateRef.current.streaming) {
+          actionsRef.current.stopStream();
+          return true;
+        }
+        return false;
+      },
+      isPopupOpen: () => stateRef.current.slashItems.length > 0,
+      sendOnEnter: () => stateRef.current.sendWith === "enter",
+      historyEntries: () => stateRef.current.historyEntries,
+    }),
+    [],
+  );
+
+  const slashIndexRef = useRef(slashIndex);
+  slashIndexRef.current = slashIndex;
+  const keyDownRef = useRef((_event: KeyboardEvent): boolean => false);
+  keyDownRef.current = (event) => {
+    const items = stateRef.current.slashItems;
+    if (items.length === 0) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setSlashIndex((i) =>
+        event.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length,
+      );
+      return true;
     }
-    historyPos.current = pos;
-    const text = pos === -1 ? "" : history[pos];
-    setEditorMarkdown(editorRef.current, text);
-    setComposerDraft(text);
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const clamped = Math.min(slashIndexRef.current, Math.max(0, items.length - 1));
+      actionsRef.current.runSlash(items[clamped][0]);
+      return true;
+    }
+    if (event.key === "Escape") {
+      setComposerDraft("");
+      editorRef.current?.clear();
+      return true;
+    }
+    return false;
   };
 
   const modelLabel =
@@ -139,43 +174,30 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   return (
     <div>
-      <div className="relative rounded-composer border border-border bg-surface-2 px-2.5 pb-2 pt-2 focus-within:border-accent/70">
+      <div className="composer relative rounded-composer border border-border bg-surface-2 px-2.5 pb-2 pt-2 focus-within:border-accent/70">
         <SlashMenu
           items={slashItems}
           index={Math.min(slashIndex, Math.max(0, slashItems.length - 1))}
           onPick={runSlash}
         />
-        <MarkdownEditor
+        <TipTapEditor
           placeholder="Message MyAgent… (Markdown supported, / for commands)"
           autoFocus={autoFocus}
           signal={composerSignal}
-          editorRef={editorRef}
+          handleRef={editorRef}
           onChangeMarkdown={(markdown) => {
-            historyPos.current = -1;
             setComposerDraft(markdown);
             setSlashIndex(0);
           }}
-          handlers={{
-            onSend: () => void submit(),
-            shouldSend: (mods) =>
-              sendWith === "enter" ? !mods.shiftKey : !!(mods.ctrlKey || mods.metaKey),
-            onEscape: () => {
-              if (streaming) stopStream();
-            },
-            onEmptyArrow: (direction) => recall(direction),
-            onBeforeEnter: () => {
-              if (slashItems.length === 0) return false;
-              runSlash(slashItems[Math.min(slashIndex, slashItems.length - 1)][0]);
-              return true;
-            },
-          }}
+          chat={chat}
+          onKeyDown={(event) => keyDownRef.current(event)}
         />
         <div className="mt-1 flex items-center gap-1">
           <button
             type="button"
             onClick={(e) => {
               openModelPicker(e.currentTarget);
-              setTimeout(() => focusEditor(editorRef.current), 0);
+              setTimeout(() => editorRef.current?.focus(), 0);
             }}
             aria-label="Choose model"
             title={modelLabel}
@@ -219,7 +241,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           ) : (
             <button
               type="button"
-              onClick={() => void submit()}
+              onClick={() => submitRef.current()}
               aria-label="Send"
               disabled={!canSend}
               className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-accent-contrast disabled:bg-active disabled:text-muted"

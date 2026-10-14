@@ -207,3 +207,100 @@ kbd {
     transition: none !important;
   }
 }
+
+.composer-editor,
+.composer-editor > div,
+.ProseMirror,
+.ProseMirror:focus,
+.ProseMirror:focus-visible,
+.ProseMirror-focused {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+
+.composer-editor {
+  caret-color: var(--color-accent);
+}
+
+.composer-editor.is-editor-empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+.composer-editor p {
+  margin: 0;
+}
+
+.composer-editor ul,
+.composer-editor ol {
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.composer-editor ul {
+  list-style: disc;
+}
+
+.composer-editor ol {
+  list-style: decimal;
+}
+
+.composer-editor ul ul,
+.composer-editor ol ol,
+.composer-editor ul ol,
+.composer-editor ol ul {
+  margin: 0;
+}
+
+.composer-editor li > p {
+  margin: 0;
+}
+
+.composer-editor blockquote {
+  margin: 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-muted);
+}
+
+.composer-editor pre {
+  margin: 0.25rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-control);
+  background: var(--color-active);
+  overflow-x: auto;
+}
+
+.composer-editor pre code {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+.composer-editor code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--color-active);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+
+.composer-editor a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: text;
+}
+
+.composer-editor ul.tight p,
+.composer-editor ol.tight p {
+  margin: 0;
+}

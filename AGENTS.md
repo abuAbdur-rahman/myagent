@@ -45,6 +45,9 @@ Run every check before saying "done".
 ## Hard rules
 
 - **Only edit files in scope.** Ask before touching anything else.
+- **Ask with the question tool. Always.** Any question for the user goes through
+  the interactive question tool — never plain chat text. Batch all open
+  questions into one call; state the default you will use if unanswered.
 - **No `any`.** Use `unknown` + narrowing or generics.
 - **Validate external input with Zod** at the boundary. Always.
 - **Every `catch` must log, rethrow, or set a typed error.** Never swallow silently.
