@@ -301,7 +301,7 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
     vec!["*".to_string()]
 }
 
-fn denied_tool_message(id: &str, text: &str) -> serde_json::Value {
+fn tool_text_message(id: &str, text: &str) -> serde_json::Value {
     serde_json::json!({
         "role": "tool",
         "tool_call_id": id,
@@ -419,7 +419,7 @@ async fn run_agentic(
                     ok: false,
                     preview: "Denied by rule".to_string(),
                 });
-                history.push(denied_tool_message(&id, "denied by rule"));
+                history.push(tool_text_message(&id, "denied by rule"));
                 continue;
             }
             if decision == permissions::Effect::Ask {
@@ -430,12 +430,6 @@ async fn run_agentic(
                     tools::summarize_call(&name, &args)
                 };
                 let cwd = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
-                let _ = on_event.send(StreamEvent::ApprovalAsked {
-                    id: approval_id.clone(),
-                    tool: name.clone(),
-                    command,
-                    cwd,
-                });
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 state.insert_pending(
                     &approval_id,
@@ -446,6 +440,12 @@ async fn run_agentic(
                         tx,
                     },
                 )?;
+                let _ = on_event.send(StreamEvent::ApprovalAsked {
+                    id: approval_id.clone(),
+                    tool: name.clone(),
+                    command,
+                    cwd,
+                });
                 let reply = tokio::select! {
                     reply = rx => reply.unwrap_or(ApprovalReply::Deny),
                     _ = cancel.notified() => return Ok(()),
@@ -456,7 +456,7 @@ async fn run_agentic(
                         ok: false,
                         preview: "Denied by user".to_string(),
                     });
-                    history.push(denied_tool_message(&id, "denied by user"));
+                    history.push(tool_text_message(&id, "denied by user"));
                     continue;
                 }
             }
@@ -469,18 +469,18 @@ async fn run_agentic(
                             ok: false,
                             preview: message.clone(),
                         });
-                        history.push(denied_tool_message(&id, &format!("Error: {message}")));
+                        history.push(tool_text_message(&id, &format!("Error: {message}")));
                     }
                     Ok(asked) => {
                         let question_id = format!("{}:{id}", req.request_id);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        state.insert_question(&question_id, tx)?;
                         let _ = on_event.send(StreamEvent::QuestionAsked {
                             id: question_id.clone(),
                             question: asked.question,
                             options: asked.options,
                             allow_custom: asked.allow_custom,
                         });
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        state.insert_question(&question_id, tx)?;
                         let answer = tokio::select! {
                             answer = rx => answer.unwrap_or_default(),
                             _ = cancel.notified() => return Ok(()),
@@ -495,7 +495,7 @@ async fn run_agentic(
                             ok: true,
                             preview: truncate_preview(&content),
                         });
-                        history.push(denied_tool_message(&id, &content));
+                        history.push(tool_text_message(&id, &content));
                     }
                 }
                 continue;

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { ShieldQuestion, CircleQuestionMark } from "lucide-react";
 import { useApp } from "../lib/store";
 import { Button, Input } from "./ui";
+
+function Kbd({ children }: { children: string }) {
+  return <kbd className="border-white/40 bg-transparent text-inherit">{children}</kbd>;
+}
 
 function useFocusOnShow(dep: string | null) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -11,10 +16,33 @@ function useFocusOnShow(dep: string | null) {
   return rootRef;
 }
 
+function inEditable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.isContentEditable
+  );
+}
+
 function ApprovalCard() {
   const { approval, replyApproval } = useApp();
   const rootRef = useFocusOnShow(approval?.id ?? null);
+
+  useEffect(() => {
+    if (!approval) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (inEditable(e.target)) return;
+      if (e.key === "1") void replyApproval("once");
+      else if (e.key === "2") void replyApproval("always");
+      else if (e.key === "Escape") void replyApproval("deny");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [approval, replyApproval]);
+
   if (!approval) return null;
+  const firstSegment = approval.command.split("\n")[0] ?? approval.command;
   return (
     <div
       ref={rootRef}
@@ -23,25 +51,33 @@ function ApprovalCard() {
       aria-labelledby="approval-title"
       className="rounded-control bg-warn/10 px-3 py-2 text-sm"
     >
-      <div id="approval-title" className="font-medium">
-        Allow <span className="font-mono">{approval.tool}</span> to run?
+      <div className="flex items-center gap-2">
+        <ShieldQuestion size={16} className="flex-none text-warn" />
+        <div id="approval-title" className="font-medium">
+          Allow <span className="font-mono">{approval.tool}</span> to run?
+        </div>
+      </div>
+      <div className="mt-0.5 pl-6 text-xs text-muted">
+        No rule matches this command, so it asks first.
       </div>
       {approval.command && (
-        <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
+        <pre className="m-0 mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-vault-raised p-2 font-mono text-xs text-text">
           {approval.command}
         </pre>
       )}
-      {approval.cwd && <div className="mt-1 text-xs text-muted">in {approval.cwd}</div>}
-      <div className="mt-1 text-xs text-muted">Always applies to this command only.</div>
-      <div className="mt-2 flex gap-2">
+      <div className="mt-1 font-mono text-[11px] text-muted">
+        in {approval.cwd} · Always saves allow {approval.tool} · {firstSegment.slice(0, 60)}
+      </div>
+      <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
-          Allow once
+          Allow once <Kbd>1</Kbd>
         </Button>
         <Button size="sm" variant="default" onClick={() => void replyApproval("always")}>
-          Always allow
+          Always allow <Kbd>2</Kbd>
         </Button>
+        <span className="flex-1" />
         <Button size="sm" variant="danger" onClick={() => void replyApproval("deny")}>
-          Deny
+          Deny <Kbd>Esc</Kbd>
         </Button>
       </div>
     </div>
@@ -51,7 +87,49 @@ function ApprovalCard() {
 function QuestionCard() {
   const { question, answerQuestion } = useApp();
   const [custom, setCustom] = useState("");
+  const [highlight, setHighlight] = useState(0);
   const rootRef = useFocusOnShow(question?.id ?? null);
+  const customRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setHighlight(0);
+    setCustom("");
+  }, [question?.id]);
+
+  useEffect(() => {
+    if (!question) return;
+    const count = question.options.length + (question.allowCustom ? 1 : 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        void answerQuestion("Skipped by user.");
+        return;
+      }
+      if (inEditable(e.target)) return;
+      if (e.key >= "1" && e.key <= "9") {
+        const index = Number(e.key) - 1;
+        if (index < question.options.length) {
+          void answerQuestion(question.options[index]);
+        } else if (index === question.options.length && question.allowCustom) {
+          customRef.current?.focus();
+        }
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlight((h) => (h + 1) % count);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlight((h) => (h - 1 + count) % count);
+      } else if (e.key === "Enter") {
+        if (highlight < question.options.length) {
+          void answerQuestion(question.options[highlight]);
+        } else {
+          customRef.current?.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [question, highlight, answerQuestion]);
+
   if (!question) return null;
   const sendCustom = () => {
     if (!custom.trim()) return;
@@ -66,44 +144,86 @@ function QuestionCard() {
       aria-labelledby="question-title"
       className="rounded-control bg-accent/10 px-3 py-2 text-sm"
     >
-      <div id="question-title" className="font-medium">
-        {question.question}
+      <div className="flex items-center gap-2">
+        <CircleQuestionMark size={16} className="flex-none text-accent" />
+        <div id="question-title" className="font-medium">
+          {question.question}
+        </div>
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {question.options.map((option) => (
-          <Button
+      <div className="mt-0.5 pl-6 text-xs text-muted">
+        The model is waiting on your choice before it continues.
+      </div>
+      <div className="mt-2 flex flex-col gap-1">
+        {question.options.map((option, i) => (
+          <button
             key={option}
-            size="sm"
-            variant="default"
+            type="button"
             onClick={() => void answerQuestion(option)}
+            onMouseEnter={() => setHighlight(i)}
+            className={
+              highlight === i
+                ? "flex items-center gap-2.5 rounded-control border border-accent bg-accent/15 px-2.5 py-1.5 text-left"
+                : "flex items-center gap-2.5 rounded-control border border-border px-2.5 py-1.5 text-left hover:border-accent/60"
+            }
           >
-            {option}
-          </Button>
+            <span className="grid h-5 w-5 flex-none place-items-center rounded-control border border-border font-mono text-[11px] text-muted">
+              {i + 1}
+            </span>
+            <span className="min-w-0 flex-1 truncate" title={option}>
+              {option}
+            </span>
+          </button>
         ))}
+        {question.allowCustom && (
+          <form
+            className={
+              highlight === question.options.length
+                ? "flex items-center gap-2.5 rounded-control border border-accent bg-accent/15 px-2.5 py-1.5"
+                : "flex items-center gap-2.5 rounded-control border border-border px-2.5 py-1.5"
+            }
+            onSubmit={(e) => {
+              e.preventDefault();
+              sendCustom();
+            }}
+          >
+            <span className="grid h-5 w-5 flex-none place-items-center rounded-control border border-border font-mono text-[11px] text-muted">
+              {question.options.length + 1}
+            </span>
+            <label htmlFor="question-custom" className="sr-only">
+              Type your own answer
+            </label>
+            <Input
+              id="question-custom"
+              ref={customRef}
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onFocus={() => setHighlight(question.options.length)}
+              placeholder="Type your own answer"
+              className="h-7 min-w-0 flex-1 border-transparent bg-transparent text-xs"
+            />
+          </form>
+        )}
       </div>
-      {question.allowCustom && (
-        <form
-          className="mt-2 flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            sendCustom();
+      <div className="mt-2 flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => {
+            if (highlight < question.options.length) {
+              void answerQuestion(question.options[highlight]);
+            } else {
+              sendCustom();
+            }
           }}
         >
-          <label htmlFor="question-custom" className="sr-only">
-            Custom answer
-          </label>
-          <Input
-            id="question-custom"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            placeholder="Or type your own answer…"
-            className="h-7 min-w-0 flex-1 text-xs"
-          />
-          <Button size="sm" variant="default" type="submit" disabled={!custom.trim()}>
-            Send
-          </Button>
-        </form>
-      )}
+          Send answer <Kbd>Enter</Kbd>
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => void answerQuestion("Skipped by user.")}>
+          Skip <Kbd>Esc</Kbd>
+        </Button>
+        <span className="flex-1" />
+        <span className="hidden text-[11px] text-muted sm:inline">↑↓ move · 1–{question.options.length + (question.allowCustom ? 1 : 0)} pick</span>
+      </div>
     </div>
   );
 }
@@ -116,6 +236,9 @@ export function TurnCards() {
       <div className="space-y-2 rounded-control border border-border bg-surface p-2 shadow-[var(--shadow)]">
         <ApprovalCard />
         <QuestionCard />
+      </div>
+      <div className="mt-1 text-center text-[11px] text-muted">
+        Waiting for your answer above…
       </div>
     </div>
   );

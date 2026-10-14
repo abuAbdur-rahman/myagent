@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 pub struct SseParser {
-    buf: String,
+    buf: Vec<u8>,
     data: Vec<String>,
 }
 
@@ -13,16 +13,18 @@ pub enum SseItem {
 impl SseParser {
     pub fn new() -> Self {
         SseParser {
-            buf: String::new(),
+            buf: Vec::new(),
             data: Vec::new(),
         }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<SseItem> {
-        self.buf.push_str(&String::from_utf8_lossy(bytes));
+        self.buf.extend_from_slice(bytes);
         let mut out = Vec::new();
-        while let Some(pos) = self.buf.find('\n') {
-            let mut line: String = self.buf.drain(..=pos).collect();
+        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+            let raw: Vec<u8> = self.buf.drain(..=pos).collect();
+            let mut line = String::from_utf8(raw)
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
             line.pop();
             if line.ends_with('\r') {
                 line.pop();
@@ -141,6 +143,14 @@ mod tests {
     }
 
     #[test]
+    fn keeps_multibyte_chars_split_across_chunks() {
+        let raw = "data: {\"text\":\"hi 👍\"}\n\n";
+        let mut parser = SseParser::new();
+        let items = feed_all(&mut parser, raw, 1);
+        assert_eq!(payloads(items), vec!["{\"text\":\"hi 👍\"}"]);
+    }
+
+    #[test]
     fn ignores_comments_and_blank_keepalives() {
         let raw = ": ping\n\ndata: {\"a\":1}\n\n\n";
         let mut parser = SseParser::new();
@@ -149,8 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn joins_multiline_data_and_detects_done() {
-        let raw = "data: line1\ndata: line2\n\n";
+    fn joins_multiline_data_and_detects_done() {        let raw = "data: line1\ndata: line2\n\n";
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 100);
         assert_eq!(payloads(items), vec!["line1\nline2"]);

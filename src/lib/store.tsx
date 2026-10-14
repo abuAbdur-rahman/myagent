@@ -958,6 +958,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
             thinkingMsRef.current = Date.now() - thinkingStartRef.current;
           }
+          setApproval(null);
+          setQuestion(null);
           flush();
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
