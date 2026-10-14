@@ -2,6 +2,59 @@
 
 **Status: T1–T7 shipped. T8 (release 0.1.1) and T9 (in-app updater) remain.**
 
+## Round 4 — v0.1.2 (send fix, rich composer, reasoning, visibility, sidebar, router)
+
+**P0 — Sending is broken (critical, first).** Reproduce with a mock
+OpenAI-compatible server (plain / tool-loop / tools-rejected / 401 scenarios)
+driven through the real dev app via win-mcp. Fix root cause, verify all
+scenarios, commit, push. Hypothesis to kill first: the always-on tool loop and
+its 4xx fallback.
+
+**P0 root cause (found live):** `StreamState::take_cancelled` returned true
+whenever the registry entry *existed* — and `register` always inserts one. So
+every tool-enabled send aborted on the first loop check with `Ok(())`: user row
+persisted, composer cleared, no reply, no error. Fixed by splitting the wakeup
+registry (`active: HashMap<id, Notify>`) from the cancel flags
+(`cancelled: HashSet<id>`). Verified with a mock server: plain reply streams
+and persists; the user's own send confirmed it on the real path.
+
+- [ ] Mock server with scenario control + request log.
+- [ ] Backup dev DB, add Custom mock connection, send per scenario.
+- [ ] Fix + broaden fallback (400/404/422 → plain retry, once).
+- [ ] Verify, commit, push.
+
+**P1 — Rich-text composer (Lexical).** Live formatting per the accepted spec:
+paragraph/bold/italic/strike/inline-code/code-block/lists/blockquote/link;
+auto-format on type (`code`, `**b**`, `*i*`/`_i_`, `~~s~~`, ``` fences,
+`1.`/`-`/`> `, undo-on-backspace); code-block Enter/Tab/Escape rules;
+Ctrl+B/I/E, Shift+X, K; send on Enter (Shift+Enter break); markdown
+serialization; token counter on serialized text; user bubbles render with the
+same Markdown pipeline (`breaks` on); edit round-trips raw markdown.
+Also: single subtle focus ring, overlay scrollbar only on overflow, model chip
+tooltip (already), empty-composer ArrowUp/Down history (kept).
+
+**P2 — Reasoning effort.** Effort select beside the model picker, options from
+real support data (OpenRouter catalog `supported_parameters` where available,
+family map fallback); disabled when unsupported; sent as `reasoning.effort`.
+Research-backed values only.
+
+**P3 — Model visibility per provider.** `hidden_models` table, searchable
+eye-toggle list under each provider, composer + settings selects filter
+hidden. Migration v5.
+
+**P4 — Sidebar projects.** Two most-recently-active projects (by latest chat
+activity), chevron expands up to 5 latest threads each.
+
+**P5 — Agent Router provider.** Research first; add as a preset kind with the
+right base URL/auth/notes or report why not.
+
+**P6 — Onboarding.** Show every fetched model (scrollable, no 8-item cap);
+capture display name on welcome; confirm new/existing flag persistence
+(localStorage `onboarded` + displayName already exist — verify, don't duplicate).
+
+**P7 — Release 0.1.2.** Bump, full gate, tag, watch. Includes the updater
+artifacts path proven in 0.1.1.
+
 ### T9 — Update from inside the app ✅ (dormant)
 - `tauri-plugin-updater` wired (Rust + JS): About → version, check, download
   with progress, install and relaunch; one silent background check on launch

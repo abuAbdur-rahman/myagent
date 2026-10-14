@@ -94,8 +94,17 @@ async fn error_body(resp: reqwest::Response) -> String {
     }
 }
 
-fn is_tool_rejection(error: &AppError) -> bool {
-    matches!(error, AppError::Upstream(message) if message.to_lowercase().contains("tool"))
+fn is_retryable_tools_error(error: &AppError) -> bool {
+    match error {
+        AppError::Upstream(message) => {
+            let lower = message.to_lowercase();
+            lower.contains("tool")
+                || lower.starts_with("400")
+                || lower.starts_with("404")
+                || lower.starts_with("422")
+        }
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -239,6 +248,25 @@ fn tool_calls_of(message: &serde_json::Value) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+fn message_text(message: &serde_json::Value) -> Option<String> {
+    message
+        .get("content")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn empty_response_error(value: &serde_json::Value) -> AppError {
+    let reason = value["choices"][0]
+        .get("finish_reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let excerpt = truncate_chars(&serde_json::to_string(value).unwrap_or_default(), 500);
+    AppError::Upstream(format!(
+        "empty response from provider (finish: {reason}): {excerpt}"
+    ))
+}
+
 async fn run_agentic(
     client: &reqwest::Client,
     app: &AppHandle,
@@ -273,7 +301,7 @@ async fn run_agentic(
 
         let value = match post_completion(client, &url, &key, &body).await {
             Ok(value) => value,
-            Err(error) if is_tool_rejection(&error) => {
+            Err(error) if is_retryable_tools_error(&error) => {
                 return stream_completion(client, req, key, history, on_event, cancel).await;
             }
             Err(error) => return Err(error),
@@ -281,6 +309,9 @@ async fn run_agentic(
 
         let message = value["choices"][0]["message"].clone();
         let calls = tool_calls_of(&message);
+        if calls.is_empty() && message_text(&message).is_none() {
+            return Err(empty_response_error(&value));
+        }
         if calls.is_empty() {
             break;
         }
@@ -388,6 +419,7 @@ async fn stream_completion(
 
     let mut stream = resp.bytes_stream();
     let mut buffer: Vec<u8> = Vec::new();
+    let mut received: u32 = 0;
     let notified = cancel.notified();
     tokio::pin!(notified);
 
@@ -413,11 +445,20 @@ async fn stream_completion(
             }
             if data == "[DONE]" {
                 let _ = on_event.send(StreamEvent::Done);
-                return Ok(());
+                return if received == 0 {
+                    Err(AppError::Upstream(
+                        "empty response from provider".to_string(),
+                    ))
+                } else {
+                    Ok(())
+                };
             }
 
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
                 if let Some(text) = value["choices"][0]["delta"]["content"].as_str() {
+                    if !text.is_empty() {
+                        received += 1;
+                    }
                     let _ = on_event.send(StreamEvent::Delta {
                         text: text.to_string(),
                     });
@@ -434,5 +475,10 @@ async fn stream_completion(
     }
 
     let _ = on_event.send(StreamEvent::Done);
+    if received == 0 {
+        return Err(AppError::Upstream(
+            "empty response from provider".to_string(),
+        ));
+    }
     Ok(())
 }
