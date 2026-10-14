@@ -12,7 +12,9 @@ import type {
   Project,
   ProjectInput,
   Role,
+  ToolLogEntry,
 } from "./types";
+import { toolLogEntrySchema } from "./types";
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -191,12 +193,13 @@ export interface MessageMeta {
   completionTokens: number | null;
   totalTokens: number | null;
   finishReason: string | null;
+  toolLogJson: string | null;
 }
 
 export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6 WHERE id = $7",
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7 WHERE id = $8",
     [
       meta.reasoning,
       meta.thinkingMs,
@@ -204,9 +207,26 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
       meta.completionTokens,
       meta.totalTokens,
       meta.finishReason,
+      meta.toolLogJson,
       id,
     ],
   );
+}
+
+export function parseToolLog(raw: unknown): ToolLogEntry[] {
+  if (typeof raw !== "string" || !raw) return [];
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    const entries: ToolLogEntry[] = [];
+    for (const entry of value) {
+      const parsed = toolLogEntrySchema.safeParse(entry);
+      if (parsed.success) entries.push(parsed.data);
+    }
+    return entries;
+  } catch {
+    return [];
+  }
 }
 
 export async function deleteMessage(id: string): Promise<void> {

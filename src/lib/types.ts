@@ -25,6 +25,15 @@ export type ConnectionInput = z.infer<typeof connectionInputSchema>;
 const roleSchema = z.enum(["system", "user", "assistant"]);
 export type Role = z.infer<typeof roleSchema>;
 
+export const toolLogEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  summary: z.string(),
+  status: z.enum(["running", "ok", "err"]),
+  preview: z.string().nullable(),
+});
+export type ToolLogEntry = z.infer<typeof toolLogEntrySchema>;
+
 const messageSchema = z.object({
   id: z.string(),
   conversation_id: z.string(),
@@ -36,6 +45,7 @@ const messageSchema = z.object({
   completion_tokens: z.number().nullish(),
   total_tokens: z.number().nullish(),
   finish_reason: z.string().nullish(),
+  tool_log: z.string().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;

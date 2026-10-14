@@ -31,6 +31,7 @@ import type {
   Project,
   ProjectInput,
   Message,
+  ToolLogEntry,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
@@ -42,13 +43,7 @@ const DISPLAY_NAME_KEY = "displayName";
 
 export type ThemeMode = "system" | "light" | "dark";
 
-interface ToolEntry {
-  id: string;
-  name: string;
-  summary: string;
-  status: "running" | "ok" | "err";
-  preview: string | null;
-}
+type ToolEntry = ToolLogEntry;
 
 type View = "chat" | "projects" | "project";
 
@@ -290,6 +285,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  const toolLogRef = useRef<ToolEntry[]>([]);
+  useEffect(() => {
+    toolLogRef.current = toolLog;
+  }, [toolLog]);
   const conversationsRef = useRef<Conversation[]>([]);
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -744,7 +743,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages([]);
       return;
     }
-    setMessages(await db.listMessages(id));
+    const rows = await db.listMessages(id);
+    setMessages(rows);
+    const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
+    const restored = db.parseToolLog(lastAssistant?.tool_log).map((entry) =>
+      entry.status === "running"
+        ? { ...entry, status: "err" as const, preview: "Interrupted" }
+        : entry,
+    );
+    if (restored.length > 0) setToolLog(restored);
   }, []);
 
   const newConversation = useCallback(async () => {
@@ -787,7 +794,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
-    if (!content && !reasoning) {
+    const toolLogJson =
+      toolLogRef.current.length > 0 ? JSON.stringify(toolLogRef.current) : null;
+    if (!content && !reasoning && !toolLogJson) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     }
     const usage = usageRef.current;
@@ -798,8 +807,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       completionTokens: usage?.completion ?? null,
       totalTokens: usage?.total ?? null,
       finishReason: finishRef.current,
+      toolLogJson,
     };
-    const persist = content
+    const persist = content || toolLogJson
       ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
     persist

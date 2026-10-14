@@ -124,6 +124,12 @@ pub fn run() {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "add_message_tool_log",
+            sql: "ALTER TABLE messages ADD COLUMN tool_log TEXT;",
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
