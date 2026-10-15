@@ -197,44 +197,44 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Switching mid-chat applies to the next turn only.
 
 ## C3. Model catalogue and capabilities
-- **Status:** Partial (live /models only)
+- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model)
 - **Ref:** † OpenRouter's models list includes context length and supported parameters.
 - **Build:** Fetch, cache with a TTL, and read: context length, supports reasoning, supports tools. Disable UI that a model cannot use. Fall back to safe defaults when unknown.
 - **Done:** A model without tool support never gets tools in its request.
 
 ## C4. Reasoning effort control
-- **Status:** Partial (selector visible in the UI)
+- **Status:** Have (0.1.7: caps-gated selector, mixed param shape, Rust re-gate)
 - **Ref:** † OpenRouter accepts a `reasoning` request parameter with effort. Claude Code has effort levels and a thinking toggle.
 - **Build:** Selector (off, minimal, low, medium, high) shown only for reasoning-capable models (C3). Maps to the provider parameter.
 - **Done:** The request body contains the parameter only when supported.
 
 ## C5. Usage and cost
-- **Status:** Have (0.1.3: real usage stored + footer; cost needs catalogue prices)
+- **Status:** Have (0.1.7: include_usage on streams, fallback chain, tokens-only footer)
 - **Ref:** † OpenRouter returns a final usage chunk (prompt and completion tokens).
 - **Build:** Store real usage per assistant message. Footer shows tokens for the chat. Cost only if the catalogue has prices. Fall back to chars/4 labelled "estimate".
 - **Done:** Usage from the fixture is stored and displayed.
 
 ## C6. Context meter
-- **Status:** Partial ("Context 0% used" bar exists)
+- **Status:** Have (0.1.7: stored usage + catalogue limit, warn at 80%, limit-estimated flag)
 - **Ref:** Claude Code `/context` shows context use.
 - **Build:** Last prompt tokens divided by model context length (C3, C5). Warn at 80%.
 - **Done:** Meter matches stored usage.
 
 ## C7. Prune old tool outputs
-- **Status:** Missing
+- **Status:** Have (0.1.7: older role:tool outputs replaced in send payload only, newest kept)
 - **Ref:** † OpenCode first clears old tool outputs and keeps only the most recent chunk (about 40K tokens in its docs), skipping some important tools.
 - **Build:** When building context, replace tool results older than N turns with "[output omitted, N bytes]". Stored messages stay intact. Pure function over the message list.
 - **Done:** Pruned context is smaller, stored history unchanged.
 
 ## C8. Compaction summary
-- **Status:** Partial (fake: slices last 4)
+- **Status:** Have (0.1.7: structured template, same-model, range-bound, folds prior summary)
 - **Ref:** † OpenCode runs a hidden agent that writes a summary when the context nears the limit; earlier messages remain stored, only the active context changes. Claude Code `/compact` does the same.
 - **Build:** Context = system prompt + summary + recent messages. Summarize older messages with the same model using a fixed prompt (goal, decisions, files touched, open tasks). Store the summary as a special message with the range it covers. Show a "context compacted" marker.
 - **Not:** Multiple summaries stacking, AI-picked pruning.
 - **Done:** After compaction the model can answer a question about an early decision.
 
 ## C9. Compact trigger (manual and auto)
-- **Status:** Missing
+- **Status:** Have (0.1.7: /compact exact-match + menu, auto at 80% with latch and off switch)
 - **Ref:** † OpenCode has auto and manual compaction, and an option to disable auto. Claude Code has `/compact` and auto-compact near the limit.
 - **Build:** `/compact` command, plus auto at about 80% of context using real usage. A setting to turn auto off. Run between turns only.
 - **Done:** Crossing the threshold triggers exactly one compaction.
@@ -450,7 +450,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # G. App shell
 
 ## G1. Slash commands
-- **Status:** Missing
+- **Status:** Partial (0.1.7: /compact in menu + exact-match; /export, /fork, /model still missing)
 - **Ref:** † Claude Code and OpenCode have `/compact`, `/export`, `/fork`, `/copy` and more; Claude Code custom commands are markdown files that are now part of skills.
 - **Build:** Typing `/` at the start opens a filtered menu. Start with `/compact`, `/export`, `/fork`, `/clear`, `/model`. Commands are a plain registry in code.
 - **Not:** User-defined commands.
