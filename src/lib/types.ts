@@ -116,6 +116,69 @@ export type MemoryInput = z.infer<typeof memoryInputSchema>;
 
 export const MEMORY_KINDS: MemoryKind[] = [...memoryKindSchema.options];
 
+export const searchQuerySchema = z.object({
+  q: z.string().trim().min(1, "Search cannot be empty").max(200),
+  projectId: z.string().nullable().optional(),
+  pinnedOnly: z.boolean().optional(),
+  from: z.number().nullable().optional(),
+  to: z.number().nullable().optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+});
+export type SearchQuery = z.infer<typeof searchQuerySchema>;
+
+export const tagSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1, "Tag cannot be empty")
+  .max(32, "Tag too long")
+  .regex(/^[a-z0-9-]+$/, "Letters, numbers and dashes only");
+export type Tag = z.infer<typeof tagSchema>;
+
+export interface SearchHit {
+  conversationId: string;
+  messageId: string | null;
+  snippet: string;
+}
+
+const usageSchema = z.object({
+  prompt: z.number(),
+  completion: z.number(),
+  total: z.number(),
+});
+
+const exportMessageSchema = z.object({
+  id: z.string(),
+  parentId: z.string().nullable(),
+  childrenIds: z.array(z.string()),
+  role: roleSchema,
+  content: z.string(),
+  reasoning: z.string().nullable(),
+  thinkingMs: z.number().nullable(),
+  usage: usageSchema.nullable(),
+  finishReason: z.string().nullable(),
+  toolLog: z.array(toolLogEntrySchema),
+  artifacts: z.array(declaredArtifactSchema),
+  createdAt: z.number(),
+});
+
+export const chatExportSchema = z
+  .object({
+    app: z.literal("myagent"),
+    format: z.number().int().min(1).max(1),
+    exportedAt: z.string(),
+    chat: z.object({
+      title: z.string(),
+      model: z.string().nullable(),
+      pinned: z.boolean(),
+      projectId: z.string().nullable(),
+      summary: z.string().nullable(),
+    }),
+    messages: z.array(exportMessageSchema).min(1).max(2000),
+  })
+  .strict();
+export type ChatExport = z.infer<typeof chatExportSchema>;
+
 export const memoryDraftSchema = z.object({
   content: z.string().min(1, "Memory cannot be empty").max(2000),
   kind: memoryKindSchema,

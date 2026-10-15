@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Cpu, Download, FolderInput, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { Cpu, Download, FolderInput, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectColor } from "../lib/grouping";
-import { conversationToMarkdown, safeFilename } from "../lib/export";
+import { buildChatExport, conversationToMarkdown, importChatExport, safeFilename } from "../lib/export";
 import { MenuItem, MenuSeparator, showMenu } from "./Menu";
 import { confirmDialog } from "./ConfirmDialog";
 import { openModelPicker } from "./ModelPicker";
@@ -24,9 +24,12 @@ export function ChatHeader() {
     messages,
     togglePanel,
     panelArtifact,
+    refreshConversations,
+    selectConversation,
   } = useApp();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const chat = conversations.find((c) => c.id === activeConversationId) ?? null;
   const project = chat?.project_id ? projects.find((p) => p.id === chat.project_id) : undefined;
@@ -61,6 +64,28 @@ export function ChatHeader() {
     if (!chat) return;
     downloadText(safeFilename(chat.title), conversationToMarkdown(chat.title, messages));
     toast("Chat exported");
+  };
+
+  const exportJson = () => {
+    if (!chat) return;
+    downloadText(
+      safeFilename(chat.title, "json"),
+      JSON.stringify(buildChatExport(chat, messages), null, 2),
+      "application/json",
+    );
+    toast("Chat exported as JSON");
+  };
+
+  const importFile = async (file: File) => {
+    try {
+      const text = await file.text();
+      const id = await importChatExport(text);
+      await refreshConversations();
+      await selectConversation(id);
+      toast("Chat imported");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Import failed");
+    }
   };
 
   const openMenu = (anchor: HTMLElement) => {
@@ -109,6 +134,16 @@ export function ChatHeader() {
           icon={<Download size={16} />}
           label="Export"
           onSelect={exportChat}
+        />
+        <MenuItem
+          icon={<Download size={16} />}
+          label="Export JSON"
+          onSelect={exportJson}
+        />
+        <MenuItem
+          icon={<Upload size={16} />}
+          label="Import chat…"
+          onSelect={() => fileRef.current?.click()}
         />
         <MenuSeparator />
         <MenuItem
@@ -194,6 +229,18 @@ export function ChatHeader() {
       >
         <PanelRight size={16} />
       </IconButton>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        aria-label="Import chat file"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) void importFile(file);
+        }}
+      />
     </div>
   );
 }

@@ -29,9 +29,8 @@ fn delete_spill(app: AppHandle, conversation_id: String) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let migrations = vec![
+pub(crate) fn migrations() -> Vec<Migration> {
+    vec![
         Migration {
             version: 1,
             description: "create_chat_schema",
@@ -164,14 +163,32 @@ pub fn run() {
             ",
             kind: MigrationKind::Up,
         },
-    ];
+        Migration {
+            version: 11,
+            description: "add_chat_tags",
+            sql: "
+                CREATE TABLE IF NOT EXISTS chat_tags (
+                    chat_id TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, tag)
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_tags_tag ON chat_tags(tag);
+            ",
+            kind: MigrationKind::Up,
+        },
+    ]
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let pending = migrations();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:myagent.db", migrations)
+                .add_migrations("sqlite:myagent.db", pending)
                 .build(),
         )
         .manage(
@@ -199,4 +216,92 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::migrations;
+    use sqlx::Row;
+
+    async fn pool() -> sqlx::SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("memory db")
+    }
+
+    async fn apply_all(pool: &sqlx::SqlitePool) {
+        for migration in migrations() {
+            sqlx::raw_sql(migration.sql)
+                .execute(pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("migration {} does not apply: {e}", migration.description)
+                });
+        }
+    }
+
+    #[tokio::test]
+    async fn all_migrations_apply_cleanly() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        let count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM conversations")
+            .fetch_one(&pool)
+            .await
+            .expect("schema readable")
+            .get("c");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn shipped_sqlite_searches_fts5() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO conversations (id, title, connection_id, model, created_at, updated_at) VALUES ('c1', 'Rust notes', NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("seed chat");
+        sqlx::query("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ('m1', 'c1', 'user', 'how do async runtimes work', 2)")
+            .execute(&pool)
+            .await
+            .expect("seed message");
+        sqlx::query("CREATE VIRTUAL TABLE probe_fts USING fts5(content)")
+            .execute(&pool)
+            .await
+            .expect("fts5 available in shipped sqlite");
+        sqlx::query("INSERT INTO probe_fts (content) VALUES ('how do async runtimes work')")
+            .execute(&pool)
+            .await
+            .expect("fts insert");
+        let hit: String =
+            sqlx::query("SELECT snippet(probe_fts, 0, '', '', '…', 12) AS s FROM probe_fts WHERE probe_fts MATCH '\"async\"'")
+                .fetch_one(&pool)
+                .await
+                .expect("fts match")
+                .get("s");
+        assert!(hit.contains("async"), "snippet carries the term");
+        let rank: f64 = sqlx::query(
+            "SELECT bm25(probe_fts) AS r FROM probe_fts WHERE probe_fts MATCH '\"async\"'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("bm25 ranks")
+        .get("r");
+        assert!(rank.is_finite(), "bm25 returns a score");
+    }
+
+    #[tokio::test]
+    async fn chat_tags_enforce_uniqueness() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO chat_tags (chat_id, tag) VALUES ('c1', 'rust')")
+            .execute(&pool)
+            .await
+            .expect("first tag");
+        let dup = sqlx::query("INSERT INTO chat_tags (chat_id, tag) VALUES ('c1', 'rust')")
+            .execute(&pool)
+            .await;
+        assert!(dup.is_err(), "duplicate chat tag rejected");
+    }
 }

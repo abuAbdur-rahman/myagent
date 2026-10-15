@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -14,15 +14,17 @@ import {
   Plus,
   Search,
   Settings,
+  Tag,
   Trash2,
 } from "lucide-react";
 import { useApp } from "../lib/store";
+import * as db from "../lib/db";
 import { groupChats, projectColor } from "../lib/grouping";
 import { MenuItem, MenuSeparator, showMenu } from "./Menu";
 import { confirmDialog } from "./ConfirmDialog";
-import { Avatar, Button } from "./ui";
+import { Avatar, Button, Dialog, Input, Select } from "./ui";
 import { cn } from "../lib/utils";
-import type { Conversation } from "../lib/types";
+import type { Conversation, SearchHit } from "../lib/types";
 
 function initialsOf(name: string): string {
   const trimmed = name.trim();
@@ -112,6 +114,100 @@ function ChatRow({
   );
 }
 
+function TagDialog({
+  chat,
+  onClose,
+  onChanged,
+}: {
+  chat: Conversation;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [tags, setTags] = useState<string[]>([]);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    db.listTags(chat.id)
+      .then(setTags)
+      .catch((e) => setError(e instanceof Error ? e.message : "Could not load tags"));
+  }, [chat.id]);
+
+  const reload = async () => {
+    setTags(await db.listTags(chat.id));
+    onChanged();
+  };
+
+  const add = async () => {
+    if (!draft.trim()) return;
+    try {
+      await db.addTag(chat.id, draft);
+      setDraft("");
+      setError(null);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not add tag");
+    }
+  };
+
+  const remove = async (tag: string) => {
+    try {
+      await db.removeTag(chat.id, tag);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not remove tag");
+    }
+  };
+
+  return (
+    <Dialog open onClose={onClose} title={`Tags · ${chat.title}`}>
+      <div className="flex flex-col gap-2.5">
+        <div className="flex flex-wrap gap-1.5">
+          {tags.length === 0 && <span className="text-xs text-muted">No tags yet.</span>}
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="flex items-center gap-1 rounded-full bg-active px-2 py-0.5 text-xs"
+            >
+              {tag}
+              <button
+                type="button"
+                aria-label={`Remove tag ${tag}`}
+                onClick={() => void remove(tag)}
+                className="text-muted hover:text-text"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="flex gap-1.5">
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void add();
+              }
+            }}
+            aria-label="New tag"
+            placeholder="new-tag"
+          />
+          <Button variant="primary" size="sm" onClick={() => void add()}>
+            Add
+          </Button>
+        </div>
+        {error && (
+          <p className="text-xs text-danger" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
 export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) => void }) {
   const {
     conversations,
@@ -137,6 +233,54 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [allTags, setAllTags] = useState<{ tag: string; count: number }[]>([]);
+  const [tagMap, setTagMap] = useState<Map<string, string[]>>(new Map());
+  const [tagDialogChat, setTagDialogChat] = useState<Conversation | null>(null);
+
+  const reloadTags = async () => {
+    try {
+      const [tags, map] = await Promise.all([db.listAllTags(), db.chatTagMap()]);
+      setAllTags(tags);
+      setTagMap(map);
+      if (tagFilter && !tags.some((t) => t.tag === tagFilter)) setTagFilter(null);
+    } catch {
+      // surfaced on next read
+    }
+  };
+
+  useEffect(() => {
+    void reloadTags();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setHits(null);
+      setSearching(false);
+      setSearchError(null);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      db.searchMessages({ q: trimmed })
+        .then((found) => {
+          setHits(found);
+          setSearchError(null);
+        })
+        .catch((e) => {
+          setHits([]);
+          setSearchError(e instanceof Error ? e.message : "Search failed");
+        })
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set(["Older"]),
@@ -152,10 +296,14 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   };
 
   const projectById = new Map(projects.map((p) => [p.id, p]));
-  const groups = groupChats(conversations);
+  const chatById = new Map(conversations.map((c) => [c.id, c]));
 
+  const shown = tagFilter
+    ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
+    : conversations;
+  const groups = groupChats(shown);
   const threadsByProject = new Map<string, Conversation[]>();
-  for (const chat of conversations) {
+  for (const chat of shown) {
     if (!chat.project_id) continue;
     const list = threadsByProject.get(chat.project_id) ?? [];
     list.push(chat);
@@ -251,6 +399,11 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
               { align: "right" },
             )
           }
+        />
+        <MenuItem
+          icon={<Tag size={16} />}
+          label="Tags…"
+          onSelect={() => setTagDialogChat(chat)}
         />
         <MenuSeparator />
         <MenuItem
@@ -377,6 +530,78 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+        <div className="px-2.5 pb-1 pt-2">
+          <div className="flex h-8 items-center gap-2 rounded-control border border-border bg-surface-2 px-2.5">
+            <Search size={14} className="flex-none text-muted" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQuery("");
+              }}
+              aria-label="Search chats"
+              placeholder="Search chats…"
+              className="w-full border-0 bg-transparent text-sm outline-none placeholder:text-muted"
+            />
+          </div>
+          {searching && <p className="px-2.5 pt-1 text-xs text-muted">Searching…</p>}
+          {searchError && (
+            <p className="px-2.5 pt-1 text-xs text-danger" role="alert">
+              {searchError}
+            </p>
+          )}
+          {allTags.length > 0 && (
+            <div className="flex items-center gap-1.5 px-2.5 pt-1.5">
+              <Tag size={14} className="flex-none text-muted" />
+              <Select
+                value={tagFilter ?? ""}
+                onChange={(e) => setTagFilter(e.target.value || null)}
+                aria-label="Filter by tag"
+              >
+                <option value="">All tags</option>
+                {allTags.map((t) => (
+                  <option key={t.tag} value={t.tag}>
+                    {t.tag} ({t.count})
+                  </option>
+                ))}
+              </Select>
+              {tagFilter && (
+                <button
+                  type="button"
+                  aria-label="Clear tag filter"
+                  onClick={() => setTagFilter(null)}
+                  className="text-xs text-muted hover:text-text"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {hits !== null ? (
+          <div>
+            {hits.length === 0 && !searching && (
+              <p className="px-2.5 py-4 text-xs text-muted">No matches.</p>
+            )}
+            {hits.map((hit, i) => {
+              const chat = chatById.get(hit.conversationId);
+              if (!chat) return null;
+              return (
+                <button
+                  key={`${hit.conversationId}:${hit.messageId ?? "title"}:${i}`}
+                  type="button"
+                  onClick={() => openChat(chat.id)}
+                  title={chat.title}
+                  className="block w-full rounded-control px-2.5 py-1.5 text-left hover:bg-hover"
+                >
+                  <span className="block truncate text-sm">{chat.title}</span>
+                  <span className="block truncate text-xs text-muted">{hit.snippet}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <>
         <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted">
           Projects
         </div>
@@ -506,6 +731,8 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         {ready && conversations.length === 0 && (
           <p className="px-2.5 py-4 text-xs text-muted">No chats yet.</p>
         )}
+          </>
+        )}
       </div>
 
       <div className="flex items-center gap-1.5 border-t border-border p-2">
@@ -530,6 +757,13 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
           </span>
         </button>
       </div>
+      {tagDialogChat && (
+        <TagDialog
+          chat={tagDialogChat}
+          onClose={() => setTagDialogChat(null)}
+          onChanged={() => void reloadTags()}
+        />
+      )}
     </aside>
   );
 }

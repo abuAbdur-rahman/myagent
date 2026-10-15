@@ -13,9 +13,12 @@ import type {
   Project,
   ProjectInput,
   Role,
+  SearchHit,
+  SearchQuery,
+  Tag,
   ToolLogEntry,
 } from "./types";
-import { declaredArtifactSchema, toolLogEntrySchema } from "./types";
+import { declaredArtifactSchema, searchQuerySchema, tagSchema, toolLogEntrySchema } from "./types";
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -144,7 +147,68 @@ export async function touchConversation(
 export async function deleteConversation(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [id]);
+  await db.execute("DELETE FROM chat_tags WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
+}
+
+export async function wipeAll(): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM chat_tags");
+  await db.execute("DELETE FROM messages");
+  await db.execute("DELETE FROM conversations");
+  await db.execute("DELETE FROM memories");
+  await db.execute("DELETE FROM projects");
+  await db.execute("VACUUM");
+}
+
+export async function listTags(conversationId: string): Promise<Tag[]> {
+  const db = await getDb();
+  const rows = await db.select<{ tag: string }[]>(
+    "SELECT tag FROM chat_tags WHERE chat_id = $1 ORDER BY tag ASC",
+    [conversationId],
+  );
+  return rows.map((row) => row.tag);
+}
+
+export async function chatTagMap(): Promise<Map<string, string[]>> {
+  const db = await getDb();
+  const rows = await db.select<{ chat_id: string; tag: string }[]>(
+    "SELECT chat_id, tag FROM chat_tags ORDER BY tag ASC",
+  );
+  const map = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = map.get(row.chat_id) ?? [];
+    list.push(row.tag);
+    map.set(row.chat_id, list);
+  }
+  return map;
+}
+
+export async function listAllTags(): Promise<{ tag: string; count: number }[]> {
+  const db = await getDb();
+  return db.select<{ tag: string; count: number }[]>(
+    "SELECT tag, COUNT(*) AS count FROM chat_tags GROUP BY tag ORDER BY tag ASC",
+  );
+}
+
+export async function addTag(conversationId: string, tag: string): Promise<void> {
+  const parsed = tagSchema.safeParse(tag);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "Invalid tag");
+  }
+  const db = await getDb();
+  await db.execute("INSERT OR IGNORE INTO chat_tags (chat_id, tag) VALUES ($1, $2)", [
+    conversationId,
+    parsed.data,
+  ]);
+}
+
+export async function removeTag(conversationId: string, tag: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM chat_tags WHERE chat_id = $1 AND tag = $2", [
+    conversationId,
+    tag,
+  ]);
 }
 
 export async function listMessages(conversationId: string): Promise<Message[]> {
@@ -153,6 +217,128 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
     "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
     [conversationId],
   );
+}
+
+let searchReady: boolean | null = null;
+
+async function ensureSearchIndex(): Promise<boolean> {
+  if (searchReady !== null) return searchReady;
+  try {
+    const db = await getDb();
+    await db.execute(
+      "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, conversation_id UNINDEXED, tokenize='unicode61')",
+    );
+    await db.execute(
+      "CREATE TRIGGER IF NOT EXISTS trg_fts_insert AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(rowid, content, conversation_id) VALUES (new.rowid, new.content, new.conversation_id); END",
+    );
+    await db.execute(
+      "CREATE TRIGGER IF NOT EXISTS trg_fts_delete AFTER DELETE ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.rowid; END",
+    );
+    await db.execute(
+      "CREATE TRIGGER IF NOT EXISTS trg_fts_update AFTER UPDATE ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.rowid; INSERT INTO messages_fts(rowid, content, conversation_id) VALUES (new.rowid, new.content, new.conversation_id); END",
+    );
+    await db.execute(
+      "INSERT INTO messages_fts(rowid, content, conversation_id) SELECT rowid, content, conversation_id FROM messages WHERE rowid NOT IN (SELECT rowid FROM messages_fts)",
+    );
+    searchReady = true;
+  } catch {
+    searchReady = false;
+  }
+  return searchReady;
+}
+
+export async function searchMessages(input: unknown): Promise<SearchHit[]> {
+  const parsed = searchQuerySchema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "Invalid search");
+  }
+  const query: SearchQuery = parsed.data;
+  const { q, projectId, pinnedOnly, from, to, limit = 20 } = query;
+  const db = await getDb();
+  const filters: string[] = [];
+  const values: unknown[] = [];
+  if (projectId) {
+    values.push(projectId);
+    filters.push(`c.project_id = $${values.length}`);
+  }
+  if (pinnedOnly) filters.push("c.pinned = 1");
+  if (from != null) {
+    values.push(from);
+    filters.push(`m.created_at >= $${values.length}`);
+  }
+  if (to != null) {
+    values.push(to);
+    filters.push(`m.created_at <= $${values.length}`);
+  }
+  const where = filters.length > 0 ? `AND ${filters.join(" AND ")}` : "";
+  const likeFilters = filters.map((f) => f.replace(/^m\./, "m.")).join(" AND ");
+  const likeWhere = filters.length > 0 ? `AND ${likeFilters}` : "";
+
+  const titleValues: unknown[] = projectId ? [projectId] : [];
+  const titleWhere = [
+    projectId ? `c.project_id = $1` : null,
+    pinnedOnly ? "c.pinned = 1" : null,
+  ]
+    .filter(Boolean)
+    .join(" AND ");
+  const titleRows = await db.select<{ id: string; title: string }[]>(
+    `SELECT c.id, c.title FROM conversations c WHERE c.title LIKE $${titleValues.length + 1}${titleWhere ? ` AND ${titleWhere}` : ""} ORDER BY c.updated_at DESC LIMIT ${limit}`,
+    [...titleValues, `%${q}%`],
+  );
+  const hits: SearchHit[] = titleRows.map((row) => ({
+    conversationId: row.id,
+    messageId: null,
+    snippet: row.title,
+  }));
+
+  if (await ensureSearchIndex()) {
+    const tokens = q
+      .split(/\s+/)
+      .map((token) => token.replace(/["*:()^]/g, "").trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return hits;
+    values.push(tokens.map((token) => `"${token}"`).join(" "));
+    const rows = await db.select<
+      { conversation_id: string; message_id: string; snippet: string }[]
+    >(
+      `SELECT m.conversation_id, m.id AS message_id, snippet(messages_fts, 0, '', '', '…', 12) AS snippet
+       FROM messages_fts
+       JOIN messages m ON m.rowid = messages_fts.rowid
+       JOIN conversations c ON c.id = m.conversation_id
+       WHERE messages_fts MATCH $${values.length} ${where}
+       ORDER BY bm25(messages_fts) LIMIT ${limit}`,
+      values,
+    );
+    for (const row of rows) {
+      if (hits.length >= limit) break;
+      hits.push({
+        conversationId: row.conversation_id,
+        messageId: row.message_id,
+        snippet: row.snippet,
+      });
+    }
+    return hits;
+  }
+
+  values.push(`%${q}%`);
+  const rows = await db.select<
+    { conversation_id: string; message_id: string; snippet: string }[]
+  >(
+    `SELECT m.conversation_id, m.id AS message_id, substr(m.content, 1, 160) AS snippet
+     FROM messages m JOIN conversations c ON c.id = m.conversation_id
+     WHERE m.content LIKE $${values.length} ${likeWhere}
+     ORDER BY m.created_at DESC LIMIT ${limit}`,
+    values,
+  );
+  for (const row of rows) {
+    if (hits.length >= limit) break;
+    hits.push({
+      conversationId: row.conversation_id,
+      messageId: row.message_id,
+      snippet: row.snippet,
+    });
+  }
+  return hits;
 }
 
 export async function addMessage(
@@ -187,6 +373,55 @@ export async function updateMessage(id: string, content: string): Promise<void> 
     content,
     id,
   ]);
+}
+
+export interface FullMessageInput {
+  role: Role;
+  content: string;
+  reasoning?: string | null;
+  thinkingMs?: number | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+  finishReason?: string | null;
+  toolLogJson?: string | null;
+  artifactsJson?: string | null;
+  createdAt?: number | null;
+}
+
+export async function insertMessageFull(
+  conversationId: string,
+  input: FullMessageInput,
+): Promise<Message> {
+  const db = await getDb();
+  const message: Message = {
+    id: newId(),
+    conversation_id: conversationId,
+    role: input.role,
+    content: input.content,
+    created_at: input.createdAt ?? Date.now(),
+  };
+  await db.execute(
+    "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
+    [
+      message.id,
+      message.conversation_id,
+      message.role,
+      message.content,
+      message.created_at,
+    ],
+  );
+  await updateMessageMeta(message.id, {
+    reasoning: input.reasoning ?? null,
+    thinkingMs: input.thinkingMs ?? null,
+    promptTokens: input.promptTokens ?? null,
+    completionTokens: input.completionTokens ?? null,
+    totalTokens: input.totalTokens ?? null,
+    finishReason: input.finishReason ?? null,
+    toolLogJson: input.toolLogJson ?? null,
+    artifactsJson: input.artifactsJson ?? null,
+  });
+  return message;
 }
 
 export interface MessageMeta {

@@ -34,6 +34,9 @@ chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls"] }
 
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

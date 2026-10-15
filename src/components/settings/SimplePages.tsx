@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Moon, Sun, Monitor } from "lucide-react";
 import { useApp, type ThemeMode } from "../../lib/store";
+import * as api from "../../lib/api";
 import * as db from "../../lib/db";
 import { MemoryEditor } from "../MemoryEditor";
 import { Button, Input, Select, Spinner } from "../ui";
@@ -234,7 +235,16 @@ export function MemoryPage() {
 }
 
 export function DataPage() {
-  const { conversations, removeConversation } = useApp();
+  const {
+    conversations,
+    removeConversation,
+    refreshConversations,
+    refreshProjects,
+    refreshMemories,
+    selectConversation,
+    selectProject,
+    stopStream,
+  } = useApp();
   const [stats, setStats] = useState({ conversations: 0, messages: 0, memories: 0, projects: 0 });
 
   useEffect(() => {
@@ -288,6 +298,38 @@ export function DataPage() {
     toast("Chats cleared");
   };
 
+  const deleteEverything = async () => {
+    const confirmed = await confirmDialog({
+      title: "Delete everything?",
+      body: "All chats, projects and memory will be permanently removed, including files on disk. Connections and stored keys are kept. This cannot be undone.",
+      danger: true,
+      ok: "Delete everything",
+    });
+    if (!confirmed) return;
+    try {
+      stopStream();
+      const spillLeftovers: string[] = [];
+      for (const conversation of conversations) {
+        await api.deleteSpill(conversation.id).catch(() => {
+          spillLeftovers.push(conversation.id);
+        });
+      }
+      await db.wipeAll();
+      await selectConversation(null);
+      selectProject(null);
+      await refreshConversations();
+      await refreshProjects();
+      await refreshMemories();
+      toast(
+        spillLeftovers.length > 0
+          ? "Deleted, but some spill files remain on disk"
+          : "Everything deleted",
+      );
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
+
   return (
     <div>
       <SettingRow label="Export all data" description="Download chats, projects and memory as JSON">
@@ -298,6 +340,14 @@ export function DataPage() {
       <SettingRow label="Clear all chats" description="Projects and memory are kept">
         <Button variant="danger" size="sm" onClick={() => void clearChats()}>
           Clear
+        </Button>
+      </SettingRow>
+      <SettingRow
+        label="Delete everything"
+        description="Chats, projects and memory, including files on disk"
+      >
+        <Button variant="danger" size="sm" onClick={() => void deleteEverything()}>
+          Delete
         </Button>
       </SettingRow>
       <div className="mt-4 flex flex-col gap-1.5 px-2">

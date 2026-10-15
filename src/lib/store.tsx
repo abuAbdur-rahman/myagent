@@ -123,6 +123,7 @@ interface AppContextValue {
   startProjectChat: (projectId: string, text: string) => Promise<boolean>;
   saveProject: (input: ProjectInput, id?: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
+  refreshProjects: () => Promise<void>;
 
   globalMemories: Memory[];
   projectMemories: Memory[];
@@ -134,6 +135,7 @@ interface AppContextValue {
 
   conversations: Conversation[];
   activeConversationId: string | null;
+  refreshConversations: () => Promise<void>;
   selectConversation: (id: string | null) => Promise<void>;
   newConversation: () => Promise<void>;
   removeConversation: (id: string) => Promise<void>;
@@ -338,6 +340,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveProjectId((prev) =>
       prev && rows.some((row) => row.id === prev) ? prev : null,
     );
+  }, []);
+
+  const refreshConversations = useCallback(async () => {
+    setConversations(await db.listConversations());
   }, []);
 
   const refreshMemories = useCallback(async () => {
@@ -1598,6 +1604,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     startProjectChat,
     saveProject,
     removeProject,
+    refreshProjects,
     globalMemories,
     projectMemories,
     refreshMemories,
@@ -1608,6 +1615,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     conversations,
     activeConversationId,
     selectConversation,
+    refreshConversations,
     newConversation,
     removeConversation,
     renameConversation,
