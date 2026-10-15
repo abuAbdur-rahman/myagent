@@ -1,5 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type { StreamEvent } from "./types";
+import { parseBackendCaps, type ModelCapabilities } from "./catalog";
 
 export function setApiKey(connectionId: string, apiKey: string) {
   return invoke<void>("set_api_key", { connectionId, apiKey });
@@ -15,6 +16,14 @@ export function deleteApiKey(connectionId: string) {
 
 export function listModels(baseUrl: string, connectionId: string) {
   return invoke<string[]>("list_models", { baseUrl, connectionId });
+}
+
+export async function listModelCaps(
+  baseUrl: string,
+  connectionId: string,
+): Promise<ModelCapabilities[]> {
+  const raw: unknown = await invoke("list_model_caps", { baseUrl, connectionId });
+  return parseBackendCaps(raw);
 }
 
 export function approvalReply(id: string, reply: "once" | "always" | "deny") {

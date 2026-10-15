@@ -1,29 +1,25 @@
 import { z } from "zod";
 
-const catalogReasoningSchema = z.object({
-  supported_efforts: z.array(z.string()).nullable().optional(),
+import type { ProviderKind } from "./types";
+
+const backendCapsSchema = z.object({
+  id: z.string(),
+  context_length: z.number().nullable().optional(),
+  supports_tools: z.boolean().nullable().optional(),
+  supports_reasoning: z.boolean().nullable().optional(),
+  efforts: z.array(z.string()).nullable().optional(),
   mandatory: z.boolean().optional(),
 });
 
-const catalogModelSchema = z.object({
-  id: z.string(),
-  context_length: z.number().optional(),
-  supported_parameters: z.array(z.string()).optional(),
-  reasoning: catalogReasoningSchema.optional(),
-});
-
-const catalogSchema = z.object({
-  data: z.array(catalogModelSchema),
-});
+const backendCatalogSchema = z.array(backendCapsSchema);
 
 export interface ModelCapabilities {
   id: string;
   contextLength: number | null;
+  supportsTools: boolean | null;
   reasoningEfforts: string[] | null;
   reasoningMandatory: boolean;
 }
-
-const cache = new Map<string, Promise<ModelCapabilities[]>>();
 
 const GATEWAY_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -42,37 +38,27 @@ function familyEfforts(modelId: string): string[] | null {
   return null;
 }
 
-function toCapabilities(raw: z.infer<typeof catalogSchema>): ModelCapabilities[] {
-  return raw.data.map((m) => {
-    const supported = m.supported_parameters ?? [];
-    const hasReasoning =
-      supported.includes("reasoning") || supported.includes("include_reasoning");
-    const efforts = m.reasoning?.supported_efforts ?? null;
-    return {
-      id: m.id,
-      contextLength: m.context_length ?? null,
-      reasoningEfforts:
-        efforts ?? (hasReasoning ? [...GATEWAY_EFFORTS] : null),
-      reasoningMandatory: m.reasoning?.mandatory ?? false,
-    };
-  });
+export function lookupSupportsTools(
+  catalog: ModelCapabilities[] | null,
+  modelId: string,
+  kind: ProviderKind | undefined,
+): boolean {
+  const entry = catalog?.find((m) => m.id === modelId);
+  if (entry?.supportsTools === false) return false;
+  if (entry?.supportsTools === true) return true;
+  return kind === "openrouter" || kind === "agentrouter";
 }
 
-export function fetchCatalog(): Promise<ModelCapabilities[]> {
-  const cached = cache.get("openrouter");
-  if (cached) return cached;
-  const task = fetch("https://openrouter.ai/api/v1/models")
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`catalog ${response.status}`);
-      const json: unknown = await response.json();
-      return toCapabilities(catalogSchema.parse(json));
-    })
-    .catch((error) => {
-      cache.delete("openrouter");
-      throw error;
-    });
-  cache.set("openrouter", task);
-  return task;
+export function parseBackendCaps(raw: unknown): ModelCapabilities[] {
+  const rows = backendCatalogSchema.parse(raw);
+  return rows.map((m) => ({
+    id: m.id,
+    contextLength: m.context_length ?? null,
+    supportsTools: m.supports_tools ?? null,
+    reasoningEfforts:
+      m.efforts ?? (m.supports_reasoning ? [...GATEWAY_EFFORTS] : null),
+    reasoningMandatory: m.mandatory ?? false,
+  }));
 }
 
 export function lookupEfforts(

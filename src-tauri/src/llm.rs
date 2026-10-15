@@ -1,6 +1,8 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tokio::sync::Notify;
@@ -149,33 +151,6 @@ fn agentrouter_headers(request: reqwest::RequestBuilder, url: &str) -> reqwest::
     }
 }
 
-fn parse_models_list(value: &serde_json::Value) -> Vec<String> {
-    let mut models: Vec<String> = value
-        .get("data")
-        .and_then(|data| data.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let id = item.get("id")?.as_str()?;
-                    if let Some(types) = item
-                        .get("supported_endpoint_types")
-                        .and_then(|t| t.as_array())
-                    {
-                        let openai = types.iter().any(|t| t.as_str() == Some("openai"));
-                        if !openai {
-                            return None;
-                        }
-                    }
-                    Some(id.to_string())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    models.sort();
-    models
-}
-
 async fn error_body(resp: reqwest::Response) -> String {
     let status = resp.status();
     match resp.text().await {
@@ -202,6 +177,131 @@ fn is_retryable_tools_error(error: &AppError) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelCaps {
+    pub id: String,
+    pub context_length: Option<u64>,
+    pub supports_tools: Option<bool>,
+    pub supports_reasoning: Option<bool>,
+    pub efforts: Option<Vec<String>>,
+    pub mandatory: bool,
+}
+
+fn parse_models_caps(value: &serde_json::Value) -> Vec<ModelCaps> {
+    let mut caps: Vec<ModelCaps> = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id")?.as_str()?;
+                    if let Some(types) = item
+                        .get("supported_endpoint_types")
+                        .and_then(|t| t.as_array())
+                    {
+                        let openai = types.iter().any(|t| t.as_str() == Some("openai"));
+                        if !openai {
+                            return None;
+                        }
+                    }
+                    let params: Option<Vec<&str>> = item
+                        .get("supported_parameters")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect());
+                    let reasoning = item.get("reasoning");
+                    let efforts = reasoning
+                        .and_then(|r| r.get("supported_efforts"))
+                        .and_then(|e| e.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|t| t.as_str().map(str::to_string))
+                                .collect()
+                        });
+                    let has_reasoning_param = params.as_ref().is_some_and(|p| {
+                        p.contains(&"reasoning") || p.contains(&"include_reasoning")
+                    });
+                    Some(ModelCaps {
+                        id: id.to_string(),
+                        context_length: item.get("context_length").and_then(|v| v.as_u64()),
+                        supports_tools: params
+                            .as_ref()
+                            .map(|p| p.contains(&"tools") || p.contains(&"tool_choice")),
+                        supports_reasoning: match (has_reasoning_param, reasoning.is_some()) {
+                            (false, false) if params.is_some() => Some(false),
+                            (false, false) => None,
+                            _ => Some(true),
+                        },
+                        efforts,
+                        mandatory: reasoning
+                            .and_then(|r| r.get("mandatory"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    caps.sort_by(|a, b| a.id.cmp(&b.id));
+    caps
+}
+
+const CAPS_TTL: Duration = Duration::from_secs(86_400);
+
+type CapsEntry = (Instant, Vec<ModelCaps>);
+
+fn caps_cache() -> &'static Mutex<HashMap<String, CapsEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CapsEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn fetch_model_caps(
+    client: &reqwest::Client,
+    base_url: &str,
+    key: &str,
+) -> AppResult<Vec<ModelCaps>> {
+    let fresh = caps_cache()
+        .lock()
+        .expect("caps cache lock")
+        .get(base_url)
+        .filter(|(at, _)| at.elapsed() < CAPS_TTL)
+        .map(|(_, caps)| caps.clone());
+    if let Some(caps) = fresh {
+        return Ok(caps);
+    }
+    let url = endpoint(base_url, "models");
+    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), &url);
+    let resp = request.send().await?;
+    if !resp.status().is_success() {
+        if let Some((_, stale)) = caps_cache()
+            .lock()
+            .expect("caps cache lock")
+            .get(base_url)
+            .cloned()
+        {
+            return Ok(stale);
+        }
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+    let value: serde_json::Value = resp.json().await?;
+    let caps = parse_models_caps(&value);
+    caps_cache()
+        .lock()
+        .expect("caps cache lock")
+        .insert(base_url.to_string(), (Instant::now(), caps.clone()));
+    Ok(caps)
+}
+
+#[tauri::command]
+pub async fn list_model_caps(
+    base_url: String,
+    connection_id: String,
+    client: State<'_, reqwest::Client>,
+) -> AppResult<Vec<ModelCaps>> {
+    let key = vault::get_api_key(&connection_id)?;
+    fetch_model_caps(&client, &base_url, &key).await
+}
+
 #[tauri::command]
 pub async fn list_models(
     base_url: String,
@@ -209,16 +309,11 @@ pub async fn list_models(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let key = vault::get_api_key(&connection_id)?;
-    let url = endpoint(&base_url, "models");
-    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), &url);
-    let resp = request.send().await?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::Upstream(error_body(resp).await));
-    }
-
-    let value: serde_json::Value = resp.json().await?;
-    Ok(parse_models_list(&value))
+    Ok(fetch_model_caps(&client, &base_url, &key)
+        .await?
+        .into_iter()
+        .map(|caps| caps.id)
+        .collect())
 }
 
 #[tauri::command]
@@ -1136,8 +1231,12 @@ mod tests {
                 {"id": "deepseek-v4-flash"}
             ]
         });
+        let ids: Vec<String> = parse_models_caps(&value)
+            .into_iter()
+            .map(|caps| caps.id)
+            .collect();
         assert_eq!(
-            parse_models_list(&value),
+            ids,
             vec![
                 "claude-opus-5-5".to_string(),
                 "deepseek-v4-flash".to_string(),
@@ -1152,10 +1251,67 @@ mod tests {
             "object": "list",
             "data": [{"id": "b"}, {"id": "a"}]
         });
+        let ids: Vec<String> = parse_models_caps(&value)
+            .into_iter()
+            .map(|caps| caps.id)
+            .collect();
+        assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+        assert!(parse_models_caps(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn parses_openrouter_caps_shape() {
+        let value = serde_json::json!({
+            "data": [
+                {
+                    "id": "b-model",
+                    "context_length": 200000,
+                    "supported_parameters": ["tools", "reasoning"],
+                    "reasoning": {
+                        "supported_efforts": ["low", "medium"],
+                        "mandatory": true
+                    }
+                },
+                {
+                    "id": "a-model",
+                    "context_length": 128000,
+                    "supported_parameters": ["temperature"]
+                },
+                {"id": "plain"}
+            ]
+        });
+        let caps = parse_models_caps(&value);
+        assert_eq!(caps.len(), 3);
+        assert_eq!(caps[0].id, "a-model");
+        assert_eq!(caps[0].supports_tools, Some(false));
+        assert_eq!(caps[0].supports_reasoning, Some(false));
+        assert_eq!(caps[1].id, "b-model");
+        assert_eq!(caps[1].context_length, Some(200000));
+        assert_eq!(caps[1].supports_tools, Some(true));
+        assert_eq!(caps[1].supports_reasoning, Some(true));
         assert_eq!(
-            parse_models_list(&value),
-            vec!["a".to_string(), "b".to_string()]
+            caps[1].efforts,
+            Some(vec!["low".to_string(), "medium".to_string()])
         );
-        assert!(parse_models_list(&serde_json::json!({})).is_empty());
+        assert!(caps[1].mandatory);
+        assert_eq!(caps[2].id, "plain");
+        assert_eq!(caps[2].supports_tools, None);
+        assert_eq!(caps[2].supports_reasoning, None);
+    }
+
+    #[test]
+    fn parses_agentrouter_caps_shape() {
+        let value = serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": "chat-model", "supported_endpoint_types": ["openai"]},
+                {"id": "voice", "supported_endpoint_types": ["audio"]}
+            ]
+        });
+        let caps = parse_models_caps(&value);
+        assert_eq!(caps.len(), 1);
+        assert_eq!(caps[0].id, "chat-model");
+        assert_eq!(caps[0].supports_tools, None);
+        assert!(parse_models_caps(&serde_json::json!({})).is_empty());
     }
 }

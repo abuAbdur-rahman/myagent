@@ -12,9 +12,9 @@ import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
 import {
-  fetchCatalog,
   lookupContextLength,
   lookupEfforts,
+  lookupSupportsTools,
   type ModelCapabilities,
 } from "./catalog";
 import { toast } from "./toast";
@@ -561,12 +561,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [ready, activeConnection, refreshModels]);
 
   useEffect(() => {
-    if (!activeConnection || activeConnection.kind !== "openrouter") {
+    if (!activeConnection) {
       setCatalog(null);
       return;
     }
     let live = true;
-    fetchCatalog()
+    api
+      .listModelCaps(activeConnection.base_url, activeConnection.id)
       .then((rows) => {
         if (live) setCatalog(rows);
       })
@@ -664,6 +665,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     supportedEffortsRef.current = supportedEfforts;
   }, [supportedEfforts]);
+  const catalogRef = useRef<ModelCapabilities[] | null>(null);
+  useEffect(() => {
+    catalogRef.current = catalog;
+  }, [catalog]);
 
   const modelContextLimit = useMemo(
     () => (model ? (lookupContextLength(catalog, model) ?? null) : null),
@@ -714,6 +719,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const supported = supportedEffortsRef.current;
     if (supported && !supported.includes(selected)) return null;
     return selected;
+  }, []);
+
+  const resolveTools = useCallback((): boolean => {
+    const connection = connRef.current;
+    const modelName = modelRef.current;
+    if (!connection || !modelName) return false;
+    return lookupSupportsTools(catalogRef.current, modelName, connection.kind);
   }, []);
 
   const selectProject = useCallback(
@@ -966,7 +978,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             connectionId: connection.id,
             model: modelName,
             messages: payload,
-            enableTools: true,
+            enableTools: resolveTools(),
             projectId: projectRef.current?.id ?? null,
             conversationId,
             reasoningEffort: resolveEffort(),
@@ -1086,7 +1098,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [finalize, openArtifact, resolveEffort],
+    [finalize, openArtifact, resolveEffort, resolveTools],
   );
 
   const maybeGenerateTitle = useCallback(
