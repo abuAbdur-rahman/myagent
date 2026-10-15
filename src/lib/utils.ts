@@ -36,3 +36,15 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   }
 }
+
+export async function rollbackConnection(
+  remove: (id: string) => Promise<void>,
+  id: string | null,
+): Promise<void> {
+  if (!id) return;
+  try {
+    await remove(id);
+  } catch (cause) {
+    console.warn("provider rollback failed", cause);
+  }
+}

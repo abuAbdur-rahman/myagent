@@ -5,8 +5,7 @@ import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import { DEFAULT_BASE_URLS, connectionInputSchema, type ProviderKind } from "../lib/types";
 import { Button, Input, Spinner } from "./ui";
-import { errorText } from "../lib/utils";
-import { cn } from "../lib/utils";
+import { cn, errorText, rollbackConnection } from "../lib/utils";
 
 const SUGGESTIONS = [
   "Explain how closures work in JavaScript",
@@ -87,11 +86,7 @@ export function OnboardingDialog() {
       setStatus(`Connected · ${found.length} models found`);
       setTimeout(() => setStep(2), 700);
     } catch (e) {
-      if (savedId) {
-        await removeConnection(savedId).catch((cause) =>
-          console.warn("provider rollback failed", cause),
-        );
-      }
+      await rollbackConnection(removeConnection, savedId);
       setStatus(errorText(e));
     } finally {
       setBusy(false);
