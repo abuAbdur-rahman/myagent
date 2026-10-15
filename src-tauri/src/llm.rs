@@ -171,7 +171,7 @@ pub async fn list_models(
     let mut request = client.get(endpoint(&base_url, "models")).bearer_auth(key);
     if base_url.contains("agentrouter.org") {
         request = request
-            .header("User-Agent", "myagent/0.1.5")
+            .header("User-Agent", "myagent/0.1.6")
             .header("originator", "myagent");
     }
     let resp = request.send().await?;

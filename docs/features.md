@@ -130,7 +130,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Missing
+- **Status:** Partial (0.1.6: FTS5 + sidebar box + filters, no test yet)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.
@@ -150,7 +150,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Move a chat into a folder and back.
 
 ## B7. Tags
-- **Status:** Missing
+- **Status:** Partial (0.1.6: manual add/remove + sidebar filter)
 - **Ref:** † OpenWebUI tags are keyword labels, searchable.
 - **Build:** `chat_tags(chat_id, tag)`. Manual add/remove first; auto-suggest from the title model later.
 - **Done:** Filtering by a tag returns only tagged chats.
@@ -162,20 +162,20 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** After closing, nothing about it exists on disk.
 
 ## B9. Export
-- **Status:** Partial
+- **Status:** Partial (0.1.6: markdown + lossless JSON single chat)
 - **Ref:** † OpenWebUI exports chats as JSON including the tree, tags and pinned state.
 - **Build:** Markdown (readable, active branch only) and JSON (lossless, all branches). Single chat and all chats.
 - **Done:** JSON export re-imports to an identical chat.
 
 ## B10. Import
-- **Status:** Missing
+- **Status:** Partial (0.1.6: single-chat import, needs round-trip test)
 - **Ref:** † OpenWebUI imports its own JSON and can convert other platforms' exports.
 - **Build:** Import MyAgents JSON only. Validate schema, generate new ids, never overwrite.
 - **Not:** Other platforms' formats.
 - **Done:** Round trip with B9 passes.
 
 ## B11. Delete data
-- **Status:** Partial (chats only)
+- **Status:** Partial (0.1.6: delete-everything added, needs filesystem test)
 - **Ref:** † OpenWebUI lets you delete one chat or clear all history from settings.
 - **Build:** Delete chat (including spill files and attachments for it). "Delete everything" removes DB, attachments, spill files, caches, then confirms. Memory included, with a warning.
 - **Done:** A test against the real filesystem finds no leftover files.
