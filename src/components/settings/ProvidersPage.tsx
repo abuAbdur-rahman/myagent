@@ -89,7 +89,11 @@ function ProviderDialog({
       setStatus(`Connected · ${models.length} models found`);
       if (!testFirst) onClose();
     } catch (e) {
-      if (isNew && savedId) await removeConnection(savedId).catch(() => undefined);
+      if (isNew && savedId) {
+        await removeConnection(savedId).catch((cause) =>
+          console.warn("provider rollback failed", cause),
+        );
+      }
       const raw = errorText(e);
       const { hint } = api.classifyStreamError(raw);
       setStatus(hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300));

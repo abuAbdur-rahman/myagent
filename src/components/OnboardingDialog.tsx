@@ -87,7 +87,11 @@ export function OnboardingDialog() {
       setStatus(`Connected · ${found.length} models found`);
       setTimeout(() => setStep(2), 700);
     } catch (e) {
-      if (savedId) await removeConnection(savedId).catch(() => undefined);
+      if (savedId) {
+        await removeConnection(savedId).catch((cause) =>
+          console.warn("provider rollback failed", cause),
+        );
+      }
       setStatus(errorText(e));
     } finally {
       setBusy(false);
