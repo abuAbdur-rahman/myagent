@@ -16,9 +16,16 @@ import type {
   SearchHit,
   SearchQuery,
   Tag,
+  Todo,
   ToolLogEntry,
 } from "./types";
-import { declaredArtifactSchema, searchQuerySchema, tagSchema, toolLogEntrySchema } from "./types";
+import {
+  declaredArtifactSchema,
+  searchQuerySchema,
+  tagSchema,
+  todoSchema,
+  toolLogEntrySchema,
+} from "./types";
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -152,12 +159,14 @@ export async function deleteConversation(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [id]);
   await db.execute("DELETE FROM chat_tags WHERE chat_id = $1", [id]);
+  await db.execute("DELETE FROM todos WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
 }
 
 export async function wipeAll(): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM chat_tags");
+  await db.execute("DELETE FROM todos");
   await db.execute("DELETE FROM messages");
   await db.execute("DELETE FROM conversations");
   await db.execute("DELETE FROM memories");
@@ -213,6 +222,18 @@ export async function removeTag(conversationId: string, tag: string): Promise<vo
     conversationId,
     tag,
   ]);
+}
+
+export async function listTodos(conversationId: string): Promise<Todo[]> {
+  const db = await getDb();
+  const rows = await db.select<unknown[]>(
+    "SELECT * FROM todos WHERE chat_id = $1 ORDER BY position ASC, created_at ASC",
+    [conversationId],
+  );
+  return rows
+    .map((row) => todoSchema.safeParse(row))
+    .filter((parsed) => parsed.success)
+    .map((parsed) => parsed.data);
 }
 
 export async function listMessages(conversationId: string): Promise<Message[]> {
@@ -527,6 +548,7 @@ export async function truncateConversation(
 export async function clearConversation(conversationId: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [conversationId]);
+  await db.execute("DELETE FROM todos WHERE chat_id = $1", [conversationId]);
 }
 
 export async function branchConversation(

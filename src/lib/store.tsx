@@ -32,6 +32,7 @@ import type {
   Project,
   ProjectInput,
   Message,
+  Todo,
   ToolLogEntry,
 } from "./types";
 
@@ -183,6 +184,8 @@ interface AppContextValue {
   setSearchBackend: (value: "tavily" | "searxng") => void;
   searchEndpoint: string;
   setSearchEndpoint: (value: string) => void;
+  todos: Todo[];
+  refreshTodos: (conversationId: string | null) => Promise<void>;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
   panelTab: PanelTab;
@@ -247,6 +250,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -831,12 +835,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setView("chat");
     if (!id) {
       setMessages([]);
+      setTodos([]);
       return;
     }
     const rows = await db.listMessages(id);
     if (convIdRef.current !== id) return;
     setMessages(rows);
-    const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
+    setTodos(await db.listTodos(id));    const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
     const restored = db.parseToolLog(lastAssistant?.tool_log).map((entry) =>
       entry.status === "running"
         ? {
@@ -853,9 +858,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveConversationId(null);
     setActiveProjectId(null);
     setMessages([]);
+    setTodos([]);
     setToolLog([]);
     setError(null);
     setView("chat");
+  }, []);
+
+  const refreshTodos = useCallback(async (conversationId: string | null) => {
+    if (!conversationId) {
+      setTodos([]);
+      return;
+    }
+    setTodos(await db.listTodos(conversationId));
   }, []);
 
   const removeConversation = useCallback(
@@ -1108,6 +1122,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }
           },
         );
+        await refreshTodos(conversationId);
       } catch (e) {
         if (requestIdRef.current === requestId) {
           reportError(e);
@@ -1128,7 +1143,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [finalize, openArtifact, resolveEffort, resolveTools, searchBackend, searchEndpoint],
+    [finalize, openArtifact, resolveEffort, resolveTools, refreshTodos, searchBackend, searchEndpoint],
   );
 
   const maybeGenerateTitle = useCallback(
@@ -1355,6 +1370,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setConversations((prev) => [created, ...prev]);
           setActiveConversationId(created.id);
           setMessages([]);
+          setTodos([]);
         }
 
         const userMsg = await db.addMessage(conversationId, "user", text);
@@ -1725,6 +1741,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSearchBackend,
     searchEndpoint,
     setSearchEndpoint,
+    todos,
+    refreshTodos,
     panelOpen,
     panelArtifact,
     panelTab,

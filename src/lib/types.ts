@@ -41,6 +41,20 @@ export const declaredArtifactSchema = z.object({
 });
 export type DeclaredArtifact = z.infer<typeof declaredArtifactSchema>;
 
+export const todoStatusSchema = z.enum(["pending", "in_progress", "completed", "cancelled"]);
+export type TodoStatus = z.infer<typeof todoStatusSchema>;
+
+export const todoSchema = z.object({
+  id: z.string(),
+  chat_id: z.string(),
+  text: z.string(),
+  status: todoStatusSchema,
+  position: z.number(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+export type Todo = z.infer<typeof todoSchema>;
+
 const messageSchema = z.object({
   id: z.string(),
   conversation_id: z.string(),

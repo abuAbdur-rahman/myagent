@@ -13,6 +13,7 @@ const OUTPUT_CAP: usize = 32 * 1024;
 const ARTIFACT_CAP: usize = 200_000;
 const COMMAND_CAP: usize = 8_000;
 const MEMORY_CAP: usize = 2_000;
+const TODO_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "cancelled"];
 
 pub struct ArtifactPayload {
     pub title: String,
@@ -222,6 +223,49 @@ pub fn tool_specs() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "todo_write",
+                "description": "Replace the current chat's visible task checklist. Use for multi-step work so the user can see progress. Pass the full list each time; statuses are pending, in_progress, completed, cancelled.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "todos": {
+                            "type": "array",
+                            "description": "The complete ordered checklist.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "text": { "type": "string" },
+                                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"] },
+                                },
+                                "required": ["text"],
+                                "additionalProperties": false,
+                            },
+                        },
+                    },
+                    "required": ["todos"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "todo_set",
+                "description": "Change the status of one checklist item by its 1-based index as shown in the current checklist.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer", "minimum": 1 },
+                        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"] },
+                    },
+                    "required": ["index", "status"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "ask_user",                "description": "Ask the user a question with fixed options and an optional free-text answer. Use when a choice blocks progress (ambiguous request, destructive scope, missing decision). The user's answer returns as the tool result.",
                 "parameters": {
                     "type": "object",
@@ -313,6 +357,19 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
                 .take(120)
                 .collect();
             format!("Search: {query}")
+        }
+        "todo_write" => {
+            let count = args
+                .get("todos")
+                .and_then(|v| v.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            format!("Update checklist ({count} items)")
+        }
+        "todo_set" => {
+            let index = args.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+            let status = arg_str(args, "status").unwrap_or_default();
+            format!("Checklist #{index} -> {status}")
         }
         _ => name.to_string(),
     }
@@ -579,6 +636,102 @@ pub async fn execute(
             })
         }
         "ask_user" => Err("ask_user is answered by the agent loop".to_string()),
+        "todo_write" => {
+            let conversation = conversation_id.ok_or("no active chat for a checklist")?;
+            let items = args
+                .get("todos")
+                .and_then(|v| v.as_array())
+                .ok_or("missing todos")?;
+            if items.len() > 50 {
+                return Err("too many todos (max 50)".to_string());
+            }
+            let mut parsed_items: Vec<(String, String)> = Vec::new();
+            for item in items {
+                let text = item
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or("each todo needs non-empty text")?
+                    .to_string();
+                if text.chars().count() > 500 {
+                    return Err("todo text too long (max 500 chars)".to_string());
+                }
+                let status = item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pending");
+                if !TODO_STATUSES.contains(&status) {
+                    return Err(
+                        "status must be pending, in_progress, completed or cancelled".to_string(),
+                    );
+                }
+                parsed_items.push((text, status.to_string()));
+            }
+            let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+            sqlx::query("DELETE FROM todos WHERE chat_id = ?")
+                .bind(conversation)
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("database: {e}"))?;
+            let now = now_millis();
+            for (index, (text, status)) in parsed_items.iter().enumerate() {
+                sqlx::query(
+                    "INSERT INTO todos (id, chat_id, text, status, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(conversation)
+                .bind(text)
+                .bind(status)
+                .bind(index as i64)
+                .bind(now)
+                .bind(now)
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("database: {e}"))?;
+            }
+            Ok(ExecOutput {
+                output: render_todos(&pool, conversation).await?,
+                artifact: None,
+            })
+        }
+        "todo_set" => {
+            let conversation = conversation_id.ok_or("no active chat for a checklist")?;
+            let index = args
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .filter(|v| *v >= 1)
+                .ok_or("index must be 1 or greater")?;
+            let status = arg_str(&args, "status").ok_or("missing status")?;
+            if !TODO_STATUSES.contains(&status.as_str()) {
+                return Err(
+                    "status must be pending, in_progress, completed or cancelled".to_string(),
+                );
+            }
+            let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+            let rows: Vec<(String,)> = sqlx::query_as(
+                "SELECT id FROM todos WHERE chat_id = ? ORDER BY position ASC, created_at ASC",
+            )
+            .bind(conversation)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| format!("database: {e}"))?;
+            let id = rows
+                .get(index as usize - 1)
+                .map(|(id,)| id.clone())
+                .ok_or("index is out of range for this checklist")?;
+            sqlx::query("UPDATE todos SET status = ?, updated_at = ? WHERE id = ?")
+                .bind(&status)
+                .bind(now_millis())
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("database: {e}"))?;
+            Ok(ExecOutput {
+                output: render_todos(&pool, conversation).await?,
+                artifact: None,
+            })
+        }
         "web_fetch" => {
             let url = arg_str(&args, "url").ok_or("missing url")?;
             if url.len() > 2048 {
@@ -604,6 +757,34 @@ pub async fn execute(
         }
         other => Err(format!("unknown tool: {other}")),
     }
+}
+
+async fn render_todos(pool: &SqlitePool, conversation: &str) -> Result<String, String> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT text, status FROM todos WHERE chat_id = ? ORDER BY position ASC, created_at ASC",
+    )
+    .bind(conversation)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("database: {e}"))?;
+    if rows.is_empty() {
+        return Ok("Checklist cleared.".to_string());
+    }
+    let done = rows
+        .iter()
+        .filter(|(_, status)| status == "completed")
+        .count();
+    let mut out = format!("Checklist ({done}/{} done):\n", rows.len());
+    for (index, (text, status)) in rows.iter().enumerate() {
+        let mark = match status.as_str() {
+            "completed" => "x",
+            "in_progress" => "~",
+            "cancelled" => "-",
+            _ => " ",
+        };
+        out.push_str(&format!("{}. [{mark}] {text}\n", index + 1));
+    }
+    Ok(out.trim_end().to_string())
 }
 
 pub async fn log_audit(

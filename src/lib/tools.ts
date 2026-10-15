@@ -6,6 +6,8 @@ const KNOWN_TOOLS = [
   "save_artifact",
   "web_fetch",
   "web_search",
+  "todo_write",
+  "todo_set",
 ] as const;
 
 type KnownToolName = (typeof KNOWN_TOOLS)[number];

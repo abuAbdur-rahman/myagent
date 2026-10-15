@@ -9,6 +9,7 @@ import {
   FileText,
   GitBranch,
   Globe,
+  ListChecks,
   Pencil,
   RefreshCw,
   Search,
@@ -78,6 +79,9 @@ function ToolIcon({ name }: { name: string }) {
       return <Globe {...props} />;
     case "web_search":
       return <Search {...props} />;
+    case "todo_write":
+    case "todo_set":
+      return <ListChecks {...props} />;
     default:
       return <Wrench {...props} />;
   }

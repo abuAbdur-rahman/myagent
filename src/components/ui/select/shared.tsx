@@ -8,7 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronRight as ChevronRightIcon, Plus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight as ChevronRightIcon } from "lucide-react";
 import { cn } from "../../../lib/utils";
 
 export interface Option<T extends string = string> {
@@ -45,9 +45,6 @@ export const fieldCls = (kind: "select" | "combo", size: "sm" | "md", extra?: st
       : "cursor-text data-[multi]:py-1 focus-within:border-ui-accent focus-within:ring-[3px] focus-within:ring-ui-accent/25 data-[invalid]:focus-within:border-ui-danger data-[invalid]:focus-within:ring-ui-danger/25 [&:not([data-invalid]):not(:focus-within):not([data-disabled]):hover]:border-ui-line-hover",
     extra,
   );
-
-export const iconBtn =
-  "inline-flex size-6 items-center justify-center rounded-md border-0 bg-transparent p-0 text-inherit cursor-pointer hover:enabled:bg-ui-hover hover:enabled:text-ui-fg disabled:cursor-not-allowed";
 
 export function buildRows<T extends string>(opts: Option<T>[]): Row<T>[] {
   const rows: Row<T>[] = [];
@@ -285,8 +282,6 @@ export function Chevron({ open, className }: { open?: boolean; className?: strin
   );
 }
 export const CheckIcon = () => <Check size={16} strokeWidth={1.6} aria-hidden />;
-export const XIcon = () => <X size={16} strokeWidth={1.6} aria-hidden />;
-export const PlusIcon = () => <Plus size={16} strokeWidth={1.6} aria-hidden />;
 export const ChevronRight = () => <ChevronRightIcon size={16} strokeWidth={1.6} aria-hidden />;
 export const Spinner = () => (
   <span

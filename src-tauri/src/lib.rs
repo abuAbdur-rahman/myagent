@@ -200,6 +200,23 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 14,
+            description: "add_todos",
+            sql: "
+                CREATE TABLE IF NOT EXISTS todos (
+                    id TEXT PRIMARY KEY,
+                    chat_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    position INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_todos_chat ON todos(chat_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -345,5 +362,21 @@ mod migration_tests {
                 .expect("audit readable")
                 .get("d");
         assert_eq!(detail, "example.com");
+    }
+
+    #[tokio::test]
+    async fn todos_are_per_chat() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO todos (id, chat_id, text, status, position, created_at, updated_at) VALUES ('t1', 'c1', 'first', 'pending', 0, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("todo row");
+        let count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM todos WHERE chat_id = 'c1'")
+            .fetch_one(&pool)
+            .await
+            .expect("todos readable")
+            .get("c");
+        assert_eq!(count, 1);
     }
 }
