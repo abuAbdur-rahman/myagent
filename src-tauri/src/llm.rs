@@ -804,6 +804,17 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             return vec![command.to_string()];
         }
     }
+    if name == "web_fetch" {
+        if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
+            if let Ok(parsed) = reqwest::Url::parse(url.trim()) {
+                if let Some(host) = parsed.host_str() {
+                    let bare = host.trim_start_matches('[').trim_end_matches(']');
+                    return vec![bare.to_string()];
+                }
+            }
+            return vec![url.trim().to_string()];
+        }
+    }
     vec!["*".to_string()]
 }
 
@@ -1135,6 +1146,14 @@ async fn run_agentic(
                 .await
                 .unwrap_or(permissions::Effect::Ask);
             if decision == permissions::Effect::Deny {
+                tools::log_audit(
+                    app,
+                    req.conversation_id.as_deref(),
+                    &name,
+                    "deny(rule)",
+                    &resources.join("\n"),
+                )
+                .await;
                 let _ = on_event.send(StreamEvent::ToolResult {
                     id: id.clone(),
                     ok: false,
@@ -1172,6 +1191,14 @@ async fn run_agentic(
                     _ = cancel.notified() => return Ok(()),
                 };
                 if reply == ApprovalReply::Deny {
+                    tools::log_audit(
+                        app,
+                        req.conversation_id.as_deref(),
+                        &name,
+                        "deny(user)",
+                        &resources.join("\n"),
+                    )
+                    .await;
                     let _ = on_event.send(StreamEvent::ToolResult {
                         id: id.clone(),
                         ok: false,
@@ -1180,6 +1207,18 @@ async fn run_agentic(
                     history.push(tool_text_message(&id, "denied by user"));
                     continue;
                 }
+                tools::log_audit(
+                    app,
+                    req.conversation_id.as_deref(),
+                    &name,
+                    if reply == ApprovalReply::Always {
+                        "always"
+                    } else {
+                        "once"
+                    },
+                    &resources.join("\n"),
+                )
+                .await;
             }
 
             if name == "ask_user" {

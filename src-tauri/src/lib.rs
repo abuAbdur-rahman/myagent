@@ -5,6 +5,7 @@ mod sse;
 mod state;
 mod tools;
 mod vault;
+mod webfetch;
 
 use std::time::Duration;
 
@@ -182,6 +183,22 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN model TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "add_audit_log",
+            sql: "
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id TEXT PRIMARY KEY,
+                    ts INTEGER NOT NULL,
+                    conversation_id TEXT,
+                    tool TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_log_conversation ON audit_log(conversation_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -310,5 +327,22 @@ mod migration_tests {
             .execute(&pool)
             .await;
         assert!(dup.is_err(), "duplicate chat tag rejected");
+    }
+
+    #[tokio::test]
+    async fn audit_log_stores_decision_rows() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO audit_log (id, ts, conversation_id, tool, decision, detail) VALUES ('a1', 7, 'c1', 'web_fetch', 'once', 'example.com')")
+            .execute(&pool)
+            .await
+            .expect("audit row");
+        let detail: String =
+            sqlx::query("SELECT detail AS d FROM audit_log WHERE tool = 'web_fetch'")
+                .fetch_one(&pool)
+                .await
+                .expect("audit readable")
+                .get("d");
+        assert_eq!(detail, "example.com");
     }
 }

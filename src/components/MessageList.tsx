@@ -8,6 +8,7 @@ import {
   FileCode,
   FileText,
   GitBranch,
+  Globe,
   Pencil,
   RefreshCw,
   Terminal,
@@ -72,6 +73,8 @@ function ToolIcon({ name }: { name: string }) {
     case "remember":
     case "recall_memory":
       return <FileText {...props} />;
+    case "web_fetch":
+      return <Globe {...props} />;
     default:
       return <Wrench {...props} />;
   }
