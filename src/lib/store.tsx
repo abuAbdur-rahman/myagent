@@ -20,6 +20,7 @@ import {
 import { toast } from "./toast";
 import { memoryInputSchema } from "./types";
 import { newId } from "./utils";
+import { deriveFallbackTitle } from "./title";
 import type {
   Connection,
   ConnectionInput,
@@ -1195,11 +1196,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           console.warn("title generation failed", cause);
         }
       }
-      if (!trimmed) return;
-      if (
-        conversationsRef.current.find((c) => c.id === conversationId)?.title !==
-        provisionalTitle
-      ) {
+      if (!trimmed) {
+        toast("Couldn't generate a title for this chat.");
+        return;
+      }
+      const fresh = (await db.listConversations()).find((c) => c.id === conversationId);
+      if (!fresh || fresh.title !== provisionalTitle) {
         return;
       }
       await db.touchConversation(conversationId, { title: trimmed });
@@ -1399,7 +1401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const current = conversations.find((c) => c.id === conversationId);
         if (!current || current.title === "New chat") {
-          provisionalTitle = text.slice(0, 48) || "New chat";
+          provisionalTitle = deriveFallbackTitle(text);
           await db.touchConversation(conversationId, {
             title: provisionalTitle,
             model: modelRef.current,
@@ -1615,7 +1617,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const created = await db.createConversation(connection.id, modelRef.current, projectId);
         const userMsg = await db.addMessage(created.id, "user", trimmed);
         const assistantMsg = await db.addMessage(created.id, "assistant", "", modelRef.current);
-        const title = trimmed.slice(0, 48) || "New chat";
+        const title = deriveFallbackTitle(trimmed);
         await db.touchConversation(created.id, { title });
         setConversations((prev) => [{ ...created, title }, ...prev]);
         setActiveConversationId(created.id);

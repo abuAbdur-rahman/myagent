@@ -171,6 +171,22 @@ fn truncate_preview(text: &str) -> String {
     truncate_chars(text.trim(), 500)
 }
 
+fn message_text(content: &serde_json::Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.to_string();
+    }
+    if let Some(parts) = content.as_array() {
+        let mut out = String::new();
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|value| value.as_str()) {
+                out.push_str(text);
+            }
+        }
+        return out;
+    }
+    String::new()
+}
+
 fn endpoint(base_url: &str, path: &str) -> String {
     format!(
         "{}/{}",
@@ -629,7 +645,7 @@ pub async fn suggest_title(
                 ),
             },
         ],
-        "max_tokens": 512,
+        "max_tokens": 2048,
         "temperature": 0.3,
         "stream": false,
     });
@@ -647,9 +663,7 @@ pub async fn suggest_title(
     .await?;
 
     let value: serde_json::Value = resp.json().await?;
-    let title = value["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
+    let title = message_text(&value["choices"][0]["message"]["content"])
         .trim()
         .trim_matches(|c| c == '"' || c == '\'' || c == '.' || c == ':')
         .trim()
@@ -1895,5 +1909,95 @@ mod tests {
         assert_eq!(pruned[3]["content"], serde_json::json!("working"));
         assert_eq!(pruned[4]["content"], serde_json::json!("fresh output"));
         assert_eq!(pruned[4]["tool_call_id"], serde_json::json!("call-3"));
+    }
+
+    #[test]
+    fn message_text_handles_string_and_parts() {
+        assert_eq!(message_text(&serde_json::json!("hello")), "hello");
+        assert_eq!(
+            message_text(&serde_json::json!([
+                {"type": "text", "text": "Tit"},
+                {"type": "text", "text": "le"}
+            ])),
+            "Title"
+        );
+        assert_eq!(message_text(&serde_json::json!(42)), "");
+    }
+
+    #[tokio::test]
+    #[ignore = "live network; requires AGENTROUTER_KEY"]
+    async fn live_title_generation() {
+        let Ok(key) = std::env::var("AGENTROUTER_KEY") else {
+            panic!("AGENTROUTER_KEY not set");
+        };
+        let client = reqwest::Client::new();
+        let url = endpoint("https://agentrouter.org/v1", "chat/completions");
+        let model =
+            std::env::var("TITLE_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Title this conversation in 6 words or fewer. Plain text only: no quotes, no punctuation, no preamble."},
+                {"role": "user", "content": "User asked: what is two plus two?\n\nAssistant answered (excerpt): Four."}
+            ],
+            "max_tokens": 512,
+            "temperature": 0.3,
+            "stream": false
+        });
+        let cancel = Notify::new();
+        let resp = post_with_retry(
+            &client,
+            &url,
+            &key,
+            &body,
+            &cancel,
+            None,
+            Some("agentrouter"),
+        )
+        .await
+        .expect("title request");
+        let value: serde_json::Value = resp.json().await.expect("title json");
+        let title = value["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        eprintln!("LIVE TITLE = {title:?}");
+        assert!(!title.is_empty(), "provider returned an empty title");
+    }
+
+    #[tokio::test]
+    #[ignore = "live network; requires AGENTROUTER_KEY"]
+    async fn live_chat_probe() {
+        let Ok(key) = std::env::var("AGENTROUTER_KEY") else {
+            panic!("AGENTROUTER_KEY not set");
+        };
+        let client = reqwest::Client::new();
+        let url = endpoint("https://agentrouter.org/v1", "chat/completions");
+        let model =
+            std::env::var("TITLE_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "say hi"}],
+            "stream": false
+        });
+        let cancel = Notify::new();
+        let resp = post_with_retry(
+            &client,
+            &url,
+            &key,
+            &body,
+            &cancel,
+            None,
+            Some("agentrouter"),
+        )
+        .await
+        .expect("chat request");
+        let value: serde_json::Value = resp.json().await.expect("chat json");
+        let content = value["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("");
+        eprintln!("LIVE CHAT = {content:?}");
+        assert!(!content.trim().is_empty());
     }
 }

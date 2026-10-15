@@ -91,7 +91,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Edit never removes the old version.
 
 ## A13. Auto titles
-- **Status:** Have (0.1.5: placeholder first, AI title with default-model fallback)
+- **Status:** Have (0.2.1: AI title hardened — bigger token budget, string-or-parts content, DB-authoritative guard, clean fallback)
 - **Ref:** † OpenWebUI generates titles (and tags) with a task model, without bumping the chat's activity time.
 - **Build:** After the first assistant reply, ask a cheap model for a 3-6 word title. Fall back to the first line of the user message. Never block the UI.
 - **Not:** Tags and follow-up suggestions (see B7).
