@@ -110,6 +110,7 @@ interface AppContextValue {
     limit: number;
     pct: number;
     real: boolean;
+    limitEstimated: boolean;
     lastIn: number | null;
     lastOut: number | null;
   };
@@ -697,6 +698,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         limit,
         pct: Math.min(100, Math.round((tokens / limit) * 100)),
         real: true,
+        limitEstimated: modelContextLimit == null,
         lastIn: lastUsage.prompt_tokens ?? null,
         lastOut: lastUsage.completion_tokens ?? null,
       };
@@ -708,6 +710,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         limit,
       ),
       real: false,
+      limitEstimated: modelContextLimit == null,
       lastIn: null,
       lastOut: null,
     };

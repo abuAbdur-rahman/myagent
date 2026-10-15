@@ -38,24 +38,24 @@ export function ContextBar() {
     );
   }
 
-  const { tokens, limit, pct, real, lastIn, lastOut } = contextInfo;
+  const { tokens, limit, pct, real, limitEstimated, lastIn, lastOut } = contextInfo;
 
   let labelClass = "";
   if (pct > 90) {
     labelClass = "text-danger";
-  } else if (pct > 70) {
+  } else if (pct >= 80) {
     labelClass = "text-warn";
   }
 
   let fillClass = "bg-accent";
   if (pct > 90) {
     fillClass = "bg-danger";
-  } else if (pct > 70) {
+  } else if (pct >= 80) {
     fillClass = "bg-warn";
   }
 
   const title = real
-    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`
+    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported${limitEstimated ? ", limit estimated" : ""})`
     : `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
 
   const usageDetail =

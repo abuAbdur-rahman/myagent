@@ -193,6 +193,23 @@ fn u64_of(value: &Value, keys: &[&str]) -> u64 {
         .unwrap_or(0)
 }
 
+pub fn normalize_usage(usage: &Value) -> Usage {
+    let prompt = u64_of(
+        usage,
+        &["prompt_tokens", "input_tokens", "prompt_eval_count"],
+    );
+    let completion = u64_of(usage, &["completion_tokens", "output_tokens", "eval_count"]);
+    let total = usage
+        .get("total_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(prompt + completion);
+    Usage {
+        prompt,
+        completion,
+        total,
+    }
+}
+
 pub fn map_chunk(value: &Value) -> ChatChunk {
     let mut chunk = ChatChunk::default();
     if let Some(message) = value.get("error").and_then(|e| e.get("message")) {
@@ -234,11 +251,7 @@ pub fn map_chunk(value: &Value) -> ChatChunk {
         chunk.finish_reason = Some(reason.to_string());
     }
     if let Some(usage) = value.get("usage") {
-        chunk.usage = Some(Usage {
-            prompt: u64_of(usage, &["prompt_tokens", "input_tokens"]),
-            completion: u64_of(usage, &["completion_tokens", "output_tokens"]),
-            total: u64_of(usage, &["total_tokens"]),
-        });
+        chunk.usage = Some(normalize_usage(usage));
     }
     chunk
 }
@@ -392,6 +405,48 @@ mod tests {
             }
         }
         assert_eq!(error.as_deref(), Some("upstream overloaded"));
+    }
+
+    #[test]
+    fn usage_fallback_chain_and_total() {
+        let openai = serde_json::json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        });
+        assert_eq!(
+            normalize_usage(&openai),
+            Usage {
+                prompt: 10,
+                completion: 5,
+                total: 15,
+            }
+        );
+        let ollama_like = serde_json::json!({
+            "prompt_eval_count": 40,
+            "eval_count": 8,
+        });
+        assert_eq!(
+            normalize_usage(&ollama_like),
+            Usage {
+                prompt: 40,
+                completion: 8,
+                total: 48,
+            }
+        );
+        let anthropic_like = serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 120,
+        });
+        assert_eq!(
+            normalize_usage(&anthropic_like),
+            Usage {
+                prompt: 100,
+                completion: 20,
+                total: 120,
+            }
+        );
     }
 
     #[test]

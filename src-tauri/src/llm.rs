@@ -764,6 +764,7 @@ async fn run_agentic(
             "messages": history,
             "tools": tools,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
         apply_optional_params(client, &mut body, req, &key).await;
 
@@ -1030,6 +1031,7 @@ async fn stream_completion(
         "model": req.model,
         "messages": history,
         "stream": true,
+        "stream_options": { "include_usage": true },
     });
     apply_optional_params(client, &mut body, req, &key).await;
 
