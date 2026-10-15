@@ -20,8 +20,16 @@ describe("deriveFallbackTitle", () => {
     expect(deriveFallbackTitle("")).toBe("New chat");
   });
 
-  it("caps the length", () => {
-    const long = "word ".repeat(40);
-    expect(deriveFallbackTitle(long).length).toBeLessThanOrEqual(48);
+  it("strips a message that is only markup", () => {
+    expect(deriveFallbackTitle("```js\nconst x = 1\n```")).toBe("New chat");
+    expect(deriveFallbackTitle("###")).toBe("New chat");
+  });
+
+  it("caps the length without cutting a word", () => {
+    const long = "Understand the implementation of the authentication flow deeply";
+    const title = deriveFallbackTitle(long);
+    expect(title.length).toBeLessThanOrEqual(48);
+    expect(title.endsWith(" ")).toBe(false);
+    expect(long.startsWith(title)).toBe(true);
   });
 });
