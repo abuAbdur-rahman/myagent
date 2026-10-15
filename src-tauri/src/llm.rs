@@ -209,6 +209,61 @@ pub fn cancel_stream(request_id: String, state: State<'_, StreamState>) -> AppRe
     state.cancel(&request_id)
 }
 
+#[derive(Deserialize)]
+pub struct SummaryRequest {
+    pub base_url: String,
+    pub connection_id: String,
+    pub model: String,
+    pub text: String,
+}
+
+fn summary_body(model: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Summarize this chat excerpt for context compaction. Cover: the user's goal, key decisions, files touched, and open tasks. Under 300 words, plain text, no preamble.",
+            },
+            {
+                "role": "user",
+                "content": truncate_chars(text.trim(), 12_000),
+            },
+        ],
+        "max_tokens": 500,
+        "temperature": 0.2,
+        "stream": false,
+    })
+}
+
+#[tauri::command]
+pub async fn summarize(
+    req: SummaryRequest,
+    client: State<'_, reqwest::Client>,
+) -> AppResult<String> {
+    let key = vault::get_api_key(&req.connection_id)?;
+    let cancel = Notify::new();
+    let resp = post_with_retry(
+        &client,
+        &endpoint(&req.base_url, "chat/completions"),
+        &key,
+        &summary_body(&req.model, &req.text),
+        &cancel,
+        None,
+    )
+    .await?;
+    let value: serde_json::Value = resp.json().await.map_err(AppError::from)?;
+    let summary = value["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if summary.is_empty() {
+        return Err(AppError::Upstream("empty summary".to_string()));
+    }
+    Ok(summary.chars().take(2000).collect())
+}
+
 #[tauri::command]
 pub async fn suggest_title(
     req: TitleRequest,
@@ -1003,5 +1058,19 @@ mod tests {
         assert_eq!(guard.note("other::{}".to_string()), 1);
         guard.reset();
         assert_eq!(guard.note("read::{}".to_string()), 1);
+    }
+
+    #[test]
+    fn summary_body_caps_input_and_targets_model() {
+        const WORD: &str = "word ";
+        let long = WORD.repeat(5000);
+        const WORD_LEN: usize = 5;
+        assert!(long.len() > 12_000 + WORD_LEN);
+        let body = summary_body("test-model", &long);
+        assert_eq!(body["model"], serde_json::json!("test-model"));
+        assert_eq!(body["stream"], serde_json::json!(false));
+        let content = body["messages"][1]["content"].as_str().unwrap();
+        assert!(content.len() <= 12_000 + WORD_LEN);
+        assert!(content.starts_with("word word"));
     }
 }

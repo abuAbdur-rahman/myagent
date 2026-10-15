@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { applyCompactWindow, buildSystemPrompt, estimateContext } from "./context";
+import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
 import {
   fetchCatalog,
   lookupContextLength,
@@ -165,7 +165,7 @@ interface AppContextValue {
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
   branchFrom: (messageId: string) => Promise<void>;
   clearActiveConversation: () => Promise<void>;
-  compactActive: () => Promise<void>;
+  compactActive: (quiet?: boolean) => Promise<void>;
   uncompactActive: () => Promise<void>;
   stopStream: () => void;
   composerDraft: string;
@@ -174,6 +174,8 @@ interface AppContextValue {
   setComposerText: (text: string) => void;
   sendWith: "enter" | "ctrl";
   setSendWith: (mode: "enter" | "ctrl") => void;
+  autoCompact: boolean;
+  setAutoCompact: (value: boolean) => void;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
   panelTab: PanelTab;
@@ -269,6 +271,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sendWith, setSendWithState] = useState<"enter" | "ctrl">(() =>
     localStorage.getItem("sendWith") === "ctrl" ? "ctrl" : "enter",
   );
+  const [autoCompact, setAutoCompactState] = useState(
+    () => localStorage.getItem("autoCompact") !== "0",
+  );
+  const autoCompactRef = useRef(true);
+  useEffect(() => {
+    autoCompactRef.current = autoCompact;
+  }, [autoCompact]);
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
   const requestIdRef = useRef<string | null>(null);
@@ -437,6 +446,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setSendWith = useCallback((mode: "enter" | "ctrl") => {
     setSendWithState(mode);
     localStorage.setItem("sendWith", mode);
+  }, []);
+
+  const setAutoCompact = useCallback((value: boolean) => {
+    setAutoCompactState(value);
+    localStorage.setItem("autoCompact", value ? "1" : "0");
   }, []);
 
   const setDisplayName = useCallback((name: string) => {
@@ -875,14 +889,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const withSystem = useCallback(
-    (turns: { role: string; content: string }[]) => {
+    (turns: { role: string; content: string }[], summary: string | null = null) => {
       const system = buildSystemPrompt({
         globalMemories: globalMemoriesRef.current,
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
       });
-      return [...(system ? [{ role: "system", content: system }] : []), ...turns];
+      return [
+        ...(system ? [{ role: "system", content: system }] : []),
+        ...(summary ? [summarySystemTurn(summary)] : []),
+        ...turns,
+      ];
     },
     [],
   );
@@ -1057,27 +1075,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [finalize, openArtifact, resolveEffort],
   );
 
-  const resolveCompact = useCallback(
-    (conversationId: string | null, turns: { role: string; content: string }[]) => {
-      const conversation = conversationId
-        ? conversationsRef.current.find((c) => c.id === conversationId)
-        : undefined;
-      if (conversation?.compacted === 1) return true;
-      const system = buildSystemPrompt({
-        globalMemories: globalMemoriesRef.current,
-        project: projectRef.current,
-        projectMemories: projectMemoriesRef.current,
-        userName: displayNameRef.current || undefined,
-      });
-      if (estimateContext(turns, system, contextLimitRef.current).pct > 80) {
-        toast("Context is over 80% full — sending recent messages only.");
-        return true;
-      }
-      return false;
-    },
-    [],
-  );
-
   const maybeGenerateTitle = useCallback(
     async (
       conversationId: string,
@@ -1112,6 +1109,140 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     },
     [],
+  );
+
+  const summaryFor = useCallback((conversationId: string | null) => {
+    const conversation = conversationId
+      ? conversationsRef.current.find((c) => c.id === conversationId)
+      : undefined;
+    return {
+      summary: conversation?.summary ?? null,
+      through: conversation?.summary_through ?? null,
+    };
+  }, []);
+
+  const resolveCompact = useCallback(
+    (conversationId: string | null, turns: { role: string; content: string }[]) => {
+      const conversation = conversationId
+        ? conversationsRef.current.find((c) => c.id === conversationId)
+        : undefined;
+      if (conversation?.compacted === 1) return true;
+      const system = buildSystemPrompt({
+        globalMemories: globalMemoriesRef.current,
+        project: projectRef.current,
+        projectMemories: projectMemoriesRef.current,
+        userName: displayNameRef.current || undefined,
+      });
+      if (estimateContext(turns, system, contextLimitRef.current).pct > 80) {
+        toast("Context is over 80% full - sending recent messages only.");
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
+  const setCompacted = useCallback(async (id: string, value: boolean) => {
+    try {
+      await db.setConversationCompacted(id, value);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, compacted: value ? 1 : 0 } : c)),
+      );
+    } catch (e) {
+      reportError(e);
+    }
+  }, []);
+
+  const compactActive = useCallback(
+    async (quiet = false) => {
+      const id = convIdRef.current;
+      const connection = connRef.current;
+      const model = modelRef.current;
+      if (!id || !connection || !model || streaming) {
+        if (!quiet) toast("Nothing to compact yet");
+        return;
+      }
+      const all = messagesRef.current.filter((m) => m.content.length > 0);
+      const KEEP = 8;
+      if (all.length <= KEEP) {
+        if (!quiet) toast("Nothing to compact yet");
+        return;
+      }
+      const older = all.slice(0, -KEEP);
+      const prior = conversationsRef.current.find((c) => c.id === id)?.summary;
+      const text = [
+        ...(prior ? [`Previous summary:\n${prior}`] : []),
+        ...older.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`),
+      ].join("\n\n");
+      try {
+        const summary = await api.summarize(connection.base_url, connection.id, model, text);
+        const through = older[older.length - 1].created_at;
+        await db.setConversationSummary(id, summary, through);
+        await db.setConversationCompacted(id, true);
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === id ? { ...c, compacted: 1, summary, summary_through: through } : c,
+          ),
+        );
+        if (!quiet) toast("Context compacted");
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [streaming],
+  );
+
+  const maybeAutoCompact = useCallback(
+    async (conversationId: string) => {
+      if (!autoCompactRef.current) return;
+      const { summary, through } = summaryFor(conversationId);
+      const turns = messagesRef.current.filter((m) => m.content.length > 0);
+      const fresh = through !== null ? turns.filter((m) => m.created_at > through) : turns;
+      if (fresh.length === 0) return;
+      const system = buildSystemPrompt({
+        globalMemories: globalMemoriesRef.current,
+        project: projectRef.current,
+        projectMemories: projectMemoriesRef.current,
+        userName: displayNameRef.current || undefined,
+      });
+      const windowed = summary
+        ? applySummaryWindow(turns, { summary, through })
+        : applyCompactWindow(turns, false);
+      const tokens =
+        usageRef.current?.total ??
+        estimateContext(windowed, system, contextLimitRef.current).tokens;
+      if (tokens / contextLimitRef.current > 0.8) {
+        toast("Context over 80% full - compacting");
+        await compactActive(true);
+      }
+    },
+    [compactActive, summaryFor],
+  );
+
+  const uncompactActive = useCallback(async () => {
+    const id = convIdRef.current;
+    if (!id) return;
+    try {
+      await db.setConversationSummary(id, null, null);
+      await setCompacted(id, false);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, summary: null, summary_through: null } : c)),
+      );
+    } catch (e) {
+      reportError(e);
+    }
+  }, [setCompacted]);
+
+  const buildPayload = useCallback(
+    (conversationId: string | null, turns: { role: string; content: string; created_at?: number }[]) => {
+      const { summary, through } = summaryFor(conversationId);
+      const windowed = summary
+        ? applySummaryWindow(turns, { summary, through })
+        : applyCompactWindow(turns, resolveCompact(conversationId, turns));
+      const slim = windowed.map(({ role, content }) => ({ role, content }));
+      return withSystem(slim, summary);
+    },
+    [resolveCompact, summaryFor, withSystem],
   );
 
   const sendMessage = useCallback(
@@ -1171,12 +1302,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       const turns = [...history, { role: "user", content: text }];
-      const payload = withSystem(applyCompactWindow(turns, resolveCompact(conversationId, turns)));
+      const payload = buildPayload(conversationId, turns);
 
       await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
       if (provisionalTitle) {
         void maybeGenerateTitle(conversationId, provisionalTitle, text, bufferRef.current);
       }
+      await maybeAutoCompact(conversationId);
       return true;
     },
     [
@@ -1185,9 +1317,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       messages,
       streaming,
       streamTurn,
-      withSystem,
-      resolveCompact,
+      buildPayload,
       maybeGenerateTitle,
+      maybeAutoCompact,
     ],
   );
 
@@ -1218,10 +1350,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       conversationId,
       connection,
       modelRef.current,
-      withSystem(applyCompactWindow(kept, resolveCompact(conversationId, kept))),
+      buildPayload(conversationId, kept),
       assistantMsg,
     );
-  }, [streaming, streamTurn, withSystem, resolveCompact]);
+  }, [streaming, streamTurn, buildPayload]);
 
   const continueTurn = useCallback(async () => {
     const conversationId = convIdRef.current;
@@ -1231,7 +1363,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
     if (partial.finish_reason !== "length") return;
-    const payload = lastPayloadRef.current ?? withSystem(applyCompactWindow(turns, false));
+    const payload = lastPayloadRef.current ?? buildPayload(conversationId, turns);
     await streamTurn(
       conversationId,
       connection,
@@ -1240,7 +1372,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       partial,
       true,
     );
-  }, [streaming, streamTurn, withSystem]);
+  }, [streaming, streamTurn, buildPayload]);
 
   const retryTurn = useCallback(async () => {    const conversationId = convIdRef.current;
     const connection = connRef.current;
@@ -1315,12 +1447,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         conversationId,
         connection,
         modelRef.current,
-        withSystem(applyCompactWindow(kept, resolveCompact(conversationId, kept))),
+        buildPayload(conversationId, kept),
         assistantMsg,
       );
       return true;
     },
-    [streaming, streamTurn, withSystem, resolveCompact],
+    [streaming, streamTurn, buildPayload],
   );
 
   const branchFrom = useCallback(
@@ -1372,7 +1504,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           created.id,
           connection,
           modelRef.current,
-          withSystem(applyCompactWindow(firstTurns, resolveCompact(created.id, firstTurns))),
+          buildPayload(created.id, firstTurns),
           assistantMsg,
         );
         void maybeGenerateTitle(created.id, title, trimmed, bufferRef.current);
@@ -1382,7 +1514,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [streaming, streamTurn, withSystem, resolveCompact, maybeGenerateTitle],
+    [streaming, streamTurn, buildPayload, maybeGenerateTitle],
   );
 
   const clearActiveConversation = useCallback(async () => {
@@ -1399,29 +1531,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       reportError(e);
     }
   }, []);
-
-  const setCompacted = useCallback(async (id: string, value: boolean) => {
-    try {
-      await db.setConversationCompacted(id, value);
-      setConversations((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, compacted: value ? 1 : 0 } : c)),
-      );
-    } catch (e) {
-      reportError(e);
-    }
-  }, []);
-
-  const compactActive = useCallback(async () => {
-    const id = convIdRef.current;
-    if (!id) return;
-    await setCompacted(id, true);
-  }, [setCompacted]);
-
-  const uncompactActive = useCallback(async () => {
-    const id = convIdRef.current;
-    if (!id) return;
-    await setCompacted(id, false);
-  }, [setCompacted]);
 
   const stopStream = useCallback(() => {
     const id = requestIdRef.current;
@@ -1521,6 +1630,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setComposerText,
     sendWith,
     setSendWith,
+    autoCompact,
+    setAutoCompact,
     panelOpen,
     panelArtifact,
     panelTab,

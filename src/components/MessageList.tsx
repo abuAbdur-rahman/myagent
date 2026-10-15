@@ -478,8 +478,9 @@ export function MessageList() {
   );
 
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
-  const activeModel =
-    conversations.find((c) => c.id === activeConversationId)?.model ?? null;
+  const activeConversation =
+    conversations.find((c) => c.id === activeConversationId) ?? null;
+  const activeModel = activeConversation?.model ?? null;
 
   return (
     <div ref={scrollRef} onScroll={onScroll} className="relative h-full overflow-y-auto">
@@ -493,6 +494,14 @@ export function MessageList() {
         {ready && messages.length === 0 && !error && (
           <div className="flex items-center justify-center py-24">
             <p className="text-sm text-muted">No messages yet.</p>
+          </div>
+        )}
+
+        {activeConversation?.summary && (
+          <div className="mb-6 flex items-center gap-3 text-xs text-muted">
+            <span className="h-px flex-1 bg-border" aria-hidden="true" />
+            <span>Context compacted - earlier messages summarized</span>
+            <span className="h-px flex-1 bg-border" aria-hidden="true" />
           </div>
         )}
 

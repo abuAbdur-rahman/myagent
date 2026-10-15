@@ -39,7 +39,7 @@ function SettingRow({
 }
 
 export function GeneralPage() {
-  const { displayName, setDisplayName, sendWith, setSendWith } = useApp();
+  const { displayName, setDisplayName, sendWith, setSendWith, autoCompact, setAutoCompact } = useApp();
   return (
     <div>
       <SettingRow label="Display name" description="Used in the greeting and profile">
@@ -59,6 +59,14 @@ export function GeneralPage() {
           <option value="enter">Enter</option>
           <option value="ctrl">Ctrl+Enter</option>
         </Select>
+      </SettingRow>
+      <SettingRow label="Auto-compact context" description="Summarize older messages at 80% context">
+        <Input
+          type="checkbox"
+          checked={autoCompact}
+          onChange={(e) => setAutoCompact(e.target.checked)}
+          aria-label="Auto-compact context"
+        />
       </SettingRow>
     </div>
   );

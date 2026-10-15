@@ -66,6 +66,8 @@ const conversationSchema = z.object({
   pinned: z.number(),
   compacted: z.number(),
   model: z.string().nullable(),
+  summary: z.string().nullable(),
+  summary_through: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });

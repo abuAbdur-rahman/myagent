@@ -98,6 +98,8 @@ export async function createConversation(
     pinned: 0,
     compacted: 0,
     model,
+    summary: null,
+    summary_through: null,
     created_at: now,
     updated_at: now,
   };
@@ -361,6 +363,18 @@ export async function setConversationCompacted(id: string, compacted: boolean): 
     Date.now(),
     id,
   ]);
+}
+
+export async function setConversationSummary(
+  id: string,
+  summary: string | null,
+  through: number | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE conversations SET summary = $1, summary_through = $2, updated_at = $3 WHERE id = $4",
+    [summary, through, Date.now(), id],
+  );
 }
 
 export async function listProjects(): Promise<Project[]> {

@@ -155,6 +155,15 @@ pub fn run() {
             sql: "ALTER TABLE messages ADD COLUMN artifacts TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "add_conversation_summary",
+            sql: "
+                ALTER TABLE conversations ADD COLUMN summary TEXT;
+                ALTER TABLE conversations ADD COLUMN summary_through INTEGER;
+            ",
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -181,6 +190,7 @@ pub fn run() {
             llm::cancel_stream,
             llm::chat_stream,
             llm::suggest_title,
+            llm::summarize,
             delete_spill,
             permissions::permission_check,
             permissions::permission_allow,

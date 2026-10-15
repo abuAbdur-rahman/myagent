@@ -170,3 +170,14 @@ export async function chatStream(
 export function deleteSpill(conversationId: string) {
   return invoke<void>("delete_spill", { conversationId });
 }
+
+export function summarize(baseUrl: string, connectionId: string, model: string, text: string) {
+  return invoke<string>("summarize", {
+    req: {
+      base_url: baseUrl,
+      connection_id: connectionId,
+      model,
+      text,
+    },
+  });
+}

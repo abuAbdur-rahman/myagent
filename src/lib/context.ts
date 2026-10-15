@@ -72,6 +72,30 @@ export function applyCompactWindow<T extends { content: string }>(turns: T[], co
   return turns;
 }
 
+export interface SummaryWindow {
+  summary: string | null;
+  through: number | null;
+}
+
+export function applySummaryWindow<
+  T extends { content: string; created_at?: number },
+>(turns: T[], window: SummaryWindow): T[] {
+  let kept = turns;
+  if (window.summary && window.through !== null) {
+    const through: number = window.through;
+    kept = turns.filter((turn) => (turn.created_at ?? Number.MAX_SAFE_INTEGER) > through);
+  }
+  if (kept.length > MAX_TURNS_WINDOW) return kept.slice(-MAX_TURNS_WINDOW);
+  return kept;
+}
+
+export function summarySystemTurn(summary: string): { role: string; content: string } {
+  return {
+    role: "system",
+    content: `Earlier conversation summary (older messages omitted):\n${summary}`,
+  };
+}
+
 export function estimateContext(
   turns: { content: string }[],
   system: string | null,

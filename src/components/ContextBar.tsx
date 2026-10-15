@@ -25,7 +25,11 @@ export function ContextBar() {
   if (conversation.compacted === 1) {
     return (
       <div className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted">
-        <span>Compacted — only recent messages are sent</span>
+        <span>
+          {conversation.summary
+            ? "Compacted - summary + recent messages are sent"
+            : "Compacted - only recent messages are sent"}
+        </span>
         <span className="flex-1" />
         <Button size="sm" variant="default" onClick={() => void uncompactActive()}>
           Show all
