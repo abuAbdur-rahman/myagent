@@ -141,11 +141,7 @@ impl ToolCallAccumulator {
             if !slot.name.is_empty() && !slot.id.is_empty() && !slot.announced {
                 slot.announced = true;
                 slot.announced_id = Some(slot.id.clone());
-                newly_named.push((
-                    delta.index,
-                    slot.id.clone(),
-                    slot.name.clone(),
-                ));
+                newly_named.push((delta.index, slot.id.clone(), slot.name.clone()));
             }
         }
         newly_named
@@ -433,10 +429,7 @@ mod tests {
         let calls = accumulator.calls();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["id"], serde_json::json!("call_time_1"));
-        assert_eq!(
-            calls[0]["function"]["name"],
-            serde_json::json!("get_time")
-        );
+        assert_eq!(calls[0]["function"]["name"], serde_json::json!("get_time"));
         assert_eq!(
             calls[1]["function"]["arguments"],
             serde_json::json!("{\"command\":\"Get-Date\"}")

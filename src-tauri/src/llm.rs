@@ -660,7 +660,10 @@ async fn run_agentic(
                 summary: tools::summarize_call(&name, &args),
             });
 
-            let repeat_key = format!("{name}\n{}", serde_json::to_string(&args).unwrap_or_default());
+            let repeat_key = format!(
+                "{name}\n{}",
+                serde_json::to_string(&args).unwrap_or_default()
+            );
             if repeat.note(repeat_key) >= 3 {
                 let question_id = format!("{}:{id}:repeat", req.request_id);
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -683,7 +686,10 @@ async fn run_agentic(
                         ok: false,
                         preview: "Stopped: repeated tool call".to_string(),
                     });
-                    history.push(tool_text_message(&id, "Stopped by user: same tool call repeated 3 times"));
+                    history.push(tool_text_message(
+                        &id,
+                        "Stopped by user: same tool call repeated 3 times",
+                    ));
                     return Ok(());
                 }
                 if answer != "Keep going" {
@@ -798,7 +804,8 @@ async fn run_agentic(
                 req.project_id.as_deref(),
                 cancel,
             )
-            .await {
+            .await
+            {
                 Ok(done) => {
                     if let Some(artifact) = done.artifact {
                         let _ = on_event.send(StreamEvent::Artifact {
@@ -981,9 +988,7 @@ mod tests {
     }
 
     fn test_client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .build()
-            .expect("test client")
+        reqwest::Client::builder().build().expect("test client")
     }
 
     fn body() -> serde_json::Value {
@@ -993,9 +998,7 @@ mod tests {
     #[test]
     fn retryable_status_covers_429_and_5xx_only() {
         assert!(retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
-        assert!(retryable_status(
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR
-        ));
+        assert!(retryable_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
         assert!(retryable_status(reqwest::StatusCode::BAD_GATEWAY));
         assert!(!retryable_status(reqwest::StatusCode::BAD_REQUEST));
         assert!(!retryable_status(reqwest::StatusCode::UNAUTHORIZED));
@@ -1004,14 +1007,8 @@ mod tests {
 
     #[test]
     fn backoff_honors_retry_after_and_grows() {
-        assert_eq!(
-            backoff_delay(0, Some(7)),
-            Duration::from_secs(7)
-        );
-        assert_eq!(
-            backoff_delay(2, Some(99)),
-            Duration::from_secs(30)
-        );
+        assert_eq!(backoff_delay(0, Some(7)), Duration::from_secs(7));
+        assert_eq!(backoff_delay(2, Some(99)), Duration::from_secs(30));
         let first = backoff_delay(0, None);
         let second = backoff_delay(1, None);
         assert!(first >= Duration::from_millis(500));
