@@ -220,7 +220,7 @@ fn is_content_blocked_error(error: &AppError) -> bool {
 
 fn content_blocked_request_id(message: &str) -> Option<String> {
     let marker = "request id:";
-    let start = message.to_lowercase().find(marker)? + marker.len();
+    let start = message.to_ascii_lowercase().find(marker)? + marker.len();
     let id: String = message[start..]
         .trim_start()
         .chars()
@@ -297,15 +297,15 @@ fn deepseek_first_turn(text: &str) -> String {
 }
 
 fn harden_deepseek_history(
-    history: &[serde_json::Value],
+    history: Vec<serde_json::Value>,
     model: &str,
     kind: Option<&str>,
     url: &str,
 ) -> Vec<serde_json::Value> {
     if !deepseek_guard_active(model, kind, url) {
-        return history.to_vec();
+        return history;
     }
-    let mut out = history.to_vec();
+    let mut out = history;
     let Some(first) = out
         .iter_mut()
         .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
@@ -315,6 +315,9 @@ fn harden_deepseek_history(
     let Some(text) = first.get("content").and_then(|v| v.as_str()) else {
         return out;
     };
+    if text.contains(DEEPSEEK_CONTEXT_MARK) {
+        return out;
+    }
     let cleaned = sanitize_deepseek_text(text);
     first["content"] = serde_json::json!(deepseek_first_turn(&cleaned));
     out
@@ -964,7 +967,7 @@ async fn run_agentic(
         .iter()
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
-    history = harden_deepseek_history(&history, &req.model, req.connection_kind.as_deref(), &url);
+    history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
     let tools = tools::tool_specs();
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32);
     let mut repeat = RepeatGuard::new();
@@ -1261,7 +1264,7 @@ async fn stream_completion(
 ) -> AppResult<()> {
     let url = endpoint(&req.base_url, "chat/completions");
     let history =
-        harden_deepseek_history(&history, &req.model, req.connection_kind.as_deref(), &url);
+        harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
     let mut body = serde_json::json!({
         "model": req.model,
         "messages": history,
@@ -1593,7 +1596,7 @@ mod tests {
             serde_json::json!({"role": "user", "content": "work kanban task t_24edbb12"}),
         ];
         let hardened = harden_deepseek_history(
-            &history,
+            history.clone(),
             "deepseek-v4-flash",
             Some("agentrouter"),
             "https://agentrouter.org/v1/chat/completions",
@@ -1610,12 +1613,35 @@ mod tests {
             serde_json::json!("work kanban task t_24edbb12")
         );
         let untouched = harden_deepseek_history(
-            &history,
+            history.clone(),
             "gpt-6-astra",
             Some("agentrouter"),
             "https://agentrouter.org/v1/chat/completions",
         );
         assert_eq!(untouched, history);
+        let twice = harden_deepseek_history(
+            hardened.clone(),
+            "deepseek-v4-flash",
+            Some("agentrouter"),
+            "https://agentrouter.org/v1/chat/completions",
+        );
+        assert_eq!(twice, hardened);
+        assert!(
+            !twice[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("large large")
+        );
+    }
+
+    #[test]
+    fn content_blocked_request_id_survives_non_ascii_prefix() {
+        let message = "400 Bad Request: {\"error\":{\"code\":\"content-blocked\",\"message\":\"İd content-blocked (request id: abcDEF123)\",\"type\":\"agent_router_api_error\"}}";
+        assert_eq!(
+            content_blocked_request_id(message),
+            Some("abcDEF123".to_string())
+        );
+        assert!(describe_content_blocked(message).contains("abcDEF123"));
     }
 
     #[test]
