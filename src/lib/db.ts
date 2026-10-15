@@ -32,6 +32,10 @@ function getDb() {
   return dbPromise;
 }
 
+export function sqlNull<T>(value: T | null | undefined): T | null {
+  return value ?? null;
+}
+
 export async function listConnections(): Promise<Connection[]> {
   const db = await getDb();
   return db.select<Connection[]>(
@@ -345,6 +349,7 @@ export async function addMessage(
   conversationId: string,
   role: Role,
   content: string,
+  model?: string | null,
 ): Promise<Message> {
   const db = await getDb();
   const message: Message = {
@@ -352,15 +357,17 @@ export async function addMessage(
     conversation_id: conversationId,
     role,
     content,
+    model: model ?? null,
     created_at: Date.now(),
   };
   await db.execute(
-    "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
+    "INSERT INTO messages (id, conversation_id, role, content, model, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
     [
       message.id,
       message.conversation_id,
       message.role,
       message.content,
+      message.model,
       message.created_at,
     ],
   );
@@ -386,6 +393,7 @@ export interface FullMessageInput {
   finishReason?: string | null;
   toolLogJson?: string | null;
   artifactsJson?: string | null;
+  model?: string | null;
   createdAt?: number | null;
 }
 
@@ -399,27 +407,29 @@ export async function insertMessageFull(
     conversation_id: conversationId,
     role: input.role,
     content: input.content,
+    model: sqlNull(input.model),
     created_at: input.createdAt ?? Date.now(),
   };
   await db.execute(
-    "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)",
+    "INSERT INTO messages (id, conversation_id, role, content, model, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
     [
       message.id,
       message.conversation_id,
       message.role,
       message.content,
+      message.model,
       message.created_at,
     ],
   );
   await updateMessageMeta(message.id, {
-    reasoning: input.reasoning ?? null,
-    thinkingMs: input.thinkingMs ?? null,
-    promptTokens: input.promptTokens ?? null,
-    completionTokens: input.completionTokens ?? null,
-    totalTokens: input.totalTokens ?? null,
-    finishReason: input.finishReason ?? null,
-    toolLogJson: input.toolLogJson ?? null,
-    artifactsJson: input.artifactsJson ?? null,
+    reasoning: sqlNull(input.reasoning),
+    thinkingMs: sqlNull(input.thinkingMs),
+    promptTokens: sqlNull(input.promptTokens),
+    completionTokens: sqlNull(input.completionTokens),
+    totalTokens: sqlNull(input.totalTokens),
+    finishReason: sqlNull(input.finishReason),
+    toolLogJson: sqlNull(input.toolLogJson),
+    artifactsJson: sqlNull(input.artifactsJson),
   });
   return message;
 }
@@ -562,20 +572,21 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
       [
         newId(),
         branched.id,
         m.role,
         m.content,
-        m.reasoning ?? null,
-        m.thinking_ms ?? null,
-        m.prompt_tokens ?? null,
-        m.completion_tokens ?? null,
-        m.total_tokens ?? null,
-        m.finish_reason ?? null,
-        m.tool_log ?? null,
-        m.artifacts ?? null,
+        sqlNull(m.reasoning),
+        sqlNull(m.thinking_ms),
+        sqlNull(m.prompt_tokens),
+        sqlNull(m.completion_tokens),
+        sqlNull(m.total_tokens),
+        sqlNull(m.finish_reason),
+        sqlNull(m.tool_log),
+        sqlNull(m.artifacts),
+        sqlNull(m.model),
         m.created_at,
       ],
     );

@@ -31,8 +31,8 @@ export function buildChatExport(chat: Conversation, messages: Message[]): ChatEx
       childrenIds: index + 1 < ordered.length ? [ordered[index + 1].id] : [],
       role: message.role,
       content: message.content,
-      reasoning: message.reasoning ?? null,
-      thinkingMs: message.thinking_ms ?? null,
+      reasoning: db.sqlNull(message.reasoning),
+      thinkingMs: db.sqlNull(message.thinking_ms),
       usage:
         message.prompt_tokens != null ||
         message.completion_tokens != null ||
@@ -43,9 +43,10 @@ export function buildChatExport(chat: Conversation, messages: Message[]): ChatEx
               total: message.total_tokens ?? 0,
             }
           : null,
-      finishReason: message.finish_reason ?? null,
+      finishReason: db.sqlNull(message.finish_reason),
       toolLog: db.parseToolLog(message.tool_log),
       artifacts: db.parseDeclaredArtifacts(message.artifacts),
+      model: db.sqlNull(message.model),
       createdAt: message.created_at,
     })),
   };
@@ -96,14 +97,15 @@ export async function importChatExport(raw: unknown): Promise<string> {
       content: message.content,
       reasoning: message.reasoning,
       thinkingMs: message.thinkingMs,
-      promptTokens: message.usage?.prompt ?? null,
-      completionTokens: message.usage?.completion ?? null,
-      totalTokens: message.usage?.total ?? null,
+      promptTokens: db.sqlNull(message.usage?.prompt),
+      completionTokens: db.sqlNull(message.usage?.completion),
+      totalTokens: db.sqlNull(message.usage?.total),
       finishReason: message.finishReason,
       toolLogJson:
         message.toolLog.length > 0 ? JSON.stringify(message.toolLog) : null,
       artifactsJson:
         message.artifacts.length > 0 ? JSON.stringify(message.artifacts) : null,
+      model: db.sqlNull(message.model),
       createdAt: message.createdAt,
     });
   }

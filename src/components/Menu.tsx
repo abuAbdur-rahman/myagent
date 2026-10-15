@@ -47,6 +47,23 @@ function subscribe(listener: () => void) {  listeners.add(listener);
   };
 }
 
+function menuAvailableSpace(anchor: HTMLElement, preferAbove: boolean): number {
+  const rect = anchor.getBoundingClientRect();
+  return preferAbove ? rect.top - 16 : window.innerHeight - rect.bottom - 16;
+}
+
+function clampMenuHeight(el: HTMLDivElement, available: number) {
+  el.style.maxHeight = "";
+  el.style.overflowY = "";
+  if (el.offsetHeight <= available) return;
+  el.style.maxHeight = `${Math.max(160, Math.floor(available))}px`;
+  el.style.overflowY = "auto";
+}
+
+function menuOverflowsBottom(el: HTMLDivElement): boolean {
+  return el.getBoundingClientRect().bottom > window.innerHeight;
+}
+
 export function MenuHost() {
   const [state, setState] = useState<MenuState | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -60,9 +77,10 @@ export function MenuHost() {
     if (overRight > 0) {
       el.style.left = `${Math.max(8, state.x - overRight - 8)}px`;
     }
-    const rect = state.anchor.getBoundingClientRect();
-    const overflowBottom = el.getBoundingClientRect().bottom - window.innerHeight;
-    if (state.y < rect.top || overflowBottom > 0) {
+    const preferAbove = state.y < state.anchor.getBoundingClientRect().top;
+    clampMenuHeight(el, menuAvailableSpace(state.anchor, preferAbove));
+    if (preferAbove || menuOverflowsBottom(el)) {
+      const rect = state.anchor.getBoundingClientRect();
       el.style.top = `${Math.max(8, rect.top - 4 - el.offsetHeight)}px`;
     }
   }, [state]);

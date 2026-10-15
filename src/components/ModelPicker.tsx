@@ -70,7 +70,7 @@ function ModelPickerContent({ onDone }: { onDone: () => void }) {
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search models"
         aria-label="Search models"
-        className="mx-0.5 mb-1.5 h-8 w-[calc(100%-4px)] rounded-card border border-border bg-surface-2 px-2.5 text-sm outline-none placeholder:text-muted focus:border-accent"
+        className="sticky top-0 z-10 mx-0.5 mb-1.5 h-8 w-[calc(100%-4px)] rounded-card border border-border bg-surface-2 px-2.5 text-sm outline-none placeholder:text-muted focus:border-accent"
       />
       <div className="max-h-[280px] overflow-auto">
         {groups === null && (

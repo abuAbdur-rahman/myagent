@@ -201,6 +201,147 @@ fn wants_stream_usage(kind: Option<&str>) -> bool {
     !matches!(kind, Some("agentrouter"))
 }
 
+fn is_deepseek_model(model: &str) -> bool {
+    model.to_lowercase().contains("deepseek")
+}
+
+fn deepseek_guard_active(model: &str, kind: Option<&str>, url: &str) -> bool {
+    is_deepseek_model(model) && is_agentrouter(kind, url)
+}
+
+fn is_content_blocked_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("content-blocked") && lower.contains("agent_router_api_error")
+}
+
+fn is_content_blocked_error(error: &AppError) -> bool {
+    matches!(error, AppError::Upstream(message) if is_content_blocked_message(message))
+}
+
+fn content_blocked_request_id(message: &str) -> Option<String> {
+    let marker = "request id:";
+    let start = message.to_lowercase().find(marker)? + marker.len();
+    let id: String = message[start..]
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect();
+    if id.is_empty() { None } else { Some(id) }
+}
+
+fn describe_content_blocked(message: &str) -> String {
+    match content_blocked_request_id(message) {
+        Some(id) => format!(
+            "DeepSeek declined the prompt (content-blocked, request {id}). Rephrase the first message in plain English and retry."
+        ),
+        None => "DeepSeek declined the prompt (content-blocked). Rephrase the first message in plain English and retry."
+            .to_string(),
+    }
+}
+
+fn sanitize_deepseek_text(text: &str) -> String {
+    const REPLACEMENTS: &[(&str, &str)] = &[
+        ("Lorem ipsum", "example text"),
+        ("lorem ipsum", "example text"),
+        ("language model", "large language model"),
+        ("Language model", "Large language model"),
+        ("virtual assistant", "AI assistant"),
+        ("Virtual assistant", "AI assistant"),
+        ("I'm here to help", "How can I help"),
+        ("here to help", "How can I help"),
+        ("placeholder", "example value"),
+        ("Placeholder", "Example value"),
+        ("dummy data", "sample data"),
+        ("Dummy data", "Sample data"),
+    ];
+    let mut out = text.to_string();
+    for (from, to) in REPLACEMENTS {
+        out = out.replace(from, to);
+    }
+    out
+}
+
+const DEEPSEEK_CONTEXT_MARK: &str = "[myagent-request]";
+
+fn ends_with_bare_token(text: &str) -> bool {
+    let Some(last) = text.split_whitespace().last() else {
+        return false;
+    };
+    let token: String = last
+        .trim_matches(|c: char| ".,;:!?()[]{}\"'".contains(c))
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    token.len() >= 6
+        && token
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '_' || c == '-')
+}
+
+fn deepseek_first_turn(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return format!(
+            "{DEEPSEEK_CONTEXT_MARK} The user sent an empty message. Ask what they would like help with."
+        );
+    }
+    let needs_frame = !trimmed.contains(DEEPSEEK_CONTEXT_MARK)
+        && (trimmed.chars().count() < 20 || !trimmed.is_ascii() || ends_with_bare_token(trimmed));
+    if needs_frame {
+        format!(
+            "{DEEPSEEK_CONTEXT_MARK} Please handle the following user request. Respond in the user's language.\n\n{trimmed}"
+        )
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn harden_deepseek_history(
+    history: &[serde_json::Value],
+    model: &str,
+    kind: Option<&str>,
+    url: &str,
+) -> Vec<serde_json::Value> {
+    if !deepseek_guard_active(model, kind, url) {
+        return history.to_vec();
+    }
+    let mut out = history.to_vec();
+    let Some(first) = out
+        .iter_mut()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+    else {
+        return out;
+    };
+    let Some(text) = first.get("content").and_then(|v| v.as_str()) else {
+        return out;
+    };
+    let cleaned = sanitize_deepseek_text(text);
+    first["content"] = serde_json::json!(deepseek_first_turn(&cleaned));
+    out
+}
+
+fn agentrouter_pace() -> &'static Mutex<Option<Instant>> {
+    static LAST: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(None))
+}
+
+async fn pace_agentrouter(url: &str, cancel: &Notify) -> bool {
+    if !is_agentrouter_url(url) {
+        return false;
+    }
+    let wait = {
+        let mut guard = agentrouter_pace().lock().expect("pace lock");
+        let now = Instant::now();
+        let wait = match *guard {
+            Some(next) if next > now => next - now,
+            _ => Duration::from_millis(0),
+        };
+        *guard = Some(now + wait + Duration::from_millis(500));
+        wait
+    };
+    sleep_or_cancel(wait, cancel).await
+}
+
 async fn error_body(resp: reqwest::Response) -> String {
     let status = resp.status();
     match resp.text().await {
@@ -562,7 +703,11 @@ async fn post_with_retry(
     on_event: Option<&Channel<StreamEvent>>,
     kind: Option<&str>,
 ) -> AppResult<reqwest::Response> {
+    if pace_agentrouter(url, cancel).await {
+        return Err(AppError::Cancelled);
+    }
     let mut last_error: Option<AppError> = None;
+    let mut blocked_retries = 0u32;
     for attempt in 0..MAX_ATTEMPTS {
         let request = agentrouter_headers(client.post(url).bearer_auth(key), kind, url);
         match request.json(body).send().await {
@@ -570,6 +715,25 @@ async fn post_with_retry(
                 let status = resp.status();
                 if status.is_success() {
                     return Ok(resp);
+                }
+                if status == reqwest::StatusCode::BAD_REQUEST {
+                    let message = error_body(resp).await;
+                    if is_content_blocked_message(&message) {
+                        if blocked_retries < 2 {
+                            blocked_retries += 1;
+                            if sleep_or_cancel(
+                                Duration::from_millis(1500 * u64::from(blocked_retries)),
+                                cancel,
+                            )
+                            .await
+                            {
+                                return Err(AppError::Cancelled);
+                            }
+                            continue;
+                        }
+                        return Err(AppError::Upstream(describe_content_blocked(&message)));
+                    }
+                    return Err(AppError::Upstream(message));
                 }
                 if retryable_status(status) && attempt + 1 < MAX_ATTEMPTS {
                     let wait = backoff_delay(attempt, retry_after_secs(&resp));
@@ -800,6 +964,7 @@ async fn run_agentic(
         .iter()
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
+    history = harden_deepseek_history(&history, &req.model, req.connection_kind.as_deref(), &url);
     let tools = tools::tool_specs();
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32);
     let mut repeat = RepeatGuard::new();
@@ -835,6 +1000,7 @@ async fn run_agentic(
             Ok(None) => return Ok(()),
             Err(error)
                 if is_retryable_tools_error(&error)
+                    && !is_content_blocked_error(&error)
                     && !history
                         .iter()
                         .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool")) =>
@@ -1093,6 +1259,9 @@ async fn stream_completion(
     on_event: &Channel<StreamEvent>,
     cancel: &Notify,
 ) -> AppResult<()> {
+    let url = endpoint(&req.base_url, "chat/completions");
+    let history =
+        harden_deepseek_history(&history, &req.model, req.connection_kind.as_deref(), &url);
     let mut body = serde_json::json!({
         "model": req.model,
         "messages": history,
@@ -1105,7 +1274,7 @@ async fn stream_completion(
 
     let resp = match post_with_retry(
         client,
-        &endpoint(&req.base_url, "chat/completions"),
+        &url,
         &key,
         &body,
         cancel,
@@ -1340,6 +1509,113 @@ mod tests {
         assert!(!is_agentrouter(None, "https://openrouter.ai/api/v1"));
         assert!(wants_stream_usage(Some("openrouter")));
         assert!(!wants_stream_usage(Some("agentrouter")));
+    }
+
+    #[test]
+    fn content_blocked_detects_gateway_code() {
+        let blocked = "400 Bad Request: {\"error\":{\"code\":\"content-blocked\",\"message\":\"content-blocked (request id: 2026101600292781111551vqnnmUltoGkF6)\",\"param\":\"\",\"type\":\"agent_router_api_error\"}}";
+        assert!(is_content_blocked_message(blocked));
+        assert!(is_content_blocked_error(&AppError::Upstream(
+            blocked.to_string()
+        )));
+        assert_eq!(
+            content_blocked_request_id(blocked),
+            Some("2026101600292781111551vqnnmUltoGkF6".to_string())
+        );
+        assert!(describe_content_blocked(blocked).contains("2026101600292781111551vqnnmUltoGkF6"));
+        assert!(!is_content_blocked_message("400 Bad Request: bad input"));
+        assert!(!is_content_blocked_error(&AppError::Upstream(
+            "500 Internal Server Error: boom".to_string()
+        )));
+    }
+
+    #[test]
+    fn deepseek_guard_scopes_model_and_host() {
+        assert!(deepseek_guard_active(
+            "deepseek-v4-flash",
+            Some("agentrouter"),
+            "https://proxy.local/v1/chat/completions"
+        ));
+        assert!(deepseek_guard_active(
+            "deepseek-v4-flash",
+            None,
+            "https://agentrouter.org/v1/chat/completions"
+        ));
+        assert!(!deepseek_guard_active(
+            "gpt-6-astra",
+            Some("agentrouter"),
+            "https://agentrouter.org/v1/chat/completions"
+        ));
+        assert!(!deepseek_guard_active(
+            "deepseek-v4-flash",
+            Some("custom"),
+            "https://api.openai.com/v1/chat/completions"
+        ));
+    }
+
+    #[test]
+    fn deepseek_first_turn_frames_thin_shapes() {
+        assert!(deepseek_first_turn("hi").starts_with(DEEPSEEK_CONTEXT_MARK));
+        assert!(deepseek_first_turn("hola, ¿cómo estás?").starts_with(DEEPSEEK_CONTEXT_MARK));
+        assert!(
+            deepseek_first_turn("Please handle work kanban task 24edbb12")
+                .starts_with(DEEPSEEK_CONTEXT_MARK)
+        );
+        assert!(deepseek_first_turn("").starts_with(DEEPSEEK_CONTEXT_MARK));
+        assert_eq!(
+            deepseek_first_turn("Please explain Rust ownership in detail with examples."),
+            "Please explain Rust ownership in detail with examples."
+        );
+        assert_eq!(
+            deepseek_first_turn("[myagent-request] Please handle this."),
+            "[myagent-request] Please handle this."
+        );
+    }
+
+    #[test]
+    fn sanitize_replaces_deepseek_tripwords() {
+        assert_eq!(
+            sanitize_deepseek_text("Write Lorem ipsum placeholder dummy data."),
+            "Write example text example value sample data."
+        );
+        assert_eq!(
+            sanitize_deepseek_text("As a language model virtual assistant, I'm here to help."),
+            "As a large language model AI assistant, How can I help."
+        );
+    }
+
+    #[test]
+    fn harden_touches_first_user_message_only() {
+        let history = vec![
+            serde_json::json!({"role": "system", "content": "Be helpful"}),
+            serde_json::json!({"role": "user", "content": "hi"}),
+            serde_json::json!({"role": "assistant", "content": "Hello"}),
+            serde_json::json!({"role": "user", "content": "work kanban task t_24edbb12"}),
+        ];
+        let hardened = harden_deepseek_history(
+            &history,
+            "deepseek-v4-flash",
+            Some("agentrouter"),
+            "https://agentrouter.org/v1/chat/completions",
+        );
+        assert_eq!(hardened[0]["content"], serde_json::json!("Be helpful"));
+        assert!(
+            hardened[1]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with(DEEPSEEK_CONTEXT_MARK)
+        );
+        assert_eq!(
+            hardened[3]["content"],
+            serde_json::json!("work kanban task t_24edbb12")
+        );
+        let untouched = harden_deepseek_history(
+            &history,
+            "gpt-6-astra",
+            Some("agentrouter"),
+            "https://agentrouter.org/v1/chat/completions",
+        );
+        assert_eq!(untouched, history);
     }
 
     #[test]

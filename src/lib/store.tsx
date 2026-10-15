@@ -1337,7 +1337,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         const userMsg = await db.addMessage(conversationId, "user", text);
-        assistantMsg = await db.addMessage(conversationId, "assistant", "");
+        assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
         setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
         const current = conversations.find((c) => c.id === conversationId);
@@ -1349,11 +1349,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
           setConversations((prev) =>
             prev.map((c) =>
-              c.id === conversationId ? { ...c, title: provisionalTitle as string } : c,
+              c.id === conversationId
+                ? { ...c, title: provisionalTitle as string, model: modelRef.current }
+                : c,
             ),
           );
         } else {
           await db.touchConversation(conversationId, { model: modelRef.current });
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === conversationId ? { ...c, model: modelRef.current } : c,
+            ),
+          );
         }
       } catch (e) {
         reportError(e);
@@ -1399,7 +1406,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMessages(kept);
     let assistantMsg: Message;
     try {
-      assistantMsg = await db.addMessage(conversationId, "assistant", "");
+      assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
     } catch (e) {
       reportError(e);
       return;
@@ -1440,7 +1447,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setError(null);
     let assistantMsg: Message;
     try {
-      assistantMsg = await db.addMessage(conversationId, "assistant", "");
+      assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
     } catch (e) {
       reportError(e);
       return;
@@ -1496,7 +1503,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       let assistantMsg: Message;
       try {
-        assistantMsg = await db.addMessage(conversationId, "assistant", "");
+        assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
       } catch (e) {
         reportError(e);
         return false;
@@ -1550,7 +1557,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const created = await db.createConversation(connection.id, modelRef.current, projectId);
         const userMsg = await db.addMessage(created.id, "user", trimmed);
-        const assistantMsg = await db.addMessage(created.id, "assistant", "");
+        const assistantMsg = await db.addMessage(created.id, "assistant", "", modelRef.current);
         const title = trimmed.slice(0, 48) || "New chat";
         await db.touchConversation(created.id, { title });
         setConversations((prev) => [{ ...created, title }, ...prev]);

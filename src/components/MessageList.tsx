@@ -515,7 +515,7 @@ export function MessageList() {
             <div key={message.id} className="mb-6">
               <AssistantMessage
                 message={message}
-                modelName={activeModel ?? "assistant"}
+                modelName={message.model ?? activeModel ?? "assistant"}
                 isLast={message.id === lastAssistantId}
                 streaming={streaming}
                 resetKey={activeConversationId}
