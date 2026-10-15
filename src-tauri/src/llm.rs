@@ -135,6 +135,47 @@ fn endpoint(base_url: &str, path: &str) -> String {
     )
 }
 
+fn is_agentrouter_url(url: &str) -> bool {
+    url.contains("agentrouter.org")
+}
+
+fn agentrouter_headers(request: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+    if is_agentrouter_url(url) {
+        request
+            .header("User-Agent", "codex_cli_rs/0.114.0")
+            .header("originator", "codex_cli_rs")
+    } else {
+        request
+    }
+}
+
+fn parse_models_list(value: &serde_json::Value) -> Vec<String> {
+    let mut models: Vec<String> = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id")?.as_str()?;
+                    if let Some(types) = item
+                        .get("supported_endpoint_types")
+                        .and_then(|t| t.as_array())
+                    {
+                        let openai = types.iter().any(|t| t.as_str() == Some("openai"));
+                        if !openai {
+                            return None;
+                        }
+                    }
+                    Some(id.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    models
+}
+
 async fn error_body(resp: reqwest::Response) -> String {
     let status = resp.status();
     match resp.text().await {
@@ -168,12 +209,8 @@ pub async fn list_models(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let key = vault::get_api_key(&connection_id)?;
-    let mut request = client.get(endpoint(&base_url, "models")).bearer_auth(key);
-    if base_url.contains("agentrouter.org") {
-        request = request
-            .header("User-Agent", "myagent/0.1.6")
-            .header("originator", "myagent");
-    }
+    let url = endpoint(&base_url, "models");
+    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), &url);
     let resp = request.send().await?;
 
     if !resp.status().is_success() {
@@ -181,30 +218,7 @@ pub async fn list_models(
     }
 
     let value: serde_json::Value = resp.json().await?;
-    let mut models: Vec<String> = value
-        .get("data")
-        .and_then(|data| data.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let id = item.get("id")?.as_str()?;
-                    if let Some(types) = item
-                        .get("supported_endpoint_types")
-                        .and_then(|t| t.as_array())
-                    {
-                        let openai = types.iter().any(|t| t.as_str() == Some("openai"));
-                        if !openai {
-                            return None;
-                        }
-                    }
-                    Some(id.to_string())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    models.sort();
-    Ok(models)
+    Ok(parse_models_list(&value))
 }
 
 #[tauri::command]
@@ -273,6 +287,7 @@ pub async fn suggest_title(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<String> {
     let key = vault::get_api_key(&req.connection_id)?;
+    let url = endpoint(&req.base_url, "chat/completions");
     let body = serde_json::json!({
         "model": req.model,
         "messages": [
@@ -294,12 +309,8 @@ pub async fn suggest_title(
         "stream": false,
     });
 
-    let resp = client
-        .post(endpoint(&req.base_url, "chat/completions"))
-        .bearer_auth(key)
-        .json(&body)
-        .send()
-        .await?;
+    let request = agentrouter_headers(client.post(url.clone()).bearer_auth(key), &url);
+    let resp = request.json(&body).send().await?;
 
     if !resp.status().is_success() {
         return Err(AppError::Upstream(error_body(resp).await));
@@ -387,7 +398,8 @@ async fn post_with_retry(
 ) -> AppResult<reqwest::Response> {
     let mut last_error: Option<AppError> = None;
     for attempt in 0..MAX_ATTEMPTS {
-        match client.post(url).bearer_auth(key).json(body).send().await {
+        let request = agentrouter_headers(client.post(url).bearer_auth(key), url);
+        match request.json(body).send().await {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
@@ -1100,5 +1112,50 @@ mod tests {
         let content = body["messages"][1]["content"].as_str().unwrap();
         assert!(content.len() <= 12_000 + WORD_LEN);
         assert!(content.starts_with("word word"));
+    }
+
+    #[test]
+    fn agentrouter_gating_matches_gateway_only() {
+        assert!(is_agentrouter_url("https://agentrouter.org/v1/models"));
+        assert!(is_agentrouter_url(
+            "https://co.agentrouter.org/v1/chat/completions"
+        ));
+        assert!(!is_agentrouter_url("https://openrouter.ai/api/v1/models"));
+        assert!(!is_agentrouter_url("http://127.0.0.1:7777/v1/models"));
+    }
+
+    #[test]
+    fn parses_agentrouter_models_shape() {
+        let value = serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": "gpt-6.1-sol", "supported_endpoint_types": ["openai"]},
+                {"id": "claude-opus-5-5", "supported_endpoint_types": ["anthropic", "openai"]},
+                {"id": "voice-only", "supported_endpoint_types": ["audio"]},
+                {"no-id": true},
+                {"id": "deepseek-v4-flash"}
+            ]
+        });
+        assert_eq!(
+            parse_models_list(&value),
+            vec![
+                "claude-opus-5-5".to_string(),
+                "deepseek-v4-flash".to_string(),
+                "gpt-6.1-sol".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_openai_models_shape() {
+        let value = serde_json::json!({
+            "object": "list",
+            "data": [{"id": "b"}, {"id": "a"}]
+        });
+        assert_eq!(
+            parse_models_list(&value),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(parse_models_list(&serde_json::json!({})).is_empty());
     }
 }
