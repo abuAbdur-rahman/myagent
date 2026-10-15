@@ -121,7 +121,7 @@ Exit: the app is comfortable to use daily.
 | [ ] | C1 | Provider and API key storage (verify first) | Unknown | S | none |
 | [ ] | C2 | Model picker polish | Have | S | C3 |
 | [ ] | G3 | Settings page | Unknown | M | C1, D4 |
-| [ ] | G1 | Slash commands | Missing | M | C9, B9 |
+| [ ] | G1 | Slash commands | Have (0.2.0) | M | C9, B9 |
 | [ ] | G2 | Keyboard shortcuts | Partial | S | none |
 | [ ] | A8 | Queue messages while streaming | Missing | S | A2 |
 | [ ] | G4 | Theme | Unknown | S | none |
@@ -136,9 +136,9 @@ Exit: each added one at a time with its own tests.
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
 | [x] | D16 | Question tool | Have (0.1.3) | M | D5 |
-| [ ] | D17 | Todo list tool | Missing | M | D1 |
-| [ ] | D14 | Web fetch | Missing | M | D4, D5 |
-| [ ] | D15 | Web search | Missing | M | D14 |
+| [ ] | D17 | Todo list tool | Have (0.2.0) | M | D1 |
+| [ ] | D14 | Web fetch | Have (0.2.0) | M | D4, D5 |
+| [ ] | D15 | Web search | Have (0.2.0) | M | D14 |
 | [ ] | F3 | Attachments + project knowledge (text, docs) | Missing | M | F2 |
 | [ ] | F4 | Image input (vision) | Missing | S | C3, F3 |
 | [ ] | F5 | Mermaid and LaTeX | Missing | M | A9 |

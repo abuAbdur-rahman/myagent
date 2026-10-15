@@ -336,13 +336,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Large output is capped in context but fully recoverable.
 
 ## D14. Web fetch
-- **Status:** Missing
+- **Status:** Have (0.2.0: `web_fetch`, https-only, SSRF guard + redirect re-check, htmd conversion, audit rows)
 - **Ref:** † OpenCode `webfetch` reads web pages; default permission is allow in some setups, ask in safer templates.
 - **Build:** Default ask. HTTP(S) only, block private, loopback and link-local addresses, resolve DNS before connecting and re-check after redirects (SSRF). Convert HTML to text, cap size, 15s timeout.
 - **Done:** Requests to localhost and 169.254.x.x are rejected.
 
 ## D15. Web search
-- **Status:** Missing
+- **Status:** Have (0.2.0: `web_search`, Tavily default + SearXNG endpoint, key in vault, Settings/onboarding)
 - **Ref:** OpenCode has a `websearch` permission; OpenRouter offers web search plugins.
 - **Build:** One provider behind one tool; default ask; returns titles, URLs, snippets. Needs a key. Not before D14.
 - **Done:** Results render as links the model can fetch.
@@ -354,7 +354,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** The loop resumes with the chosen answer.
 
 ## D17. Todo list tool
-- **Status:** Missing
+- **Status:** Have (0.2.0: `todo_write`/`todo_set`, per-chat in DB, sticky checklist)
 - **Ref:** † OpenCode `todowrite` and `todoread`; OpenWebUI has task management in chat for multi-step work.
 - **Build:** Tool that replaces a list of `{text, status}`. Rendered as a sticky checklist above the composer. Per chat, stored in the DB.
 - **Done:** The model updates the list and the UI reflects it.
@@ -450,7 +450,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # G. App shell
 
 ## G1. Slash commands
-- **Status:** Partial (0.1.7: /compact in menu + exact-match; /export, /fork, /model still missing)
+- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest)
 - **Ref:** † Claude Code and OpenCode have `/compact`, `/export`, `/fork`, `/copy` and more; Claude Code custom commands are markdown files that are now part of skills.
 - **Build:** Typing `/` at the start opens a filtered menu. Start with `/compact`, `/export`, `/fork`, `/clear`, `/model`. Commands are a plain registry in code.
 - **Not:** User-defined commands.
