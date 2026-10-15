@@ -180,6 +180,10 @@ interface AppContextValue {
   setSendWith: (mode: "enter" | "ctrl") => void;
   autoCompact: boolean;
   setAutoCompact: (value: boolean) => void;
+  collapseThinking: boolean;
+  setCollapseThinking: (value: boolean) => void;
+  collapseToolCalls: boolean;
+  setCollapseToolCalls: (value: boolean) => void;
   searchBackend: "tavily" | "searxng";
   setSearchBackend: (value: "tavily" | "searxng") => void;
   searchEndpoint: string;
@@ -284,6 +288,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const [autoCompact, setAutoCompactState] = useState(
     () => localStorage.getItem("autoCompact") !== "0",
+  );
+  const [collapseThinking, setCollapseThinkingState] = useState(
+    () => localStorage.getItem("collapseThinking") !== "0",
+  );
+  const [collapseToolCalls, setCollapseToolCallsState] = useState(
+    () => localStorage.getItem("collapseToolCalls") !== "0",
   );
   const autoCompactRef = useRef(true);
   const autoLatchRef = useRef<{ through: number | null; count: number } | null>(null);
@@ -467,6 +477,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setAutoCompact = useCallback((value: boolean) => {
     setAutoCompactState(value);
     localStorage.setItem("autoCompact", value ? "1" : "0");
+  }, []);
+
+  const setCollapseThinking = useCallback((value: boolean) => {
+    setCollapseThinkingState(value);
+    localStorage.setItem("collapseThinking", value ? "1" : "0");
+  }, []);
+
+  const setCollapseToolCalls = useCallback((value: boolean) => {
+    setCollapseToolCallsState(value);
+    localStorage.setItem("collapseToolCalls", value ? "1" : "0");
   }, []);
 
   const [searchBackend, setSearchBackendState] = useState<"tavily" | "searxng">(
@@ -1737,6 +1757,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSendWith,
     autoCompact,
     setAutoCompact,
+    collapseThinking,
+    setCollapseThinking,
+    collapseToolCalls,
+    setCollapseToolCalls,
     searchBackend,
     setSearchBackend,
     searchEndpoint,

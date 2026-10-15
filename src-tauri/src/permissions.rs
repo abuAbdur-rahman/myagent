@@ -134,14 +134,13 @@ fn scope_of(project_id: Option<&str>) -> String {
     project_id.unwrap_or("").to_string()
 }
 
-pub async fn load_rules(app: &AppHandle, project_id: Option<&str>) -> AppResult<Vec<Rule>> {
-    let pool = rules_pool(app).await?;
+async fn load_rules_from(pool: &SqlitePool, project_id: Option<&str>) -> AppResult<Vec<Rule>> {
     let scope = scope_of(project_id);
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT action, resource, effect FROM permission_rules WHERE project_id = '' OR project_id = ? ORDER BY project_id",
     )
     .bind(&scope)
-    .fetch_all(&pool)
+    .fetch_all(pool)
     .await
     .map_err(|e| AppError::Internal(format!("load rules: {e}")))?;
     let mut rules = default_rules();
@@ -160,6 +159,11 @@ pub async fn load_rules(app: &AppHandle, project_id: Option<&str>) -> AppResult<
     Ok(rules)
 }
 
+pub async fn load_rules(app: &AppHandle, project_id: Option<&str>) -> AppResult<Vec<Rule>> {
+    let pool = rules_pool(app).await?;
+    load_rules_from(&pool, project_id).await
+}
+
 pub async fn check(
     app: &AppHandle,
     action: &str,
@@ -176,22 +180,60 @@ pub async fn allow_always(
     resource: &str,
     project_id: Option<&str>,
 ) -> AppResult<()> {
+    let pool = rules_pool(app).await?;
+    allow_always_from(&pool, action, resource, project_id).await
+}
+
+pub(crate) async fn allow_always_from(
+    pool: &SqlitePool,
+    action: &str,
+    resource: &str,
+    project_id: Option<&str>,
+) -> AppResult<()> {
     if resource == "*" {
         return Err(AppError::Internal(
             "refusing to store a blanket allow rule".to_string(),
         ));
     }
-    let pool = rules_pool(app).await?;
     sqlx::query(
         "INSERT INTO permission_rules (action, resource, effect, project_id) VALUES (?, ?, 'allow', ?) ON CONFLICT (action, resource, project_id) DO UPDATE SET effect = 'allow'",
     )
     .bind(action)
     .bind(resource)
     .bind(scope_of(project_id))
-    .execute(&pool)
+    .execute(pool)
     .await
     .map_err(|e| AppError::Internal(format!("save rule: {e}")))?;
     Ok(())
+}
+
+pub(crate) async fn allow_tool(
+    app: &AppHandle,
+    action: &str,
+    project_id: Option<&str>,
+) -> AppResult<()> {
+    let pool = rules_pool(app).await?;
+    allow_tool_from(&pool, action, project_id).await
+}
+
+pub(crate) async fn allow_tool_from(
+    pool: &SqlitePool,
+    action: &str,
+    project_id: Option<&str>,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO permission_rules (action, resource, effect, project_id) VALUES (?, '*', 'allow', ?) ON CONFLICT (action, resource, project_id) DO UPDATE SET effect = 'allow'",
+    )
+    .bind(action)
+    .bind(scope_of(project_id))
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("save rule: {e}")))?;
+    Ok(())
+}
+
+pub fn tool_wide_allow(action: &str) -> bool {
+    matches!(action, "web_fetch" | "web_search")
 }
 
 #[derive(Deserialize)]
@@ -250,18 +292,29 @@ pub async fn approval_reply(
         return Err(AppError::Internal("approval already resolved".to_string()));
     };
     if reply == ApprovalReply::Always {
-        for resource in &pending.resources {
-            if let Err(error) = allow_always(
-                &app,
-                &pending.action,
-                resource,
-                pending.project_id.as_deref(),
-            )
-            .await
-            {
-                let _ = pending.tx.send(ApprovalReply::Once);
-                return Err(error);
+        let tool_wide = tool_wide_allow(&pending.action);
+        let result = if tool_wide {
+            allow_tool(&app, &pending.action, pending.project_id.as_deref()).await
+        } else {
+            let mut outcome = Ok(());
+            for resource in &pending.resources {
+                if let Err(error) = allow_always(
+                    &app,
+                    &pending.action,
+                    resource,
+                    pending.project_id.as_deref(),
+                )
+                .await
+                {
+                    outcome = Err(error);
+                    break;
+                }
             }
+            outcome
+        };
+        if let Err(error) = result {
+            let _ = pending.tx.send(ApprovalReply::Once);
+            return Err(error);
         }
     }
     let _ = pending.tx.send(reply);
@@ -395,5 +448,76 @@ mod tests {
             decide("run_powershell", &["Get-X".to_string()], &rules),
             Effect::Ask
         );
+    }
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("memory db");
+        sqlx::query(
+            "CREATE TABLE permission_rules (action TEXT NOT NULL, resource TEXT NOT NULL, effect TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', PRIMARY KEY (action, resource, project_id))",
+        )
+        .execute(&pool)
+        .await
+        .expect("permission_rules schema");
+        pool
+    }
+
+    #[tokio::test]
+    async fn always_allow_persists_and_stops_asking() {
+        let pool = test_pool().await;
+        allow_always_from(&pool, "web_fetch", "example.com", None)
+            .await
+            .expect("store allow");
+        let rules = load_rules_from(&pool, None).await.expect("load rules");
+        assert_eq!(
+            decide("web_fetch", &["example.com".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("web_fetch", &["other.com".to_string()], &rules),
+            Effect::Ask
+        );
+    }
+
+    #[tokio::test]
+    async fn always_allow_refuses_blanket() {
+        let pool = test_pool().await;
+        assert!(
+            allow_always_from(&pool, "web_search", "*", None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_allow_covers_every_resource() {
+        let pool = test_pool().await;
+        allow_tool_from(&pool, "web_search", None)
+            .await
+            .expect("store tool allow");
+        let rules = load_rules_from(&pool, None).await.expect("load rules");
+        assert_eq!(
+            decide("web_search", &["any query".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("web_search", &["another query".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("web_fetch", &["example.com".to_string()], &rules),
+            Effect::Ask
+        );
+    }
+
+    #[test]
+    fn tool_wide_allow_only_for_network_tools() {
+        assert!(tool_wide_allow("web_fetch"));
+        assert!(tool_wide_allow("web_search"));
+        assert!(!tool_wide_allow("run_powershell"));
+        assert!(!tool_wide_allow("save_artifact"));
     }
 }

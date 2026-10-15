@@ -97,6 +97,42 @@ export const Textarea = forwardRef<
 ));
 Textarea.displayName = "Textarea";
 
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-10 flex-none items-center rounded-full border transition-colors",
+        checked ? "border-accent bg-accent" : "border-border bg-active",
+        focusRing,
+        disabled && "opacity-50",
+      )}
+    >
+      <span
+        className={cn(
+          "ml-0.5 block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+          checked && "translate-x-[18px]",
+        )}
+      />
+    </button>
+  );
+}
+
 export function Badge({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span

@@ -88,11 +88,11 @@ function ToolIcon({ name }: { name: string }) {
 }
 
 function ToolLogView({ resetKey }: { resetKey: string | null }) {
-  const { toolLog } = useApp();
-  const [collapsed, setCollapsed] = useState(false);
+  const { toolLog, collapseToolCalls } = useApp();
+  const [collapsed, setCollapsed] = useState(collapseToolCalls);
   useEffect(() => {
-    setCollapsed(false);
-  }, [resetKey]);
+    setCollapsed(collapseToolCalls);
+  }, [resetKey, collapseToolCalls]);
   if (toolLog.length === 0) return null;
   const running = toolLog.filter((e) => e.status === "running").length;
   const failed = toolLog.filter((e) => e.status === "err").length;
@@ -260,12 +260,13 @@ function ThinkingBlock({
   message: Message;
   live: boolean;
 }) {
+  const { collapseThinking } = useApp();
   if (!message.reasoning) return null;
   const seconds =
     message.thinking_ms != null ? Math.max(1, Math.round(message.thinking_ms / 1000)) : null;
   const title = live && seconds === null ? "Thinking…" : `Thought${seconds !== null ? ` for ${seconds} s` : ""}`;
   return (
-    <details className="think" open={live}>
+    <details className="think" open={live || !collapseThinking}>
       <summary>{title}</summary>
       <Markdown content={message.reasoning} />
     </details>

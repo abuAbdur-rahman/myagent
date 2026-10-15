@@ -5,7 +5,7 @@ import * as api from "../../lib/api";
 import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
 import { MemoryEditor } from "../MemoryEditor";
-import { Button, Input, Spinner } from "../ui";
+import { Button, Input, Spinner, Toggle } from "../ui";
 import { Select } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText } from "../../lib/utils";
@@ -42,7 +42,18 @@ function SettingRow({
 }
 
 export function GeneralPage() {
-  const { displayName, setDisplayName, sendWith, setSendWith, autoCompact, setAutoCompact } = useApp();
+  const {
+    displayName,
+    setDisplayName,
+    sendWith,
+    setSendWith,
+    autoCompact,
+    setAutoCompact,
+    collapseThinking,
+    setCollapseThinking,
+    collapseToolCalls,
+    setCollapseToolCalls,
+  } = useApp();
   return (
     <div>
       <SettingRow label="Display name" description="Used in the greeting and profile">
@@ -66,11 +77,24 @@ export function GeneralPage() {
         />
       </SettingRow>
       <SettingRow label="Auto-compact context" description="Summarize older messages at 80% context">
-        <Input
-          type="checkbox"
+        <Toggle
           checked={autoCompact}
-          onChange={(e) => setAutoCompact(e.target.checked)}
-          aria-label="Auto-compact context"
+          onChange={setAutoCompact}
+          label="Auto-compact context"
+        />
+      </SettingRow>
+      <SettingRow label="Collapse thinking" description="Fold reasoning blocks once the reply is done">
+        <Toggle
+          checked={collapseThinking}
+          onChange={setCollapseThinking}
+          label="Collapse thinking"
+        />
+      </SettingRow>
+      <SettingRow label="Collapse tool calls" description="Fold the tool-call list when a new turn starts">
+        <Toggle
+          checked={collapseToolCalls}
+          onChange={setCollapseToolCalls}
+          label="Collapse tool calls"
         />
       </SettingRow>
     </div>

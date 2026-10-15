@@ -66,7 +66,11 @@ function ApprovalCard() {
         </pre>
       )}
       <div className="mt-1 font-mono text-[11px] text-muted">
-        in {approval.cwd} · Always saves allow {approval.tool} · {firstSegment.slice(0, 60)}
+        in {approval.cwd} ·{" "}
+        {approval.tool === "web_fetch" || approval.tool === "web_search"
+          ? `Always allows ${approval.tool} every time`
+          : `Always allows these ${approval.tool} commands`}{" "}
+        · {firstSegment.slice(0, 60)}
       </div>
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
