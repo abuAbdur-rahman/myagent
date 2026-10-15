@@ -371,7 +371,7 @@ fn summary_body(model: &str, text: &str) -> serde_json::Value {
         "messages": [
             {
                 "role": "system",
-                "content": "Summarize this chat excerpt for context compaction. Cover: the user's goal, key decisions, files touched, and open tasks. Under 300 words, plain text, no preamble.",
+                "content": "Summarize this chat excerpt for context compaction. Reply with terse bullets under exactly these headings. Keep every file path, command, and model name verbatim. Under 300 words, plain text, no preamble.\n## Objective\n## Decisions\n## Work State\n### Completed\n### Active\n## Next Move\n## Relevant Files (max 15)",
             },
             {
                 "role": "user",
@@ -593,6 +593,32 @@ fn tool_text_message(id: &str, text: &str) -> serde_json::Value {
     })
 }
 
+const PRUNE_KEEP_TOOL_MESSAGES: usize = 1;
+
+fn prune_tool_history(history: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let tool_total = history
+        .iter()
+        .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+        .count();
+    let mut seen = 0;
+    history
+        .iter()
+        .map(|m| {
+            let is_tool = m.get("role").and_then(|r| r.as_str()) == Some("tool");
+            if !is_tool {
+                return m.clone();
+            }
+            seen += 1;
+            if tool_total - seen < PRUNE_KEEP_TOOL_MESSAGES {
+                return m.clone();
+            }
+            let mut pruned = m.clone();
+            pruned["content"] = serde_json::json!("[older tool output omitted]");
+            pruned
+        })
+        .collect()
+}
+
 struct RepeatGuard {
     last_key: Option<String>,
     streak: u32,
@@ -761,7 +787,7 @@ async fn run_agentic(
         }
         let mut body = serde_json::json!({
             "model": req.model,
-            "messages": history,
+            "messages": prune_tool_history(&history),
             "tools": tools,
             "stream": true,
             "stream_options": { "include_usage": true },
@@ -1387,5 +1413,31 @@ mod tests {
         assert!(uses_unified_reasoning(Some("agentrouter")));
         assert!(!uses_unified_reasoning(Some("custom")));
         assert!(!uses_unified_reasoning(None));
+    }
+
+    #[test]
+    fn prune_keeps_newest_tool_output_only() {
+        let history = vec![
+            serde_json::json!({"role": "user", "content": "hi"}),
+            tool_text_message("call-1", "old output one"),
+            tool_text_message("call-2", "old output two"),
+            serde_json::json!({"role": "assistant", "content": "working"}),
+            tool_text_message("call-3", "fresh output"),
+        ];
+        let pruned = prune_tool_history(&history);
+        assert_eq!(pruned.len(), 5);
+        assert_eq!(pruned[0]["content"], serde_json::json!("hi"));
+        assert_eq!(
+            pruned[1]["content"],
+            serde_json::json!("[older tool output omitted]")
+        );
+        assert_eq!(pruned[1]["tool_call_id"], serde_json::json!("call-1"));
+        assert_eq!(
+            pruned[2]["content"],
+            serde_json::json!("[older tool output omitted]")
+        );
+        assert_eq!(pruned[3]["content"], serde_json::json!("working"));
+        assert_eq!(pruned[4]["content"], serde_json::json!("fresh output"));
+        assert_eq!(pruned[4]["tool_call_id"], serde_json::json!("call-3"));
     }
 }

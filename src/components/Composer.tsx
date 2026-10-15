@@ -10,6 +10,7 @@ import type { ChatKeyCallbacks } from "./composer/chatKeys";
 const SLASH_COMMANDS: [string, string][] = [
   ["new", "New chat"],
   ["clear", "Clear chat"],
+  ["compact", "Compact context now"],
   ["memory", "Open memory"],
   ["settings", "Open settings"],
 ];
@@ -63,6 +64,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     clearActiveConversation,
     setSettingsPage,
     newConversation,
+    compactActive,
     reasoningEffort,
     setReasoningEffort,
     supportedEfforts,
@@ -94,6 +96,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
+    if (text === "/compact") {
+      handle?.focus();
+      void compactActive().catch(() => undefined);
+      return;
+    }
     handle?.focus();
     void sendMessage(text).then((accepted) => {
       if (!accepted) {
@@ -120,6 +127,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setSlashIndex(0);
     if (name === "new") void newConversation().catch(() => undefined);
     else if (name === "clear") void clearActiveConversation();
+    else if (name === "compact") void compactActive().catch(() => undefined);
     else if (name === "memory") setSettingsPage("memory");
     else if (name === "settings") setSettingsPage("general");
   };

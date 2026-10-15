@@ -278,6 +278,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => localStorage.getItem("autoCompact") !== "0",
   );
   const autoCompactRef = useRef(true);
+  const autoLatchRef = useRef<{ through: number | null; count: number } | null>(null);
   useEffect(() => {
     autoCompactRef.current = autoCompact;
   }, [autoCompact]);
@@ -1248,10 +1249,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const tokens =
         usageRef.current?.total ??
         estimateContext(windowed, system, contextLimitRef.current).tokens;
-      if (tokens / contextLimitRef.current > 0.8) {
-        toast("Context over 80% full - compacting");
-        await compactActive(true);
+      const ratio = tokens / contextLimitRef.current;
+      if (ratio < 0.7) {
+        autoLatchRef.current = null;
+        return;
       }
+      if (ratio <= 0.8) return;
+      const latch = autoLatchRef.current;
+      if (latch && latch.through === through && latch.count === turns.length) return;
+      toast("Context over 80% full - compacting");
+      await compactActive(true);
+      autoLatchRef.current = {
+        through: summaryFor(conversationId).through,
+        count: messagesRef.current.length,
+      };
     },
     [compactActive, summaryFor],
   );
