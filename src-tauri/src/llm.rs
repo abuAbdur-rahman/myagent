@@ -92,6 +92,8 @@ pub struct ChatRequest {
     pub conversation_id: Option<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub connection_kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -103,16 +105,50 @@ pub struct TitleRequest {
     pub assistant_text: String,
 }
 
-fn apply_optional_params(body: &mut serde_json::Value, req: &ChatRequest) {
+fn effort_allowed(caps: Option<&ModelCaps>, effort: &str) -> bool {
+    let Some(entry) = caps else {
+        return true;
+    };
+    if entry.supports_reasoning == Some(false) {
+        return false;
+    }
+    if let Some(efforts) = &entry.efforts {
+        return efforts.iter().any(|level| level == effort);
+    }
+    true
+}
+
+fn uses_unified_reasoning(kind: Option<&str>) -> bool {
+    matches!(kind, Some("openrouter" | "agentrouter"))
+}
+
+async fn apply_optional_params(
+    client: &reqwest::Client,
+    body: &mut serde_json::Value,
+    req: &ChatRequest,
+    key: &str,
+) {
     if let Some(temperature) = req.temperature {
         body["temperature"] = serde_json::json!(temperature);
     }
-    if let Some(effort) = req
+    let Some(effort) = req
         .reasoning_effort
         .as_deref()
         .filter(|e| !e.is_empty() && *e != "none")
-    {
+    else {
+        return;
+    };
+    let caps = fetch_model_caps(client, &req.base_url, key)
+        .await
+        .ok()
+        .and_then(|entries| entries.into_iter().find(|entry| entry.id == req.model));
+    if !effort_allowed(caps.as_ref(), effort) {
+        return;
+    }
+    if uses_unified_reasoning(req.connection_kind.as_deref()) {
         body["reasoning"] = serde_json::json!({ "effort": effort });
+    } else {
+        body["reasoning_effort"] = serde_json::json!(effort);
     }
 }
 
@@ -729,7 +765,7 @@ async fn run_agentic(
             "tools": tools,
             "stream": true,
         });
-        apply_optional_params(&mut body, req);
+        apply_optional_params(client, &mut body, req, &key).await;
 
         let iteration =
             match stream_agentic_iteration(client, &url, &key, &body, cancel, on_event).await {
@@ -995,7 +1031,7 @@ async fn stream_completion(
         "messages": history,
         "stream": true,
     });
-    apply_optional_params(&mut body, req);
+    apply_optional_params(client, &mut body, req, &key).await;
 
     let resp = match post_with_retry(
         client,
@@ -1313,5 +1349,41 @@ mod tests {
         assert_eq!(caps[0].id, "chat-model");
         assert_eq!(caps[0].supports_tools, None);
         assert!(parse_models_caps(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn effort_gate_drops_unsupported_effort() {
+        assert!(effort_allowed(None, "medium"));
+        let no_reasoning = ModelCaps {
+            id: "plain".to_string(),
+            context_length: None,
+            supports_tools: None,
+            supports_reasoning: Some(false),
+            efforts: None,
+            mandatory: false,
+        };
+        assert!(!effort_allowed(Some(&no_reasoning), "medium"));
+        let listed = ModelCaps {
+            supports_reasoning: Some(true),
+            efforts: Some(vec!["low".to_string()]),
+            ..ModelCaps {
+                id: "thinker".to_string(),
+                context_length: None,
+                supports_tools: None,
+                supports_reasoning: None,
+                efforts: None,
+                mandatory: false,
+            }
+        };
+        assert!(effort_allowed(Some(&listed), "low"));
+        assert!(!effort_allowed(Some(&listed), "high"));
+    }
+
+    #[test]
+    fn unified_reasoning_only_for_gateways() {
+        assert!(uses_unified_reasoning(Some("openrouter")));
+        assert!(uses_unified_reasoning(Some("agentrouter")));
+        assert!(!uses_unified_reasoning(Some("custom")));
+        assert!(!uses_unified_reasoning(None));
     }
 }

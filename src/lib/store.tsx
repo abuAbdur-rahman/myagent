@@ -982,6 +982,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             projectId: projectRef.current?.id ?? null,
             conversationId,
             reasoningEffort: resolveEffort(),
+            connectionKind: connection.kind,
           },
           (event) => {
             if (requestIdRef.current !== requestId) return;

@@ -150,6 +150,7 @@ export interface ChatStreamArgs {
   projectId?: string | null;
   conversationId?: string | null;
   reasoningEffort?: string | null;
+  connectionKind?: string;
 }
 
 export async function chatStream(
@@ -171,6 +172,7 @@ export async function chatStream(
       project_id: args.projectId ?? null,
       conversation_id: args.conversationId ?? null,
       reasoning_effort: args.reasoningEffort ?? null,
+      connection_kind: args.connectionKind ?? null,
     },
     onEvent: channel,
   });
