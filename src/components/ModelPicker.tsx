@@ -31,7 +31,7 @@ function ModelPickerContent({ onDone }: { onDone: () => void }) {
           const hasKey = await api.hasApiKey(connection.id);
           if (!hasKey) return { connection, hasKey, models: [] };
           const [models, hidden] = await Promise.all([
-            api.listModels(connection.base_url, connection.id),
+            api.listModels(connection.base_url, connection.id, connection.kind),
             db.listHiddenModels(connection.id),
           ]);
           const hiddenSet = new Set(hidden);

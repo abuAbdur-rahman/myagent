@@ -540,7 +540,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       setLoadingModels(true);
       const [list, hidden] = await Promise.all([
-        api.listModels(connection.base_url, connection.id),
+        api.listModels(connection.base_url, connection.id, connection.kind),
         db.listHiddenModels(connection.id),
       ]);
       const hiddenSet = new Set(hidden);
@@ -569,7 +569,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     let live = true;
     api
-      .listModelCaps(activeConnection.base_url, activeConnection.id)
+      .listModelCaps(activeConnection.base_url, activeConnection.id, activeConnection.kind)
       .then((rows) => {
         if (live) setCatalog(rows);
       })
@@ -1030,16 +1030,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
             } else if (event.type === "retrying") {
               toast(`Retrying (${event.attempt}/${event.max})`);
             } else if (event.type === "tool_start") {
-              setToolLog((prev) => [
-                ...prev,
-                {
+              setToolLog((prev) => {
+                const entry = {
                   id: event.id,
                   name: event.name,
                   summary: event.summary,
                   status: "running" as const,
                   preview: null,
-                },
-              ]);
+                };
+                const existing = prev.findIndex((item) => item.id === event.id);
+                if (existing === -1) return [...prev, entry];
+                const next = [...prev];
+                next[existing] = entry;
+                return next;
+              });
             } else if (event.type === "tool_result") {
               setToolLog((prev) =>
                 prev.map((entry) =>
@@ -1127,11 +1131,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
             candidate,
             userText,
             assistantText,
+            connection.kind,
           );
           trimmed = title.trim();
           if (trimmed) break;
-        } catch {
-          // try next candidate; the user-text title stays
+        } catch (cause) {
+          console.warn("title generation failed", cause);
         }
       }
       if (!trimmed) return;
@@ -1213,7 +1218,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...older.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`),
       ].join("\n\n");
       try {
-        const summary = await api.summarize(connection.base_url, connection.id, model, text);
+        const summary = await api.summarize(
+          connection.base_url,
+          connection.id,
+          model,
+          text,
+          connection.kind,
+        );
         const through = older[older.length - 1].created_at;
         await db.setConversationSummary(id, summary, through);
         await db.setConversationCompacted(id, true);

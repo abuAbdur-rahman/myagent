@@ -34,7 +34,7 @@ function ProviderDialog({
   connection: Connection | null;
   onClose: () => void;
 }) {
-  const { saveConnection, refreshModels, activeConnectionId } = useApp();
+  const { saveConnection, removeConnection } = useApp();
   const [kind, setKind] = useState<ProviderKind>(connection?.kind ?? "openrouter");
   const [name, setName] = useState(connection?.name ?? "OpenRouter");
   const [baseUrl, setBaseUrl] = useState(
@@ -68,22 +68,28 @@ function ProviderDialog({
       setStatus(parsed.error.issues[0]?.message ?? "Invalid provider");
       return;
     }
+    const isNew = !connection;
+    if (isNew && !key.trim()) {
+      setStatus("Enter an API key to add a provider.");
+      return;
+    }
     setBusy(true);
+    let savedId: string | null = null;
     try {
       const saved = await saveConnection(parsed.data, connection?.id);
+      savedId = saved.id;
       if (key.trim()) {
         await api.setApiKey(saved.id, key.trim());
         setKey("");
       }
-      if (testFirst || saved.id === activeConnectionId) {
-        const models = await api.listModels(saved.base_url, saved.id);
-        setStatus(`Connected · ${models.length} models found`);
-        if (saved.id === activeConnectionId) await refreshModels();
-        if (!testFirst) onClose();
-      } else {
-        onClose();
+      const models = await api.listModels(saved.base_url, saved.id, saved.kind);
+      if (models.length === 0) {
+        throw new Error("No models found. Check the API key and base URL.");
       }
+      setStatus(`Connected · ${models.length} models found`);
+      if (!testFirst) onClose();
     } catch (e) {
+      if (isNew && savedId) await removeConnection(savedId).catch(() => undefined);
       const raw = errorText(e);
       const { hint } = api.classifyStreamError(raw);
       setStatus(hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300));
@@ -168,11 +174,9 @@ function ProviderDialog({
           <Button variant="default" onClick={onClose}>
             Cancel
           </Button>
-          {connection && (
-            <Button variant="default" disabled={busy} onClick={() => void save(true)}>
-              {busy ? <Spinner label="Testing…" /> : "Test connection"}
-            </Button>
-          )}
+          <Button variant="default" disabled={busy} onClick={() => void save(true)}>
+            {busy ? <Spinner label="Testing…" /> : "Test connection"}
+          </Button>
           <Button variant="primary" disabled={busy} onClick={() => void save(false)}>
             Save
           </Button>
@@ -197,7 +201,7 @@ function ProviderModels({ connection }: { connection: Connection }) {
     let live = true;
     setLoading(true);
     Promise.all([
-      api.listModels(connection.base_url, connection.id),
+      api.listModels(connection.base_url, connection.id, connection.kind),
       db.listHiddenModels(connection.id),
     ])
       .then(([list, hiddenList]) => {
@@ -361,7 +365,7 @@ export function ProvidersPage() {
   const test = async (connection: Connection) => {
     setTestingId(connection.id);
     try {
-      const models = await api.listModels(connection.base_url, connection.id);
+      const models = await api.listModels(connection.base_url, connection.id, connection.kind);
       toast(`Connected · ${models.length} models found`);
     } catch (e) {
       toast(errorText(e));

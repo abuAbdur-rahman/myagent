@@ -14,15 +14,20 @@ export function deleteApiKey(connectionId: string) {
   return invoke<void>("delete_api_key", { connectionId });
 }
 
-export function listModels(baseUrl: string, connectionId: string) {
-  return invoke<string[]>("list_models", { baseUrl, connectionId });
+export function listModels(baseUrl: string, connectionId: string, connectionKind?: string) {
+  return invoke<string[]>("list_models", { baseUrl, connectionId, connectionKind });
 }
 
 export async function listModelCaps(
   baseUrl: string,
   connectionId: string,
+  connectionKind?: string,
 ): Promise<ModelCapabilities[]> {
-  const raw: unknown = await invoke("list_model_caps", { baseUrl, connectionId });
+  const raw: unknown = await invoke("list_model_caps", {
+    baseUrl,
+    connectionId,
+    connectionKind,
+  });
   return parseBackendCaps(raw);
 }
 
@@ -44,6 +49,7 @@ export function suggestTitle(
   model: string,
   userText: string,
   assistantText: string,
+  connectionKind?: string,
 ) {
   return invoke<string>("suggest_title", {
     req: {
@@ -52,6 +58,7 @@ export function suggestTitle(
       model,
       user_text: userText,
       assistant_text: assistantText,
+      connection_kind: connectionKind ?? null,
     },
   });
 }
@@ -182,13 +189,20 @@ export function deleteSpill(conversationId: string) {
   return invoke<void>("delete_spill", { conversationId });
 }
 
-export function summarize(baseUrl: string, connectionId: string, model: string, text: string) {
+export function summarize(
+  baseUrl: string,
+  connectionId: string,
+  model: string,
+  text: string,
+  connectionKind?: string,
+) {
   return invoke<string>("summarize", {
     req: {
       base_url: baseUrl,
       connection_id: connectionId,
       model,
       text,
+      connection_kind: connectionKind ?? null,
     },
   });
 }

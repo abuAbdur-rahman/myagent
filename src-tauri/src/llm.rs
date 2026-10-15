@@ -103,6 +103,8 @@ pub struct TitleRequest {
     pub model: String,
     pub user_text: String,
     pub assistant_text: String,
+    #[serde(default)]
+    pub connection_kind: Option<String>,
 }
 
 fn effort_allowed(caps: Option<&ModelCaps>, effort: &str) -> bool {
@@ -138,7 +140,7 @@ async fn apply_optional_params(
     else {
         return;
     };
-    let caps = fetch_model_caps(client, &req.base_url, key)
+    let caps = fetch_model_caps(client, &req.base_url, key, req.connection_kind.as_deref())
         .await
         .ok()
         .and_then(|entries| entries.into_iter().find(|entry| entry.id == req.model));
@@ -177,14 +179,26 @@ fn is_agentrouter_url(url: &str) -> bool {
     url.contains("agentrouter.org")
 }
 
-fn agentrouter_headers(request: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
-    if is_agentrouter_url(url) {
+fn is_agentrouter(kind: Option<&str>, url: &str) -> bool {
+    kind == Some("agentrouter") || is_agentrouter_url(url)
+}
+
+fn agentrouter_headers(
+    request: reqwest::RequestBuilder,
+    kind: Option<&str>,
+    url: &str,
+) -> reqwest::RequestBuilder {
+    if is_agentrouter(kind, url) {
         request
             .header("User-Agent", "codex_cli_rs/0.114.0")
             .header("originator", "codex_cli_rs")
     } else {
         request
     }
+}
+
+fn wants_stream_usage(kind: Option<&str>) -> bool {
+    !matches!(kind, Some("agentrouter"))
 }
 
 async fn error_body(resp: reqwest::Response) -> String {
@@ -205,9 +219,14 @@ fn is_retryable_tools_error(error: &AppError) -> bool {
         AppError::Upstream(message) => {
             let lower = message.to_lowercase();
             lower.contains("tool")
+                || lower.contains("upstream rejected")
                 || lower.starts_with("400")
                 || lower.starts_with("404")
                 || lower.starts_with("422")
+                || lower.starts_with("500")
+                || lower.starts_with("502")
+                || lower.starts_with("503")
+                || lower.starts_with("504")
         }
         _ => false,
     }
@@ -236,7 +255,9 @@ fn parse_models_caps(value: &serde_json::Value) -> Vec<ModelCaps> {
                         .get("supported_endpoint_types")
                         .and_then(|t| t.as_array())
                     {
-                        let openai = types.iter().any(|t| t.as_str() == Some("openai"));
+                        let openai = types
+                            .iter()
+                            .any(|t| t.as_str().is_some_and(|s| s.eq_ignore_ascii_case("openai")));
                         if !openai {
                             return None;
                         }
@@ -295,6 +316,7 @@ async fn fetch_model_caps(
     client: &reqwest::Client,
     base_url: &str,
     key: &str,
+    kind: Option<&str>,
 ) -> AppResult<Vec<ModelCaps>> {
     let fresh = caps_cache()
         .lock()
@@ -306,7 +328,7 @@ async fn fetch_model_caps(
         return Ok(caps);
     }
     let url = endpoint(base_url, "models");
-    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), &url);
+    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), kind, &url);
     let resp = request.send().await?;
     if !resp.status().is_success() {
         if let Some((_, stale)) = caps_cache()
@@ -332,24 +354,28 @@ async fn fetch_model_caps(
 pub async fn list_model_caps(
     base_url: String,
     connection_id: String,
+    connection_kind: Option<String>,
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<ModelCaps>> {
     let key = vault::get_api_key(&connection_id)?;
-    fetch_model_caps(&client, &base_url, &key).await
+    fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await
 }
 
 #[tauri::command]
 pub async fn list_models(
     base_url: String,
     connection_id: String,
+    connection_kind: Option<String>,
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let key = vault::get_api_key(&connection_id)?;
-    Ok(fetch_model_caps(&client, &base_url, &key)
-        .await?
-        .into_iter()
-        .map(|caps| caps.id)
-        .collect())
+    Ok(
+        fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref())
+            .await?
+            .into_iter()
+            .map(|caps| caps.id)
+            .collect(),
+    )
 }
 
 #[tauri::command]
@@ -363,6 +389,8 @@ pub struct SummaryRequest {
     pub connection_id: String,
     pub model: String,
     pub text: String,
+    #[serde(default)]
+    pub connection_kind: Option<String>,
 }
 
 fn summary_body(model: &str, text: &str) -> serde_json::Value {
@@ -398,6 +426,7 @@ pub async fn summarize(
         &summary_body(&req.model, &req.text),
         &cancel,
         None,
+        req.connection_kind.as_deref(),
     )
     .await?;
     let value: serde_json::Value = resp.json().await.map_err(AppError::from)?;
@@ -435,17 +464,22 @@ pub async fn suggest_title(
                 ),
             },
         ],
-        "max_tokens": 24,
+        "max_tokens": 512,
         "temperature": 0.3,
         "stream": false,
     });
 
-    let request = agentrouter_headers(client.post(url.clone()).bearer_auth(key), &url);
-    let resp = request.json(&body).send().await?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::Upstream(error_body(resp).await));
-    }
+    let cancel = Notify::new();
+    let resp = post_with_retry(
+        &client,
+        &url,
+        &key,
+        &body,
+        &cancel,
+        None,
+        req.connection_kind.as_deref(),
+    )
+    .await?;
 
     let value: serde_json::Value = resp.json().await?;
     let title = value["choices"][0]["message"]["content"]
@@ -526,10 +560,11 @@ async fn post_with_retry(
     body: &serde_json::Value,
     cancel: &Notify,
     on_event: Option<&Channel<StreamEvent>>,
+    kind: Option<&str>,
 ) -> AppResult<reqwest::Response> {
     let mut last_error: Option<AppError> = None;
     for attempt in 0..MAX_ATTEMPTS {
-        let request = agentrouter_headers(client.post(url).bearer_auth(key), url);
+        let request = agentrouter_headers(client.post(url).bearer_auth(key), kind, url);
         match request.json(body).send().await {
             Ok(resp) => {
                 let status = resp.status();
@@ -662,13 +697,7 @@ fn finish_iteration(
     accumulator: &mut sse::ToolCallAccumulator,
     on_event: &Channel<StreamEvent>,
 ) -> AppResult<Iteration> {
-    for (_, id, name) in accumulator.flush_unannounced() {
-        let _ = on_event.send(StreamEvent::ToolStart {
-            id,
-            name: name.clone(),
-            summary: tools::summarize_call(&name, &serde_json::Value::Null),
-        });
-    }
+    accumulator.flush_unannounced();
     let calls = accumulator.calls();
     if text.is_empty() && calls.is_empty() {
         return Err(AppError::Upstream(
@@ -690,8 +719,9 @@ async fn stream_agentic_iteration(
     body: &serde_json::Value,
     cancel: &Notify,
     on_event: &Channel<StreamEvent>,
+    kind: Option<&str>,
 ) -> AppResult<Option<Iteration>> {
-    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event)).await {
+    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event), kind).await {
         Ok(resp) => resp,
         Err(error) if is_cancel_shutdown(&error) => return Ok(None),
         Err(error) => return Err(error),
@@ -734,13 +764,7 @@ async fn stream_agentic_iteration(
                             text: mapped.reasoning,
                         });
                     }
-                    for (_, id, name) in accumulator.apply(mapped.tool_deltas) {
-                        let _ = on_event.send(StreamEvent::ToolStart {
-                            id,
-                            name: name.clone(),
-                            summary: tools::summarize_call(&name, &serde_json::Value::Null),
-                        });
-                    }
+                    accumulator.apply(mapped.tool_deltas);
                     if let Some(usage) = mapped.usage {
                         let _ = on_event.send(StreamEvent::Usage {
                             prompt_tokens: usage.prompt,
@@ -790,19 +814,35 @@ async fn run_agentic(
             "messages": prune_tool_history(&history),
             "tools": tools,
             "stream": true,
-            "stream_options": { "include_usage": true },
         });
+        if wants_stream_usage(req.connection_kind.as_deref()) {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
         apply_optional_params(client, &mut body, req, &key).await;
 
-        let iteration =
-            match stream_agentic_iteration(client, &url, &key, &body, cancel, on_event).await {
-                Ok(Some(iteration)) => iteration,
-                Ok(None) => return Ok(()),
-                Err(error) if is_retryable_tools_error(&error) => {
-                    return stream_completion(client, req, key, history, on_event, cancel).await;
-                }
-                Err(error) => return Err(error),
-            };
+        let iteration = match stream_agentic_iteration(
+            client,
+            &url,
+            &key,
+            &body,
+            cancel,
+            on_event,
+            req.connection_kind.as_deref(),
+        )
+        .await
+        {
+            Ok(Some(iteration)) => iteration,
+            Ok(None) => return Ok(()),
+            Err(error)
+                if is_retryable_tools_error(&error)
+                    && !history
+                        .iter()
+                        .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool")) =>
+            {
+                return stream_completion(client, req, key, history, on_event, cancel).await;
+            }
+            Err(error) => return Err(error),
+        };
         if iteration.calls.is_empty() {
             break;
         }
@@ -1057,8 +1097,10 @@ async fn stream_completion(
         "model": req.model,
         "messages": history,
         "stream": true,
-        "stream_options": { "include_usage": true },
     });
+    if wants_stream_usage(req.connection_kind.as_deref()) {
+        body["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
     apply_optional_params(client, &mut body, req, &key).await;
 
     let resp = match post_with_retry(
@@ -1068,6 +1110,7 @@ async fn stream_completion(
         &body,
         cancel,
         Some(on_event),
+        req.connection_kind.as_deref(),
     )
     .await
     {
@@ -1230,7 +1273,7 @@ mod tests {
             ("200 OK", "", r#"{"choices":[]}"#),
         ]);
         let cancel = Notify::new();
-        let resp = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None)
+        let resp = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None, None)
             .await
             .expect("retry should succeed");
         assert!(resp.status().is_success());
@@ -1242,7 +1285,7 @@ mod tests {
     async fn does_not_retry_400() {
         let url = serve_script(vec![("400 Bad Request", "", r#"{"error":"bad"}"#)]);
         let cancel = Notify::new();
-        let error = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None)
+        let error = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None, None)
             .await
             .expect_err("400 must not retry");
         assert!(matches!(error, AppError::Upstream(_)));
@@ -1281,6 +1324,22 @@ mod tests {
         ));
         assert!(!is_agentrouter_url("https://openrouter.ai/api/v1/models"));
         assert!(!is_agentrouter_url("http://127.0.0.1:7777/v1/models"));
+    }
+
+    #[test]
+    fn agentrouter_gating_accepts_kind_or_url() {
+        assert!(is_agentrouter(
+            Some("agentrouter"),
+            "https://proxy.local/v1"
+        ));
+        assert!(is_agentrouter(None, "https://agentrouter.org/v1"));
+        assert!(!is_agentrouter(
+            Some("openrouter"),
+            "https://proxy.local/v1"
+        ));
+        assert!(!is_agentrouter(None, "https://openrouter.ai/api/v1"));
+        assert!(wants_stream_usage(Some("openrouter")));
+        assert!(!wants_stream_usage(Some("agentrouter")));
     }
 
     #[test]
