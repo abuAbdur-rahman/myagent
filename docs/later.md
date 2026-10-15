@@ -64,12 +64,12 @@ Exit: edit and regenerate never destroy a message.
 | [x] | A12 | Message actions rewired to branches | Have | S | B2 |
 
 ### Phase 6: Scoped memory
-Exit: memory writes only bio, preferences, or explicit asks; injected memories match the current turn.
+Exit: memory writes only bio, preferences, or explicit asks; thread summary stays private and primary, durable points roll up to shared project memory; injected memories match the current turn.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
 | [x] | E1 | Scoped memory recall | Partial | S | H1 |
-| [x] | E6 | Write-only-what-matters memory | Missing | S | E2 |
+| [x] | E6 | Write-only-what-matters memory + thread roll-up | Missing | S | E2 |
 
 ---
 
@@ -88,19 +88,13 @@ Exit: compaction runs once at the threshold and the model still recalls an early
 | [ ] | C8 | Compaction summary | Partial | L | C5, C7 |
 | [ ] | C9 | Compact trigger (manual and auto) | Missing | S | C8 |
 
-### Phase 8: Tool basics
-Exit: the agent can read, search, edit and undo inside a project and nothing escapes it.
+### Phase 8: Tool basics (office harness)
+Exit: the agent runs gated tools with capped output and a loop guard. No file workspace in v1.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | D8 | Read file tool | Unknown | S | D4 |
-| [ ] | D9 | List, glob, grep tools | Unknown | M | D4 |
-| [ ] | D10 | Write and edit tools | Unknown | M | D4, D8 |
-| [ ] | D13 | Output cap and spill files | Partial | S | D8 |
+| [ ] | D13 | Output cap and spill files | Partial | S | D7 |
 | [ ] | D3 | Step cap and doom-loop guard | Missing | S | D1 |
-| [ ] | D11 | Diff view | Missing | M | D10 |
-| [ ] | D12 | Checkpoints / undo | Missing | M | D10, B2 |
-| [ ] | D6 | Permission modes (ask, accept edits, plan) | Missing | M | D4, D10 |
 | [ ] | D2 | Streaming tool loop | Missing | L | A3, D1 |
 
 ### Phase 9: Conversation management
@@ -133,7 +127,6 @@ Exit: the app is comfortable to use daily.
 | [ ] | G4 | Theme | Unknown | S | none |
 | [ ] | G5 | Completion notification | Missing | S | none |
 | [ ] | G6 | Debug log view | Missing | S | none |
-| [ ] | E4 | Project instructions file (`AGENTS.md`) | Unknown | S | E3 |
 | [ ] | E5 | System prompt per chat | Unknown | S | E3 |
 | [ ] | F1 | Artifact drawer (versions) | Partial | M | F2, B2 |
 
@@ -146,7 +139,7 @@ Exit: each added one at a time with its own tests.
 | [ ] | D17 | Todo list tool | Missing | M | D1 |
 | [ ] | D14 | Web fetch | Missing | M | D4, D5 |
 | [ ] | D15 | Web search | Missing | M | D14 |
-| [ ] | F3 | Attachments | Missing | M | D8, F2 |
+| [ ] | F3 | Attachments + project knowledge (text, docs) | Missing | M | F2 |
 | [ ] | F4 | Image input (vision) | Missing | S | C3, F3 |
 | [ ] | F5 | Mermaid and LaTeX | Missing | M | A9 |
 | [ ] | G7 | Auto-update | Missing | M | none |
@@ -169,8 +162,26 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J9 | Prompt and command files | Missing | M | G1 |
 | [ ] | J10 | Artifact export | Missing | S | F1 |
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
-| [ ] | J11 | Scheduled runs | Missing | L | B8, D6 |
+| [ ] | J11 | Scheduled runs | Missing | L | B8 |
 | [ ] | J12 | MCP and skills | Missing | L | D4, D5 |
+
+---
+
+## v2: Developer workspace (deferred)
+
+v1 is an office harness (Claude app / ChatGPT / OpenWebUI alt), not developer-first. File workspace and folder-as-sandbox move here. Projects (E3) stay in v1 as grouping plus docs storage (pdfs, docs); sandbox enforcement waits for v2.
+
+Exit: the agent can read, search, edit and undo inside a project and nothing escapes it.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [ ] | D8 | Read file tool | Unknown | S | D4 |
+| [ ] | D9 | List, glob, grep tools | Unknown | M | D4 |
+| [ ] | D10 | Write and edit tools | Unknown | M | D4, D8 |
+| [ ] | D11 | Diff view | Missing | M | D10 |
+| [ ] | D12 | Checkpoints / undo | Missing | M | D10, B2 |
+| [ ] | D6 | Permission modes (ask, accept edits, plan) | Missing | M | D4, D10 |
+| [ ] | E4 | Project instructions file (`AGENTS.md`) | Unknown | S | E3 |
 
 ---
 

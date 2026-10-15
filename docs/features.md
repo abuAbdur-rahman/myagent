@@ -91,7 +91,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Edit never removes the old version.
 
 ## A13. Auto titles
-- **Status:** Have (title only)
+- **Status:** Have (0.1.5: placeholder first, AI title with default-model fallback)
 - **Ref:** † OpenWebUI generates titles (and tags) with a task model, without bumping the chat's activity time.
 - **Build:** After the first assistant reply, ask a cheap model for a 3-6 word title. Fall back to the first line of the user message. Never block the UI.
 - **Not:** Tags and follow-up suggestions (see B7).
@@ -185,7 +185,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Unknown
+- **Status:** Partial (0.1.5: OS vault have, key-rejected hint added; live AgentRouter key rejected — rotate it)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
@@ -244,7 +244,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # D. Tools and agent loop
 
 ## D1. Tool-call loop
-- **Status:** Have (non-streaming)
+- **Status:** Have (0.1.5: mid-loop text retracted, identical pure calls collapsed)
 - **Ref:** † OpenCode and Claude Code: call the model, run its tool calls, return results, repeat until a final answer.
 - **Build:** Loop with a step cap (D3). Each tool call is stored as a message part with input, output, status, duration.
 - **Done:** A two-tool turn completes with both results visible.
@@ -384,10 +384,10 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A 15+ row table test passes.
 
 ## E3. Projects
-- **Status:** Have
-- **Ref:** † OpenWebUI folders act as project workspaces with a system prompt and files. Claude app Projects hold instructions and knowledge.
-- **Build:** Project = name + folder path + instructions + chats. Switching project switches working directory for tools.
-- **Done:** Tools cannot reach outside the project folder (D8).
+- **Status:** Partial (threads + instructions + shared memory have; knowledge files missing)
+- **Ref:** † OpenWebUI folders act as project workspaces with a system prompt and files. Claude app Projects hold instructions and knowledge; every chat in the project inherits both, but chats stay independent otherwise.
+- **Build:** Project = name + description + instructions + knowledge (text notes plus stored docs) + chats (threads) + shared project memory. Every thread in the project gets the same instructions, knowledge excerpt, and project memory in context. Project folder is docs storage only in v1; tool sandbox enforcement waits for v2.
+- **Done:** Two threads in one project receive identical instructions and project memory; thread-private history never leaks across.
 
 ## E4. Project instructions file
 - **Status:** Unknown
@@ -405,9 +405,9 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ## E6. Auto memory (agent-written)
 - **Status:** Missing
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
-- **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
+- **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.
-- **Done:** Test asserts the tool rules, E2 blocks secrets, and no auto-write path exists.
+- **Done:** Test asserts the tool rules, E2 blocks secrets, roll-up carries decisions with no private detail, and no auto-write path exists.
 
 ---
 
@@ -426,12 +426,12 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Not:** Per-artifact origins, artifact storage.
 - **Done:** A test artifact that calls `parent`, `localStorage` and `invoke` fails on all three.
 
-## F3. Attachments
+## F3. Attachments and project knowledge
 - **Status:** Missing
-- **Ref:** Claude and OpenWebUI accept files in the composer.
-- **Build:** Drag and drop or pick; copy into the project workspace, dedupe by hash, show a chip, give the model the path (read via D8). Size limit. Text and images only.
-- **Not:** PDF/DOCX parsing, OCR.
-- **Done:** The model can read an attached text file.
+- **Ref:** Claude app Projects hold knowledge files every chat inherits; OpenWebUI accepts files in the composer.
+- **Build:** Two paths, one storage: composer attachments plus a project knowledge panel (text notes plus stored docs such as PDF). Files copied into the project docs folder, deduped by hash, shown as chips. Capped text excerpts injected into context; full file re-read waits for the file tools in v2. Size limit. No code execution.
+- **Not:** OCR, full binary parsing.
+- **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)
 - **Status:** Missing

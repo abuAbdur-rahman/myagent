@@ -84,7 +84,9 @@ function ProviderDialog({
         onClose();
       }
     } catch (e) {
-      setStatus(errorText(e));
+      const raw = errorText(e);
+      const { hint } = api.classifyStreamError(raw);
+      setStatus(hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300));
     } finally {
       setBusy(false);
     }
@@ -204,7 +206,10 @@ function ProviderModels({ connection }: { connection: Connection }) {
         setHidden(new Set(hiddenList));
       })
       .catch((e) => {
-        if (live) toast(errorText(e));
+        if (!live) return;
+        const raw = errorText(e);
+        const { hint } = api.classifyStreamError(raw);
+        toast(hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300));
       })
       .finally(() => {
         if (live) setLoading(false);

@@ -411,6 +411,15 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
               </button>
               <button
                 type="button"
+                aria-label={`New chat in ${entry.project.name}`}
+                title={`New chat in ${entry.project.name}`}
+                onClick={() => selectProject(entry.project.id)}
+                className="invisible rounded-control px-1 text-muted hover:text-text focus-visible:visible group-hover:visible"
+              >
+                <Plus size={14} />
+              </button>
+              <button
+                type="button"
                 aria-label={`Edit ${entry.project.name}`}
                 onClick={() => onOpenProject(entry.project.id)}
                 className="invisible rounded-control px-1 text-muted hover:text-text focus-visible:visible group-hover:visible"

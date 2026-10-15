@@ -126,6 +126,7 @@ const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delta"), text: z.string() }),
   z.object({ type: z.literal("done") }),
   z.object({ type: z.literal("reasoning"), text: z.string() }),
+  z.object({ type: z.literal("retract"), chars: z.number() }),
   z.object({
     type: z.literal("usage"),
     prompt_tokens: z.number(),

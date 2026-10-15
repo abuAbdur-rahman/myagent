@@ -94,7 +94,7 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
           />
           {project.description && <p className="px-1.5 text-sm text-muted">{project.description}</p>}
 
-          <div className="rounded-composer border border-border bg-surface-2 p-2.5">
+          <div className="composer rounded-composer border border-border bg-surface-2 p-2.5">
             <textarea
               rows={2}
               value={draft}

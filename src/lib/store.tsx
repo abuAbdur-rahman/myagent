@@ -810,6 +810,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const newConversation = useCallback(async () => {
     setActiveConversationId(null);
+    setActiveProjectId(null);
     setMessages([]);
     setToolLog([]);
     setError(null);
@@ -973,6 +974,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
               reasoningRef.current += event.text;
               if (Date.now() - lastFlush >= 80) flush();
+            } else if (event.type === "retract") {
+              const kept = Array.from(bufferRef.current).slice(
+                0,
+                Math.max(0, Array.from(bufferRef.current).length - event.chars),
+              );
+              bufferRef.current = kept.join("");
+              flush();
             } else if (event.type === "usage") {
               usageRef.current = {
                 prompt: event.prompt_tokens,
@@ -1084,29 +1092,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ) => {
       const connection = connRef.current;
       if (!connection || !modelRef.current || !assistantText.trim()) return;
-      try {
-        const title = await api.suggestTitle(
-          connection.base_url,
-          connection.id,
-          modelRef.current,
-          userText,
-          assistantText,
-        );
-        const trimmed = title.trim();
-        if (!trimmed) return;
-        if (
-          conversationsRef.current.find((c) => c.id === conversationId)?.title !==
-          provisionalTitle
-        ) {
-          return;
+      const candidates = [modelRef.current];
+      const fallback = connection.default_model;
+      if (fallback && fallback !== modelRef.current) candidates.push(fallback);
+      let trimmed = "";
+      for (const candidate of candidates) {
+        try {
+          const title = await api.suggestTitle(
+            connection.base_url,
+            connection.id,
+            candidate,
+            userText,
+            assistantText,
+          );
+          trimmed = title.trim();
+          if (trimmed) break;
+        } catch {
+          // try next candidate; the user-text title stays
         }
-        await db.touchConversation(conversationId, { title: trimmed });
-        setConversations((prev) =>
-          prev.map((c) => (c.id === conversationId ? { ...c, title: trimmed } : c)),
-        );
-      } catch {
-        // best-effort; the user-text title stays
       }
+      if (!trimmed) return;
+      if (
+        conversationsRef.current.find((c) => c.id === conversationId)?.title !==
+        provisionalTitle
+      ) {
+        return;
+      }
+      await db.touchConversation(conversationId, { title: trimmed });
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, title: trimmed } : c)),
+      );
     },
     [],
   );

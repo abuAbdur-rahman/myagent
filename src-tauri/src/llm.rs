@@ -21,6 +21,9 @@ pub enum StreamEvent {
     Reasoning {
         text: String,
     },
+    Retract {
+        chars: usize,
+    },
     Usage {
         prompt_tokens: u64,
         completion_tokens: u64,
@@ -168,7 +171,7 @@ pub async fn list_models(
     let mut request = client.get(endpoint(&base_url, "models")).bearer_auth(key);
     if base_url.contains("agentrouter.org") {
         request = request
-            .header("User-Agent", "myagent/0.1.4")
+            .header("User-Agent", "myagent/0.1.5")
             .header("originator", "myagent");
     }
     let resp = request.send().await?;
@@ -481,6 +484,10 @@ struct Iteration {
     calls: Vec<serde_json::Value>,
 }
 
+fn collapsible_call(name: &str) -> bool {
+    matches!(name, "get_time" | "recall_memory")
+}
+
 fn finish_iteration(
     text: String,
     accumulator: &mut sse::ToolCallAccumulator,
@@ -498,6 +505,11 @@ fn finish_iteration(
         return Err(AppError::Upstream(
             "empty response from provider".to_string(),
         ));
+    }
+    if !text.is_empty() && !calls.is_empty() {
+        let _ = on_event.send(StreamEvent::Retract {
+            chars: text.chars().count(),
+        });
     }
     Ok(Iteration { text, calls })
 }
@@ -598,6 +610,7 @@ async fn run_agentic(
     let tools = tools::tool_specs();
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32);
     let mut repeat = RepeatGuard::new();
+    let mut last_pure: Option<(String, String)> = None;
 
     for _ in 0..max {
         if state.take_cancelled(&req.request_id) {
@@ -664,7 +677,22 @@ async fn run_agentic(
                 "{name}\n{}",
                 serde_json::to_string(&args).unwrap_or_default()
             );
-            if repeat.note(repeat_key) >= 3 {
+            let streak = repeat.note(repeat_key.clone());
+            if collapsible_call(&name) {
+                if last_pure.as_ref().is_some_and(|(k, _)| k == &repeat_key) {
+                    let output = last_pure
+                        .as_ref()
+                        .map(|(_, o)| o.clone())
+                        .unwrap_or_default();
+                    history.push(tool_text_message(&id, &output));
+                    if streak < 3 {
+                        continue;
+                    }
+                }
+            } else {
+                last_pure = None;
+            }
+            if streak >= 3 {
                 let question_id = format!("{}:{id}:repeat", req.request_id);
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 state.insert_question(&question_id, tx)?;
@@ -807,6 +835,9 @@ async fn run_agentic(
             .await
             {
                 Ok(done) => {
+                    if collapsible_call(&name) {
+                        last_pure = Some((repeat_key.clone(), done.output.clone()));
+                    }
                     if let Some(artifact) = done.artifact {
                         let _ = on_event.send(StreamEvent::Artifact {
                             title: artifact.title,
