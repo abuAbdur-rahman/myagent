@@ -1,21 +1,4 @@
-import { useEffect, useState } from "react";
-import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-
-function useEffectiveTheme(): "dark" | "light" {
-  const { theme } = useApp();
-  const [systemDark, setSystemDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
-  useEffect(() => {
-    if (theme !== "system") return;
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, [theme]);
-  return theme === "dark" || (theme === "system" && systemDark) ? "dark" : "light";
-}
 
 export function Logo({
   size,
@@ -26,16 +9,32 @@ export function Logo({
   className?: string;
   alt?: string;
 }) {
-  const effective = useEffectiveTheme();
   return (
-    <img
-      src={effective === "dark" ? "/logo.svg" : "/logo-light.svg"}
-      alt={alt}
+    <svg
       width={size}
       height={size}
-      draggable={false}
+      viewBox="0 0 256 256"
+      role="img"
+      aria-label={alt}
       className={cn("flex-none", className)}
       style={{ width: size, height: size }}
-    />
+    >
+      <rect x="8" y="8" width="240" height="240" rx="56" fill="var(--color-accent)" />
+      <path
+        d="M169 85 A64 64 0 1 0 169 167"
+        fill="none"
+        stroke="var(--color-accent-contrast)"
+        strokeWidth="24"
+        strokeLinecap="round"
+      />
+      <path
+        d="M62 168 L104 186 L56 214 Z"
+        fill="var(--color-accent-contrast)"
+        stroke="var(--color-accent-contrast)"
+        strokeWidth="12"
+        strokeLinejoin="round"
+      />
+      <circle cx="176" cy="128" r="13" fill="var(--color-accent-contrast)" />
+    </svg>
   );
 }
