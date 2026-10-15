@@ -239,12 +239,28 @@ fn describe_content_blocked(message: &str) -> String {
     }
 }
 
+fn replace_unprefixed(text: &str, needle: &str, prefix: &str, replacement: &str) -> String {
+    let prefix = prefix.to_lowercase();
+    let mut out = String::with_capacity(text.len() + replacement.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(needle) {
+        let (head, tail) = rest.split_at(pos);
+        out.push_str(head);
+        if head.to_lowercase().ends_with(prefix.as_str()) {
+            out.push_str(needle);
+        } else {
+            out.push_str(replacement);
+        }
+        rest = &tail[needle.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn sanitize_deepseek_text(text: &str) -> String {
     const REPLACEMENTS: &[(&str, &str)] = &[
         ("Lorem ipsum", "example text"),
         ("lorem ipsum", "example text"),
-        ("language model", "large language model"),
-        ("Language model", "Large language model"),
         ("virtual assistant", "AI assistant"),
         ("Virtual assistant", "AI assistant"),
         ("I'm here to help", "How can I help"),
@@ -254,7 +270,8 @@ fn sanitize_deepseek_text(text: &str) -> String {
         ("dummy data", "sample data"),
         ("Dummy data", "Sample data"),
     ];
-    let mut out = text.to_string();
+    let mut out = replace_unprefixed(text, "language model", "large ", "large language model");
+    out = replace_unprefixed(&out, "Language model", "Large ", "Large language model");
     for (from, to) in REPLACEMENTS {
         out = out.replace(from, to);
     }
@@ -654,11 +671,14 @@ pub async fn chat_stream(
     let result = if req.enable_tools {
         run_agentic(&client, &app, &req, key, &on_event, &cancel, &state).await
     } else {
+        let url = endpoint(&req.base_url, "chat/completions");
         let history: Vec<serde_json::Value> = req
             .messages
             .iter()
             .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
             .collect();
+        let history =
+            harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
         stream_completion(&client, &req, key, history, &on_event, &cancel).await
     };
     state.finish(&req.request_id);
@@ -1263,8 +1283,6 @@ async fn stream_completion(
     cancel: &Notify,
 ) -> AppResult<()> {
     let url = endpoint(&req.base_url, "chat/completions");
-    let history =
-        harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
     let mut body = serde_json::json!({
         "model": req.model,
         "messages": history,
@@ -1626,11 +1644,36 @@ mod tests {
             "https://agentrouter.org/v1/chat/completions",
         );
         assert_eq!(twice, hardened);
-        assert!(
-            !twice[1]["content"]
+    }
+
+    #[test]
+    fn sanitize_stays_stable_on_thick_tripword_turns() {
+        let history =
+            vec![serde_json::json!({"role": "user", "content": "explain language model"})];
+        let once = harden_deepseek_history(
+            history.clone(),
+            "deepseek-v4-flash",
+            Some("agentrouter"),
+            "https://agentrouter.org/v1/chat/completions",
+        );
+        assert_eq!(
+            once[0]["content"],
+            serde_json::json!("explain large language model")
+        );
+        let twice = harden_deepseek_history(
+            once.clone(),
+            "deepseek-v4-flash",
+            Some("agentrouter"),
+            "https://agentrouter.org/v1/chat/completions",
+        );
+        assert_eq!(twice, once);
+        assert_eq!(
+            twice[0]["content"]
                 .as_str()
                 .unwrap()
-                .contains("large large")
+                .matches("large language model")
+                .count(),
+            1
         );
     }
 
