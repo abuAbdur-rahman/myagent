@@ -4,17 +4,17 @@ import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
 import { Select } from "./ui/select";
 import { toast } from "../lib/toast";
-import { cn } from "../lib/utils";
+import { cn, downloadText } from "../lib/utils";
+import { buildChatExport, conversationToMarkdown, safeFilename } from "../lib/export";
+import {
+  dispatchSlash,
+  matchSlash,
+  resolveExportFormat,
+  resolveModelArg,
+  type SlashCommand,
+} from "../lib/slash";
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
-
-const SLASH_COMMANDS: [string, string][] = [
-  ["new", "New chat"],
-  ["clear", "Clear chat"],
-  ["compact", "Compact context now"],
-  ["memory", "Open memory"],
-  ["settings", "Open settings"],
-];
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -25,25 +25,28 @@ function SlashMenu({
   index,
   onPick,
 }: {
-  items: [string, string][];
+  items: SlashCommand[];
   index: number;
   onPick: (name: string) => void;
 }) {
   if (items.length === 0) return null;
   return (
     <div className="absolute bottom-full left-2 z-10 mb-1.5 min-w-[260px] rounded-card border border-border bg-surface p-1 shadow-[var(--shadow)]">
-      {items.map(([name, label], i) => (
+      {items.map((command, i) => (
         <button
-          key={name}
+          key={command.name}
           type="button"
-          onClick={() => onPick(name)}
+          onClick={() => onPick(command.name)}
           className={cn(
             "flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-sm",
             i === index && "bg-active",
           )}
         >
-          <b className="font-mono text-[13px]">/{name}</b>
-          <span className="text-muted">{label}</span>
+          <b className="font-mono text-[13px]">
+            /{command.name}
+            {command.hint ? ` ${command.hint}` : ""}
+          </b>
+          <span className="text-muted">{command.label}</span>
         </button>
       ))}
     </div>
@@ -61,7 +64,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     sendWith,
     activeConnection,
     model,
+    models,
+    setModel,
     messages,
+    conversations,
+    activeConversationId,
     clearActiveConversation,
     setSettingsPage,
     newConversation,
@@ -71,12 +78,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     supportedEfforts,
   } = useApp();
   const editorRef = useRef<TipTapHandle | null>(null);
+  const modelButtonRef = useRef<HTMLButtonElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
 
-  const slashMatch = composerDraft.match(/^\/(\w*)$/);
-  const slashItems = slashMatch
-    ? SLASH_COMMANDS.filter(([name]) => name.startsWith(slashMatch[1].toLowerCase()))
-    : [];
+  const concreteDraft = (editorRef.current?.getMarkdown() ?? composerDraft).trim();
+  const slashItems = /^\/\w*$/.test(concreteDraft) ? matchSlash(concreteDraft) : [];
 
   const historyEntries = useMemo(() => {
     const users = messages
@@ -90,6 +96,56 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   const canSend =
     !streaming && !!activeConnection && !!model && composerDraft.trim().length > 0;
 
+  const runExport = (args: string) => {
+    const chat = conversations.find((item) => item.id === activeConversationId) ?? null;
+    if (!chat || messages.length === 0) {
+      toast("Nothing to export yet.");
+      return;
+    }
+    const format = resolveExportFormat(args);
+    if (!format) {
+      toast("Usage: /export [md|json]");
+      return;
+    }
+    if (format === "json") {
+      downloadText(
+        safeFilename(chat.title, "json"),
+        JSON.stringify(buildChatExport(chat, messages), null, 2),
+        "application/json",
+      );
+    } else {
+      downloadText(safeFilename(chat.title, "md"), conversationToMarkdown(chat.title, messages));
+    }
+  };
+
+  const runModel = (args: string) => {
+    const result = resolveModelArg(args, models);
+    if (result.kind === "picker") {
+      if (modelButtonRef.current) openModelPicker(modelButtonRef.current);
+      return;
+    }
+    if (result.kind === "set") {
+      setModel(result.id);
+      toast(`Model: ${result.id}`);
+      return;
+    }
+    if (result.kind === "unknown") {
+      toast(`No model matches "${args.trim()}".`);
+      return;
+    }
+    toast(`Several models match: ${result.matches.join(", ")}`);
+  };
+
+  const slashHandlers = {
+    new: () => void newConversation().catch(() => undefined),
+    clear: () => void clearActiveConversation(),
+    compact: () => void compactActive().catch(() => undefined),
+    export: runExport,
+    model: runModel,
+    memory: () => setSettingsPage("memory"),
+    settings: () => setSettingsPage("general"),
+  };
+
   const submit = () => {
     const handle = editorRef.current;
     const text = (handle?.getMarkdown() ?? composerDraft).trim();
@@ -97,12 +153,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
-    if (text === "/compact") {
-      handle?.focus();
-      void compactActive().catch(() => undefined);
-      return;
-    }
     handle?.focus();
+    if (dispatchSlash(text, slashHandlers)) return;
     void sendMessage(text).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
@@ -126,11 +178,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     editorRef.current?.clear();
     setComposerDraft("");
     setSlashIndex(0);
-    if (name === "new") void newConversation().catch(() => undefined);
-    else if (name === "clear") void clearActiveConversation();
-    else if (name === "compact") void compactActive().catch(() => undefined);
-    else if (name === "memory") setSettingsPage("memory");
-    else if (name === "settings") setSettingsPage("general");
+    dispatchSlash(`/${name}`, slashHandlers);
   };
   actionsRef.current.runSlash = runSlash;
 
@@ -170,7 +218,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     if (event.key === "Enter") {
       event.preventDefault();
       const clamped = Math.min(slashIndexRef.current, Math.max(0, items.length - 1));
-      actionsRef.current.runSlash(items[clamped][0]);
+      actionsRef.current.runSlash(items[clamped].name);
       return true;
     }
     if (event.key === "Escape") {
@@ -204,6 +252,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         <div className="mt-1 flex items-center gap-1">
           <button
             type="button"
+            ref={modelButtonRef}
             onClick={(e) => {
               openModelPicker(e.currentTarget);
               setTimeout(() => editorRef.current?.focus(), 0);
