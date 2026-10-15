@@ -4,6 +4,7 @@ import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import { DEFAULT_BASE_URLS, connectionInputSchema, type ProviderKind } from "../lib/types";
+import { SEARCH_KEY_ACCOUNT } from "../lib/api";
 import { Button, Input, Spinner } from "./ui";
 import { cn, errorText, rollbackConnection } from "../lib/utils";
 
@@ -48,11 +49,25 @@ export function OnboardingDialog() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [searchKey, setSearchKey] = useState("");
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
 
   if (onboarded) return null;
 
   const finish = () => {
     completeOnboarding();
+  };
+
+  const saveSearchKey = async () => {
+    if (!searchKey.trim()) return;
+    try {
+      await api.setApiKey(SEARCH_KEY_ACCOUNT, searchKey.trim());
+      localStorage.setItem("searchKeyPromptDismissed", "1");
+      setSearchStatus("Search key saved.");
+      setSearchKey("");
+    } catch (e) {
+      setSearchStatus(errorText(e));
+    }
   };
 
   const connect = async () => {
@@ -235,6 +250,27 @@ export function OnboardingDialog() {
                   </button>
                 ))}
               </div>
+              <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-xs text-muted">
+                Web search key (optional, Tavily)
+                <span className="flex gap-1.5">
+                  <Input
+                    type="password"
+                    value={searchKey}
+                    onChange={(e) => setSearchKey(e.target.value)}
+                    placeholder="tvly-…"
+                    aria-label="Tavily API key"
+                    autoComplete="off"
+                  />
+                  <Button variant="default" onClick={() => void saveSearchKey()}>
+                    Save
+                  </Button>
+                </span>
+              </label>
+              {searchStatus && (
+                <p className="m-0 text-xs text-muted" role="status">
+                  {searchStatus}
+                </p>
+              )}
             </>
           )}
         </div>

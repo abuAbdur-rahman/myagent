@@ -6,6 +6,7 @@ mod state;
 mod tools;
 mod vault;
 mod webfetch;
+mod websearch;
 
 use std::time::Duration;
 

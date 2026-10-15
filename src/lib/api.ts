@@ -2,6 +2,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import type { StreamEvent } from "./types";
 import { parseBackendCaps, type ModelCapabilities } from "./catalog";
 
+export const SEARCH_KEY_ACCOUNT = "search:tavily";
+
 export function setApiKey(connectionId: string, apiKey: string) {
   return invoke<void>("set_api_key", { connectionId, apiKey });
 }
@@ -158,6 +160,8 @@ export interface ChatStreamArgs {
   conversationId?: string | null;
   reasoningEffort?: string | null;
   connectionKind?: string;
+  searchBackend?: string | null;
+  searchEndpoint?: string | null;
 }
 
 export async function chatStream(
@@ -180,6 +184,8 @@ export async function chatStream(
       conversation_id: args.conversationId ?? null,
       reasoning_effort: args.reasoningEffort ?? null,
       connection_kind: args.connectionKind ?? null,
+      search_backend: args.searchBackend ?? null,
+      search_endpoint: args.searchEndpoint ?? null,
     },
     onEvent: channel,
   });

@@ -9,7 +9,8 @@ import {
   type Connection,
   type ProviderKind,
 } from "../../lib/types";
-import { Button, Dialog, Input, Select, Spinner } from "../ui";
+import { Button, Dialog, Input, Spinner } from "../ui";
+import { Select } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { toast } from "../../lib/toast";
 import { errorText, rollbackConnection } from "../../lib/utils";
@@ -105,8 +106,7 @@ function ProviderDialog({
           Type
           <Select
             value={kind}
-            onChange={(e) => {
-              const next = e.target.value as ProviderKind;
+            onChange={(next) => {
               setKind(next);
               setBaseUrl(DEFAULT_BASE_URLS[next]);
               if (!name.trim() || name === "OpenRouter" || name === "Agent Router" || name === "Custom") {
@@ -119,11 +119,12 @@ function ProviderDialog({
                 );
               }
             }}
-          >
-            <option value="openrouter">OpenRouter</option>
-            <option value="agentrouter">Agent Router</option>
-            <option value="custom">Custom (OpenAI-compatible)</option>
-          </Select>
+            options={[
+              { value: "openrouter", label: "OpenRouter" },
+              { value: "agentrouter", label: "Agent Router" },
+              { value: "custom", label: "Custom (OpenAI-compatible)" },
+            ]}
+          />
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted">
           Name

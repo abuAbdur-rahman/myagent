@@ -59,6 +59,21 @@
   --radius-card: 8px;
   --radius-composer: 12px;
 
+  /* Select/Combobox UI tokens (src/components/ui/select) mapped onto the app theme. */
+  --color-ui-field: var(--surface-2);
+  --color-ui-popup: var(--surface);
+  --color-ui-hover: var(--hover);
+  --color-ui-line: var(--border);
+  --color-ui-line-hover: color-mix(in srgb, var(--border) 55%, var(--text));
+  --color-ui-fg: var(--text);
+  --color-ui-muted: var(--muted);
+  --color-ui-accent: var(--accent);
+  --color-ui-danger: var(--danger);
+  --radius-ui: var(--radius-card);
+  --shadow-ui: var(--shadow);
+  --animate-ui-in: ui-in 0.12s ease-out;
+  --animate-ui-in-up: ui-in-up 0.12s ease-out;
+
   /* Interim compat: pre-overhaul token names used by dialogs/panels that
      U7/U8/U10 rebuild. Remove once those files use semantic tokens. */
   --color-vault-black: var(--bg);
@@ -230,6 +245,20 @@ kbd {
   from {
     opacity: 0;
     transform: scale(0.98);
+  }
+}
+
+@keyframes ui-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@keyframes ui-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
   }
 }
 

@@ -1,127 +1,193 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import * as db from "../lib/db";
-import type { Connection } from "../lib/types";
-import { showMenu } from "./Menu";
+import {
+  OptionList,
+  Popup,
+  buildRows,
+  firstEnabled,
+  stepEnabled,
+  useFloating,
+  type Option,
+} from "./ui/select/shared";
 
-interface ProviderGroup {
-  connection: Connection;
-  hasKey: boolean;
-  models: string[];
+interface Anchor {
+  anchor: HTMLElement;
+}
+let current: Anchor | null = null;
+const listeners = new Set<() => void>();
+function emit() {
+  listeners.forEach((l) => l());
+}
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
-function ModelPickerContent({ onDone }: { onDone: () => void }) {
-  const {
-    connections,
-    activeConnectionId,
-    selectConnection,
-    model,
-    setModel,
-    setSettingsPage,
-  } = useApp();
+export function openModelPicker(anchor: HTMLElement) {
+  if (current?.anchor === anchor) {
+    current = null;
+    emit();
+    return;
+  }
+  current = { anchor };
+  emit();
+}
+
+function closeModelPicker() {
+  if (!current) return;
+  current = null;
+  emit();
+}
+
+export function ModelPickerHost() {
+  const { connections, activeConnectionId, selectConnection, model, setModel } = useApp();
+  const [state, setState] = useState<Anchor | null>(null);
+  const [options, setOptions] = useState<Option[] | null>(null);
   const [query, setQuery] = useState("");
-  const [groups, setGroups] = useState<ProviderGroup[] | null>(null);
+  const [active, setActive] = useState(-1);
+  const anchorRef = useRef<HTMLElement | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => subscribe(() => setState(current)), []);
+
+  const open = state !== null;
+  anchorRef.current = state?.anchor ?? null;
+  const pos = useFloating(open, anchorRef, 320, 6, 300);
 
   useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    setQuery("");
+    setOptions(null);
     let live = true;
     Promise.all(
-      connections.map(async (connection): Promise<ProviderGroup> => {
+      connections.map(async (connection): Promise<Option[]> => {
         try {
           const hasKey = await api.hasApiKey(connection.id);
-          if (!hasKey) return { connection, hasKey, models: [] };
-          const [models, hidden] = await Promise.all([
+          if (!hasKey) return [];
+          const [list, hidden] = await Promise.all([
             api.listModels(connection.base_url, connection.id, connection.kind),
             db.listHiddenModels(connection.id),
           ]);
           const hiddenSet = new Set(hidden);
-          return { connection, hasKey, models: models.filter((m) => !hiddenSet.has(m)) };
-        } catch {
-          return { connection, hasKey: true, models: [] };
+          return list
+            .filter((m) => !hiddenSet.has(m))
+            .map((m) => ({ value: `${connection.id}/${m}`, label: m, group: connection.name }));
+        } catch (cause) {
+          console.warn("model list failed", connection.name, cause);
+          return [];
         }
       }),
-    ).then((loaded) => {
-      if (live) setGroups(loaded);
+    ).then((groups) => {
+      if (live) setOptions(groups.flat());
     });
     return () => {
       live = false;
     };
-  }, [connections]);
+  }, [open, connections]);
 
-  const pick = (connectionId: string, modelId: string) => {
-    if (connectionId !== activeConnectionId) selectConnection(connectionId);
-    setModel(modelId);
-    onDone();
-  };
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (anchorRef.current?.contains(target)) return;
+      if ((e.target as Element).closest('[data-model-picker]')) return;
+      closeModelPicker();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeModelPicker();
+    };
+    document.addEventListener("mousedown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const q = query.trim().toLowerCase();
-  const visible = (groups ?? [])
-    .map((group) => ({
-      ...group,
-      models: group.models.filter((m) => !q || m.toLowerCase().includes(q)),
-    }))
-    .filter((group) => !q || group.models.length > 0);
+  const visible = useMemo(() => {
+    const list = options ?? [];
+    if (!q) return list;
+    return list.filter(
+      (o) => o.label.toLowerCase().includes(q) || o.group?.toLowerCase().includes(q),
+    );
+  }, [options, q]);
+  const rows = useMemo(() => buildRows(visible), [visible]);
+
+  useEffect(() => {
+    if (!open) return;
+    const selected = visible.findIndex(
+      (o) => o.value === (activeConnectionId && model ? `${activeConnectionId}/${model}` : ""),
+    );
+    setActive(selected >= 0 ? selected : firstEnabled(visible));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, q, visible.length]);
+
+  const value = activeConnectionId && model ? `${activeConnectionId}/${model}` : null;
+
+  const pick = (index: number) => {
+    const option = visible[index];
+    if (!option || option.disabled) return;
+    const slash = option.value.indexOf("/");
+    const connectionId = option.value.slice(0, slash);
+    const modelId = option.value.slice(slash + 1);
+    if (connectionId !== activeConnectionId) selectConnection(connectionId);
+    setModel(modelId);
+    closeModelPicker();
+  };
+
+  if (!open || !pos) return null;
 
   return (
-    <div className="w-[300px]">
-      <input
-        autoFocus
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search models"
-        aria-label="Search models"
-        className="sticky top-0 z-10 mx-0.5 mb-1.5 h-8 w-[calc(100%-4px)] rounded-card border border-border bg-surface-2 px-2.5 text-sm outline-none placeholder:text-muted focus:border-accent"
-      />
-      <div className="max-h-[280px] overflow-auto">
-        {groups === null && (
-          <div className="px-2 py-3 text-center text-[13px] text-muted">Loading models…</div>
-        )}
-        {visible.map((group) => (
-          <div key={group.connection.id}>
-            <div className="px-2 pb-0.5 pt-1.5 text-[11px] uppercase text-muted">
-              {group.connection.name}
-              {group.connection.id === activeConnectionId ? " · active" : ""}
-            </div>
-            {!group.hasKey && (
-              <div className="px-2 py-1 text-[13px] text-muted">No key stored</div>
-            )}
-            {group.hasKey &&
-              group.models.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => pick(group.connection.id, id)}
-                  className="flex min-h-8 w-full items-center gap-1.5 rounded-control px-2 py-1 text-left text-sm hover:bg-hover"
-                >
-                  <span className="min-w-0 flex-1 break-all">{id}</span>
-                  {group.connection.id === activeConnectionId && model === id && (
-                    <span className="text-accent">✓</span>
-                  )}
-                </button>
-              ))}
-          </div>
-        ))}
-        {groups !== null && visible.length === 0 && (
-          <div className="px-2 py-3 text-center text-[13px] text-muted">No models</div>
-        )}
-        <button
-          type="button"
-          onClick={() => {
-            onDone();
-            setSettingsPage("general");
+    <Popup pos={pos}>
+      <div data-model-picker className="flex min-h-0 flex-1 flex-col">
+        <input
+          ref={inputRef}
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setActive(stepEnabled(visible, active, 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActive(stepEnabled(visible, active, -1));
+            } else if (e.key === "Enter") {
+              if (active >= 0) {
+                e.preventDefault();
+                pick(active);
+              }
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              closeModelPicker();
+            }
           }}
-          className="mt-1 flex h-8 w-full items-center rounded-control px-2 text-left text-[13px] text-muted hover:bg-hover hover:text-text"
-        >
-          Manage connections…
-        </button>
+          placeholder="Search models"
+          aria-label="Search models"
+          className="mx-0.5 mb-1.5 h-8 shrink-0 rounded-ui border border-ui-line bg-ui-field px-2.5 text-sm text-ui-fg outline-none placeholder:text-ui-muted focus:border-ui-accent"
+        />
+        {options === null ? (
+          <div className="px-2.5 py-3.5 text-center text-[13px] text-ui-muted">Loading models…</div>
+        ) : visible.length === 0 ? (
+          <div className="px-2.5 py-3.5 text-center text-[13px] text-ui-muted">No models</div>
+        ) : (
+          <OptionList
+            id="model-picker-list"
+            rows={rows}
+            active={active}
+            selected={(o) => o.value === value}
+            onPick={pick}
+            onActive={setActive}
+            query={q}
+          />
+        )}
       </div>
-    </div>
+    </Popup>
   );
-}
-
-export function openModelPicker(anchor: HTMLElement) {
-  showMenu(anchor, <ModelPickerContent onDone={() => undefined} />, {
-    above: true,
-    width: 300,
-  });
 }

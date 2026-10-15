@@ -179,6 +179,10 @@ interface AppContextValue {
   setSendWith: (mode: "enter" | "ctrl") => void;
   autoCompact: boolean;
   setAutoCompact: (value: boolean) => void;
+  searchBackend: "tavily" | "searxng";
+  setSearchBackend: (value: "tavily" | "searxng") => void;
+  searchEndpoint: string;
+  setSearchEndpoint: (value: string) => void;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
   panelTab: PanelTab;
@@ -459,6 +463,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setAutoCompact = useCallback((value: boolean) => {
     setAutoCompactState(value);
     localStorage.setItem("autoCompact", value ? "1" : "0");
+  }, []);
+
+  const [searchBackend, setSearchBackendState] = useState<"tavily" | "searxng">(
+    () => (localStorage.getItem("searchBackend") === "searxng" ? "searxng" : "tavily"),
+  );
+  const setSearchBackend = useCallback((value: "tavily" | "searxng") => {
+    setSearchBackendState(value);
+    localStorage.setItem("searchBackend", value);
+  }, []);
+  const [searchEndpoint, setSearchEndpointState] = useState(
+    () => localStorage.getItem("searchEndpoint") ?? "http://127.0.0.1:8888",
+  );
+  const setSearchEndpoint = useCallback((value: string) => {
+    setSearchEndpointState(value);
+    localStorage.setItem("searchEndpoint", value);
   }, []);
 
   const setDisplayName = useCallback((name: string) => {
@@ -987,6 +1006,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             conversationId,
             reasoningEffort: resolveEffort(),
             connectionKind: connection.kind,
+            searchBackend,
+            searchEndpoint,
           },
           (event) => {
             if (requestIdRef.current !== requestId) return;
@@ -1107,7 +1128,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [finalize, openArtifact, resolveEffort, resolveTools],
+    [finalize, openArtifact, resolveEffort, resolveTools, searchBackend, searchEndpoint],
   );
 
   const maybeGenerateTitle = useCallback(
@@ -1700,6 +1721,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSendWith,
     autoCompact,
     setAutoCompact,
+    searchBackend,
+    setSearchBackend,
+    searchEndpoint,
+    setSearchEndpoint,
     panelOpen,
     panelArtifact,
     panelTab,

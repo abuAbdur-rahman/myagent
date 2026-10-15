@@ -11,6 +11,7 @@ import {
   Globe,
   Pencil,
   RefreshCw,
+  Search,
   Terminal,
   Clock,
   X,
@@ -75,6 +76,8 @@ function ToolIcon({ name }: { name: string }) {
       return <FileText {...props} />;
     case "web_fetch":
       return <Globe {...props} />;
+    case "web_search":
+      return <Search {...props} />;
     default:
       return <Wrench {...props} />;
   }

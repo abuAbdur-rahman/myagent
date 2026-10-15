@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, Moon, Sun, Monitor } from "lucide-react";
 import { useApp, type ThemeMode } from "../../lib/store";
 import * as api from "../../lib/api";
+import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
 import { MemoryEditor } from "../MemoryEditor";
-import { Button, Input, Select, Spinner } from "../ui";
+import { Button, Input, Spinner } from "../ui";
+import { Select } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
@@ -53,13 +55,15 @@ export function GeneralPage() {
       </SettingRow>
       <SettingRow label="Send message with" description="Keyboard shortcut to send">
         <Select
+          size="sm"
           value={sendWith}
-          onChange={(e) => setSendWith(e.target.value as "enter" | "ctrl")}
+          onChange={(mode) => setSendWith(mode)}
           aria-label="Send message with"
-        >
-          <option value="enter">Enter</option>
-          <option value="ctrl">Ctrl+Enter</option>
-        </Select>
+          options={[
+            { value: "enter", label: "Enter" },
+            { value: "ctrl", label: "Ctrl+Enter" },
+          ]}
+        />
       </SettingRow>
       <SettingRow label="Auto-compact context" description="Summarize older messages at 80% context">
         <Input
@@ -69,6 +73,96 @@ export function GeneralPage() {
           aria-label="Auto-compact context"
         />
       </SettingRow>
+    </div>
+  );
+}
+
+export function SearchPage() {
+  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
+  const [key, setKey] = useState("");
+  const [hasKey, setHasKey] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.hasApiKey(SEARCH_KEY_ACCOUNT).then(setHasKey).catch(() => undefined);
+  }, []);
+
+  const save = async () => {
+    if (!key.trim()) {
+      setStatus("Enter a Tavily API key.");
+      return;
+    }
+    try {
+      await api.setApiKey(SEARCH_KEY_ACCOUNT, key.trim());
+      setHasKey(true);
+      setKey("");
+      setStatus("Search key saved.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const clear = async () => {
+    try {
+      await api.deleteApiKey(SEARCH_KEY_ACCOUNT);
+      setHasKey(false);
+      setStatus("Search key removed.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  return (
+    <div>
+      <SettingRow label="Provider" description="Search runs locally through this provider">
+        <Select
+          size="sm"
+          value={searchBackend}
+          onChange={(backend) => setSearchBackend(backend)}
+          aria-label="Search provider"
+          options={[
+            { value: "tavily", label: "Tavily" },
+            { value: "searxng", label: "SearXNG (self-hosted)" },
+          ]}
+        />
+      </SettingRow>
+      {searchBackend === "tavily" ? (
+        <SettingRow
+          label="Tavily API key"
+          description={hasKey ? "A key is stored" : "Stored in Windows Credential Manager"}
+        >
+          <Input
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="tvly-…"
+            aria-label="Tavily API key"
+            autoComplete="off"
+          />
+          <Button variant="primary" onClick={() => void save()}>
+            Save
+          </Button>
+          {hasKey && (
+            <Button variant="danger" onClick={() => void clear()}>
+              Remove
+            </Button>
+          )}
+        </SettingRow>
+      ) : (
+        <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">
+          <Input
+            value={searchEndpoint}
+            onChange={(e) => setSearchEndpoint(e.target.value)}
+            placeholder="http://127.0.0.1:8888"
+            aria-label="SearXNG endpoint"
+          />
+        </SettingRow>
+      )}
+      {status && (
+        <p className="px-2 py-2 text-xs text-muted" role="status">
+          {status}
+        </p>
+      )}
     </div>
   );
 }
@@ -152,18 +246,14 @@ export function ModelsPage() {
         description={activeConnection ? `From ${activeConnection.name}` : "Add a provider first"}
       >
         <Select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
+          size="sm"
+          value={model || null}
+          onChange={(next) => setModel(next)}
+          placeholder={models.length ? "Select a model" : "No models"}
           aria-label="Default model"
           disabled={models.length === 0}
-        >
-          <option value="">{models.length ? "Select a model" : "No models"}</option>
-          {models.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </Select>
+          options={models.map((id) => ({ value: id, label: id }))}
+        />
       </SettingRow>
       <SettingRow label="Refresh models" description="Re-fetch the list from the provider">
         <Button

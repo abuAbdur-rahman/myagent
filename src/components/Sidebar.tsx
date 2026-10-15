@@ -20,9 +20,10 @@ import {
 import { useApp } from "../lib/store";
 import * as db from "../lib/db";
 import { groupChats, projectColor } from "../lib/grouping";
-import { MenuItem, MenuSeparator, showMenu } from "./Menu";
+import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
-import { Avatar, Button, Dialog, Input, Select } from "./ui";
+import { Avatar, Button, Dialog, Input } from "./ui";
+import { Select } from "./ui/select";
 import { cn } from "../lib/utils";
 import type { Conversation, SearchHit } from "../lib/types";
 
@@ -38,7 +39,7 @@ function ChatRow({
   dotColor,
   renaming,
   onOpen,
-  onMenu,
+  menu,
   onRenameCommit,
   onRenameCancel,
   onRenameChange,
@@ -48,7 +49,7 @@ function ChatRow({
   dotColor: string | null;
   renaming: boolean;
   onOpen: () => void;
-  onMenu: (anchor: HTMLElement) => void;
+  menu: MenuEntry[];
   onRenameCommit: () => void;
   onRenameCancel: () => void;
   onRenameChange: (value: string) => void;
@@ -99,17 +100,21 @@ function ChatRow({
         />
       )}
       <span className="min-w-0 flex-1 truncate text-sm">{chat.title}</span>
-      <button
-        type="button"
+      <DropdownMenu
+        align="end"
         aria-label={`Options for ${chat.title}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onMenu(e.currentTarget);
-        }}
-        className="invisible ml-auto rounded-control text-muted hover:text-text focus-visible:visible group-hover:visible"
-      >
-        <MoreHorizontal size={16} />
-      </button>
+        trigger={
+          <button
+            type="button"
+            aria-label={`Options for ${chat.title}`}
+            onClick={(e) => e.stopPropagation()}
+            className="invisible ml-auto rounded-control text-muted hover:text-text focus-visible:visible group-hover:visible"
+          >
+            <MoreHorizontal size={16} />
+          </button>
+        }
+        items={menu}
+      />
     </div>
   );
 }
@@ -359,78 +364,61 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     }
   };
 
-  const openMenu = (chat: Conversation, anchor: HTMLElement) => {
-    showMenu(
-      anchor,
-      <>
-        <MenuItem
-          icon={chat.pinned === 1 ? <PinOff size={16} /> : <Pin size={16} />}
-          label={chat.pinned === 1 ? "Unpin" : "Pin"}
-          onSelect={() => void togglePin(chat.id).catch(() => undefined)}
-        />
-        <MenuItem
-          icon={<Pencil size={16} />}
-          label="Rename"
-          onSelect={() => {
-            setRenameDraft(chat.title);
-            setRenamingId(chat.id);
-          }}
-        />
-        <MenuItem
-          icon={<FolderInput size={16} />}
-          label="Move to project…"
-          onSelect={() =>
-            showMenu(
-              anchor,
-              <>
-                {projects.map((p) => (
-                  <MenuItem
-                    key={p.id}
-                    label={p.name}
-                    onSelect={() => void moveConversation(chat.id, p.id).catch(() => undefined)}
-                  />
-                ))}
-                <MenuSeparator />
-                <MenuItem
-                  label="No project"
-                  onSelect={() => void moveConversation(chat.id, null).catch(() => undefined)}
-                />
-              </>,
-              { align: "right" },
-            )
-          }
-        />
-        <MenuItem
-          icon={<Tag size={16} />}
-          label="Tags…"
-          onSelect={() => setTagDialogChat(chat)}
-        />
-        <MenuSeparator />
-        <MenuItem
-          icon={<Trash2 size={16} />}
-          label="Delete"
-          danger
-          onSelect={() => void askDelete(chat)}
-        />
-      </>,
-      { align: "right" },
-    );
-  };
+  const chatMenu = (chat: Conversation): MenuEntry[] => [
+    {
+      id: "pin",
+      icon: chat.pinned === 1 ? <PinOff size={16} /> : <Pin size={16} />,
+      label: chat.pinned === 1 ? "Unpin" : "Pin",
+      onSelect: () => void togglePin(chat.id).catch(() => undefined),
+    },
+    {
+      id: "rename",
+      icon: <Pencil size={16} />,
+      label: "Rename",
+      onSelect: () => {
+        setRenameDraft(chat.title);
+        setRenamingId(chat.id);
+      },
+    },
+    {
+      id: "move",
+      type: "submenu",
+      icon: <FolderInput size={16} />,
+      label: "Move to project…",
+      items: [
+        ...projects.map((p) => ({
+          id: `project-${p.id}`,
+          label: p.name,
+          onSelect: () => void moveConversation(chat.id, p.id).catch(() => undefined),
+        })),
+        { id: "move-sep", type: "separator" },
+        {
+          id: "move-none",
+          label: "No project",
+          onSelect: () => void moveConversation(chat.id, null).catch(() => undefined),
+        },
+      ],
+    },
+    { id: "tags", icon: <Tag size={16} />, label: "Tags…", onSelect: () => setTagDialogChat(chat) },
+    { id: "chat-sep", type: "separator" },
+    {
+      id: "delete",
+      icon: <Trash2 size={16} />,
+      label: "Delete",
+      danger: true,
+      onSelect: () => void askDelete(chat),
+    },
+  ];
 
-  const openProfileMenu = (anchor: HTMLElement) => {
-    showMenu(
-      anchor,
-      <>
-        <MenuItem
-          icon={<Settings size={16} />}
-          label="Settings"
-          onSelect={() => setSettingsPage("general")}
-        />
-        <MenuItem label="Global memory" onSelect={() => setSettingsPage("memory")} />
-      </>,
-      { align: "left", above: true },
-    );
-  };
+  const profileMenu: MenuEntry[] = [
+    {
+      id: "settings",
+      icon: <Settings size={16} />,
+      label: "Settings",
+      onSelect: () => setSettingsPage("general"),
+    },
+    { id: "memory", label: "Global memory", onSelect: () => setSettingsPage("memory") },
+  ];
 
   if (sidebarCollapsed) {
     return (
@@ -554,17 +542,16 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
             <div className="flex items-center gap-1.5 px-2.5 pt-1.5">
               <Tag size={14} className="flex-none text-muted" />
               <Select
-                value={tagFilter ?? ""}
-                onChange={(e) => setTagFilter(e.target.value || null)}
+                size="sm"
+                className="min-w-0 flex-1"
+                value={tagFilter}
+                onChange={(next) => setTagFilter(next || null)}
                 aria-label="Filter by tag"
-              >
-                <option value="">All tags</option>
-                {allTags.map((t) => (
-                  <option key={t.tag} value={t.tag}>
-                    {t.tag} ({t.count})
-                  </option>
-                ))}
-              </Select>
+                options={[
+                  { value: "", label: "All tags" },
+                  ...allTags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.count})` })),
+                ]}
+              />
               {tagFilter && (
                 <button
                   type="button"
@@ -717,7 +704,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                         dotColor={project ? projectColor(project.id) : null}
                         renaming={renamingId === chat.id}
                         onOpen={() => openChat(chat.id)}
-                        onMenu={(anchor) => openMenu(chat, anchor)}
+                        menu={chatMenu(chat)}
                         onRenameCommit={() => void commitRename()}
                         onRenameCancel={() => setRenamingId(null)}
                         onRenameChange={setRenameDraft}
@@ -745,17 +732,24 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         >
           <Settings size={16} />
         </button>
-        <button
-          type="button"
-          onClick={(e) => openProfileMenu(e.currentTarget)}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-control p-1 text-left hover:bg-hover"
-        >
-          <Avatar initials={initialsOf(displayName)} />
-          <span className="flex min-w-0 flex-col leading-tight">
-            <b className="truncate text-[13px]">{displayName || "Local user"}</b>
-            <small className="text-muted">BYOK</small>
-          </span>
-        </button>
+        <DropdownMenu
+          align="start"
+          aria-label="Profile"
+          className="min-w-48"
+          trigger={
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-control p-1 text-left hover:bg-hover"
+            >
+              <Avatar initials={initialsOf(displayName)} />
+              <span className="flex min-w-0 flex-col leading-tight">
+                <b className="truncate text-[13px]">{displayName || "Local user"}</b>
+                <small className="text-muted">BYOK</small>
+              </span>
+            </button>
+          }
+          items={profileMenu}
+        />
       </div>
       {tagDialogChat && (
         <TagDialog

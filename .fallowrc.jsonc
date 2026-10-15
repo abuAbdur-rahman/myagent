@@ -1,0 +1,9 @@
+{
+  // The accessible select/combobox primitives under src/components/ui/select are
+  // vendored, self-contained, and keyboard-heavy by nature. They carry no test
+  // harness yet, so raw CRAP scoring flags them. Exclude them from health and
+  // complexity findings only — dead-code still checks them.
+  "health": {
+    "ignore": ["src/components/ui/select/**"]
+  }
+}

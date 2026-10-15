@@ -5,7 +5,8 @@ import {
   type Memory,
   type MemoryDraft,
 } from "../lib/types";
-import { Button, Select, Textarea } from "./ui";
+import { Button, Textarea } from "./ui";
+import { Select } from "./ui/select";
 import { cn, errorText } from "../lib/utils";
 
 function KindChip({ kind }: { kind: string }) {
@@ -27,17 +28,13 @@ function KindSelect({
 }) {
   return (
     <Select
+      size="sm"
       className="w-32"
       value={value}
-      onChange={(e) => onChange(e.target.value as MemoryDraft["kind"])}
+      onChange={(kind) => onChange(kind)}
       aria-label={label}
-    >
-      {MEMORY_KINDS.map((k) => (
-        <option key={k} value={k}>
-          {k}
-        </option>
-      ))}
-    </Select>
+      options={MEMORY_KINDS.map((k) => ({ value: k, label: k }))}
+    />
   );
 }
 

@@ -12,6 +12,7 @@ import { TurnCards } from "./components/TurnCards";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { OnboardingDialog } from "./components/OnboardingDialog";
+import { SearchKeyDialog } from "./components/SearchKeyDialog";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { ArtifactsPanel } from "./components/ArtifactsPanel";
 import { CommandPalette } from "./components/CommandPalette";
@@ -144,6 +145,7 @@ function Shell() {
       )}
       <SettingsDialog />
       <OnboardingDialog />
+      <SearchKeyDialog />
       <ProjectDialog
         open={projectDialog.open}
         projectId={projectDialog.id}

@@ -6,7 +6,6 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
-  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "../lib/utils";
@@ -48,23 +47,19 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
-export function IconButton({
-  className,
-  label,
-  title,
-  size = 32,
-  active,
-  children,
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  label: string;
-  title?: string;
-  size?: 32 | 28 | 24;
-  active?: boolean;
-}) {
+export const IconButton = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & {
+    label: string;
+    title?: string;
+    size?: 32 | 28 | 24;
+    active?: boolean;
+  }
+>(({ className, label, title, size = 32, active, children, ...props }, ref) => {
   const dims = size === 24 ? "h-6 w-6" : size === 28 ? "h-7 w-7" : "h-8 w-8";
   return (
     <button
+      ref={ref}
       type="button"
       aria-label={label}
       title={title ?? label}
@@ -80,7 +75,8 @@ export function IconButton({
       {children}
     </button>
   );
-}
+});
+IconButton.displayName = "IconButton";
 
 const fieldBase = cn(
   "w-full rounded-card border border-border bg-surface-2 px-2.5 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent",
@@ -100,13 +96,6 @@ export const Textarea = forwardRef<
   <textarea ref={ref} className={cn("py-2", fieldBase, className)} {...props} />
 ));
 Textarea.displayName = "Textarea";
-
-export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
-  ({ className, ...props }, ref) => (
-    <select ref={ref} className={cn("h-8", fieldBase, className)} {...props} />
-  ),
-);
-Select.displayName = "Select";
 
 export function Badge({ children, className }: { children: ReactNode; className?: string }) {
   return (

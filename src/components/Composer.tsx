@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, Square } from "lucide-react";
 import { useApp } from "../lib/store";
-import { openModelPicker } from "./ModelPicker";
+import { ModelPickerHost, openModelPicker } from "./ModelPicker";
+import { Select } from "./ui/select";
 import { toast } from "../lib/toast";
 import { cn } from "../lib/utils";
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
@@ -150,6 +151,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     [],
   );
 
+  const modelLabel =
+    activeConnection && model ? `${activeConnection.name} · ${model}` : "Select model";
+
   const slashIndexRef = useRef(slashIndex);
   slashIndexRef.current = slashIndex;
   const keyDownRef = useRef((_event: KeyboardEvent): boolean => false);
@@ -176,9 +180,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     }
     return false;
   };
-
-  const modelLabel =
-    activeConnection && model ? `${activeConnection.name} · ${model}` : "Select model";
 
   return (
     <div>
@@ -214,11 +215,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             <span className="truncate">{modelLabel}</span>
             <ChevronDown size={14} className="flex-none text-muted" />
           </button>
-          <select
+          <Select
+            size="sm"
+            className="w-28 flex-none"
             value={reasoningEffort ?? "none"}
-            onChange={(e) =>
-              setReasoningEffort(e.target.value === "none" ? null : e.target.value)
-            }
+            onChange={(level) => setReasoningEffort(level === "none" ? null : level)}
             aria-label="Reasoning effort"
             title={
               supportedEfforts
@@ -226,14 +227,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
                 : "This model does not advertise reasoning levels"
             }
             disabled={!supportedEfforts}
-            className="h-7 w-24 flex-none rounded-control border border-border bg-surface px-1.5 text-xs text-text disabled:opacity-50"
-          >
-            {(supportedEfforts ?? ["none"]).map((level) => (
-              <option key={level} value={level}>
-                {level === "none" ? "No reasoning" : level}
-              </option>
-            ))}
-          </select>
+            options={(supportedEfforts ?? ["none"]).map((level) => ({
+              value: level,
+              label: level === "none" ? "No reasoning" : level,
+            }))}
+          />
           <span className="flex-1" />
           <span className="text-xs text-muted">{estimateTokens(composerDraft)} tokens</span>
           {streaming ? (
@@ -262,6 +260,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
       <div className="mt-1.5 text-center text-xs text-muted">
         MyAgent can make mistakes. Check important info.
       </div>
+      <ModelPickerHost />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { Cpu, Download, FolderInput, MoreHorizontal, PanelRight, Pencil, Pin, Pi
 import { useApp } from "../lib/store";
 import { projectColor } from "../lib/grouping";
 import { buildChatExport, conversationToMarkdown, importChatExport, safeFilename } from "../lib/export";
-import { MenuItem, MenuSeparator, showMenu } from "./Menu";
+import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { openModelPicker } from "./ModelPicker";
 import { IconButton } from "./ui";
@@ -88,74 +88,65 @@ export function ChatHeader() {
     }
   };
 
-  const openMenu = (anchor: HTMLElement) => {
-    if (!chat) return;
-    showMenu(
-      anchor,
-      <>
-        <MenuItem
-          icon={chat.pinned === 1 ? <PinOff size={16} /> : <Pin size={16} />}
-          label={chat.pinned === 1 ? "Unpin" : "Pin"}
-          onSelect={() => void togglePin(chat.id).catch(() => undefined)}
-        />
-        <MenuItem
-          icon={<Pencil size={16} />}
-          label="Rename"
-          onSelect={() => {
+  const chatMenu: MenuEntry[] = chat
+    ? [
+        {
+          id: "pin",
+          icon: chat.pinned === 1 ? <PinOff size={16} /> : <Pin size={16} />,
+          label: chat.pinned === 1 ? "Unpin" : "Pin",
+          onSelect: () => void togglePin(chat.id).catch(() => undefined),
+        },
+        {
+          id: "rename",
+          icon: <Pencil size={16} />,
+          label: "Rename",
+          onSelect: () => {
             setDraft(chat.title);
             setRenaming(true);
-          }}
-        />
-        <MenuItem
-          icon={<FolderInput size={16} />}
-          label="Move to project…"
-          onSelect={() =>
-            showMenu(
-              anchor,
-              <>
-                {projects.map((p) => (
-                  <MenuItem
-                    key={p.id}
-                    label={p.name}
-                    onSelect={() => void moveConversation(chat.id, p.id).catch(() => undefined)}
-                  />
-                ))}
-                <MenuSeparator />
-                <MenuItem
-                  label="No project"
-                  onSelect={() => void moveConversation(chat.id, null).catch(() => undefined)}
-                />
-              </>,
-              { align: "right" },
-            )
-          }
-        />
-        <MenuItem
-          icon={<Download size={16} />}
-          label="Export"
-          onSelect={exportChat}
-        />
-        <MenuItem
-          icon={<Download size={16} />}
-          label="Export JSON"
-          onSelect={exportJson}
-        />
-        <MenuItem
-          icon={<Upload size={16} />}
-          label="Import chat…"
-          onSelect={() => fileRef.current?.click()}
-        />
-        <MenuSeparator />
-        <MenuItem
-          icon={<Trash2 size={16} />}
-          label="Delete"
-          danger
-          onSelect={() => void askDelete()}
-        />
-      </>,
-      { align: "right" },
-    );
-  };
+          },
+        },
+        {
+          id: "move",
+          type: "submenu",
+          icon: <FolderInput size={16} />,
+          label: "Move to project…",
+          items: [
+            ...projects.map((p) => ({
+              id: `project-${p.id}`,
+              label: p.name,
+              onSelect: () => void moveConversation(chat.id, p.id).catch(() => undefined),
+            })),
+            { id: "move-sep", type: "separator" },
+            {
+              id: "move-none",
+              label: "No project",
+              onSelect: () => void moveConversation(chat.id, null).catch(() => undefined),
+            },
+          ],
+        },
+        { id: "export-md", icon: <Download size={16} />, label: "Export", onSelect: exportChat },
+        {
+          id: "export-json",
+          icon: <Download size={16} />,
+          label: "Export JSON",
+          onSelect: exportJson,
+        },
+        {
+          id: "import",
+          icon: <Upload size={16} />,
+          label: "Import chat…",
+          onSelect: () => fileRef.current?.click(),
+        },
+        { id: "menu-sep", type: "separator" },
+        {
+          id: "delete",
+          icon: <Trash2 size={16} />,
+          label: "Delete",
+          danger: true,
+          onSelect: () => void askDelete(),
+        },
+      ]
+    : [];
 
   return (
     <div className="flex h-12 flex-none items-center gap-2 border-b border-border py-0 pl-4 pr-3">
@@ -214,12 +205,16 @@ export function ChatHeader() {
       <span className="flex-1" />
 
       {chat && (
-        <IconButton
-          label="Chat options"
-          onClick={(e) => openMenu(e.currentTarget)}
-        >
-          <MoreHorizontal size={16} />
-        </IconButton>
+        <DropdownMenu
+          align="end"
+          aria-label="Chat options"
+          trigger={
+            <IconButton label="Chat options">
+              <MoreHorizontal size={16} />
+            </IconButton>
+          }
+          items={chatMenu}
+        />
       )}
       <IconButton
         label="Toggle artifact panel"

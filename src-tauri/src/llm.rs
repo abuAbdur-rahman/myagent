@@ -94,6 +94,10 @@ pub struct ChatRequest {
     pub reasoning_effort: Option<String>,
     #[serde(default)]
     pub connection_kind: Option<String>,
+    #[serde(default)]
+    pub search_backend: Option<String>,
+    #[serde(default)]
+    pub search_endpoint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -815,6 +819,11 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             return vec![url.trim().to_string()];
         }
     }
+    if name == "web_search" {
+        if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
+            return vec![query.trim().to_string()];
+        }
+    }
     vec!["*".to_string()]
 }
 
@@ -1266,8 +1275,12 @@ async fn run_agentic(
                 &name,
                 args,
                 &id,
-                req.conversation_id.as_deref(),
-                req.project_id.as_deref(),
+                &tools::ExecContext {
+                    conversation_id: req.conversation_id.as_deref(),
+                    project_id: req.project_id.as_deref(),
+                    search_backend: req.search_backend.as_deref(),
+                    search_endpoint: req.search_endpoint.as_deref(),
+                },
                 cancel,
             )
             .await

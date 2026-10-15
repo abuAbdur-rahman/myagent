@@ -5,6 +5,7 @@ const KNOWN_TOOLS = [
   "run_powershell",
   "save_artifact",
   "web_fetch",
+  "web_search",
 ] as const;
 
 type KnownToolName = (typeof KNOWN_TOOLS)[number];
