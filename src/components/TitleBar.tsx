@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Asterisk, Copy, Minus, Square, X } from "lucide-react";
+import { Copy, Minus, Square, X } from "lucide-react";
+import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import { toast } from "../lib/toast";
 
@@ -63,7 +64,7 @@ export function TitleBar() {
       className="flex h-8 flex-none select-none items-center bg-bg"
     >
       <div data-tauri-drag-region className="flex min-w-0 max-w-[60%] items-center gap-2 pl-2.5">
-        <Asterisk size={16} className="shrink-0 text-accent" aria-hidden="true" />
+        <Logo size={16} alt="" />
         <b className="text-[13px]">MyAgent</b>
         <span className="truncate text-[13px] text-muted">· {title}</span>
       </div>

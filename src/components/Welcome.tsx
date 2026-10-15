@@ -1,6 +1,6 @@
-import { Asterisk } from "lucide-react";
 import { useApp } from "../lib/store";
 import { Composer } from "./Composer";
+import { Logo } from "./Logo";
 
 const SUGGESTIONS = ["Explain a concept", "Draft an email", "Debug my code", "Plan a project"];
 
@@ -24,9 +24,7 @@ export function Welcome() {
   return (
     <div className="flex h-full place-items-center justify-center overflow-auto p-4">
       <div className="w-full max-w-[720px] text-center">
-        <div className="inline-grid h-12 w-12 place-items-center rounded-full bg-accent text-accent-contrast">
-          <Asterisk size={24} aria-hidden="true" />
-        </div>
+        <Logo size={48} className="inline" />
         <h1 className="mb-1 mt-2.5 font-serif text-[28px] font-semibold">
           {heading}
         </h1>

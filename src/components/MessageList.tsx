@@ -10,7 +10,6 @@ import {
   GitBranch,
   Pencil,
   RefreshCw,
-  Sparkles,
   Terminal,
   Clock,
   X,
@@ -23,6 +22,7 @@ import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments } from "../lib/artifacts";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
+import { Logo } from "./Logo";
 import { Button, IconButton } from "./ui";
 import type { Message } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -329,9 +329,7 @@ function AssistantMessage({
   return (
     <div className="msg group" data-mid={message.id}>
       <div className="mb-1.5 flex items-center gap-2 text-xs">
-        <span className="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent text-accent-contrast">
-          <Sparkles size={12} />
-        </span>
+        <Logo size={22} alt="" className="rounded-full" />
         <span className="text-muted">{modelName}</span>
       </div>
       <div className="md">

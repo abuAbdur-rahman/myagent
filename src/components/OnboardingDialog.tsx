@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Asterisk, Check, KeyRound, Plug, ShieldCheck } from "lucide-react";
+import { Check, KeyRound, Plug, ShieldCheck } from "lucide-react";
+import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import { DEFAULT_BASE_URLS, connectionInputSchema, type ProviderKind } from "../lib/types";
@@ -103,9 +104,7 @@ export function OnboardingDialog() {
         <div className="flex flex-1 flex-col items-center gap-3 text-center">
           {step === 0 && (
             <>
-              <span className="grid h-14 w-14 place-items-center rounded-full bg-accent text-accent-contrast">
-                <Asterisk size={28} />
-              </span>
+              <Logo size={56} />
               <h1 className="m-0 font-serif text-[28px] font-semibold">Welcome to MyAgent</h1>
               <label className="flex w-full max-w-[300px] flex-col gap-1 text-left text-xs text-muted">
                 What should I call you?
