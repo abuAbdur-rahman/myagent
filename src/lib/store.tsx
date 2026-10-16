@@ -12,6 +12,7 @@ import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledge } from "./knowledge";
+import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
 import { fitImageBudget } from "./image";
 import {
   lookupContextLength,
@@ -753,6 +754,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       projectMemories,
       userName: displayName || undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
+      skillIndexBlock: skillIndexRef.current || undefined,
     });
     const limit = modelContextLimit ?? 128_000;
     const lastUsage = [...messages]
@@ -995,6 +997,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
+        skillIndexBlock: skillIndexRef.current || undefined,
       });
       return [
         ...(system ? [{ role: "system", content: system }] : []),
@@ -1007,6 +1010,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
   const knowledgeBlockRef = useRef("");
+  const skillIndexRef = useRef("");
   const pendingVisionFallbackRef = useRef<string | null>(null);
 
   const streamTurn = useCallback(
@@ -1267,6 +1271,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
+        skillIndexBlock: skillIndexRef.current || undefined,
       });
       if (estimateContext(turns, system, contextLimitRef.current).pct > 80) {
         toast("Context is over 80% full - sending recent messages only.");
@@ -1346,6 +1351,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
+        skillIndexBlock: skillIndexRef.current || undefined,
       });
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
@@ -1468,6 +1474,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const outgoing: { role: string; content: string | api.ChatContentPart[] }[] = [
         ...history,
       ];
+      let skillBlock = "";
+      let sendText = text;
+      try {
+        const index = await api.skillIndex().catch(() => []);
+        skillBlock = buildSkillIndexBlock(index);
+        const resolved = await resolveSkillMentions(text, index);
+        if (resolved.unknown.length > 0) {
+          toast(`Unknown skill: ${resolved.unknown.join(", ")}`);
+        }
+        sendText = resolved.content;
+      } catch {
+        skillBlock = "";
+      }
+      skillIndexRef.current = skillBlock;
       let knowledge = "";
       try {
         if (projectRef.current) {
@@ -1513,9 +1533,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       if (fit.kept.length > 0) {
-        outgoing.push({ role: "user", content: buildUserContent(text, fit.kept) });
+        outgoing.push({ role: "user", content: buildUserContent(sendText, fit.kept) });
       } else {
-        outgoing.push({ role: "user", content: text });
+        outgoing.push({ role: "user", content: sendText });
       }
       const payload = buildPayload(conversationId, outgoing);
 

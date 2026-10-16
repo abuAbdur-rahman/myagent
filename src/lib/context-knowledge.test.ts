@@ -27,4 +27,16 @@ describe("buildSystemPrompt knowledge block", () => {
     const system = buildSystemPrompt({ ...base, knowledgeBlock: big });
     expect((system ?? "").length).toBeLessThanOrEqual(6000);
   });
+
+  it("appends the skill index after knowledge", () => {
+    const system = buildSystemPrompt({
+      ...base,
+      knowledgeBlock: "## Attached knowledge\n<source name=a.md>hi</source>",
+      skillIndexBlock: "## Available skills\n- git-helper: Helps with git work",
+    });
+    expect(system).toContain("- git-helper: Helps with git work");
+    expect((system ?? "").indexOf("Attached knowledge")).toBeLessThan(
+      (system ?? "").indexOf("Available skills"),
+    );
+  });
 });

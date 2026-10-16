@@ -456,8 +456,22 @@ pub fn tool_specs() -> Value {
         {
             "type": "function",
             "function": {
-                "name": "describe_image",
-                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
+                "name": "skill",
+                "description": "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description. The skill ID must match an available skill or a skill explicitly referenced by the user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "The ID of an available skill." },
+                    },
+                    "required": ["id"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "describe_image",                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -560,6 +574,9 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
             let index = args.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
             let status = arg_str(args, "status").unwrap_or_default();
             format!("Checklist #{index} -> {status}")
+        }
+        "skill" => {
+            format!("Skill: {}", arg_str(args, "id").unwrap_or_default())
         }
         "describe_image" => {
             let index = args.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -949,6 +966,14 @@ pub async fn execute(
             };
             Ok(ExecOutput {
                 output: cap_output(&full, spill.as_deref()),
+                artifact: None,
+            })
+        }
+        "skill" => {
+            let id = arg_str(&args, "id").ok_or("missing skill id")?;
+            let block = crate::skills::prepare_skill(app, &id)?;
+            Ok(ExecOutput {
+                output: cap_output(&block, None),
                 artifact: None,
             })
         }

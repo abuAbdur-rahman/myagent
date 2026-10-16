@@ -217,6 +217,20 @@ export function spillImageWrite(conversationId: string, name: string, dataUrl: s
   return invoke<string>("spill_image_write", { conversationId, name, dataUrl });
 }
 
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export function skillIndex() {
+  return invoke<SkillInfo[]>("skill_index");
+}
+
+export function skillRead(id: string) {
+  return invoke<string>("skill_read", { id });
+}
+
 export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {
   return invoke<string>("knowledge_sidecar_write", { projectId, sha256, text });
 }

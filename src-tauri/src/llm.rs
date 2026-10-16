@@ -909,6 +909,16 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             return vec![query.trim().to_string()];
         }
     }
+    if name == "skill" {
+        if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
+            return vec![id.trim().to_string()];
+        }
+    }
+    if name == "describe_image" {
+        if let Some(index) = args.get("index").and_then(|v| v.as_u64()) {
+            return vec![format!("image#{index}")];
+        }
+    }
     vec!["*".to_string()]
 }
 
@@ -1770,8 +1780,13 @@ mod tests {
         assert!(names.contains(&"describe_image"), "spec listed: {names:?}");
         assert_eq!(
             approval_resources("describe_image", &serde_json::json!({"index": 0})),
-            vec!["*".to_string()],
-            "defaults to Ask"
+            vec!["image#0".to_string()],
+            "scoped to the image"
+        );
+        assert_eq!(
+            approval_resources("skill", &serde_json::json!({"id": "git-helper"})),
+            vec!["git-helper".to_string()],
+            "skill asserts per-id"
         );
     }
     use std::cell::{Cell, RefCell};

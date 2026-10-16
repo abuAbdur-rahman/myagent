@@ -2,6 +2,7 @@ mod error;
 mod knowledge;
 mod llm;
 mod permissions;
+mod skills;
 mod sse;
 mod state;
 mod tools;
@@ -283,6 +284,8 @@ pub fn run() {
             websearch::search_key_remove,
             permissions::permission_check,
             permissions::permission_allow,
+            skills::skill_index,
+            skills::skill_read,
             permissions::approval_reply,
             permissions::question_answer,
         ])
