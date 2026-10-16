@@ -4,7 +4,6 @@ import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import { DEFAULT_BASE_URLS, connectionInputSchema, type ProviderKind } from "../lib/types";
-import { SEARCH_KEY_ACCOUNT } from "../lib/api";
 import { Button, Input, Spinner } from "./ui";
 import { cn, errorText, rollbackConnection } from "../lib/utils";
 
@@ -61,9 +60,9 @@ export function OnboardingDialog() {
   const saveSearchKey = async () => {
     if (!searchKey.trim()) return;
     try {
-      await api.setApiKey(SEARCH_KEY_ACCOUNT, searchKey.trim());
+      const count = await api.addSearchKey(searchKey.trim());
       localStorage.setItem("searchKeyPromptDismissed", "1");
-      setSearchStatus("Search key saved.");
+      setSearchStatus(`Search key saved (${count} stored).`);
       setSearchKey("");
     } catch (e) {
       setSearchStatus(errorText(e));

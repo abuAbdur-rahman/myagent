@@ -44,7 +44,7 @@ export function SearchKeyDialog() {
     }
     setBusy(true);
     try {
-      await api.setApiKey(SEARCH_KEY_ACCOUNT, key.trim());
+      await api.addSearchKey(key.trim());
       localStorage.setItem(DISMISS_KEY, "1");
       setOpen(false);
     } catch (e) {

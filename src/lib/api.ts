@@ -16,6 +16,18 @@ export function deleteApiKey(connectionId: string) {
   return invoke<void>("delete_api_key", { connectionId });
 }
 
+export function searchKeyCount() {
+  return invoke<number>("search_key_count");
+}
+
+export function addSearchKey(apiKey: string) {
+  return invoke<number>("search_key_add", { key: apiKey });
+}
+
+export function removeSearchKey(index: number) {
+  return invoke<number>("search_key_remove", { index });
+}
+
 export function listModels(baseUrl: string, connectionId: string, connectionKind?: string) {
   return invoke<string[]>("list_models", { baseUrl, connectionId, connectionKind });
 }

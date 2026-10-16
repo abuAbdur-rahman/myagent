@@ -163,6 +163,7 @@ interface AppContextValue {
 
   messages: Message[];
   streaming: boolean;
+  streamingId: string | null;
   toolLog: ToolEntry[];
   sendMessage: (text: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
@@ -257,6 +258,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
   const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === "1",
@@ -1008,6 +1010,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       finishRef.current = null;
       artifactsRef.current = db.parseDeclaredArtifacts(seed?.artifacts);
       assistantMsgIdRef.current = assistantMsg.id;
+      setStreamingId(assistantMsg.id);
       setStreaming(true);
       setToolLog([]);
       setApproval(null);
@@ -1164,6 +1167,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           flush();
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
+          setStreamingId(null);
           setStreaming(false);
           finalize(assistantMsg.id, conversationId);
         }
@@ -1666,6 +1670,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const id = requestIdRef.current;
     if (!id) return;
     requestIdRef.current = null;
+    setStreamingId(null);
     setStreaming(false);
     api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
@@ -1754,6 +1759,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSettingsPage,
     messages,
     streaming,
+    streamingId,
     toolLog,
     sendMessage,
     regenerate,

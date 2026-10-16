@@ -72,10 +72,8 @@ export function ProjectDialog({
     }
     setBusy(true);
     try {
-      const saved = await saveProject(parsed.data, currentId ?? undefined);
-      setCurrentId(saved.id);
-      await reloadMemories(saved.id);
-      setStatus("Saved.");
+      await saveProject(parsed.data, currentId ?? undefined);
+      onClose();
     } catch (e) {
       setStatus(String(e));
     } finally {
@@ -95,10 +93,10 @@ export function ProjectDialog({
     setBusy(true);
     try {
       await removeProject(currentId);
+      onClose();
       setCurrentId(null);
       setForm({ name: "", description: "", instructions: "" });
       setMemories([]);
-      setStatus("Project deleted.");
     } catch (e) {
       setStatus(String(e));
     } finally {
@@ -178,6 +176,9 @@ export function ProjectDialog({
                 Delete
               </Button>
             )}
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
             <Button onClick={() => void save()} disabled={busy}>
               Save
             </Button>
