@@ -21,7 +21,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** A mock-provider test sends a message and gets a stored reply.
 
 ## A2. Stop / cancel
-- **Status:** Partial (stops only between steps)
+- **Status:** Have (0.2.2: cancel mid-stream aborts, partial kept; llm.rs cancel notified + state.rs cancel)
 - **Ref:** † OpenRouter: cancel a stream by aborting the connection (supported providers only). Claude Code: Esc stops the turn.
 - **Build:** A cancel token checked on every network read and before each tool call. On cancel, drop the HTTP body, keep partial text, mark the message `stopped`.
 - **Not:** Killing a running child process gracefully (see D7).
@@ -34,14 +34,14 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Fixtures give identical events however the bytes are chopped (1 byte, random, whole).
 
 ## A4. Retry with backoff
-- **Status:** Missing
+- **Status:** Have (0.1.4/0.2.2: post_with_retry 429/5xx only, backoff+Retry-After, Retrying events; llm.rs:715,726,745)
 - **Ref:** † OpenRouter: pre-stream errors are normal HTTP errors; mid-stream errors arrive as SSE with HTTP 200. Claude Code and OpenCode retry transient failures.
 - **Build:** Retry only on 429, 5xx and network errors, and only if no token was received. Exponential backoff with jitter, max 3 attempts, honor `Retry-After`. Show "Retrying (2/3)" in the UI.
 - **Not:** Provider fallbacks, circuit breakers.
 - **Done:** 429-then-success fixture succeeds; 400 does not retry; mid-stream failure does not retry.
 
 ## A5. Truncation and finish reasons
-- **Status:** Have (0.1.3: length note + Continue; no separate `interrupted` state yet)
+- **Status:** Partial (length+Continue yes, no interrupted/stopped state in types finishReason)
 - **Ref:** † `finish_reason: "length"` means the token limit was hit; `"error"` means mid-stream failure; some context errors are reported as `length`.
 - **Build:** Map every finish reason to a message state: `complete`, `length`, `error`, `stopped`, `interrupted` (stream died without finish reason, partial text kept). `length` and `interrupted` show a Continue button that sends a short "continue" turn.
 - **Done:** Each state has a fixture and a visible UI treatment.
@@ -66,13 +66,13 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Two quick sends produce two ordered turns.
 
 ## A9. Markdown rendering (assistant and user)
-- **Status:** Unknown
+- **Status:** Have (Markdown.tsx marked+DOMPurify both roles)
 - **Ref:** All three render markdown for both sides. OpenWebUI and Claude store raw text and render on display.
 - **Build:** Store raw markdown only. One renderer for both roles (`react-markdown`, `remark-gfm`, `remark-breaks`). No raw HTML. Links get `rel="noopener noreferrer"` and open externally. Throttle re-render during streaming.
 - **Done:** The same markdown string renders identically for user and assistant bubbles.
 
 ## A10. Code blocks in messages
-- **Status:** Unknown
+- **Status:** Have (Markdown codeblock-head lang+Copy, shiki lazy)
 - **Ref:** Claude and OpenWebUI: language label, copy button, syntax highlighting; OpenWebUI also allows editable code blocks.
 - **Build:** Header with language and Copy; monospace; horizontal scroll; highlight lazily after streaming finishes. Copy copies raw text only.
 - **Not:** Editable code blocks, run buttons.
@@ -85,7 +85,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** The acceptance list from the composer spec passes.
 
 ## A12. Message actions
-- **Status:** Have (destructive edit)
+- **Status:** Partial (destructive edit only; no version <2/3> switcher, branch claim overstated)
 - **Ref:** † OpenWebUI edits and regenerates by adding branches; Claude shows `< 2/3 >` version switchers.
 - **Build:** Copy, Regenerate, Edit (user messages). Edit and Regenerate create new branches (see B2). Delete only on explicit confirm.
 - **Done:** Edit never removes the old version.
@@ -130,7 +130,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Partial (0.1.6: FTS5 + sidebar box + filters, no test yet)
+- **Status:** Partial (FTS5+filters exist, shipped-sqlite fts5 test in lib.rs, still no dedicated search test)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.
@@ -185,7 +185,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Partial (0.1.5: OS vault have, key-rejected hint added; live AgentRouter key rejected — rotate it)
+- **Status:** Partial (0.1.5: OS vault + test-connection; key-rejected hint)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
@@ -223,7 +223,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 ## C7. Prune old tool outputs
 - **Status:** Have (0.1.7: older role:tool outputs replaced in send payload only, newest kept)
 - **Ref:** † OpenCode first clears old tool outputs and keeps only the most recent chunk (about 40K tokens in its docs), skipping some important tools.
-- **Build:** When building context, replace tool results older than N turns with "[output omitted, N bytes]". Stored messages stay intact. Pure function over the message list.
+- **Build:** When building context, replace older role:tool outputs with fixed marker, keep newest-1 only (llm.rs:878). Stored messages stay intact. Pure function over the message list.
 - **Done:** Pruned context is smaller, stored history unchanged.
 
 ## C8. Compaction summary
@@ -250,13 +250,13 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** A two-tool turn completes with both results visible.
 
 ## D2. Streaming tool loop
-- **Status:** Missing
+- **Status:** Have (sse.rs ToolCallDelta accumulator + split-args test)
 - **Ref:** † Stream tool-call arguments as deltas keyed by `index`; assemble before executing.
 - **Build:** Accumulate `ToolCallDelta` events (A3) into complete calls; execute after the finish reason `tool_calls`. Show "running" state in the UI as soon as the name arrives.
 - **Done:** Split argument fixtures assemble into valid JSON.
 
 ## D3. Step cap and doom-loop guard
-- **Status:** Missing
+- **Status:** Have (0.2.2: max 25 clamp 1-32 + 3x-repeat halt; llm.rs:1466,1235)
 - **Ref:** † OpenCode has a `doom_loop` permission that asks before repeating identical calls.
 - **Build:** Max steps per turn (for example 25). If the same tool with the same arguments repeats 3 times, stop and ask the user.
 - **Done:** A looping mock model is halted.
@@ -264,7 +264,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 ## D4. Permission engine
 - **Status:** Have (0.1.3: `permissions.rs` decide + SQLite always-rules, rules UI pending)
 - **Ref:** † OpenCode: allow, ask, deny per tool with pattern rules; v2 denies if any resource denies, else asks if any asks. † A v1 bug let "Allow always" (stored as `*`) override denies. Claude Code uses the same three effects.
-- **Build:** Rust function `decide(tool, target) -> Allow | Ask | Deny`, called inside every tool handler right before execution (never only in the frontend). Deny beats ask beats allow. "Always allow" stores a rule for that exact command prefix, never `*`. Rules in a settings file.
+- **Build:** Rust function `decide(tool, target) -> Allow | Ask | Deny`, called inside every tool handler right before execution (never only in the frontend). Deny beats ask beats allow. "Always allow" stores a rule for that exact command prefix, never `*`. Rules in SQLite (permissions.rs).
 - **Not:** Per-agent profiles, rule-editor UI.
 - **Done:** Deny beats a saved allow; unknown tools default to ask.
 
@@ -278,7 +278,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ```
 
 ## D5. Approval UI
-- **Status:** Have (0.1.3: inline card once/always/deny; reload re-show pending)
+- **Status:** Partial (card once/always/deny yes; pending in-memory, no reload re-show)
 - **Ref:** Claude Code and OpenCode prompts show the command and offer once, always, or deny.
 - **Build:** Inline card in the chat: tool name, full command, working directory. Buttons: Allow once, Always allow this command, Deny (optional reason, returned to the model). The loop awaits the answer. Dismissing equals deny. Stop cancels the pending request.
 - **Done:** The loop pauses until a button is pressed, and survives a UI reload by re-showing the card.
@@ -330,7 +330,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Undo restores bytes exactly.
 
 ## D13. Output cap and spill files
-- **Status:** Partial (32KB then lost)
+- **Status:** Have (32KB cap + spill file + delete path; tools.rs:12,60)
 - **Ref:** † Tools cap output sent to the model; OpenCode and Claude Code let the model re-read slices.
 - **Build:** Cap at about 32KB. Write the full output to `spill/<chat>/<id>.txt` and append "[truncated, full output at path]". The model reads it with D8. Delete with the chat (B11).
 - **Done:** Large output is capped in context but fully recoverable.
@@ -452,7 +452,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ## G1. Slash commands
 - **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest)
 - **Ref:** † Claude Code and OpenCode have `/compact`, `/export`, `/fork`, `/copy` and more; Claude Code custom commands are markdown files that are now part of skills.
-- **Build:** Typing `/` at the start opens a filtered menu. Start with `/compact`, `/export`, `/fork`, `/clear`, `/model`. Commands are a plain registry in code.
+- **Build:** Typing `/` at the start opens a filtered menu. 7-cmd registry (/compact /export /clear /model /new /memory /settings, slash.ts:8-16), lacks /fork. Commands are a plain registry in code.
 - **Not:** User-defined commands.
 - **Done:** Each command has a test and appears in the menu.
 
@@ -469,7 +469,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Settings persist and reload.
 
 ## G4. Theme
-- **Status:** Unknown
+- **Status:** Have (light/dark/system + CSS vars)
 - **Build:** Light, dark, system. CSS variables only.
 - **Done:** No hard-coded colors outside the variable file.
 
@@ -494,12 +494,12 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # H. Quality
 
 ## H1. Test harness
-- **Status:** Missing (zero test files)
+- **Status:** Partial (4 vitest files + sse/llm/permissions tests; npm test = vitest only, no unified cmd)
 - **Build:** Rust unit tests for pure logic (A3, A4, A5, D4, E2, B2 path). A mock provider that replays SSE fixtures. Three smoke tests: send, stream, stop. One command runs all; CI blocks merge on failure.
 - **Done:** `test` command is green on a clean checkout.
 
 ## H2. Recorded fixtures
-- **Status:** Missing
+- **Status:** Partial (5 .sse fixtures via include_str; no expected-events files)
 - **Build:** A `fixtures/` folder of real recorded streams: plain text, reasoning, tool calls, `length`, mid-stream `error`, comment lines, usage chunk, 429. Each fixture has an expected-events file.
 - **Done:** Every parser and loop test uses a fixture, not an inline string.
 
@@ -552,7 +552,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Switching from the tree matches switching with the arrows.
 
 ## J8. Action audit log
-- **Status:** Missing
+- **Status:** Partial (audit_log table+writes+test exist; no settings UI list/search)
 - **Build:** An append-only table of tool calls, approvals, denials and "always allow" rule changes with timestamp, chat and exact command. Searchable list in settings; included in delete-all (B11).
 - **Done:** Every approval creates exactly one log row.
 
