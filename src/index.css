@@ -202,21 +202,21 @@ kbd {
   border-radius: 8px;
   background: var(--color-surface-2);
 }
-.think summary {
+.think-toggle {
   cursor: pointer;
+  width: 100%;
+  text-align: left;
   padding: 6px 10px;
   font-size: 12px;
   color: var(--color-muted);
-  list-style: none;
+  background: none;
+  border: 0;
   border-radius: 8px;
 }
-.think summary::-webkit-details-marker {
-  display: none;
-}
-.think summary::before {
+.think-toggle::before {
   content: "▸ ";
 }
-.think[open] summary::before {
+.think-toggle[aria-expanded="true"]::before {
   content: "▾ ";
 }
 .think .markdown {

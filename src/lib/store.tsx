@@ -1002,7 +1002,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : undefined;
       bufferRef.current = seed?.content ?? "";
       reasoningRef.current = seed?.reasoning ?? "";
-      reasoningRef.current = "";
       thinkingStartRef.current = null;
       thinkingMsRef.current = null;
       usageRef.current = null;

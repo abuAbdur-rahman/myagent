@@ -225,6 +225,13 @@ fn is_deepseek_model(model: &str) -> bool {
     model.to_lowercase().contains("deepseek")
 }
 
+fn uses_deepseek_reasoning_replay(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    lower
+        .split('/')
+        .any(|segment| segment.trim_start().starts_with("deepseek"))
+}
+
 fn deepseek_guard_active(model: &str, kind: Option<&str>, url: &str) -> bool {
     is_deepseek_model(model) && is_agentrouter(kind, url)
 }
@@ -841,6 +848,23 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
     vec!["*".to_string()]
 }
 
+fn assistant_tool_message(
+    text: &str,
+    calls: &[serde_json::Value],
+    reasoning: &str,
+    replay_reasoning: bool,
+) -> serde_json::Value {
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": text,
+        "tool_calls": calls,
+    });
+    if replay_reasoning {
+        message["reasoning_content"] = serde_json::json!(reasoning);
+    }
+    message
+}
+
 fn tool_text_message(id: &str, text: &str) -> serde_json::Value {
     serde_json::json!({
         "role": "tool",
@@ -907,14 +931,20 @@ impl RepeatGuard {
 struct Iteration {
     text: String,
     calls: Vec<serde_json::Value>,
+    reasoning: String,
 }
 
 fn collapsible_call(name: &str) -> bool {
     matches!(name, "get_time" | "recall_memory")
 }
 
+fn should_retract(text: &str, calls: &[serde_json::Value]) -> bool {
+    !text.is_empty() && !calls.is_empty()
+}
+
 fn finish_iteration(
     text: String,
+    reasoning: String,
     accumulator: &mut sse::ToolCallAccumulator,
     on_event: &Channel<StreamEvent>,
 ) -> AppResult<Iteration> {
@@ -925,12 +955,16 @@ fn finish_iteration(
             "empty response from provider".to_string(),
         ));
     }
-    if !text.is_empty() && !calls.is_empty() {
+    if should_retract(&text, &calls) {
         let _ = on_event.send(StreamEvent::Retract {
             chars: text.chars().count(),
         });
     }
-    Ok(Iteration { text, calls })
+    Ok(Iteration {
+        text,
+        calls,
+        reasoning,
+    })
 }
 
 async fn stream_agentic_iteration(
@@ -952,6 +986,7 @@ async fn stream_agentic_iteration(
     let mut parser = sse::SseParser::new();
     let mut accumulator = sse::ToolCallAccumulator::new();
     let mut text = String::new();
+    let mut reasoning = String::new();
     let notified = cancel.notified();
     tokio::pin!(notified);
 
@@ -966,7 +1001,7 @@ async fn stream_agentic_iteration(
             match item {
                 sse::SseItem::Done => {
                     let _ = on_event.send(StreamEvent::Done);
-                    return finish_iteration(text, &mut accumulator, on_event).map(Some);
+                    return finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some);
                 }
                 sse::SseItem::Payload(payload) => {
                     let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
@@ -981,6 +1016,7 @@ async fn stream_agentic_iteration(
                         let _ = on_event.send(StreamEvent::Delta { text: mapped.text });
                     }
                     if !mapped.reasoning.is_empty() {
+                        reasoning.push_str(&mapped.reasoning);
                         let _ = on_event.send(StreamEvent::Reasoning {
                             text: mapped.reasoning,
                         });
@@ -1003,7 +1039,411 @@ async fn stream_agentic_iteration(
         }
     }
 
-    finish_iteration(text, &mut accumulator, on_event).map(Some)
+    finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some)
+}
+
+enum StepControl {
+    Continue,
+    StopTurn,
+}
+
+trait ModelClient {
+    async fn stream_step(
+        &self,
+        messages: &[serde_json::Value],
+        use_tools: bool,
+    ) -> AppResult<Option<Iteration>>;
+}
+
+trait ToolRunner {
+    async fn run(
+        &mut self,
+        call: &serde_json::Value,
+        history: &mut Vec<serde_json::Value>,
+    ) -> AppResult<StepControl>;
+}
+
+fn history_has_tool_message(history: &[serde_json::Value]) -> bool {
+    history
+        .iter()
+        .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+}
+
+async fn agent_loop<M: ModelClient, T: ToolRunner>(
+    model: &M,
+    tools: &mut T,
+    history: &mut Vec<serde_json::Value>,
+    max_iterations: usize,
+    replay_reasoning: bool,
+) -> AppResult<()> {
+    for _ in 0..max_iterations {
+        let step = match model.stream_step(history.as_slice(), true).await {
+            Ok(Some(step)) => step,
+            Ok(None) => return Ok(()),
+            Err(error)
+                if is_retryable_tools_error(&error)
+                    && !is_content_blocked_error(&error)
+                    && !history_has_tool_message(history) =>
+            {
+                model.stream_step(history.as_slice(), false).await?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if step.calls.is_empty() {
+            return Ok(());
+        }
+        history.push(assistant_tool_message(
+            &step.text,
+            &step.calls,
+            &step.reasoning,
+            replay_reasoning,
+        ));
+        for call in &step.calls {
+            match tools.run(call, history).await? {
+                StepControl::Continue => {}
+                StepControl::StopTurn => return Ok(()),
+            }
+        }
+    }
+    model.stream_step(history.as_slice(), false).await?;
+    Ok(())
+}
+
+struct RealModel<'a> {
+    client: &'a reqwest::Client,
+    url: String,
+    key: String,
+    req: &'a ChatRequest,
+    cancel: &'a Notify,
+    state: &'a StreamState,
+    on_event: &'a Channel<StreamEvent>,
+    tool_specs: serde_json::Value,
+}
+
+impl ModelClient for RealModel<'_> {
+    async fn stream_step(
+        &self,
+        messages: &[serde_json::Value],
+        use_tools: bool,
+    ) -> AppResult<Option<Iteration>> {
+        if self.state.take_cancelled(&self.req.request_id) {
+            return Ok(None);
+        }
+        if !use_tools {
+            return stream_completion(
+                self.client,
+                self.req,
+                self.key.clone(),
+                messages.to_vec(),
+                self.on_event,
+                self.cancel,
+            )
+            .await
+            .map(|()| None);
+        }
+        let mut body = serde_json::json!({
+            "model": self.req.model,
+            "messages": prune_tool_history(messages),
+            "tools": self.tool_specs,
+            "stream": true,
+        });
+        if wants_stream_usage(self.req.connection_kind.as_deref()) {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+        apply_optional_params(self.client, &mut body, self.req, &self.key).await;
+        stream_agentic_iteration(
+            self.client,
+            &self.url,
+            &self.key,
+            &body,
+            self.cancel,
+            self.on_event,
+            self.req.connection_kind.as_deref(),
+        )
+        .await
+    }
+}
+
+struct RealTools<'a> {
+    app: &'a AppHandle,
+    req: &'a ChatRequest,
+    state: &'a StreamState,
+    cancel: &'a Notify,
+    on_event: &'a Channel<StreamEvent>,
+    repeat: RepeatGuard,
+    last_pure: Option<(String, String)>,
+}
+
+impl ToolRunner for RealTools<'_> {
+    async fn run(
+        &mut self,
+        call: &serde_json::Value,
+        history: &mut Vec<serde_json::Value>,
+    ) -> AppResult<StepControl> {
+        if self.state.take_cancelled(&self.req.request_id) {
+            return Ok(StepControl::StopTurn);
+        }
+        let id = call
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = call
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let args: serde_json::Value = call
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(serde_json::Value::Null);
+
+        let _ = self.on_event.send(StreamEvent::ToolStart {
+            id: id.clone(),
+            name: name.clone(),
+            summary: tools::summarize_call(&name, &args),
+        });
+
+        let repeat_key = format!(
+            "{name}\n{}",
+            serde_json::to_string(&args).unwrap_or_default()
+        );
+        let streak = self.repeat.note(repeat_key.clone());
+        if collapsible_call(&name) {
+            if self
+                .last_pure
+                .as_ref()
+                .is_some_and(|(k, _)| k == &repeat_key)
+            {
+                let output = self
+                    .last_pure
+                    .as_ref()
+                    .map(|(_, o)| o.clone())
+                    .unwrap_or_default();
+                history.push(tool_text_message(&id, &output));
+                if streak < 3 {
+                    return Ok(StepControl::Continue);
+                }
+            }
+        } else {
+            self.last_pure = None;
+        }
+        if streak >= 3 {
+            let question_id = format!("{}:{id}:repeat", self.req.request_id);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.state.insert_question(&question_id, tx)?;
+            let _ = self.on_event.send(StreamEvent::QuestionAsked {
+                id: question_id.clone(),
+                question: format!(
+                    "`{name}` was called 3 times in a row with identical arguments. The turn is paused."
+                ),
+                options: vec!["Keep going".to_string(), "Stop here".to_string()],
+                allow_custom: true,
+            });
+            let answer = tokio::select! {
+                answer = rx => answer.unwrap_or_default(),
+                _ = self.cancel.notified() => return Ok(StepControl::StopTurn),
+            };
+            if answer.trim().is_empty() || answer == "Stop here" {
+                let _ = self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: false,
+                    preview: "Stopped: repeated tool call".to_string(),
+                });
+                history.push(tool_text_message(
+                    &id,
+                    "Stopped by user: same tool call repeated 3 times",
+                ));
+                return Ok(StepControl::StopTurn);
+            }
+            if answer != "Keep going" {
+                let _ = self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: true,
+                    preview: answer.chars().take(120).collect(),
+                });
+                history.push(tool_text_message(&id, &format!("User guidance: {answer}")));
+            }
+            self.repeat.reset();
+        }
+
+        let resources = approval_resources(&name, &args);
+        let decision =
+            permissions::check(self.app, &name, &resources, self.req.project_id.as_deref())
+                .await
+                .unwrap_or(permissions::Effect::Ask);
+        if decision == permissions::Effect::Deny {
+            tools::log_audit(
+                self.app,
+                self.req.conversation_id.as_deref(),
+                &name,
+                "deny(rule)",
+                &resources.join("\n"),
+            )
+            .await;
+            let _ = self.on_event.send(StreamEvent::ToolResult {
+                id: id.clone(),
+                ok: false,
+                preview: "Denied by rule".to_string(),
+            });
+            history.push(tool_text_message(&id, "denied by rule"));
+            return Ok(StepControl::Continue);
+        }
+        if decision == permissions::Effect::Ask {
+            let approval_id = format!("{}:{id}", self.req.request_id);
+            let command = if name == "run_powershell" {
+                resources.join("\n")
+            } else {
+                tools::summarize_call(&name, &args)
+            };
+            let cwd = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.state.insert_pending(
+                &approval_id,
+                PendingApproval {
+                    action: name.clone(),
+                    resources: resources.clone(),
+                    project_id: self.req.project_id.clone(),
+                    tx,
+                },
+            )?;
+            let _ = self.on_event.send(StreamEvent::ApprovalAsked {
+                id: approval_id.clone(),
+                tool: name.clone(),
+                command,
+                cwd,
+            });
+            let reply = tokio::select! {
+                reply = rx => reply.unwrap_or(ApprovalReply::Deny),
+                _ = self.cancel.notified() => return Ok(StepControl::StopTurn),
+            };
+            if reply == ApprovalReply::Deny {
+                tools::log_audit(
+                    self.app,
+                    self.req.conversation_id.as_deref(),
+                    &name,
+                    "deny(user)",
+                    &resources.join("\n"),
+                )
+                .await;
+                let _ = self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: false,
+                    preview: "Denied by user".to_string(),
+                });
+                history.push(tool_text_message(&id, "denied by user"));
+                return Ok(StepControl::Continue);
+            }
+            tools::log_audit(
+                self.app,
+                self.req.conversation_id.as_deref(),
+                &name,
+                if reply == ApprovalReply::Always {
+                    "always"
+                } else {
+                    "once"
+                },
+                &resources.join("\n"),
+            )
+            .await;
+        }
+
+        if name == "ask_user" {
+            match tools::parse_question(&args) {
+                Err(message) => {
+                    let _ = self.on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: false,
+                        preview: message.clone(),
+                    });
+                    history.push(tool_text_message(&id, &format!("Error: {message}")));
+                }
+                Ok(asked) => {
+                    let question_id = format!("{}:{id}", self.req.request_id);
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    self.state.insert_question(&question_id, tx)?;
+                    let _ = self.on_event.send(StreamEvent::QuestionAsked {
+                        id: question_id.clone(),
+                        question: asked.question,
+                        options: asked.options,
+                        allow_custom: asked.allow_custom,
+                    });
+                    let answer = tokio::select! {
+                        answer = rx => answer.unwrap_or_default(),
+                        _ = self.cancel.notified() => return Ok(StepControl::StopTurn),
+                    };
+                    let content = if answer.trim().is_empty() {
+                        "no answer (cancelled)".to_string()
+                    } else {
+                        answer
+                    };
+                    let _ = self.on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: true,
+                        preview: truncate_preview(&content),
+                    });
+                    history.push(tool_text_message(&id, &content));
+                }
+            }
+            return Ok(StepControl::Continue);
+        }
+
+        match tools::execute(
+            self.app,
+            &name,
+            args,
+            &id,
+            &tools::ExecContext {
+                conversation_id: self.req.conversation_id.as_deref(),
+                project_id: self.req.project_id.as_deref(),
+                search_backend: self.req.search_backend.as_deref(),
+                search_endpoint: self.req.search_endpoint.as_deref(),
+            },
+            self.cancel,
+        )
+        .await
+        {
+            Ok(done) => {
+                if collapsible_call(&name) {
+                    self.last_pure = Some((repeat_key.clone(), done.output.clone()));
+                }
+                if let Some(artifact) = done.artifact {
+                    let _ = self.on_event.send(StreamEvent::Artifact {
+                        title: artifact.title,
+                        lang: artifact.lang,
+                        code: artifact.code,
+                    });
+                }
+                let _ = self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: true,
+                    preview: truncate_preview(&done.output),
+                });
+                history.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": id,
+                    "content": done.output,
+                }));
+            }
+            Err(message) => {
+                let _ = self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: false,
+                    preview: truncate_preview(&message),
+                });
+                history.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": id,
+                    "content": format!("Error: {message}"),
+                }));
+            }
+        }
+        Ok(StepControl::Continue)
+    }
 }
 
 async fn run_agentic(
@@ -1022,322 +1462,28 @@ async fn run_agentic(
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
     history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
-    let tools = tools::tool_specs();
-    let max = req.max_iterations.unwrap_or(25).clamp(1, 32);
-    let mut repeat = RepeatGuard::new();
-    let mut last_pure: Option<(String, String)> = None;
-
-    for _ in 0..max {
-        if state.take_cancelled(&req.request_id) {
-            return Ok(());
-        }
-        let mut body = serde_json::json!({
-            "model": req.model,
-            "messages": prune_tool_history(&history),
-            "tools": tools,
-            "stream": true,
-        });
-        if wants_stream_usage(req.connection_kind.as_deref()) {
-            body["stream_options"] = serde_json::json!({ "include_usage": true });
-        }
-        apply_optional_params(client, &mut body, req, &key).await;
-
-        let iteration = match stream_agentic_iteration(
-            client,
-            &url,
-            &key,
-            &body,
-            cancel,
-            on_event,
-            req.connection_kind.as_deref(),
-        )
-        .await
-        {
-            Ok(Some(iteration)) => iteration,
-            Ok(None) => return Ok(()),
-            Err(error)
-                if is_retryable_tools_error(&error)
-                    && !is_content_blocked_error(&error)
-                    && !history
-                        .iter()
-                        .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool")) =>
-            {
-                return stream_completion(client, req, key, history, on_event, cancel).await;
-            }
-            Err(error) => return Err(error),
-        };
-        if iteration.calls.is_empty() {
-            break;
-        }
-
-        history.push(serde_json::json!({
-            "role": "assistant",
-            "content": iteration.text,
-            "tool_calls": iteration.calls,
-        }));
-
-        let calls = iteration.calls;
-
-        for call in &calls {
-            if state.take_cancelled(&req.request_id) {
-                return Ok(());
-            }
-            let id = call
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = call
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let args: serde_json::Value = call
-                .get("function")
-                .and_then(|f| f.get("arguments"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(serde_json::Value::Null);
-
-            let _ = on_event.send(StreamEvent::ToolStart {
-                id: id.clone(),
-                name: name.clone(),
-                summary: tools::summarize_call(&name, &args),
-            });
-
-            let repeat_key = format!(
-                "{name}\n{}",
-                serde_json::to_string(&args).unwrap_or_default()
-            );
-            let streak = repeat.note(repeat_key.clone());
-            if collapsible_call(&name) {
-                if last_pure.as_ref().is_some_and(|(k, _)| k == &repeat_key) {
-                    let output = last_pure
-                        .as_ref()
-                        .map(|(_, o)| o.clone())
-                        .unwrap_or_default();
-                    history.push(tool_text_message(&id, &output));
-                    if streak < 3 {
-                        continue;
-                    }
-                }
-            } else {
-                last_pure = None;
-            }
-            if streak >= 3 {
-                let question_id = format!("{}:{id}:repeat", req.request_id);
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                state.insert_question(&question_id, tx)?;
-                let _ = on_event.send(StreamEvent::QuestionAsked {
-                    id: question_id.clone(),
-                    question: format!(
-                        "`{name}` was called 3 times in a row with identical arguments. The turn is paused."
-                    ),
-                    options: vec!["Keep going".to_string(), "Stop here".to_string()],
-                    allow_custom: true,
-                });
-                let answer = tokio::select! {
-                    answer = rx => answer.unwrap_or_default(),
-                    _ = cancel.notified() => return Ok(()),
-                };
-                if answer.trim().is_empty() || answer == "Stop here" {
-                    let _ = on_event.send(StreamEvent::ToolResult {
-                        id: id.clone(),
-                        ok: false,
-                        preview: "Stopped: repeated tool call".to_string(),
-                    });
-                    history.push(tool_text_message(
-                        &id,
-                        "Stopped by user: same tool call repeated 3 times",
-                    ));
-                    return Ok(());
-                }
-                if answer != "Keep going" {
-                    let _ = on_event.send(StreamEvent::ToolResult {
-                        id: id.clone(),
-                        ok: true,
-                        preview: answer.chars().take(120).collect(),
-                    });
-                    history.push(tool_text_message(&id, &format!("User guidance: {answer}")));
-                }
-                repeat.reset();
-            }
-
-            let resources = approval_resources(&name, &args);
-            let decision = permissions::check(app, &name, &resources, req.project_id.as_deref())
-                .await
-                .unwrap_or(permissions::Effect::Ask);
-            if decision == permissions::Effect::Deny {
-                tools::log_audit(
-                    app,
-                    req.conversation_id.as_deref(),
-                    &name,
-                    "deny(rule)",
-                    &resources.join("\n"),
-                )
-                .await;
-                let _ = on_event.send(StreamEvent::ToolResult {
-                    id: id.clone(),
-                    ok: false,
-                    preview: "Denied by rule".to_string(),
-                });
-                history.push(tool_text_message(&id, "denied by rule"));
-                continue;
-            }
-            if decision == permissions::Effect::Ask {
-                let approval_id = format!("{}:{id}", req.request_id);
-                let command = if name == "run_powershell" {
-                    resources.join("\n")
-                } else {
-                    tools::summarize_call(&name, &args)
-                };
-                let cwd = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                state.insert_pending(
-                    &approval_id,
-                    PendingApproval {
-                        action: name.clone(),
-                        resources: resources.clone(),
-                        project_id: req.project_id.clone(),
-                        tx,
-                    },
-                )?;
-                let _ = on_event.send(StreamEvent::ApprovalAsked {
-                    id: approval_id.clone(),
-                    tool: name.clone(),
-                    command,
-                    cwd,
-                });
-                let reply = tokio::select! {
-                    reply = rx => reply.unwrap_or(ApprovalReply::Deny),
-                    _ = cancel.notified() => return Ok(()),
-                };
-                if reply == ApprovalReply::Deny {
-                    tools::log_audit(
-                        app,
-                        req.conversation_id.as_deref(),
-                        &name,
-                        "deny(user)",
-                        &resources.join("\n"),
-                    )
-                    .await;
-                    let _ = on_event.send(StreamEvent::ToolResult {
-                        id: id.clone(),
-                        ok: false,
-                        preview: "Denied by user".to_string(),
-                    });
-                    history.push(tool_text_message(&id, "denied by user"));
-                    continue;
-                }
-                tools::log_audit(
-                    app,
-                    req.conversation_id.as_deref(),
-                    &name,
-                    if reply == ApprovalReply::Always {
-                        "always"
-                    } else {
-                        "once"
-                    },
-                    &resources.join("\n"),
-                )
-                .await;
-            }
-
-            if name == "ask_user" {
-                match tools::parse_question(&args) {
-                    Err(message) => {
-                        let _ = on_event.send(StreamEvent::ToolResult {
-                            id: id.clone(),
-                            ok: false,
-                            preview: message.clone(),
-                        });
-                        history.push(tool_text_message(&id, &format!("Error: {message}")));
-                    }
-                    Ok(asked) => {
-                        let question_id = format!("{}:{id}", req.request_id);
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        state.insert_question(&question_id, tx)?;
-                        let _ = on_event.send(StreamEvent::QuestionAsked {
-                            id: question_id.clone(),
-                            question: asked.question,
-                            options: asked.options,
-                            allow_custom: asked.allow_custom,
-                        });
-                        let answer = tokio::select! {
-                            answer = rx => answer.unwrap_or_default(),
-                            _ = cancel.notified() => return Ok(()),
-                        };
-                        let content = if answer.trim().is_empty() {
-                            "no answer (cancelled)".to_string()
-                        } else {
-                            answer
-                        };
-                        let _ = on_event.send(StreamEvent::ToolResult {
-                            id: id.clone(),
-                            ok: true,
-                            preview: truncate_preview(&content),
-                        });
-                        history.push(tool_text_message(&id, &content));
-                    }
-                }
-                continue;
-            }
-
-            match tools::execute(
-                app,
-                &name,
-                args,
-                &id,
-                &tools::ExecContext {
-                    conversation_id: req.conversation_id.as_deref(),
-                    project_id: req.project_id.as_deref(),
-                    search_backend: req.search_backend.as_deref(),
-                    search_endpoint: req.search_endpoint.as_deref(),
-                },
-                cancel,
-            )
-            .await
-            {
-                Ok(done) => {
-                    if collapsible_call(&name) {
-                        last_pure = Some((repeat_key.clone(), done.output.clone()));
-                    }
-                    if let Some(artifact) = done.artifact {
-                        let _ = on_event.send(StreamEvent::Artifact {
-                            title: artifact.title,
-                            lang: artifact.lang,
-                            code: artifact.code,
-                        });
-                    }
-                    let _ = on_event.send(StreamEvent::ToolResult {
-                        id: id.clone(),
-                        ok: true,
-                        preview: truncate_preview(&done.output),
-                    });
-                    history.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": id,
-                        "content": done.output,
-                    }));
-                }
-                Err(message) => {
-                    let _ = on_event.send(StreamEvent::ToolResult {
-                        id: id.clone(),
-                        ok: false,
-                        preview: truncate_preview(&message),
-                    });
-                    history.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": id,
-                        "content": format!("Error: {message}"),
-                    }));
-                }
-            }
-        }
-    }
-
-    stream_completion(client, req, key, history, on_event, cancel).await
+    let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
+    let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
+    let model = RealModel {
+        client,
+        url,
+        key,
+        req,
+        cancel,
+        state: state.inner(),
+        on_event,
+        tool_specs: tools::tool_specs(),
+    };
+    let mut runner = RealTools {
+        app,
+        req,
+        state: state.inner(),
+        cancel,
+        on_event,
+        repeat: RepeatGuard::new(),
+        last_pure: None,
+    };
+    agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await
 }
 
 async fn stream_completion(
@@ -1447,6 +1593,8 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
 
@@ -1545,6 +1693,166 @@ mod tests {
             .await
             .expect_err("400 must not retry");
         assert!(matches!(error, AppError::Upstream(_)));
+    }
+
+    #[test]
+    fn final_text_answer_is_never_retracted() {
+        assert!(!should_retract("final answer", &[]));
+        assert!(!should_retract("", &[]));
+    }
+
+    #[test]
+    fn tool_preamble_text_is_retracted() {
+        let calls = vec![serde_json::json!({ "id": "c1" })];
+        assert!(should_retract("let me check", &calls));
+        assert!(!should_retract("", &calls));
+    }
+
+    #[test]
+    fn deepseek_tool_message_replays_reasoning_even_when_empty() {
+        let message = assistant_tool_message("ok", &[], "", true);
+        assert_eq!(message["role"], "assistant");
+        assert_eq!(message["content"], "ok");
+        assert_eq!(message["reasoning_content"], "");
+    }
+
+    #[test]
+    fn non_deepseek_tool_message_omits_reasoning() {
+        let message = assistant_tool_message("ok", &[], "step reasoning", false);
+        assert!(message.get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn deepseek_reasoning_replay_matches_model_family() {
+        assert!(uses_deepseek_reasoning_replay("deepseek/deepseek-v4-flash"));
+        assert!(uses_deepseek_reasoning_replay("deepseek-chat"));
+        assert!(uses_deepseek_reasoning_replay("DeepSeek-R1"));
+        assert!(uses_deepseek_reasoning_replay("openrouter/deepseek-v3"));
+        assert!(!uses_deepseek_reasoning_replay("my-deepseek-clone"));
+        assert!(!uses_deepseek_reasoning_replay("gpt-4o"));
+    }
+
+    enum FakeStep {
+        Text(&'static str),
+        Tool,
+    }
+
+    struct FakeModel {
+        script: RefCell<VecDeque<FakeStep>>,
+        calls: Cell<usize>,
+        tools_flags: RefCell<Vec<bool>>,
+    }
+
+    impl FakeModel {
+        fn new(script: Vec<FakeStep>) -> Self {
+            Self {
+                script: RefCell::new(script.into()),
+                calls: Cell::new(0),
+                tools_flags: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.get()
+        }
+
+        fn tools_flags(&self) -> Vec<bool> {
+            self.tools_flags.borrow().clone()
+        }
+    }
+
+    impl ModelClient for FakeModel {
+        async fn stream_step(
+            &self,
+            _messages: &[serde_json::Value],
+            use_tools: bool,
+        ) -> AppResult<Option<Iteration>> {
+            self.calls.set(self.calls.get() + 1);
+            self.tools_flags.borrow_mut().push(use_tools);
+            let step = self
+                .script
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(FakeStep::Tool);
+            Ok(Some(match step {
+                FakeStep::Text(text) => Iteration {
+                    text: text.to_string(),
+                    calls: Vec::new(),
+                    reasoning: String::new(),
+                },
+                FakeStep::Tool => Iteration {
+                    text: String::new(),
+                    calls: vec![serde_json::json!({
+                        "id": "call-1",
+                        "type": "function",
+                        "function": { "name": "get_time", "arguments": "{}" },
+                    })],
+                    reasoning: String::new(),
+                },
+            }))
+        }
+    }
+
+    struct FakeTools {
+        runs: Cell<usize>,
+    }
+
+    impl FakeTools {
+        fn new() -> Self {
+            Self { runs: Cell::new(0) }
+        }
+    }
+
+    impl ToolRunner for FakeTools {
+        async fn run(
+            &mut self,
+            _call: &serde_json::Value,
+            history: &mut Vec<serde_json::Value>,
+        ) -> AppResult<StepControl> {
+            self.runs.set(self.runs.get() + 1);
+            history.push(tool_text_message("call-1", "ok"));
+            Ok(StepControl::Continue)
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_loop_runs_one_tool_round_then_answers() {
+        let model = FakeModel::new(vec![FakeStep::Tool, FakeStep::Text("done")]);
+        let mut tools = FakeTools::new();
+        let mut history = Vec::new();
+        agent_loop(&model, &mut tools, &mut history, 25, false)
+            .await
+            .expect("loop");
+        assert_eq!(model.call_count(), 2);
+        assert_eq!(tools.runs.get(), 1);
+        assert_eq!(model.tools_flags(), vec![true, true]);
+        assert!(history_has_tool_message(&history));
+    }
+
+    #[tokio::test]
+    async fn agent_loop_answers_immediately_without_calling_tools() {
+        let model = FakeModel::new(vec![FakeStep::Text("hi")]);
+        let mut tools = FakeTools::new();
+        let mut history = Vec::new();
+        agent_loop(&model, &mut tools, &mut history, 25, false)
+            .await
+            .expect("loop");
+        assert_eq!(model.call_count(), 1);
+        assert_eq!(tools.runs.get(), 0);
+        assert_eq!(model.tools_flags(), vec![true]);
+    }
+
+    #[tokio::test]
+    async fn agent_loop_falls_back_without_tools_after_max_iterations() {
+        let model = FakeModel::new(Vec::new());
+        let mut tools = FakeTools::new();
+        let mut history = Vec::new();
+        agent_loop(&model, &mut tools, &mut history, 3, false)
+            .await
+            .expect("loop");
+        assert_eq!(model.call_count(), 4);
+        assert_eq!(tools.runs.get(), 3);
+        assert_eq!(model.tools_flags(), vec![true, true, true, false]);
     }
 
     #[test]

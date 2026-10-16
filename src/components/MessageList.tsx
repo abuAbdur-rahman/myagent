@@ -261,15 +261,31 @@ function ThinkingBlock({
   live: boolean;
 }) {
   const { collapseThinking } = useApp();
+  const [open, setOpen] = useState(live || !collapseThinking);
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!touched.current) setOpen(live || !collapseThinking);
+  }, [live, collapseThinking]);
   if (!message.reasoning) return null;
   const seconds =
     message.thinking_ms != null ? Math.max(1, Math.round(message.thinking_ms / 1000)) : null;
   const title = live && seconds === null ? "Thinking…" : `Thought${seconds !== null ? ` for ${seconds} s` : ""}`;
   return (
-    <details className="think" open={live || !collapseThinking}>
-      <summary>{title}</summary>
-      <Markdown content={message.reasoning} />
-    </details>
+    <div className="think">
+      <button
+        type="button"
+        className="think-toggle"
+        aria-expanded={open}
+        aria-label={open ? "Hide thinking" : "Show thinking"}
+        onClick={() => {
+          touched.current = true;
+          setOpen((v) => !v);
+        }}
+      >
+        {title}
+      </button>
+      {open && <Markdown content={message.reasoning} />}
+    </div>
   );
 }
 
