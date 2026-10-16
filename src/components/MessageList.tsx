@@ -327,6 +327,7 @@ function AssistantMessage({
   modelName,
   isLast,
   streaming,
+  streamingId,
   resetKey,
   onRemember,
 }: {
@@ -334,14 +335,16 @@ function AssistantMessage({
   modelName: string;
   isLast: boolean;
   streaming: boolean;
+  streamingId: string | null;
   resetKey: string | null;
   onRemember: (content: string) => Promise<void>;
 }) {
+  const live = streaming && streamingId === message.id;
   const segments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
   const fenceCount = segments.filter((s) => s.kind === "artifact").length;
   const declared = useMemo(() => parseDeclaredArtifacts(message.artifacts), [message.artifacts]);
   const [rememberLabel, setRememberLabel] = useState("Remember");
-  const busy = streaming && message.content.length === 0;
+  const busy = live && message.content.length === 0;
 
   const remember = async () => {
     try {
@@ -360,8 +363,8 @@ function AssistantMessage({
         <span className="text-muted">{modelName}</span>
       </div>
       <div className="md">
-        <ThinkingBlock message={message} live={isLast && streaming} />
-        {isLast && <ToolLogView resetKey={resetKey} />}
+        <ThinkingBlock message={message} live={live} />
+        {live && <ToolLogView resetKey={resetKey} />}
         {busy ? (
           <span className="dots" aria-label="Waiting for response">
             <i />
@@ -392,7 +395,7 @@ function AssistantMessage({
                 code={artifact.code}
               />
             ))}
-            {streaming && <span className="caret" aria-hidden="true" />}
+            {live && <span className="caret" aria-hidden="true" />}
           </>
         )}
       </div>
@@ -464,6 +467,7 @@ export function MessageList() {
   const {
     messages,
     streaming,
+    streamingId,
     error,
     clearError,
     ready,
@@ -550,6 +554,7 @@ export function MessageList() {
                 modelName={message.model ?? activeModel ?? "assistant"}
                 isLast={message.id === lastAssistantId}
                 streaming={streaming}
+                streamingId={streamingId}
                 resetKey={activeConversationId}
                 onRemember={remember}
               />

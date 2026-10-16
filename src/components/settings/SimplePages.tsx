@@ -104,11 +104,11 @@ export function GeneralPage() {
 export function SearchPage() {
   const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
   const [key, setKey] = useState("");
-  const [hasKey, setHasKey] = useState(false);
+  const [keyCount, setKeyCount] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    api.hasApiKey(SEARCH_KEY_ACCOUNT).then(setHasKey).catch(() => undefined);
+    api.searchKeyCount().then(setKeyCount).catch(() => undefined);
   }, []);
 
   const save = async () => {
@@ -117,10 +117,20 @@ export function SearchPage() {
       return;
     }
     try {
-      await api.setApiKey(SEARCH_KEY_ACCOUNT, key.trim());
-      setHasKey(true);
+      const count = await api.addSearchKey(key.trim());
+      setKeyCount(count);
       setKey("");
-      setStatus("Search key saved.");
+      setStatus(count > 1 ? `Search key added (${count} stored, rotates on quota).` : "Search key saved.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const removeOne = async (index: number) => {
+    try {
+      const count = await api.removeSearchKey(index);
+      setKeyCount(count);
+      setStatus(count === 0 ? "Search keys removed." : `Key removed (${count} left).`);
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -129,8 +139,8 @@ export function SearchPage() {
   const clear = async () => {
     try {
       await api.deleteApiKey(SEARCH_KEY_ACCOUNT);
-      setHasKey(false);
-      setStatus("Search key removed.");
+      setKeyCount(0);
+      setStatus("Search keys removed.");
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -150,10 +160,14 @@ export function SearchPage() {
           ]}
         />
       </SettingRow>
-      {searchBackend === "tavily" ? (
+      {searchBackend === "tavily" && (
         <SettingRow
-          label="Tavily API key"
-          description={hasKey ? "A key is stored" : "Stored in Windows Credential Manager"}
+          label="Tavily API keys"
+          description={
+            keyCount > 0
+              ? `${keyCount} key${keyCount === 1 ? "" : "s"} stored — rotates on quota`
+              : "Stored in Windows Credential Manager"
+          }
         >
           <Input
             type="password"
@@ -164,15 +178,33 @@ export function SearchPage() {
             autoComplete="off"
           />
           <Button variant="primary" onClick={() => void save()}>
-            Save
+            Add key
           </Button>
-          {hasKey && (
+          {keyCount > 0 && (
             <Button variant="danger" onClick={() => void clear()}>
-              Remove
+              Remove all
             </Button>
           )}
         </SettingRow>
-      ) : (
+      )}
+      {searchBackend === "tavily" && keyCount > 0 && (
+        <SettingRow label="Stored keys" description="First key is tried first">
+          <div className="flex flex-wrap gap-2">
+            {Array.from({ length: keyCount }, (_, index) => (
+              <span
+                key={index}
+                className="inline-flex items-center gap-2 rounded-control border border-border px-2 py-1 text-xs"
+              >
+                Key {index + 1}
+                <Button variant="ghost" size="sm" onClick={() => void removeOne(index)}>
+                  Remove
+                </Button>
+              </span>
+            ))}
+          </div>
+        </SettingRow>
+      )}
+      {searchBackend === "searxng" && (
         <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">
           <Input
             value={searchEndpoint}

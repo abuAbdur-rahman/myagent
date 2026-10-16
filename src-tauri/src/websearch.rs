@@ -12,7 +12,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const SEARCH_KEY_ACCOUNT: &str = "search:tavily";
 pub const DEFAULT_SEARXNG_ENDPOINT: &str = "http://127.0.0.1:8888";
+const MAX_SEARCH_KEYS: usize = 5;
 
+#[derive(Debug)]
 pub struct SearchHit {
     pub title: String,
     pub url: String,
@@ -155,32 +157,173 @@ fn map_status_error(status: reqwest::StatusCode, body: &str, what: &str) -> Stri
     fail(format!("HTTP_{}", status.as_u16()).as_str(), snippet)
 }
 
-async fn tavily_search(
+fn quota_exhausted(status: reqwest::StatusCode, body: &str) -> bool {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::PAYMENT_REQUIRED
+    {
+        return true;
+    }
+    let lower = body.to_lowercase();
+    lower.contains("quota exceeded")
+        || lower.contains("out of credits")
+        || lower.contains("credits exhausted")
+        || (lower.contains("insufficient") && (lower.contains("credit") || lower.contains("quota")))
+}
+
+fn parse_tavily_keys(raw: &str) -> Option<Vec<String>> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('[') {
+        let keys: Vec<String> = serde_json::from_str::<Value>(trimmed)
+            .ok()
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_string)
+            })
+            .collect();
+        return if keys.is_empty() { None } else { Some(keys) };
+    }
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(vec![trimmed.to_string()])
+}
+
+fn read_tavily_keys() -> Result<Vec<String>, String> {
+    let missing = || fail("MISSING_KEY", "add a Tavily key in Settings → Search");
+    let raw = vault::get_api_key(SEARCH_KEY_ACCOUNT).map_err(|_| missing())?;
+    parse_tavily_keys(&raw).ok_or_else(|| {
+        fail(
+            "MISSING_KEY",
+            "search key list is empty; add a Tavily key in Settings → Search",
+        )
+    })
+}
+
+fn store_tavily_keys(keys: &[String]) -> Result<(), String> {
+    if keys.is_empty() {
+        return vault::delete_api_key(SEARCH_KEY_ACCOUNT.to_string())
+            .map_err(|error| fail("VAULT", error));
+    }
+    let stored = serde_json::to_string(keys).map_err(|error| fail("INTERNAL", error))?;
+    vault::set_api_key(SEARCH_KEY_ACCOUNT.to_string(), stored).map_err(|error| fail("VAULT", error))
+}
+
+#[tauri::command]
+pub fn search_key_count() -> Result<usize, String> {
+    Ok(read_tavily_keys().unwrap_or_default().len())
+}
+
+#[tauri::command]
+pub fn search_key_add(key: String) -> Result<usize, String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(fail("BAD_KEY", "empty search key"));
+    }
+    let mut keys = read_tavily_keys().unwrap_or_default();
+    if !keys.iter().any(|existing| existing == trimmed) {
+        if keys.len() >= MAX_SEARCH_KEYS {
+            return Err(fail(
+                "BAD_KEY",
+                format!("at most {MAX_SEARCH_KEYS} search keys"),
+            ));
+        }
+        keys.push(trimmed.to_string());
+    }
+    store_tavily_keys(&keys)?;
+    Ok(keys.len())
+}
+
+#[tauri::command]
+pub fn search_key_remove(index: usize) -> Result<usize, String> {
+    let mut keys = read_tavily_keys()?;
+    if index >= keys.len() {
+        return Err(fail("BAD_KEY", "no search key at that position"));
+    }
+    keys.remove(index);
+    store_tavily_keys(&keys)?;
+    Ok(keys.len())
+}
+
+async fn tavily_search_at(
+    url: &str,
     key: &str,
     query: &str,
     count: u64,
     cancel: &Notify,
-) -> Result<Vec<SearchHit>, String> {
-    let client = build_client()?;
+) -> Result<Vec<SearchHit>, (String, bool)> {
+    let client = build_client().map_err(|error| (error, false))?;
     let body = serde_json::json!({
         "query": query,
         "search_depth": "basic",
         "max_results": count,
         "include_answer": false,
     });
-    let work = client.post(TAVILY_URL).bearer_auth(key).json(&body).send();
+    let work = client.post(url).bearer_auth(key).json(&body).send();
     tokio::pin!(work);
     let resp = tokio::select! {
-        resp = &mut work => resp.map_err(|e| fail("NETWORK", e))?,
-        _ = cancel.notified() => return Err(fail("ABORTED", "cancelled by user")),
+        resp = &mut work => resp.map_err(|error| (fail("NETWORK", error), false))?,
+        _ = cancel.notified() => return Err((fail("ABORTED", "cancelled by user"), false)),
     };
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| fail("NETWORK", e))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|error| (fail("NETWORK", error), false))?;
     if !status.is_success() {
-        return Err(map_status_error(status, &text, "tavily"));
+        let quota = quota_exhausted(status, &text);
+        return Err((map_status_error(status, &text, "tavily"), quota));
     }
-    let value: Value = serde_json::from_str(&text).map_err(|e| fail("NETWORK", e))?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|error| (fail("NETWORK", error), false))?;
     Ok(parse_tavily(&value))
+}
+
+async fn tavily_search_rotating_at(
+    url: &str,
+    keys: &[String],
+    query: &str,
+    count: u64,
+    cancel: &Notify,
+) -> Result<Vec<SearchHit>, String> {
+    if keys.is_empty() {
+        return Err(fail("MISSING_KEY", "add a Tavily key in Settings → Search"));
+    }
+    let mut last_error = String::new();
+    let mut exhausted = 0usize;
+    for key in keys {
+        match tavily_search_at(url, key, query, count, cancel).await {
+            Ok(hits) => return Ok(hits),
+            Err((error, true)) => {
+                exhausted += 1;
+                last_error = error;
+            }
+            Err((error, false)) => return Err(error),
+        }
+    }
+    if exhausted == keys.len() && keys.len() > 1 {
+        return Err(fail(
+            "RATE_LIMITED",
+            format!(
+                "all {} Tavily keys exhausted quota, retry later or add another key in Settings → Search",
+                keys.len()
+            ),
+        ));
+    }
+    Err(last_error)
+}
+
+async fn tavily_search_rotating(
+    keys: &[String],
+    query: &str,
+    count: u64,
+    cancel: &Notify,
+) -> Result<Vec<SearchHit>, String> {
+    tavily_search_rotating_at(TAVILY_URL, keys, query, count, cancel).await
 }
 
 async fn searxng_search(
@@ -232,9 +375,8 @@ pub async fn search(
                 .await
             }
             "tavily" => {
-                let key = vault::get_api_key(SEARCH_KEY_ACCOUNT)
-                    .map_err(|_| fail("MISSING_KEY", "add a Tavily key in Settings → Search"))?;
-                tavily_search(&key, query, count, cancel).await
+                let keys = read_tavily_keys()?;
+                tavily_search_rotating(&keys, query, count, cancel).await
             }
             other => Err(fail(
                 "BAD_BACKEND",
@@ -257,7 +399,9 @@ pub async fn search(
 #[cfg(test)]
 pub async fn search_tavily_with_key(key: &str, query: &str, count: u64) -> Result<String, String> {
     let cancel = Notify::new();
-    let hits = tavily_search(key, query, count, &cancel).await?;
+    let hits = tavily_search_at(TAVILY_URL, key, query, count, &cancel)
+        .await
+        .map_err(|(error, _)| error)?;
     if hits.is_empty() {
         return Err(fail("EMPTY", format!("no results for \"{query}\"")));
     }
@@ -322,6 +466,132 @@ mod tests {
             validate_endpoint("http://127.0.0.1:8888/").unwrap(),
             "http://127.0.0.1:8888"
         );
+    }
+
+    #[test]
+    fn parses_single_and_listed_search_keys() {
+        assert_eq!(
+            parse_tavily_keys("tvly-abc"),
+            Some(vec!["tvly-abc".to_string()])
+        );
+        assert_eq!(
+            parse_tavily_keys(r#"["tvly-a", "tvly-b", ""]"#),
+            Some(vec!["tvly-a".to_string(), "tvly-b".to_string()])
+        );
+        assert_eq!(parse_tavily_keys(""), None);
+        assert_eq!(parse_tavily_keys("[]"), None);
+        assert_eq!(
+            parse_tavily_keys("not json ["),
+            Some(vec!["not json [".to_string()])
+        );
+    }
+
+    #[test]
+    fn detects_quota_exhaustion() {
+        use reqwest::StatusCode;
+        assert!(quota_exhausted(StatusCode::TOO_MANY_REQUESTS, "slow down"));
+        assert!(quota_exhausted(StatusCode::PAYMENT_REQUIRED, "pay up"));
+        assert!(quota_exhausted(
+            StatusCode::BAD_REQUEST,
+            "insufficient credits for this key"
+        ));
+        assert!(!quota_exhausted(StatusCode::BAD_REQUEST, "bad query"));
+        assert!(!quota_exhausted(StatusCode::UNAUTHORIZED, "invalid key"));
+    }
+
+    #[cfg(test)]
+    fn serve_auth_script(
+        take: usize,
+        handler: impl Fn(Option<String>) -> (String, String) + Send + 'static,
+    ) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(take) {
+                let Ok(stream) = stream else { return };
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut auth: Option<String> = None;
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if std::io::BufRead::read_line(&mut reader, &mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = trimmed.split_once(':') {
+                        if name.eq_ignore_ascii_case("Authorization") {
+                            auth = Some(value.trim().to_string());
+                        }
+                        if name.eq_ignore_ascii_case("Content-Length") {
+                            content_length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body_buf = vec![0u8; content_length];
+                let _ = std::io::Read::read_exact(&mut reader, &mut body_buf);
+                let mut stream = reader.into_inner();
+                let (status, body) = handler(auth);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn rotates_to_next_key_on_quota() {
+        let url = serve_auth_script(2, |auth| {
+            if auth.as_deref() == Some("Bearer key-one") {
+                (
+                    "429 Too Many Requests".to_string(),
+                    r#"{"detail":{"error":"blocked"}}"#.to_string(),
+                )
+            } else {
+                (
+                    "200 OK".to_string(),
+                    r#"{"results":[{"title":"T","url":"https://a.test/","content":"s"}]}"#
+                        .to_string(),
+                )
+            }
+        });
+        let cancel = Notify::new();
+        let keys = vec!["key-one".to_string(), "key-two".to_string()];
+        let hits = tavily_search_rotating_at(&url, &keys, "q", 3, &cancel)
+            .await
+            .expect("rotation");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "T");
+    }
+
+    #[tokio::test]
+    async fn reports_all_keys_exhausted() {
+        let url = serve_auth_script(2, |_| {
+            ("429 Too Many Requests".to_string(), "{}".to_string())
+        });
+        let cancel = Notify::new();
+        let keys = vec!["key-one".to_string(), "key-two".to_string()];
+        let error = tavily_search_rotating_at(&url, &keys, "q", 3, &cancel)
+            .await
+            .expect_err("all quota");
+        assert!(error.starts_with("RATE_LIMITED:"));
+        assert!(error.contains("all 2 Tavily keys"));
+    }
+
+    #[tokio::test]
+    async fn non_quota_error_stops_rotation() {
+        let url = serve_auth_script(1, |_| ("401 Unauthorized".to_string(), "{}".to_string()));
+        let cancel = Notify::new();
+        let keys = vec!["key-one".to_string(), "key-two".to_string()];
+        let error = tavily_search_rotating_at(&url, &keys, "q", 3, &cancel)
+            .await
+            .expect_err("auth must stop rotation");
+        assert!(error.starts_with("AUTH:"));
     }
 
     #[tokio::test]
