@@ -294,7 +294,7 @@ export function AppearancePage() {
 }
 
 export function ModelsPage() {
-  const { models, model, setModel, activeConnection, refreshModels, loadingModels } = useApp();
+  const { models, model, setModel, activeConnection, refreshModels, loadingModels, visionFallbackModel, setVisionFallbackModel } = useApp();
   return (
     <div>
       <SettingRow
@@ -309,6 +309,20 @@ export function ModelsPage() {
           aria-label="Default model"
           disabled={models.length === 0}
           options={models.map((id) => ({ value: id, label: id }))}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Vision fallback model"
+        description="Reads attached images when the active model cannot"
+      >
+        <Select
+          size="sm"
+          value={visionFallbackModel || null}
+          onChange={(next) => setVisionFallbackModel(next)}
+          placeholder={models.length ? "None" : "No models"}
+          aria-label="Vision fallback model"
+          disabled={models.length === 0}
+          options={[{ value: "", label: "None (text only)" }, ...models.map((id) => ({ value: id, label: id }))]}
         />
       </SettingRow>
       <SettingRow label="Refresh models" description="Re-fetch the list from the provider">

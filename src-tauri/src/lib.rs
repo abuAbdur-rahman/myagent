@@ -272,6 +272,7 @@ pub fn run() {
             llm::suggest_title,
             llm::summarize,
             delete_spill,
+            tools::spill_image_write,
             knowledge::knowledge_sidecar_write,
             knowledge::knowledge_sidecar_read,
             knowledge::knowledge_sidecar_wipe,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { knowledgeSidecarRead, knowledgeSidecarWrite } from "./api";
 import { addKnowledgeDoc, knowledgeShaExists, listKnowledgeDocs } from "./db";
-import { ingestDoc, buildAttachmentSend, searchKnowledge } from "./knowledge";
+import { ingestDoc, buildAttachmentSend, resolveImageSend, searchKnowledge } from "./knowledge";
 
 vi.mock("./api", () => ({
   knowledgeSidecarWrite: vi.fn(),
@@ -94,6 +94,26 @@ describe("buildAttachmentSend", () => {
 
   it("returns an empty block with no chips", () => {
     expect(buildAttachmentSend("hi", []).block).toBe("");
+  });
+});
+
+describe("resolveImageSend", () => {
+  const images = [{ dataUrl: "data:image/jpeg;base64,AAA" }];
+
+  it("keeps images for vision models", () => {
+    const gated = resolveImageSend(true, images);
+    expect(gated.dropped).toBe(false);
+    expect(gated.kept).toHaveLength(1);
+  });
+
+  it("drops images for non-vision models", () => {
+    const gated = resolveImageSend(false, images);
+    expect(gated.dropped).toBe(true);
+    expect(gated.kept).toHaveLength(0);
+  });
+
+  it("never drops when there are no images", () => {
+    expect(resolveImageSend(false, []).dropped).toBe(false);
   });
 });
 

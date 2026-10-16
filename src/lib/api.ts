@@ -159,12 +159,16 @@ export function formatInvokeError(error: unknown): string {
   return "Something went wrong.";
 }
 
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: string } };
+
 export interface ChatStreamArgs {
   requestId: string;
   baseUrl: string;
   connectionId: string;
   model: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string | ChatContentPart[] }[];
   temperature?: number;
   enableTools?: boolean;
   maxIterations?: number;
@@ -174,6 +178,7 @@ export interface ChatStreamArgs {
   connectionKind?: string;
   searchBackend?: string | null;
   searchEndpoint?: string | null;
+  visionFallbackModel?: string | null;
 }
 
 export async function chatStream(
@@ -195,9 +200,10 @@ export async function chatStream(
       project_id: args.projectId ?? null,
       conversation_id: args.conversationId ?? null,
       reasoning_effort: args.reasoningEffort ?? null,
-      connection_kind: args.connectionKind ?? null,
-      search_backend: args.searchBackend ?? null,
-      search_endpoint: args.searchEndpoint ?? null,
+          connection_kind: args.connectionKind ?? null,
+          search_backend: args.searchBackend ?? null,
+          search_endpoint: args.searchEndpoint ?? null,
+          vision_fallback_model: args.visionFallbackModel ?? null,
     },
     onEvent: channel,
   });
@@ -205,6 +211,10 @@ export async function chatStream(
 
 export function deleteSpill(conversationId: string) {
   return invoke<void>("delete_spill", { conversationId });
+}
+
+export function spillImageWrite(conversationId: string, name: string, dataUrl: string) {
+  return invoke<string>("spill_image_write", { conversationId, name, dataUrl });
 }
 
 export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {

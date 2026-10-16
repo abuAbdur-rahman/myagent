@@ -16,8 +16,10 @@ import {
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
 import { buildAttachmentSend, ingestDoc, isSupportedMime } from "../lib/knowledge";
+import { downscaleImage, isSupportedImage } from "../lib/image";
 
 const MAX_ATTACH_BYTES = 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 function mimeForFile(name: string, declared: string): string {
   if (declared) return declared;
@@ -30,8 +32,10 @@ function mimeForFile(name: string, declared: string): string {
 
 interface AttachChip {
   key: string;
+  kind: "file" | "image";
   name: string;
   excerpt: string;
+  dataUrl?: string;
 }
 
 function estimateTokens(text: string): number {
@@ -110,16 +114,38 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const attachFiles = async (files: File[]) => {
     if (files.length === 0) return;
-    if (!activeProject) {
-      toast("Select a project first to attach files.");
-      return;
-    }
     setAttaching(true);
     try {
       for (const file of files) {
+        if (isSupportedImage(file.type)) {
+          if (file.size > MAX_IMAGE_BYTES) {
+            toast(`"${file.name}": over 10 MB, skipped.`);
+            continue;
+          }
+          try {
+            const downscaled = await downscaleImage(file);
+            setChips((prev) => [
+              ...prev,
+              {
+                key: `img-${prev.length}-${Date.now()}`,
+                kind: "image",
+                name: file.name,
+                excerpt: "",
+                dataUrl: downscaled.dataUrl,
+              },
+            ]);
+          } catch {
+            toast(`"${file.name}": couldn't read as image.`);
+          }
+          continue;
+        }
+        if (!activeProject) {
+          toast("Select a project first to attach files.");
+          continue;
+        }
         const mime = mimeForFile(file.name, file.type);
         if (!isSupportedMime(mime)) {
-          toast(`"${file.name}": type not supported in v1 (text/code only).`);
+          toast(`"${file.name}": type not supported in v1 (text/code/images only).`);
           continue;
         }
         if (file.size > MAX_ATTACH_BYTES) {
@@ -143,7 +169,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         }
         setChips((prev) => [
           ...prev,
-          { key: result.id ?? `${file.name}-${prev.length}`, name: file.name, excerpt: text },
+          { key: result.id ?? `${file.name}-${prev.length}`, kind: "file", name: file.name, excerpt: text },
         ]);
       }
     } catch {
@@ -233,8 +259,12 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setChips([]);
     handle?.focus();
     if (dispatchSlash(text, slashHandlers)) return;
-    const send = buildAttachmentSend(text, pending);
-    void sendMessage(send.outgoing, send.block).then((accepted) => {
+    const fileChips = pending.filter((chip) => chip.kind === "file");
+    const imagePayloads = pending
+      .filter((chip) => chip.kind === "image" && chip.dataUrl)
+      .map((chip) => ({ dataUrl: chip.dataUrl as string }));
+    const send = buildAttachmentSend(text, fileChips);
+    void sendMessage(send.outgoing, send.block, imagePayloads).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
         setComposerDraft(text);

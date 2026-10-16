@@ -112,6 +112,41 @@ export function buildAttachmentSend(
   };
 }
 
+export interface ImageAttachment {
+  dataUrl: string;
+}
+
+export interface TextPart {
+  type: "text";
+  text: string;
+}
+
+export interface ImagePart {
+  type: "image_url";
+  image_url: { url: string };
+}
+
+export type MessagePart = TextPart | ImagePart;
+
+export function resolveImageSend(
+  supportsVision: boolean,
+  images: ImageAttachment[],
+): { kept: ImageAttachment[]; dropped: boolean } {
+  if (images.length === 0) return { kept: [], dropped: false };
+  if (supportsVision) return { kept: images, dropped: false };
+  return { kept: [], dropped: true };
+}
+
+export function buildUserContent(text: string, images: ImageAttachment[]): string | MessagePart[] {
+  if (images.length === 0) return text;
+  const parts: MessagePart[] = [];
+  if (text.trim().length > 0) parts.push({ type: "text", text });
+  for (const image of images) {
+    parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
+  }
+  return parts;
+}
+
 export async function searchKnowledge(projectId: string, query: string): Promise<string> {  const terms = query.trim().split(/\s+/).filter((term) => term.length > 0);
   if (terms.length === 0) return "";
   const like = terms[0] as string;

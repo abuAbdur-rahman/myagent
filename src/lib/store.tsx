@@ -11,11 +11,13 @@ import {
 import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
-import { searchKnowledge } from "./knowledge";
+import { buildUserContent, resolveImageSend, searchKnowledge } from "./knowledge";
+import { fitImageBudget } from "./image";
 import {
   lookupContextLength,
   lookupEfforts,
   lookupSupportsTools,
+  lookupSupportsVision,
   type ModelCapabilities,
 } from "./catalog";
 import { toast } from "./toast";
@@ -96,6 +98,7 @@ interface AppContextValue {
   loadingModels: boolean;
   refreshModels: () => Promise<void>;
   hiddenModels: string[];
+  catalog: ModelCapabilities[] | null;
   toggleModelVisibility: (connectionId: string, modelId: string, hidden: boolean) => Promise<void>;
   setAllModelsVisibility: (
     connectionId: string,
@@ -104,6 +107,8 @@ interface AppContextValue {
   ) => Promise<void>;
   model: string;
   setModel: (model: string) => void;
+  visionFallbackModel: string;
+  setVisionFallbackModel: (model: string) => void;
   reasoningEffort: string | null;
   setReasoningEffort: (effort: string | null) => void;
   supportedEfforts: string[] | null;
@@ -166,7 +171,7 @@ interface AppContextValue {
   streaming: boolean;
   streamingId: string | null;
   toolLog: ToolEntry[];
-  sendMessage: (text: string, attachmentBlock?: string) => Promise<boolean>;
+  sendMessage: (text: string, attachmentBlock?: string, images?: { dataUrl: string }[]) => Promise<boolean>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
@@ -237,6 +242,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [model, setModelState] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
+  const [visionFallbackModel, setVisionFallbackModelState] = useState(
+    () => localStorage.getItem("visionFallbackModel") ?? "",
+  );
   const [reasoningEffort, setReasoningEffortState] = useState<string | null>(() =>
     localStorage.getItem("reasoningEffort"),
   );
@@ -327,6 +335,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+  const visionFallbackModelRef = useRef(visionFallbackModel);
+  useEffect(() => {
+    visionFallbackModelRef.current = visionFallbackModel;
+  }, [visionFallbackModel]);
   useEffect(() => {
     convIdRef.current = activeConversationId;
   }, [activeConversationId]);
@@ -692,6 +704,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setModel = useCallback((value: string) => setModelState(value), []);
 
+  const setVisionFallbackModel = useCallback((value: string) => {
+    if (value) localStorage.setItem("visionFallbackModel", value);
+    else localStorage.removeItem("visionFallbackModel");
+    setVisionFallbackModelState(value);
+  }, []);
+
   const setReasoningEffort = useCallback((effort: string | null) => {
     setReasoningEffortState(effort);
     if (effort) {
@@ -970,7 +988,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const withSystem = useCallback(
-    (turns: { role: string; content: string }[], summary: string | null = null) => {
+    (turns: { role: string; content: string | api.ChatContentPart[] }[], summary: string | null = null) => {
       const system = buildSystemPrompt({
         globalMemories: globalMemoriesRef.current,
         project: projectRef.current,
@@ -987,15 +1005,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const lastPayloadRef = useRef<{ role: string; content: string }[] | null>(null);
+  const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
   const knowledgeBlockRef = useRef("");
+  const pendingVisionFallbackRef = useRef<string | null>(null);
 
   const streamTurn = useCallback(
     async (
       conversationId: string,
       connection: Connection,
       modelName: string,
-      payload: { role: string; content: string }[],
+      payload: { role: string; content: string | api.ChatContentPart[] }[],
       assistantMsg: Message,
       keepSeed?: boolean,
     ): Promise<void> => {
@@ -1055,6 +1074,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             connectionKind: connection.kind,
             searchBackend,
             searchEndpoint,
+            visionFallbackModel: pendingVisionFallbackRef.current,
           },
           (event) => {
             if (requestIdRef.current !== requestId) return;
@@ -1236,7 +1256,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resolveCompact = useCallback(
-    (conversationId: string | null, turns: { role: string; content: string }[]) => {
+    (conversationId: string | null, turns: { role: string; content: string | api.ChatContentPart[] }[]) => {
       const conversation = conversationId
         ? conversationsRef.current.find((c) => c.id === conversationId)
         : undefined;
@@ -1366,7 +1386,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [setCompacted]);
 
   const buildPayload = useCallback(
-    (conversationId: string | null, turns: { role: string; content: string; created_at?: number }[]) => {
+    (conversationId: string | null, turns: { role: string; content: string | api.ChatContentPart[]; created_at?: number }[]) => {
       const { summary, through } = summaryFor(conversationId);
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
@@ -1378,7 +1398,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const sendMessage = useCallback(
-    async (text: string, attachmentBlock?: string): Promise<boolean> => {
+    async (
+      text: string,
+      attachmentBlock?: string,
+      images?: { dataUrl: string }[],
+    ): Promise<boolean> => {
       if (streaming) return false;
       const connection = connRef.current;
       if (!connection) {
@@ -1441,7 +1465,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const turns = [...history, { role: "user", content: text }];
+      const outgoing: { role: string; content: string | api.ChatContentPart[] }[] = [
+        ...history,
+      ];
       let knowledge = "";
       try {
         if (projectRef.current) {
@@ -1453,8 +1479,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
       knowledge = [knowledge, attachmentBlock?.trim() ?? ""]
         .filter((part) => part.length > 0)
         .join("\n\n");
+      const vision = lookupSupportsVision(catalogRef.current, modelRef.current);
+      const toolsOn = resolveTools();
+      const fallback = visionFallbackModelRef.current.trim();
+      const imageCount = images?.length ?? 0;
+      const routed = !vision && fallback.length > 0 && toolsOn && imageCount > 0;
+      const gated = resolveImageSend(vision || routed, images ?? []);
+      const fit = fitImageBudget(gated.kept);
+      if (gated.dropped) {
+        toast("This model can't read images and no vision fallback is set — sending text only.");
+      } else if (fit.dropped > 0) {
+        toast(`${fit.dropped} image(s) dropped to fit the turn budget.`);
+      } else if (routed) {
+        toast("Reading images with the fallback vision model…");
+      }
+      pendingVisionFallbackRef.current = routed ? fallback : null;
+      if (gated.dropped || fit.dropped > 0) {
+        knowledge = [knowledge, "[Some attached images were removed: no vision support or over budget.]"]
+          .filter((part) => part.length > 0)
+          .join("\n\n");
+      }
       knowledgeBlockRef.current = knowledge;
-      const payload = buildPayload(conversationId, turns);
+      if (fit.kept.length > 0) {
+        try {
+          const stamp = Date.now();
+          await Promise.all(
+            fit.kept.map((image, index) =>
+              api.spillImageWrite(conversationId, `img-${stamp}-${index}`, image.dataUrl),
+            ),
+          );
+        } catch {
+          // spill is best-effort; the payload still carries the images
+        }
+      }
+      if (fit.kept.length > 0) {
+        outgoing.push({ role: "user", content: buildUserContent(text, fit.kept) });
+      } else {
+        outgoing.push({ role: "user", content: text });
+      }
+      const payload = buildPayload(conversationId, outgoing);
 
       await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
       if (provisionalTitle) {
@@ -1470,6 +1533,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       streaming,
       streamTurn,
       buildPayload,
+      resolveTools,
       maybeGenerateTitle,
       maybeAutoCompact,
     ],
@@ -1726,10 +1790,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadingModels,
     refreshModels,
     hiddenModels,
+    catalog,
     toggleModelVisibility,
     setAllModelsVisibility,
     model,
     setModel,
+    visionFallbackModel,
+    setVisionFallbackModel,
     reasoningEffort,
     setReasoningEffort,
     supportedEfforts,

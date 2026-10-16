@@ -74,7 +74,7 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   return blocks.join("\n\n").slice(0, MAX_CHARS);
 }
 
-export function applyCompactWindow<T extends { content: string }>(turns: T[], compacted: boolean): T[] {
+export function applyCompactWindow<T extends { content: string | { type: string }[] }>(turns: T[], compacted: boolean): T[] {
   if (compacted) return turns.slice(-COMPACT_WINDOW);
   if (turns.length > MAX_TURNS_WINDOW) return turns.slice(-MAX_TURNS_WINDOW);
   return turns;
@@ -86,7 +86,7 @@ export interface SummaryWindow {
 }
 
 export function applySummaryWindow<
-  T extends { content: string; created_at?: number },
+  T extends { content: string | { type: string }[]; created_at?: number },
 >(turns: T[], window: SummaryWindow): T[] {
   let kept = turns;
   if (window.summary && window.through !== null) {
@@ -105,12 +105,22 @@ export function summarySystemTurn(summary: string): { role: string; content: str
 }
 
 export function estimateContext(
-  turns: { content: string }[],
+  turns: { content: string | { type: string }[] }[],
   system: string | null,
   limit = DEFAULT_MODEL_CONTEXT,
 ): { tokens: number; limit: number; pct: number } {
   const chars =
-    (system ?? "").length + turns.reduce((sum, turn) => sum + turn.content.length, 0);
+    (system ?? "").length +
+    turns.reduce((sum, turn) => {
+      if (typeof turn.content === "string") return sum + turn.content.length;
+      return (
+        sum +
+        turn.content.reduce(
+          (part, item) => part + (item.type === "text" ? 200 : 1500),
+          0,
+        )
+      );
+    }, 0);
   const tokens = Math.round(chars / 4);
   const pct = Math.min(100, Math.round((tokens / limit) * 100));
   return { tokens, limit, pct };

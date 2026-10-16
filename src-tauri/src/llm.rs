@@ -68,10 +68,31 @@ pub enum StreamEvent {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ImageUrl {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: MessageContent,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +119,8 @@ pub struct ChatRequest {
     pub search_backend: Option<String>,
     #[serde(default)]
     pub search_endpoint: Option<String>,
+    #[serde(default)]
+    pub vision_fallback_model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -185,6 +208,41 @@ fn message_text(content: &serde_json::Value) -> String {
         return out;
     }
     String::new()
+}
+
+/// Blind-model routing: the frontend only sends `fallback` when the active
+/// model lacks vision support. Image parts are stripped (the provider would
+/// reject them) and the agent is told to read them via `describe_image`,
+/// which re-sends them to the fallback model. `None` leaves history alone.
+/// Returns (removed_count, system_note).
+fn route_vision(
+    history: &mut [serde_json::Value],
+    fallback: Option<&str>,
+) -> (usize, Option<String>) {
+    let Some(model) = fallback.filter(|m| !m.trim().is_empty()) else {
+        return (0, None);
+    };
+    let mut removed = 0;
+    for message in history.iter_mut() {
+        let Some(parts) = message.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        let before = parts.len();
+        parts.retain(|part| part.get("type").and_then(|t| t.as_str()) != Some("image_url"));
+        removed += before - parts.len();
+        if parts.len() == 1 && parts[0].get("text").and_then(|t| t.as_str()).is_some() {
+            let text = parts[0]["text"].as_str().unwrap_or_default().to_string();
+            message["content"] = serde_json::Value::String(text);
+        }
+    }
+    if removed == 0 {
+        return (0, None);
+    }
+    let note = format!(
+        "The user attached {removed} image(s) this turn, but the current model ({model}) cannot see images. The files are saved under this conversation's spill/images directory. Call describe_image once per image (index 0..{}) with a specific question, then answer from the descriptions. Never claim to see the images directly.",
+        removed - 1,
+    );
+    (removed, Some(note))
 }
 
 fn endpoint(base_url: &str, path: &str) -> String {
@@ -426,6 +484,7 @@ pub struct ModelCaps {
     pub context_length: Option<u64>,
     pub supports_tools: Option<bool>,
     pub supports_reasoning: Option<bool>,
+    pub supports_vision: Option<bool>,
     pub efforts: Option<Vec<String>>,
     pub mandatory: bool,
 }
@@ -466,6 +525,23 @@ fn parse_models_caps(value: &serde_json::Value) -> Vec<ModelCaps> {
                     let has_reasoning_param = params.as_ref().is_some_and(|p| {
                         p.contains(&"reasoning") || p.contains(&"include_reasoning")
                     });
+                    let modalities: Option<Vec<&str>> = item
+                        .get("architecture")
+                        .and_then(|a| a.get("input_modalities"))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect());
+                    let modality_text = item
+                        .get("architecture")
+                        .and_then(|a| a.get("modality"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let supports_vision = modalities
+                        .as_ref()
+                        .map(|m| m.iter().any(|t| t.eq_ignore_ascii_case("image")))
+                        .or_else(|| {
+                            (!modality_text.is_empty())
+                                .then(|| modality_text.to_lowercase().contains("image"))
+                        });
                     Some(ModelCaps {
                         id: id.to_string(),
                         context_length: item.get("context_length").and_then(|v| v.as_u64()),
@@ -477,6 +553,7 @@ fn parse_models_caps(value: &serde_json::Value) -> Vec<ModelCaps> {
                             (false, false) => None,
                             _ => Some(true),
                         },
+                        supports_vision,
                         efforts,
                         mandatory: reasoning
                             .and_then(|r| r.get("mandatory"))
@@ -1389,6 +1466,9 @@ impl ToolRunner for RealTools<'_> {
                 project_id: self.req.project_id.as_deref(),
                 search_backend: self.req.search_backend.as_deref(),
                 search_endpoint: self.req.search_endpoint.as_deref(),
+                base_url: Some(self.req.base_url.as_str()),
+                connection_id: Some(self.req.connection_id.as_str()),
+                vision_fallback_model: self.req.vision_fallback_model.as_deref(),
             },
             self.cancel,
         )
@@ -1449,6 +1529,17 @@ async fn run_agentic(
         .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
         .collect();
     history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
+    let (removed, note) = route_vision(&mut history, req.vision_fallback_model.as_deref());
+    if removed > 0 {
+        if let Some(note) = note {
+            let at = history
+                .iter()
+                .position(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            history.insert(at, serde_json::json!({"role": "system", "content": note}));
+        }
+    }
     let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
     let model = RealModel {
@@ -1580,6 +1671,109 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parts_serialize_openai_shape() {
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: MessageContent::Parts(vec![
+                ContentPart::Text {
+                    text: "see this".to_string(),
+                },
+                ContentPart::ImageUrl {
+                    image_url: ImageUrl {
+                        url: "data:image/jpeg;base64,AAA".to_string(),
+                        detail: None,
+                    },
+                },
+            ]),
+        };
+        let value = serde_json::to_value(&msg).expect("serializes");
+        assert_eq!(
+            value["content"][0],
+            serde_json::json!({"type": "text", "text": "see this"})
+        );
+        assert_eq!(value["content"][1]["type"], serde_json::json!("image_url"));
+        assert_eq!(
+            value["content"][1]["image_url"]["url"],
+            serde_json::json!("data:image/jpeg;base64,AAA")
+        );
+    }
+
+    #[test]
+    fn message_text_reads_parts() {
+        let content = serde_json::json!([
+            {"type": "text", "text": "hello "},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAA"}},
+        ]);
+        assert_eq!(message_text(&content), "hello ");
+    }
+
+    #[test]
+    fn vision_flag_reads_input_modalities() {
+        let value = serde_json::json!({"data": [
+            {"id": "m-sees", "architecture": {"modality": "text+image->text", "input_modalities": ["text", "image"]}},
+            {"id": "m-blind", "architecture": {"modality": "text->text", "input_modalities": ["text"]}},
+            {"id": "m-legacy", "supported_parameters": ["tools"]},
+        ]});
+        let caps = parse_models_caps(&value);
+        let sees = caps.iter().find(|c| c.id == "m-sees").expect("sees parsed");
+        let blind = caps
+            .iter()
+            .find(|c| c.id == "m-blind")
+            .expect("blind parsed");
+        let legacy = caps
+            .iter()
+            .find(|c| c.id == "m-legacy")
+            .expect("legacy parsed");
+        assert_eq!(sees.supports_vision, Some(true));
+        assert_eq!(blind.supports_vision, Some(false));
+        assert_eq!(legacy.supports_vision, None);
+    }
+
+    #[test]
+    fn blind_model_strips_images_and_notes_tool() {
+        let mut history = vec![serde_json::json!({"role": "user", "content": [
+            {"type": "text", "text": "look at this"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        ]})];
+        let (removed, note) = route_vision(&mut history, Some("fallback-model"));
+        assert_eq!(removed, 1);
+        let note = note.expect("note for blind model");
+        assert!(
+            note.contains("describe_image"),
+            "tells agent the tool: {note}"
+        );
+        assert_eq!(history[0]["content"], serde_json::json!("look at this"));
+    }
+
+    #[test]
+    fn no_fallback_leaves_history_untouched() {
+        let mut history = vec![serde_json::json!({"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        ]})];
+        let (removed, note) = route_vision(&mut history, None);
+        assert_eq!(removed, 0);
+        assert!(note.is_none());
+        assert!(history[0]["content"].is_array());
+    }
+
+    #[test]
+    fn describe_image_tool_is_listed_and_gated() {
+        let specs = tools::tool_specs();
+        let names: Vec<&str> = specs
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|s| s["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&"describe_image"), "spec listed: {names:?}");
+        assert_eq!(
+            approval_resources("describe_image", &serde_json::json!({"index": 0})),
+            vec!["*".to_string()],
+            "defaults to Ask"
+        );
+    }
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -2168,6 +2362,7 @@ mod tests {
             context_length: None,
             supports_tools: None,
             supports_reasoning: Some(false),
+            supports_vision: None,
             efforts: None,
             mandatory: false,
         };
@@ -2180,6 +2375,7 @@ mod tests {
                 context_length: None,
                 supports_tools: None,
                 supports_reasoning: None,
+                supports_vision: None,
                 efforts: None,
                 mandatory: false,
             }
