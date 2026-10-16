@@ -231,6 +231,40 @@ export function skillRead(id: string) {
   return invoke<string>("skill_read", { id });
 }
 
+export interface McpServerRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  transport: string;
+  cmd: string | null;
+  url: string | null;
+  allow_tools: string | null;
+  timeout_ms: number | null;
+  enabled: boolean;
+}
+
+export function mcpList(projectId: string | null) {
+  return invoke<McpServerRow[]>("mcp_list", { projectId });
+}
+
+export function mcpAdd(
+  projectId: string | null,
+  name: string,
+  transport: string,
+  cmd: string | null,
+  url: string | null,
+) {
+  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, cmd, url });
+}
+
+export function mcpRemove(id: string) {
+  return invoke<void>("mcp_remove", { id });
+}
+
+export function mcpToggle(id: string, enabled: boolean) {
+  return invoke<void>("mcp_toggle", { id, enabled });
+}
+
 export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {
   return invoke<string>("knowledge_sidecar_write", { projectId, sha256, text });
 }

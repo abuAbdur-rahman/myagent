@@ -486,7 +486,7 @@ pub fn tool_specs() -> Value {
     ])
 }
 
-async fn memory_pool(app: &AppHandle) -> AppResult<SqlitePool> {
+pub(crate) async fn memory_pool(app: &AppHandle) -> AppResult<SqlitePool> {
     let dir = app
         .path()
         .app_data_dir()

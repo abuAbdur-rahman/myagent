@@ -1,6 +1,7 @@
 mod error;
 mod knowledge;
 mod llm;
+mod mcp;
 mod permissions;
 mod skills;
 mod sse;
@@ -239,6 +240,27 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "add_mcp_servers",
+            sql: "
+                CREATE TABLE IF NOT EXISTS mcp_servers (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    name TEXT NOT NULL,
+                    transport TEXT NOT NULL,
+                    cmd TEXT,
+                    url TEXT,
+                    allow_tools TEXT,
+                    timeout_ms INTEGER,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(project_id, name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -261,6 +283,7 @@ pub fn run() {
                 .build()
                 .expect("failed to build HTTP client"),
         )
+        .manage(mcp::McpState::default())
         .manage(state::StreamState::default())
         .invoke_handler(tauri::generate_handler![
             vault::set_api_key,
@@ -286,6 +309,10 @@ pub fn run() {
             permissions::permission_allow,
             skills::skill_index,
             skills::skill_read,
+            mcp::mcp_list,
+            mcp::mcp_add,
+            mcp::mcp_remove,
+            mcp::mcp_toggle,
             permissions::approval_reply,
             permissions::question_answer,
         ])
@@ -315,6 +342,20 @@ mod migration_tests {
                     panic!("migration {} does not apply: {e}", migration.description)
                 });
         }
+    }
+
+    #[tokio::test]
+    async fn mcp_servers_unique_name_per_project() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('s1', 'p1', 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("first server");
+        let dup = sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('s2', 'p1', 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 2)")
+            .execute(&pool)
+            .await;
+        assert!(dup.is_err(), "duplicate server name per project rejected");
     }
 
     #[tokio::test]

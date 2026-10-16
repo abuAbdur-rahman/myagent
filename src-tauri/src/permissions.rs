@@ -66,7 +66,7 @@ pub fn decide(action: &str, resources: &[String], rules: &[Rule]) -> Effect {
     for resource in resources {
         let mut current = Effect::Ask;
         for rule in rules {
-            if rule.action != "*" && rule.action != action {
+            if !matches(&rule.action, action) {
                 continue;
             }
             if !matches(&rule.resource, resource) {
@@ -423,6 +423,20 @@ mod tests {
             decide("anything", &["whatever".to_string()], &rules),
             Effect::Deny
         );
+    }
+
+    #[test]
+    fn server_prefix_action_matches_namespaced_tools() {
+        let rules = vec![
+            rule("fs_*", "*", Effect::Allow),
+            rule("fs_delete", "*", Effect::Deny),
+        ];
+        assert_eq!(decide("fs_read", &["*".to_string()], &rules), Effect::Allow);
+        assert_eq!(
+            decide("fs_delete", &["*".to_string()], &rules),
+            Effect::Deny
+        );
+        assert_eq!(decide("db_query", &["*".to_string()], &rules), Effect::Ask);
     }
 
     #[test]

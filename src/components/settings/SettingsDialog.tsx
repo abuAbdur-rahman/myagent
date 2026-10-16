@@ -10,6 +10,7 @@ import {
   Search,
   Settings as SettingsIcon,
   X,
+  Blocks,
 } from "lucide-react";
 import { useApp } from "../../lib/store";
 import { ProvidersPage } from "./ProvidersPage";
@@ -18,6 +19,7 @@ import {
   AppearancePage,
   DataPage,
   GeneralPage,
+  McpPage,
   MemoryPage,
   ModelsPage,
   SearchPage,
@@ -31,6 +33,7 @@ const PAGES = [
   { id: "providers", label: "Providers", icon: <Plug size={16} /> },
   { id: "models", label: "Models", icon: <Cpu size={16} /> },
   { id: "search", label: "Search", icon: <Search size={16} /> },
+  { id: "mcp", label: "MCP", icon: <Blocks size={16} /> },
   { id: "memory", label: "Memory", icon: <Brain size={16} /> },
   { id: "data", label: "Data", icon: <Database size={16} /> },
   { id: "shortcuts", label: "Shortcuts", icon: <Keyboard size={16} /> },
@@ -121,6 +124,7 @@ export function SettingsDialog() {
           {page === "providers" && <ProvidersPage />}
           {page === "models" && <ModelsPage />}
           {page === "search" && <SearchPage />}
+          {page === "mcp" && <McpPage />}
           {page === "memory" && <MemoryPage />}
           {page === "data" && <DataPage />}
           {page === "shortcuts" && <ShortcutsPage />}

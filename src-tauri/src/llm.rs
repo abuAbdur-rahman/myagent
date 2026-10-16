@@ -1466,24 +1466,36 @@ impl ToolRunner for RealTools<'_> {
             return Ok(StepControl::Continue);
         }
 
-        match tools::execute(
+        match match crate::mcp::try_execute(
             self.app,
+            self.req.project_id.as_deref(),
             &name,
-            args,
-            &id,
-            &tools::ExecContext {
-                conversation_id: self.req.conversation_id.as_deref(),
-                project_id: self.req.project_id.as_deref(),
-                search_backend: self.req.search_backend.as_deref(),
-                search_endpoint: self.req.search_endpoint.as_deref(),
-                base_url: Some(self.req.base_url.as_str()),
-                connection_id: Some(self.req.connection_id.as_str()),
-                vision_fallback_model: self.req.vision_fallback_model.as_deref(),
-            },
+            args.clone(),
             self.cancel,
         )
         .await
         {
+            Some(result) => result,
+            None => {
+                tools::execute(
+                    self.app,
+                    &name,
+                    args,
+                    &id,
+                    &tools::ExecContext {
+                        conversation_id: self.req.conversation_id.as_deref(),
+                        project_id: self.req.project_id.as_deref(),
+                        search_backend: self.req.search_backend.as_deref(),
+                        search_endpoint: self.req.search_endpoint.as_deref(),
+                        base_url: Some(self.req.base_url.as_str()),
+                        connection_id: Some(self.req.connection_id.as_str()),
+                        vision_fallback_model: self.req.vision_fallback_model.as_deref(),
+                    },
+                    self.cancel,
+                )
+                .await
+            }
+        } {
             Ok(done) => {
                 if collapsible_call(&name) {
                     self.last_pure = Some((repeat_key.clone(), done.output.clone()));
@@ -1552,7 +1564,7 @@ async fn run_agentic(
     }
     let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
-    let model = RealModel {
+    let mut model = RealModel {
         client,
         url,
         key,
@@ -1562,6 +1574,16 @@ async fn run_agentic(
         on_event,
         tool_specs: tools::tool_specs(),
     };
+    let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
+        .await
+        .unwrap_or_default();
+    if !mcp_tools.is_empty() {
+        if let Some(specs) = model.tool_specs.as_array_mut() {
+            for def in &mcp_tools {
+                specs.push(crate::mcp::spec_for(def));
+            }
+        }
+    }
     let mut runner = RealTools {
         app,
         req,
@@ -1787,6 +1809,11 @@ mod tests {
             approval_resources("skill", &serde_json::json!({"id": "git-helper"})),
             vec!["git-helper".to_string()],
             "skill asserts per-id"
+        );
+        assert_eq!(
+            approval_resources("fs_read", &serde_json::json!({"path": "/tmp"})),
+            vec!["*".to_string()],
+            "mcp tools use action-only granularity"
         );
     }
     use std::cell::{Cell, RefCell};

@@ -1,5 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
-import { knowledgeSidecarWipe, knowledgeSidecarWipeAll } from "./api";
+import { knowledgeSidecarWipe, knowledgeSidecarWipeAll, type McpServerRow } from "./api";
 import { newId } from "./utils";
 import type {
   Connection,
@@ -887,4 +887,26 @@ export async function listKnowledgeDocs(
 export async function deleteKnowledgeDoc(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM knowledge_docs WHERE id = $1", [id]);
+}
+
+export async function listMcpServers(projectId: string | null): Promise<McpServerRow[]> {
+  const db = await getDb();
+  const rows = await db.select<(Omit<McpServerRow, "enabled"> & { enabled: number })[]>(
+    "SELECT * FROM mcp_servers WHERE project_id IS $1 OR project_id IS NULL ORDER BY name ASC",
+    [sqlNull(projectId)],
+  );
+  return rows.map((row) => ({ ...row, enabled: row.enabled !== 0 }));
+}
+
+export async function toggleMcpServer(id: string, enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE mcp_servers SET enabled = $1 WHERE id = $2", [
+    enabled ? 1 : 0,
+    id,
+  ]);
+}
+
+export async function removeMcpServer(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM mcp_servers WHERE id = $1", [id]);
 }
