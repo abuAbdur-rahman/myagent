@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn coalesces_split_chunks_and_crlf() {
-        let raw = "data: {\"a\":1}\r\n\r\ndata: {\"b\":2}\n\n";
+        let raw = include_str!("../tests/fixtures/coalesced.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 7);
         assert_eq!(payloads(items), vec!["{\"a\":1}", "{\"b\":2}"]);
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn keeps_multibyte_chars_split_across_chunks() {
-        let raw = "data: {\"text\":\"hi 👍\"}\n\n";
+        let raw = include_str!("../tests/fixtures/multibyte.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 1);
         assert_eq!(payloads(items), vec!["{\"text\":\"hi 👍\"}"]);
@@ -297,15 +297,47 @@ mod tests {
 
     #[test]
     fn ignores_comments_and_blank_keepalives() {
-        let raw = ": ping\n\ndata: {\"a\":1}\n\n\n";
+        let raw = include_str!("../tests/fixtures/comments.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 5);
-        assert_eq!(payloads(items), vec!["{\"a\":1}"]);
+        assert_eq!(payloads(items), vec!["{\"a\":1}", "{\"b\":2}"]);
+    }
+
+    #[test]
+    fn recorded_usage_chunk_fixture() {
+        let raw = include_str!("../tests/fixtures/usage.sse");
+        let mut parser = SseParser::new();
+        let items = feed_all(&mut parser, raw, 9);
+        let mut text = String::new();
+        let mut finish = None;
+        let mut usage = None;
+        for item in items {
+            match item {
+                SseItem::Payload(payload) => {
+                    let value: Value = serde_json::from_str(&payload).unwrap();
+                    let chunk = map_chunk(&value);
+                    text.push_str(&chunk.text);
+                    finish = chunk.finish_reason.or(finish);
+                    usage = chunk.usage.or(usage);
+                }
+                SseItem::Done => {}
+            }
+        }
+        assert_eq!(text, "part");
+        assert_eq!(finish.as_deref(), Some("stop"));
+        assert_eq!(
+            usage,
+            Some(Usage {
+                prompt: 44,
+                completion: 6,
+                total: 50,
+            })
+        );
     }
 
     #[test]
     fn joins_multiline_data_and_detects_done() {
-        let raw = "data: line1\ndata: line2\n\n";
+        let raw = include_str!("../tests/fixtures/multiline.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 100);
         assert_eq!(payloads(items), vec!["line1\nline2"]);

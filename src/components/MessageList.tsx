@@ -398,10 +398,15 @@ function AssistantMessage({
       </div>
       {!busy && (
         <>
-          {isLast && message.finish_reason === "length" && (
+          {isLast && (message.finish_reason === "length" || message.finish_reason === "interrupted") && (
             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-warn">
-              <span>Stopped at the token limit — the reply may be cut off.</span>
+              <span>{message.finish_reason === "length" ? "Stopped at the token limit — the reply may be cut off." : "Stream interrupted — partial reply kept."}</span>
               <ContinueButton />
+            </div>
+          )}
+          {isLast && message.finish_reason === "stopped" && (
+            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+              <span>Stopped — partial reply kept.</span>
             </div>
           )}
           <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">

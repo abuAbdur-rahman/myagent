@@ -710,7 +710,7 @@ pub async fn chat_stream(
     result
 }
 
-const MAX_ATTEMPTS: u32 = 10;
+const MAX_ATTEMPTS: u32 = 3;
 
 fn retryable_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
@@ -755,7 +755,6 @@ async fn post_with_retry(
         return Err(AppError::Cancelled);
     }
     let mut last_error: Option<AppError> = None;
-    let mut blocked_retries = 0u32;
     for attempt in 0..MAX_ATTEMPTS {
         let request = agentrouter_headers(client.post(url).bearer_auth(key), kind, url);
         match request.json(body).send().await {
@@ -767,18 +766,6 @@ async fn post_with_retry(
                 if status == reqwest::StatusCode::BAD_REQUEST {
                     let message = error_body(resp).await;
                     if is_content_blocked_message(&message) {
-                        if blocked_retries < 2 {
-                            blocked_retries += 1;
-                            if sleep_or_cancel(
-                                Duration::from_millis(1500 * u64::from(blocked_retries)),
-                                cancel,
-                            )
-                            .await
-                            {
-                                return Err(AppError::Cancelled);
-                            }
-                            continue;
-                        }
                         return Err(AppError::Upstream(describe_content_blocked(&message)));
                     }
                     return Err(AppError::Upstream(message));
@@ -1693,6 +1680,22 @@ mod tests {
             .await
             .expect_err("400 must not retry");
         assert!(matches!(error, AppError::Upstream(_)));
+    }
+
+    #[tokio::test]
+    async fn content_blocked_400_does_not_retry() {
+        let url = serve_script(vec![(
+            "400 Bad Request",
+            "",
+            r#"{"error":"content-blocked agent_router_api_error request id:abc"}"#,
+        )]);
+        let cancel = Notify::new();
+        let error = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None, None)
+            .await
+            .expect_err("content-blocked 400 must not retry");
+        assert!(
+            matches!(error, AppError::Upstream(message) if message.contains("content-blocked"))
+        );
     }
 
     #[test]

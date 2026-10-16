@@ -1021,7 +1021,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
-              ? { ...m, content: buffered, reasoning, thinking_ms: thinkingMs }
+              ? {
+                  ...m,
+                  content: buffered,
+                  reasoning,
+                  thinking_ms: thinkingMs,
+                  finish_reason: finishRef.current,
+                }
               : m,
           ),
         );
@@ -1486,7 +1492,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const turns = messagesRef.current.filter((m) => m.content.length > 0);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
-    if (partial.finish_reason !== "length") return;
+    if (partial.finish_reason !== "length" && partial.finish_reason !== "interrupted") return;
     const payload = lastPayloadRef.current ?? buildPayload(conversationId, turns);
     await streamTurn(
       conversationId,
@@ -1665,7 +1671,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const assistantId = assistantMsgIdRef.current;
     const conversationId = convIdRef.current;
     assistantMsgIdRef.current = null;
-    if (assistantId && conversationId) finalize(assistantId, conversationId);
+    if (assistantId && conversationId) {
+      finishRef.current = "stopped";
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, finish_reason: "stopped" } : m,
+        ),
+      );
+      finalize(assistantId, conversationId);
+    }
   }, [finalize]);
 
   const value: AppContextValue = {
