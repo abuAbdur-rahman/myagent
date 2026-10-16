@@ -1486,7 +1486,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const turns = messagesRef.current.filter((m) => m.content.length > 0);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
-    if (partial.finish_reason !== "length") return;
+    if (partial.finish_reason !== "length" && partial.finish_reason !== "interrupted") return;
     const payload = lastPayloadRef.current ?? buildPayload(conversationId, turns);
     await streamTurn(
       conversationId,

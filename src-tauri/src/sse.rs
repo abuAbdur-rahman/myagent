@@ -297,10 +297,42 @@ mod tests {
 
     #[test]
     fn ignores_comments_and_blank_keepalives() {
-        let raw = ": ping\n\ndata: {\"a\":1}\n\n\n";
+        let raw = include_str!("../tests/fixtures/comments.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 5);
-        assert_eq!(payloads(items), vec!["{\"a\":1}"]);
+        assert_eq!(payloads(items), vec!["{\"a\":1}", "{\"b\":2}"]);
+    }
+
+    #[test]
+    fn recorded_usage_chunk_fixture() {
+        let raw = include_str!("../tests/fixtures/usage.sse");
+        let mut parser = SseParser::new();
+        let items = feed_all(&mut parser, raw, 9);
+        let mut text = String::new();
+        let mut finish = None;
+        let mut usage = None;
+        for item in items {
+            match item {
+                SseItem::Payload(payload) => {
+                    let value: Value = serde_json::from_str(&payload).unwrap();
+                    let chunk = map_chunk(&value);
+                    text.push_str(&chunk.text);
+                    finish = chunk.finish_reason.or(finish);
+                    usage = chunk.usage.or(usage);
+                }
+                SseItem::Done => {}
+            }
+        }
+        assert_eq!(text, "part");
+        assert_eq!(finish.as_deref(), Some("stop"));
+        assert_eq!(
+            usage,
+            Some(Usage {
+                prompt: 44,
+                completion: 6,
+                total: 50,
+            })
+        );
     }
 
     #[test]

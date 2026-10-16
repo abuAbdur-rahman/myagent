@@ -45,6 +45,7 @@ Run every check before saying "done".
 ## Hard rules
 
 - **Only edit files in scope.** Ask before touching anything else.
+- **Verify `docs/features.md` Status in code before changing it.** Never ship doc-only versioned releases; one patch release = code/test fixes for already-released features only.
 - **Ask with the question tool. Always.** Any question for the user goes through
   the interactive question tool — never plain chat text. Batch all open
   questions into one call; state the default you will use if unanswered.

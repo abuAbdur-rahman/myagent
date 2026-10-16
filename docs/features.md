@@ -130,7 +130,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Partial (0.1.6: FTS5 + sidebar box + filters, no test yet)
+- **Status:** Partial (0.1.6: FTS5 + sidebar box + filters; searchMessages test in search.test.ts)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.
