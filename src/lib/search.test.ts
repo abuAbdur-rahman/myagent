@@ -11,7 +11,7 @@ const load = vi.mocked(Database.load);
 
 describe("searchMessages", () => {
   const select = vi.fn(async (sql: string, _params: unknown[]) => {
-    if (sql.includes("c.title LIKE")) return [{ id: "c1", title: "Rust notes" }];
+    if (sql.includes("c.title LIKE")) return [];
     if (sql.includes("messages_fts MATCH")) {
       return [
         { conversation_id: "c1", message_id: "m1", snippet: "how do async runtimes work" },
@@ -24,9 +24,10 @@ describe("searchMessages", () => {
     load.mockResolvedValue({ select, execute: vi.fn(async () => undefined) } as never);
   });
 
-  it("returns title hit plus FTS hit with snippet for a known phrase", async () => {
+  it("returns the FTS hit with snippet for a known phrase", async () => {
     const hits = await searchMessages({ q: "async runtimes" });
-    expect(hits[0]).toMatchObject({ conversationId: "c1", messageId: null });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ conversationId: "c1", messageId: "m1" });
     const body = hits.find((hit) => hit.messageId === "m1");
     expect(body?.snippet).toContain("async");
     const ftsCall = select.mock.calls.find(([sql]) =>

@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn coalesces_split_chunks_and_crlf() {
-        let raw = "data: {\"a\":1}\r\n\r\ndata: {\"b\":2}\n\n";
+        let raw = include_str!("../tests/fixtures/coalesced.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 7);
         assert_eq!(payloads(items), vec!["{\"a\":1}", "{\"b\":2}"]);
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn keeps_multibyte_chars_split_across_chunks() {
-        let raw = "data: {\"text\":\"hi 👍\"}\n\n";
+        let raw = include_str!("../tests/fixtures/multibyte.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 1);
         assert_eq!(payloads(items), vec!["{\"text\":\"hi 👍\"}"]);
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn joins_multiline_data_and_detects_done() {
-        let raw = "data: line1\ndata: line2\n\n";
+        let raw = include_str!("../tests/fixtures/multiline.sse");
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 100);
         assert_eq!(payloads(items), vec!["line1\nline2"]);
