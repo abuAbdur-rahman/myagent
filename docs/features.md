@@ -342,7 +342,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Requests to localhost and 169.254.x.x are rejected.
 
 ## D15. Web search
-- **Status:** Have (0.2.0: `web_search`, Tavily default + SearXNG endpoint, key in vault, Settings/onboarding)
+- **Status:** Have (0.2.0: `web_search`, Tavily default + SearXNG endpoint, key in vault, Settings/onboarding; multi-key rotation on 429/402/quota)
 - **Ref:** OpenCode has a `websearch` permission; OpenRouter offers web search plugins.
 - **Build:** One provider behind one tool; default ask; returns titles, URLs, snippets. Needs a key. Not before D14.
 - **Done:** Results render as links the model can fetch.
