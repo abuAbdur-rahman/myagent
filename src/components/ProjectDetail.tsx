@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowUp } from "lucide-react";
+import { ArrowLeft, ArrowUp, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectInputSchema } from "../lib/types";
+import { deleteKnowledgeDoc, listKnowledgeDocs, type KnowledgeDocRow } from "../lib/db";
+import { knowledgeSidecarDelete } from "../lib/api";
 import { MemoryEditor } from "./MemoryEditor";
 import { Button, Input, Textarea } from "./ui";
 import { errorText } from "../lib/utils";
@@ -24,6 +26,7 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const [instructions, setInstructions] = useState(activeProject?.instructions ?? "");
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [docs, setDocs] = useState<KnowledgeDocRow[]>([]);
 
   useEffect(() => {
     setName(activeProject?.name ?? "");
@@ -31,6 +34,23 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
     setInstructions(activeProject?.instructions ?? "");
     setStatus(null);
   }, [activeProject?.id, activeProject?.name, activeProject?.description, activeProject?.instructions]);
+
+  useEffect(() => {
+    const id = activeProject?.id;
+    if (!id) {
+      setDocs([]);
+      return;
+    }
+    let live = true;
+    listKnowledgeDocs(id)
+      .then((rows) => {
+        if (live) setDocs(rows);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [activeProject?.id]);
 
   if (!activeProject) {
     return (
@@ -61,6 +81,16 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
     try {
       await saveProject(parsed.data, project.id);
       setStatus("Saved.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const removeDoc = async (doc: KnowledgeDocRow) => {
+    try {
+      await deleteKnowledgeDoc(doc.id);
+      await knowledgeSidecarDelete(project.id, doc.sha256);
+      setDocs((prev) => prev.filter((row) => row.id !== doc.id));
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -180,6 +210,39 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
               onUpdate={(id, d) => editMemory(id, d)}
               onDelete={(id) => deleteMemory(id)}
             />
+          </div>
+
+          <div className="rounded-card border border-border bg-surface p-3">
+            <b className="text-sm">Docs</b>
+            <p className="mb-2 mt-1 text-xs text-muted">
+              {docs.length} file{docs.length === 1 ? "" : "s"} · searched on every send here
+            </p>
+            {docs.length === 0 && (
+              <p className="text-sm text-muted">No docs yet. Attach files from the composer.</p>
+            )}
+            <ul className="flex flex-col gap-1.5">
+              {docs.map((doc) => (
+                <li
+                  key={doc.id}
+                  className="flex items-center gap-2 rounded-control border border-border bg-surface-2 px-2 py-1 text-xs"
+                >
+                  <span className="min-w-0 flex-1 truncate" title={doc.name}>
+                    {doc.name}
+                  </span>
+                  <span className="flex-none text-muted">
+                    {Math.max(1, Math.round(doc.size / 1024))} KB
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void removeDoc(doc)}
+                    aria-label={`Remove ${doc.name}`}
+                    className="flex-none text-muted hover:text-fg"
+                  >
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
 
           <div className="rounded-card border border-border bg-surface p-3">

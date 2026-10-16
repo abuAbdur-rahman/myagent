@@ -1,4 +1,5 @@
 mod error;
+mod knowledge;
 mod llm;
 mod permissions;
 mod sse;
@@ -217,6 +218,26 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "add_knowledge_docs",
+            sql: "
+                CREATE TABLE IF NOT EXISTS knowledge_docs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    chat_id TEXT,
+                    name TEXT NOT NULL,
+                    mime TEXT NOT NULL,
+                    sha256 TEXT NOT NULL UNIQUE,
+                    path TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_docs(project_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -251,6 +272,11 @@ pub fn run() {
             llm::suggest_title,
             llm::summarize,
             delete_spill,
+            knowledge::knowledge_sidecar_write,
+            knowledge::knowledge_sidecar_read,
+            knowledge::knowledge_sidecar_wipe,
+            knowledge::knowledge_sidecar_delete,
+            knowledge::knowledge_sidecar_wipe_all,
             websearch::search_key_count,
             websearch::search_key_add,
             websearch::search_key_remove,
@@ -285,6 +311,26 @@ mod migration_tests {
                     panic!("migration {} does not apply: {e}", migration.description)
                 });
         }
+    }
+
+    #[tokio::test]
+    async fn knowledge_docs_rejects_duplicate_sha() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query(
+            "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'P', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed project");
+        sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k1', 'p1', NULL, 'notes.md', 'text/markdown', 'abc123', 'knowledge/p1/abc123.txt', 9, 1)")
+            .execute(&pool)
+            .await
+            .expect("first ingest");
+        let dup = sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k2', 'p1', NULL, 'notes-copy.md', 'text/markdown', 'abc123', 'knowledge/p1/abc123.txt', 9, 2)")
+            .execute(&pool)
+            .await;
+        assert!(dup.is_err(), "duplicate sha256 rejected");
     }
 
     #[tokio::test]

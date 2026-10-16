@@ -207,6 +207,26 @@ export function deleteSpill(conversationId: string) {
   return invoke<void>("delete_spill", { conversationId });
 }
 
+export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {
+  return invoke<string>("knowledge_sidecar_write", { projectId, sha256, text });
+}
+
+export function knowledgeSidecarRead(projectId: string, sha256: string) {
+  return invoke<string>("knowledge_sidecar_read", { projectId, sha256 });
+}
+
+export function knowledgeSidecarWipe(projectId: string) {
+  return invoke<void>("knowledge_sidecar_wipe", { projectId });
+}
+
+export function knowledgeSidecarDelete(projectId: string, sha256: string) {
+  return invoke<void>("knowledge_sidecar_delete", { projectId, sha256 });
+}
+
+export function knowledgeSidecarWipeAll() {
+  return invoke<void>("knowledge_sidecar_wipe_all");
+}
+
 export function summarize(
   baseUrl: string,
   connectionId: string,

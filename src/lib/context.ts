@@ -12,6 +12,7 @@ export interface ContextInput {
   project: Project | null;
   projectMemories: Memory[];
   userName?: string;
+  knowledgeBlock?: string;
 }
 
 const IDENTITY_LINES = [
@@ -61,6 +62,11 @@ export function buildSystemPrompt(input: ContextInput): string | null {
     if (parts.length > 1) {
       blocks.push(parts.join("\n\n"));
     }
+  }
+
+  const knowledge = input.knowledgeBlock?.trim();
+  if (knowledge) {
+    blocks.push(knowledge);
   }
 
   if (blocks.length === 0) return null;

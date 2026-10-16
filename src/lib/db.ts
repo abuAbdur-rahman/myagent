@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { knowledgeSidecarWipe, knowledgeSidecarWipeAll } from "./api";
 import { newId } from "./utils";
 import type {
   Connection,
@@ -160,6 +161,7 @@ export async function deleteConversation(id: string): Promise<void> {
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [id]);
   await db.execute("DELETE FROM chat_tags WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [id]);
+  await db.execute("DELETE FROM knowledge_docs WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
 }
 
@@ -167,10 +169,12 @@ export async function wipeAll(): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM chat_tags");
   await db.execute("DELETE FROM todos");
+  await db.execute("DELETE FROM knowledge_docs");
   await db.execute("DELETE FROM messages");
   await db.execute("DELETE FROM conversations");
   await db.execute("DELETE FROM memories");
   await db.execute("DELETE FROM projects");
+  await knowledgeSidecarWipeAll();
   await db.execute("VACUUM");
 }
 
@@ -698,6 +702,8 @@ export async function deleteProject(id: string): Promise<void> {
   await db.execute("UPDATE conversations SET project_id = NULL WHERE project_id = $1", [
     id,
   ]);
+  await db.execute("DELETE FROM knowledge_docs WHERE project_id = $1", [id]);
+  await knowledgeSidecarWipe(id);
   await db.execute("DELETE FROM projects WHERE id = $1", [id]);
 }
 
@@ -819,4 +825,66 @@ export async function stats(): Promise<DatabaseStats> {
     count("projects"),
   ]);
   return { conversations, messages, memories, projects };
+}
+
+export interface KnowledgeDocRow {
+  id: string;
+  project_id: string;
+  chat_id: string | null;
+  name: string;
+  mime: string;
+  sha256: string;
+  path: string;
+  size: number;
+  created_at: number;
+}
+
+export async function addKnowledgeDoc(row: Omit<KnowledgeDocRow, "created_at">): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    [
+      row.id,
+      row.project_id,
+      sqlNull(row.chat_id),
+      row.name,
+      row.mime,
+      row.sha256,
+      row.path,
+      row.size,
+      Date.now(),
+    ],
+  );
+}
+
+export async function knowledgeShaExists(sha256: string): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ id: string }[]>(
+    "SELECT id FROM knowledge_docs WHERE sha256 = $1 LIMIT 1",
+    [sha256],
+  );
+  return rows.length > 0;
+}
+
+export async function listKnowledgeDocs(
+  projectId: string,
+  query?: string,
+): Promise<KnowledgeDocRow[]> {
+  const db = await getDb();
+  if (query && query.trim().length > 0) {
+    const like = `%${query.trim()}%`;
+    return db.select<KnowledgeDocRow[]>(
+      "SELECT * FROM knowledge_docs WHERE project_id = $1 AND name LIKE $2 ORDER BY created_at DESC LIMIT 20",
+      [projectId, like],
+    );
+  }
+  return db.select<KnowledgeDocRow[]>(
+    "SELECT * FROM knowledge_docs WHERE project_id = $1 ORDER BY created_at DESC",
+    [projectId],
+  );
+}
+
+export async function deleteKnowledgeDoc(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM knowledge_docs WHERE id = $1", [id]);
 }

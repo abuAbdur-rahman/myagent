@@ -11,6 +11,7 @@ import {
 import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
+import { searchKnowledge } from "./knowledge";
 import {
   lookupContextLength,
   lookupEfforts,
@@ -165,7 +166,7 @@ interface AppContextValue {
   streaming: boolean;
   streamingId: string | null;
   toolLog: ToolEntry[];
-  sendMessage: (text: string) => Promise<boolean>;
+  sendMessage: (text: string, attachmentBlock?: string) => Promise<boolean>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
@@ -733,6 +734,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       project: activeProject,
       projectMemories,
       userName: displayName || undefined,
+      knowledgeBlock: knowledgeBlockRef.current || undefined,
     });
     const limit = modelContextLimit ?? 128_000;
     const lastUsage = [...messages]
@@ -974,6 +976,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
+        knowledgeBlock: knowledgeBlockRef.current || undefined,
       });
       return [
         ...(system ? [{ role: "system", content: system }] : []),
@@ -985,6 +988,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const lastPayloadRef = useRef<{ role: string; content: string }[] | null>(null);
+  const knowledgeBlockRef = useRef("");
 
   const streamTurn = useCallback(
     async (
@@ -1242,6 +1246,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
+        knowledgeBlock: knowledgeBlockRef.current || undefined,
       });
       if (estimateContext(turns, system, contextLimitRef.current).pct > 80) {
         toast("Context is over 80% full - sending recent messages only.");
@@ -1320,6 +1325,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
+        knowledgeBlock: knowledgeBlockRef.current || undefined,
       });
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
@@ -1372,7 +1378,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const sendMessage = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (text: string, attachmentBlock?: string): Promise<boolean> => {
       if (streaming) return false;
       const connection = connRef.current;
       if (!connection) {
@@ -1436,6 +1442,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       const turns = [...history, { role: "user", content: text }];
+      let knowledge = "";
+      try {
+        if (projectRef.current) {
+          knowledge = await searchKnowledge(projectRef.current.id, text);
+        }
+      } catch {
+        knowledge = "";
+      }
+      knowledge = [knowledge, attachmentBlock?.trim() ?? ""]
+        .filter((part) => part.length > 0)
+        .join("\n\n");
+      knowledgeBlockRef.current = knowledge;
       const payload = buildPayload(conversationId, turns);
 
       await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
