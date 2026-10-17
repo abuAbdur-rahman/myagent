@@ -21,6 +21,8 @@ describe("mcp_servers crud", () => {
           cmd: "npx srv",
           url: null,
           allow_tools: null,
+          deny_tools: null,
+          approval_mode: "ask",
           timeout_ms: null,
           enabled: 1,
         },

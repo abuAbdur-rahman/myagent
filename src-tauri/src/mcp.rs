@@ -172,6 +172,7 @@ pub struct McpServerConfig {
     pub cmd: Option<String>,
     pub url: Option<String>,
     pub allow_tools: Option<Vec<String>>,
+    pub deny_tools: Option<Vec<String>>,
     pub timeout_ms: Option<u64>,
     pub _enabled: bool,
 }
@@ -185,6 +186,8 @@ pub struct McpServerRow {
     pub cmd: Option<String>,
     pub url: Option<String>,
     pub allow_tools: Option<String>,
+    pub deny_tools: Option<String>,
+    pub approval_mode: String,
     pub timeout_ms: Option<i64>,
     pub enabled: bool,
 }
@@ -205,8 +208,8 @@ pub async fn mcp_list(
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    let rows: Vec<McpRow> =
-        sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled FROM mcp_servers WHERE project_id IS ? OR project_id IS NULL ORDER BY name ASC")
+    let rows: Vec<McpListRow> =
+        sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, approval_mode FROM mcp_servers WHERE project_id IS ? OR project_id IS NULL ORDER BY name ASC")
             .bind(&project_id)
             .fetch_all(&pool)
             .await
@@ -214,7 +217,19 @@ pub async fn mcp_list(
     Ok(rows
         .into_iter()
         .map(
-            |(id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled)| {
+            |(
+                id,
+                project_id,
+                name,
+                transport,
+                cmd,
+                url,
+                allow_tools,
+                timeout_ms,
+                enabled,
+                deny_tools,
+                approval_mode,
+            )| {
                 McpServerRow {
                     id,
                     project_id,
@@ -223,6 +238,8 @@ pub async fn mcp_list(
                     cmd,
                     url,
                     allow_tools,
+                    deny_tools,
+                    approval_mode,
                     timeout_ms,
                     enabled: enabled != 0,
                 }
@@ -285,6 +302,8 @@ pub async fn mcp_add(
         cmd,
         url,
         allow_tools: None,
+        deny_tools: None,
+        approval_mode: "ask".to_string(),
         timeout_ms: None,
         enabled: true,
     })
@@ -335,6 +354,21 @@ type McpRow = (
     Option<String>,
     Option<i64>,
     i64,
+    Option<String>,
+);
+
+type McpListRow = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    i64,
+    Option<String>,
+    String,
 );
 
 struct StdioHandles {
@@ -594,14 +628,27 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
     }
 }
 
+fn parse_tool_list(raw: Option<String>) -> Option<Vec<String>> {
+    raw.and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+}
+
 fn filter_tools(config: &McpServerConfig, tools: Vec<McpToolDef>) -> Vec<McpToolDef> {
-    match &config.allow_tools {
-        None => tools,
-        Some(allow) => tools
-            .into_iter()
-            .filter(|t| allow.contains(&t.tool))
-            .collect(),
-    }
+    tools
+        .into_iter()
+        .filter(|t| {
+            if config
+                .deny_tools
+                .as_ref()
+                .is_some_and(|deny| deny.contains(&t.tool))
+            {
+                return false;
+            }
+            config
+                .allow_tools
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&t.tool))
+        })
+        .collect()
 }
 
 async fn read_body_capped(
@@ -724,7 +771,7 @@ async fn load_configs(
 ) -> Result<Vec<McpServerConfig>, String> {
     let pool = crate::connections::ro_pool(app).await?;
     let rows: Vec<McpRow> =
-        sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled FROM mcp_servers WHERE enabled = 1 AND (project_id IS ? OR project_id IS NULL)")
+        sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, deny_tools FROM mcp_servers WHERE enabled = 1 AND (project_id IS ? OR project_id IS NULL)")
             .bind(project)
             .fetch_all(&pool)
             .await
@@ -732,9 +779,18 @@ async fn load_configs(
     Ok(rows
         .into_iter()
         .map(
-            |(id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled)| {
-                let allow =
-                    allow_tools.and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok());
+            |(
+                id,
+                project_id,
+                name,
+                transport,
+                cmd,
+                url,
+                allow_tools,
+                timeout_ms,
+                enabled,
+                deny_tools,
+            )| {
                 McpServerConfig {
                     id,
                     project_id,
@@ -742,7 +798,8 @@ async fn load_configs(
                     transport,
                     cmd,
                     url,
-                    allow_tools: allow,
+                    allow_tools: parse_tool_list(allow_tools),
+                    deny_tools: parse_tool_list(deny_tools),
                     timeout_ms: timeout_ms.map(|v| v as u64),
                     _enabled: enabled != 0,
                 }

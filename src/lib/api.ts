@@ -233,6 +233,8 @@ export interface McpServerRow {
   cmd: string | null;
   url: string | null;
   allow_tools: string | null;
+  deny_tools: string | null;
+  approval_mode: string;
   timeout_ms: number | null;
   enabled: boolean;
 }

@@ -265,6 +265,20 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 17,
+            description: "add_mcp_approval_mode",
+            sql: "
+                ALTER TABLE mcp_servers ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'ask';
+            ",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 18,
+            description: "add_mcp_deny_tools",
+            sql: "ALTER TABLE mcp_servers ADD COLUMN deny_tools TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -340,6 +354,17 @@ mod migration_tests {
 
     async fn apply_all(pool: &sqlx::SqlitePool) {
         for migration in migrations() {
+            sqlx::raw_sql(migration.sql)
+                .execute(pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("migration {} does not apply: {e}", migration.description)
+                });
+        }
+    }
+
+    async fn apply_versions(pool: &sqlx::SqlitePool, keep: impl Fn(i64) -> bool) {
+        for migration in migrations().into_iter().filter(|m| keep(m.version)) {
             sqlx::raw_sql(migration.sql)
                 .execute(pool)
                 .await
@@ -493,5 +518,68 @@ mod migration_tests {
             .expect("todos readable")
             .get("c");
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn mcp_schema_upgrades_from_v16_without_data_loss() {
+        let pool = pool().await;
+        apply_versions(&pool, |v| v <= 16).await;
+
+        sqlx::query("INSERT INTO connections (id, name, base_url, kind, default_model, created_at) VALUES ('c1', 'Local', 'https://openrouter.ai/api/v1', 'openai', NULL, 1)")
+            .execute(&pool)
+            .await
+            .expect("connection row");
+        sqlx::query("INSERT INTO projects (id, name, description, instructions, created_at, updated_at) VALUES ('p1', 'Work', '', '', 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("project row");
+        sqlx::query("INSERT INTO conversations (id, title, connection_id, model, created_at, updated_at, project_id) VALUES ('v1', 'Hi', 'c1', 'm', 1, 1, 'p1')")
+            .execute(&pool)
+            .await
+            .expect("conversation row");
+        sqlx::query("INSERT INTO memories (id, scope, project_id, kind, content, created_at, updated_at) VALUES ('m1', 'project', 'p1', 'fact', 'uses sqlite', 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("memory row");
+        sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('s1', NULL, 'fs', 'stdio', 'npx srv', NULL, '[\"read\"]', 5000, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("mcp row");
+
+        apply_versions(&pool, |v| v > 16).await;
+
+        let row = sqlx::query("SELECT name, transport, cmd, allow_tools, timeout_ms, enabled, approval_mode, deny_tools FROM mcp_servers WHERE id = 's1'")
+            .fetch_one(&pool)
+            .await
+            .expect("server survives the upgrade");
+        assert_eq!(row.get::<String, _>("name"), "fs");
+        assert_eq!(row.get::<String, _>("transport"), "stdio");
+        assert_eq!(row.get::<String, _>("cmd"), "npx srv");
+        assert_eq!(row.get::<String, _>("allow_tools"), "[\"read\"]");
+        assert_eq!(row.get::<i64, _>("timeout_ms"), 5000);
+        assert_eq!(row.get::<i64, _>("enabled"), 1);
+        assert_eq!(
+            row.get::<String, _>("approval_mode"),
+            "ask",
+            "existing rows keep asking per call"
+        );
+        assert_eq!(row.get::<Option<String>, _>("deny_tools"), None);
+
+        let servers: i64 = sqlx::query("SELECT COUNT(*) AS c FROM mcp_servers")
+            .fetch_one(&pool)
+            .await
+            .expect("server count")
+            .get("c");
+        let chats: i64 = sqlx::query("SELECT COUNT(*) AS c FROM conversations")
+            .fetch_one(&pool)
+            .await
+            .expect("chat count")
+            .get("c");
+        let facts: i64 = sqlx::query("SELECT COUNT(*) AS c FROM memories")
+            .fetch_one(&pool)
+            .await
+            .expect("memory count")
+            .get("c");
+        assert_eq!((servers, chats, facts), (1, 1, 1), "upgrade drops no rows");
     }
 }
