@@ -1,6 +1,6 @@
 import { skillRead, type SkillInfo } from "./api";
 
-const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?:\s[^>]*)?\s*>/gi;
+const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?=[\s\u0085/>])[^>]*>/gi;
 const MAX_STRIP_PASSES = 8;
 
 function stripBoundaryTags(text: string): string {
@@ -10,7 +10,7 @@ function stripBoundaryTags(text: string): string {
     if (next === current) return current;
     current = next;
   }
-  return current.replace(BOUNDARY_TAG, (match) => `&lt;${match.slice(1)}`);
+  return current.replace(BOUNDARY_TAG, (match) => match.replace(/</g, "&lt;"));
 }
 
 export function parseSkillMentions(text: string): string[] {
