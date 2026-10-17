@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["sync", "macros", "process", "time", "net"]
 chrono = "0.4"
 htmd = "0.5"
 uuid = { version = "1", features = ["v4"] }
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

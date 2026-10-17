@@ -153,6 +153,107 @@ mod tests {
         assert_eq!(unavailable("fs"), "MCP_UNAVAILABLE:fs");
         assert_eq!(timed_out("fs_read"), "MCP_TIMEOUT:fs_read");
     }
+
+    fn config(allow: Option<Vec<&str>>, deny: Option<Vec<&str>>) -> McpServerConfig {
+        McpServerConfig {
+            id: "s1".to_string(),
+            project_id: None,
+            name: "fs".to_string(),
+            transport: "stdio".to_string(),
+            cmd: Some("npx srv".to_string()),
+            url: None,
+            allow_tools: allow.map(|list| list.into_iter().map(String::from).collect()),
+            deny_tools: deny.map(|list| list.into_iter().map(String::from).collect()),
+            timeout_ms: None,
+            _enabled: true,
+        }
+    }
+
+    fn tools(names: &[&str]) -> Vec<McpToolDef> {
+        names
+            .iter()
+            .map(|name| McpToolDef {
+                server: "fs".to_string(),
+                tool: (*name).to_string(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+            })
+            .collect()
+    }
+
+    fn names(tools: &[McpToolDef]) -> Vec<&str> {
+        tools.iter().map(|t| t.tool.as_str()).collect()
+    }
+
+    #[test]
+    fn deny_wins_over_allow() {
+        let kept = filter_tools(
+            &config(Some(vec!["read", "write"]), Some(vec!["write"])),
+            tools(&["read", "write"]),
+        );
+        assert_eq!(names(&kept), vec!["read"]);
+    }
+
+    #[test]
+    fn empty_allow_list_exposes_no_tools() {
+        let kept = filter_tools(&config(Some(vec![]), None), tools(&["read"]));
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn absent_allow_list_exposes_all_but_denied() {
+        let kept = filter_tools(
+            &config(None, Some(vec!["write"])),
+            tools(&["read", "write"]),
+        );
+        assert_eq!(names(&kept), vec!["read"]);
+    }
+
+    #[test]
+    fn malformed_tool_list_is_ignored() {
+        assert_eq!(
+            parse_tool_list(Some("{ not json }".to_string()), "deny_tools"),
+            None
+        );
+        assert_eq!(parse_tool_list(None, "allow_tools"), None);
+        assert_eq!(
+            parse_tool_list(Some("[\"read\"]".to_string()), "allow_tools"),
+            Some(vec!["read".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn server_rows_decode_from_the_shared_select() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("memory db");
+        for migration in crate::migrations() {
+            sqlx::raw_sql(migration.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("migration {} does not apply: {e}", migration.description)
+                });
+        }
+        sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('s1', NULL, 'fs', 'stdio', 'npx srv', NULL, '[\"read\"]', NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("server row");
+
+        let row: McpServerRow = sqlx::query_as(&format!("{SERVER_SELECT} WHERE id = ?"))
+            .bind("s1")
+            .fetch_one(&pool)
+            .await
+            .expect("row decodes");
+        assert_eq!(row.name, "fs");
+        assert_eq!(row.transport, "stdio");
+        assert!(row.enabled, "INTEGER 1 decodes as true");
+        assert_eq!(row.allow_tools.as_deref(), Some("[\"read\"]"));
+        assert_eq!(row.approval_mode, "ask", "schema default reaches the row");
+        assert!(row.deny_tools.is_none());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +278,7 @@ pub struct McpServerConfig {
     pub _enabled: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct McpServerRow {
     pub id: String,
     pub project_id: Option<String>,
@@ -191,6 +292,8 @@ pub struct McpServerRow {
     pub timeout_ms: Option<i64>,
     pub enabled: bool,
 }
+
+const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, approval_mode FROM mcp_servers";
 
 fn valid_server_name(name: &str) -> bool {
     !name.trim().is_empty()
@@ -208,44 +311,14 @@ pub async fn mcp_list(
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    let rows: Vec<McpListRow> =
-        sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, approval_mode FROM mcp_servers WHERE project_id IS ? OR project_id IS NULL ORDER BY name ASC")
-            .bind(&project_id)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| e.to_string())?;
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                id,
-                project_id,
-                name,
-                transport,
-                cmd,
-                url,
-                allow_tools,
-                timeout_ms,
-                enabled,
-                deny_tools,
-                approval_mode,
-            )| {
-                McpServerRow {
-                    id,
-                    project_id,
-                    name,
-                    transport,
-                    cmd,
-                    url,
-                    allow_tools,
-                    deny_tools,
-                    approval_mode,
-                    timeout_ms,
-                    enabled: enabled != 0,
-                }
-            },
-        )
-        .collect())
+    let rows: Vec<McpServerRow> = sqlx::query_as(&format!(
+        "{SERVER_SELECT} WHERE project_id IS ? OR project_id IS NULL ORDER BY name ASC"
+    ))
+    .bind(&project_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -294,19 +367,12 @@ pub async fn mcp_add(
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(McpServerRow {
-        id,
-        project_id,
-        name,
-        transport,
-        cmd,
-        url,
-        allow_tools: None,
-        deny_tools: None,
-        approval_mode: "ask".to_string(),
-        timeout_ms: None,
-        enabled: true,
-    })
+    let row: McpServerRow = sqlx::query_as(&format!("{SERVER_SELECT} WHERE id = ?"))
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(row)
 }
 
 #[tauri::command]
@@ -343,33 +409,6 @@ struct Session {
     timeouts: u32,
     next_id: u64,
 }
-
-type McpRow = (
-    String,
-    Option<String>,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    i64,
-    Option<String>,
-);
-
-type McpListRow = (
-    String,
-    Option<String>,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    i64,
-    Option<String>,
-    String,
-);
 
 struct StdioHandles {
     _child: Child,
@@ -628,8 +667,14 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
     }
 }
 
-fn parse_tool_list(raw: Option<String>) -> Option<Vec<String>> {
-    raw.and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+fn parse_tool_list(raw: Option<String>, source: &str) -> Option<Vec<String>> {
+    raw.and_then(|value| match serde_json::from_str::<Vec<String>>(&value) {
+        Ok(list) => Some(list),
+        Err(error) => {
+            eprintln!("mcp: ignoring malformed {source} list: {error}");
+            None
+        }
+    })
 }
 
 fn filter_tools(config: &McpServerConfig, tools: Vec<McpToolDef>) -> Vec<McpToolDef> {
@@ -770,41 +815,27 @@ async fn load_configs(
     project: Option<&str>,
 ) -> Result<Vec<McpServerConfig>, String> {
     let pool = crate::connections::ro_pool(app).await?;
-    let rows: Vec<McpRow> =
-        sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, deny_tools FROM mcp_servers WHERE enabled = 1 AND (project_id IS ? OR project_id IS NULL)")
-            .bind(project)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    let rows: Vec<McpServerRow> = sqlx::query_as(&format!(
+        "{SERVER_SELECT} WHERE enabled = 1 AND (project_id IS ? OR project_id IS NULL)"
+    ))
+    .bind(project)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
-        .map(
-            |(
-                id,
-                project_id,
-                name,
-                transport,
-                cmd,
-                url,
-                allow_tools,
-                timeout_ms,
-                enabled,
-                deny_tools,
-            )| {
-                McpServerConfig {
-                    id,
-                    project_id,
-                    name,
-                    transport,
-                    cmd,
-                    url,
-                    allow_tools: parse_tool_list(allow_tools),
-                    deny_tools: parse_tool_list(deny_tools),
-                    timeout_ms: timeout_ms.map(|v| v as u64),
-                    _enabled: enabled != 0,
-                }
-            },
-        )
+        .map(|row| McpServerConfig {
+            id: row.id,
+            project_id: row.project_id,
+            name: row.name,
+            transport: row.transport,
+            cmd: row.cmd,
+            url: row.url,
+            allow_tools: parse_tool_list(row.allow_tools, "allow_tools"),
+            deny_tools: parse_tool_list(row.deny_tools, "deny_tools"),
+            timeout_ms: row.timeout_ms.map(|v| v as u64),
+            _enabled: row.enabled,
+        })
         .collect())
 }
 
