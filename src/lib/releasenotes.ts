@@ -24,7 +24,7 @@ export const RELEASES: readonly Release[] = [
   {
     version: "0.3.2",
     date: "2026-10-17",
-    summary: "A design-system pass, a rebuilt MCP page with per-tool approvals, and a Changelog page.",
+    summary: "A design-system pass, a rebuilt MCP page with per-tool approvals, a Changelog page, and smaller tool output.",
     changes: [
       {
         kind: "new",
@@ -37,6 +37,14 @@ export const RELEASES: readonly Release[] = [
       {
         kind: "new",
         text: "MCP: an empty scope offers one-click presets for Filesystem, Fetch and Git.",
+      },
+      {
+        kind: "new",
+        text: "Tools take limits: web_fetch pages through a page with start and max_chars, web_search narrows with max_results and fields, run_powershell filters with grep, head and tail, and recall_memory caps its list.",
+      },
+      {
+        kind: "improved",
+        text: "Every limited tool result reports how much it showed and how to ask for the rest, and terminal colour codes and repeated blank lines are stripped.",
       },
       {
         kind: "improved",
@@ -53,6 +61,22 @@ export const RELEASES: readonly Release[] = [
       {
         kind: "improved",
         text: "Settings pages share one pattern: page header, cards, pills, and empty, loading and error states.",
+      },
+      {
+        kind: "fixed",
+        text: "Images sent with a message are kept: regenerating a reply or resubmitting an edited message no longer loses them, and they show in the transcript again after a reload.",
+      },
+      {
+        kind: "fixed",
+        text: "Deleting a chat no longer touches project knowledge, and the audit log keeps itself to the newest 500 entries.",
+      },
+      {
+        kind: "fixed",
+        text: "A long PowerShell command is now split into its real segments for the approval check, so a command hidden behind a pipeline or a quoted separator is still seen.",
+      },
+      {
+        kind: "fixed",
+        text: "Skill text can no longer close its own wrapper with an unterminated tag, and a skill's description is sanitized before it reaches the prompt.",
       },
     ],
   },

@@ -21,10 +21,10 @@ Exit: the Changelog page ships; MCP upgrades from 0.3.1 with no data loss; #10, 
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | G8 | Changelog page (settings, before About) | Missing | S | none |
-| [x] | J12 | MCP migrations (`approval_mode`, `deny_tools`) + MCP page | Have | M | D4 |
-| [x] | D19 | Tool output controls (code-mode Phase 0) | Missing | M | D13 |
-| [x] | — | Issue fixes #10, #13, #15 | Open | M | none |
+| [x] | G8 | Changelog page (settings, before About) | Have (0.3.2) | S | none |
+| [x] | J12 | MCP migrations (`approval_mode`, `deny_tools`, `ask_tools`) + MCP page | Have (0.3.2) | M | D4 |
+| [x] | D19 | Tool output controls (code-mode Phase 0) | Have (0.3.2) | M | D13 |
+| [x] | — | Issue fixes #10, #13, #15 | Closed (0.3.2) | M | none |
 
 Detail: `docs/releases/v0.3.2.md`. Code-mode Phases 1 and 2 stay in Later.
 

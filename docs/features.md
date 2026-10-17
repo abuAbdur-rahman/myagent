@@ -366,7 +366,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** n/a.
 
 ## D19. Tool output controls
-- **Status:** Missing (plan: `docs/plan/code-mode-migration.md`, Phase 0)
+- **Status:** Have (0.3.2: `src-tauri/src/tooltext.rs` shaping + per-tool caps + `{shown,total,truncated}` reports)
 - **Ref:** Give the model the same levers a shell user has, so it asks for less instead of reading everything. Extends D13
 - **Build:** Optional `max_chars` (plus `start`, `grep`, `format`) on `web_fetch`; `max_results` and `fields` on `web_search`; `head`, `tail`, `grep`, `max_chars` on `run_powershell`; `limit` on `recall_memory`. Safe default cap per tool; old prompts keep working. Strip ANSI and repeated blank lines in Rust before counting. Every result carries `{ shown, total, truncated }`, never truncates silently, and says how to get the rest. One line in each tool description tells the model to use the filters
 - **Done:** Median `web_fetch` and `run_powershell` result is under 2,000 tokens and no tool exceeds its cap unless the model asks. Unit tests for truncation, `grep` and ANSI stripping
@@ -453,7 +453,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)
-- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts)
+- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts. 0.3.2: sent images are stored on the message, survive regenerate and edit-resubmit, and render after reload)
 - **Ref:** Claude and OpenWebUI accept pasted images for vision models.
 - **Build:** Paste or attach, downscale to a max edge, send as a content part only if the model supports it (C3).
 - **Done:** A non-vision model never receives an image part.
@@ -509,7 +509,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** n/a for now.
 
 ## G8. Changelog page
-- **Status:** Missing
+- **Status:** Have (0.3.2: settings page between Shortcuts and About, releases from `src/lib/releasenotes.ts`)
 - **Ref:** Desktop apps ship a "What's new" surface; `docs/releases/` already holds the notes
 - **Build:** A settings page placed before About in the nav. An installed-version card with **Check for updates** (spinner, then a confirmation), then releases newest first. Each release header shows version, a Current pill, date and change count, and expands to a one-line summary and its changes; each change carries a New / Improved / Fixed label. The latest release is open, older ones collapsed. A type filter opens every release that matches and hides the rest. Reachable from Settings, About, the profile menu ("What's new") and the command palette
 - **Done:** The page lists the installed version and every stored release note; the filter hides non-matching releases; it opens from all four entry points
@@ -599,7 +599,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** A scheduled run produces a stored result.
 
 ## J12. MCP and skills
-- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated, streamableHTTP unsupported)
+- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated, streamableHTTP unsupported. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page)
 - **Ref:** † OpenCode and Claude Code both support MCP servers and skills (`SKILL.md`).
 - **Build:** Not before D4 and D5 are proven. Skills first (read a markdown file into context on demand), MCP second, every MCP tool going through the permission engine.
 - **Done:** An MCP tool cannot run without passing D4.
