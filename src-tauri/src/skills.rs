@@ -56,19 +56,45 @@ fn first_line_description(content: &str) -> Option<String> {
 const MAX_STRIP_PASSES: usize = 8;
 const BOUNDARY_NAMES: [&[u8]; 3] = [b"skill_files", b"skill_content", b"file"];
 
-fn next_gt_offsets(bytes: &[u8]) -> Vec<Option<usize>> {
-    let mut next: Vec<Option<usize>> = vec![None; bytes.len()];
-    let mut seen: Option<usize> = None;
+const NO_GT: usize = usize::MAX;
+
+fn next_gt_offsets(bytes: &[u8]) -> Vec<usize> {
+    let mut next: Vec<usize> = vec![NO_GT; bytes.len()];
+    let mut seen = NO_GT;
     for index in (0..bytes.len()).rev() {
         if bytes[index] == b'>' {
-            seen = Some(index);
+            seen = index;
         }
         next[index] = seen;
     }
     next
 }
 
-fn match_boundary_tag(bytes: &[u8], next_gt: &[Option<usize>], index: usize) -> Option<usize> {
+fn first_char(bytes: &[u8], index: usize) -> Option<char> {
+    let width = match *bytes.get(index)? {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => return None,
+    };
+    std::str::from_utf8(bytes.get(index..index + width)?)
+        .ok()?
+        .chars()
+        .next()
+}
+
+fn is_tag_boundary(bytes: &[u8], index: usize) -> bool {
+    match bytes.get(index) {
+        Some(&b'>') | Some(&b'/') => true,
+        Some(_) => {
+            first_char(bytes, index).is_some_and(|ch| ch == '\u{feff}' || ch.is_whitespace())
+        }
+        None => false,
+    }
+}
+
+fn match_boundary_tag(bytes: &[u8], next_gt: &[usize], index: usize) -> Option<usize> {
     if bytes[index] != b'<' {
         return None;
     }
@@ -81,25 +107,14 @@ fn match_boundary_tag(bytes: &[u8], next_gt: &[Option<usize>], index: usize) -> 
             && bytes[cursor..cursor + name.len()].eq_ignore_ascii_case(name)
     })?;
     let after = cursor + name.len();
-    match bytes.get(after) {
-        Some(&b'>') => Some(after + 1),
-        Some(&b'/') => {
-            let mut scan = after + 1;
-            while bytes
-                .get(scan)
-                .is_some_and(|byte| byte.is_ascii_whitespace())
-            {
-                scan += 1;
-            }
-            if bytes.get(scan) == Some(&b'>') {
-                Some(scan + 1)
-            } else {
-                None
-            }
-        }
-        Some(byte) if byte.is_ascii_whitespace() => next_gt[after].map(|end| end + 1),
-        _ => None,
+    if !is_tag_boundary(bytes, after) {
+        return None;
     }
+    let end = next_gt[after];
+    if end == NO_GT {
+        return None;
+    }
+    Some(end + 1)
 }
 
 fn strip_boundary_tags(text: &str) -> String {
@@ -374,13 +389,34 @@ mod tests {
         assert_eq!(strip_boundary_tags(r#"<file x="y">a"#), "a");
         assert_eq!(strip_boundary_tags("<file/>"), "");
         assert_eq!(strip_boundary_tags("<file />"), "");
-        assert_eq!(strip_boundary_tags("<file/x>"), "<file/x>");
+        assert_eq!(strip_boundary_tags("<file/x>"), "");
+        assert_eq!(strip_boundary_tags("<file//>"), "");
+        assert_eq!(strip_boundary_tags("</SKILL_CONTENT/X>"), "");
         assert_eq!(strip_boundary_tags("</skill_content</skill_content>>"), "");
         assert_eq!(strip_boundary_tags("<file</file>>"), "");
         assert_eq!(strip_boundary_tags("<filename>"), "<filename>");
         assert_eq!(strip_boundary_tags("<file.md>"), "<file.md>");
+        assert_eq!(strip_boundary_tags("<files>"), "<files>");
         assert_eq!(strip_boundary_tags("<fi<file>le>"), "");
         assert_eq!(strip_boundary_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn strips_unicode_whitespace_boundary_tags() {
+        assert_eq!(strip_boundary_tags("<file\u{00A0}x>"), "");
+        assert_eq!(strip_boundary_tags("<file\u{3000}>"), "");
+        assert_eq!(strip_boundary_tags("</skill_content\u{2000}>"), "");
+        assert_eq!(strip_boundary_tags("<file\u{FEFF}x>"), "");
+    }
+
+    #[test]
+    fn neutralize_escapes_every_angle_bracket_in_the_span() {
+        assert_eq!(neutralize_boundary_tags("<file <x>>"), "&lt;file &lt;x>>");
+        assert_eq!(
+            neutralize_boundary_tags("</skill_content>"),
+            "&lt;/skill_content>"
+        );
+        assert_eq!(neutralize_boundary_tags("plain text"), "plain text");
     }
 
     #[test]
