@@ -15,16 +15,18 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ## Now
 
-### v0.3.2: code-mode Phase 0 and Changelog
+### v0.3.2: design system pass, MCP migrations, issue fixes
 
-Exit: every tool result is capped and reports `truncated`; the Changelog page ships.
+Exit: the Changelog page ships; MCP upgrades from 0.3.1 with no data loss; #10, #13 and #15 are closed.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | D19 | Tool output controls (code-mode Phase 0) | Missing | M | D13 |
 | [x] | G8 | Changelog page (settings, before About) | Missing | S | none |
+| [x] | J12 | MCP migrations (`approval_mode`, `deny_tools`) + MCP page | Have | M | D4 |
+| [x] | D19 | Tool output controls (code-mode Phase 0) | Missing | M | D13 |
+| [x] | — | Issue fixes #10, #13, #15 | Open | M | none |
 
-Plan: `docs/plan/code-mode-migration.md`. Phases 1 and 2 stay in Later.
+Detail: `docs/releases/v0.3.2.md`. Code-mode Phases 1 and 2 stay in Later.
 
 ### Phase 1: Foundation
 Exit: one command runs green tests on a clean checkout.
