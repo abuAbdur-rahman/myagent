@@ -119,6 +119,25 @@ mod tests {
     }
 
     #[test]
+    fn known_server_matches_catalog_prefix() {
+        let state = McpState::default();
+        state
+            .catalog
+            .write()
+            .expect("catalog lock")
+            .push(CatalogEntry {
+                alias: mcp_name("srv-a", "do.things"),
+                key: "k".to_string(),
+                tool: "do.things".to_string(),
+                project: None,
+            });
+        assert!(known_server(&state, &mcp_name("srv-a", "do.things")));
+        assert!(known_server(&state, &mcp_name("srv-a", "missing")));
+        assert!(!known_server(&state, &mcp_name("other", "x")));
+        assert!(!known_server(&state, "fs_read"));
+    }
+
+    #[test]
     fn caps_long_output() {
         let short = "ok".to_string();
         assert_eq!(cap_mcp_text(short), "ok");
@@ -858,6 +877,22 @@ fn resolve_catalog(
     fallback
 }
 
+fn known_server(state: &McpState, name: &str) -> bool {
+    let rest = match name.strip_prefix(MCP_PREFIX) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let target = match rest.split_once("__") {
+        Some((server, _)) => format!("{MCP_PREFIX}{server}__"),
+        None => return false,
+    };
+    state
+        .catalog
+        .read()
+        .map(|guard| guard.iter().any(|entry| entry.alias.starts_with(&target)))
+        .unwrap_or(false)
+}
+
 pub async fn try_execute(
     app: &AppHandle,
     project: Option<&str>,
@@ -870,8 +905,10 @@ pub async fn try_execute(
     }
     let state = app.state::<McpState>();
     let mut resolved = resolve_catalog(&state, project, name);
-    if resolved.is_none() {
-        let _ = flush(app, project).await;
+    if resolved.is_none() && !known_server(&state, name) {
+        if let Err(error) = flush(app, project).await {
+            eprintln!("mcp: refresh for {name} failed: {error}");
+        }
         resolved = resolve_catalog(&state, project, name);
     }
     let (key, tool) = resolved?;

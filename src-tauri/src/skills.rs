@@ -35,37 +35,62 @@ fn frontmatter_description(content: &str) -> Option<String> {
 }
 
 fn first_line_description(content: &str) -> Option<String> {
-    let body = match content.strip_prefix("---") {
-        Some(rest) => match rest.find("---") {
-            Some(end) => &rest[end + 3..],
-            None => content,
-        },
-        None => content,
+    let lines: Vec<&str> = content.lines().collect();
+    let start = match lines.first().map(|line| line.trim()) {
+        Some("---") => lines
+            .iter()
+            .skip(1)
+            .position(|line| line.trim() == "---")
+            .map(|index| index + 2)
+            .unwrap_or(1),
+        _ => 0,
     };
-    body.lines()
+    lines
+        .get(start..)?
+        .iter()
         .map(|line| line.trim().trim_start_matches('#').trim())
-        .find(|line| !line.is_empty() && *line != "---")
+        .find(|line| !line.is_empty())
         .map(str::to_string)
 }
 
 fn strip_boundary_tags(text: &str) -> String {
-    const TAGS: [&[u8]; 5] = [
-        b"</skill_content>",
-        b"<skill_files>",
-        b"</skill_files>",
-        b"<file>",
-        b"</file>",
-    ];
+    let mut current = text.to_string();
+    loop {
+        let next = strip_boundary_tags_once(&current);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+}
+
+fn strip_boundary_tags_once(text: &str) -> String {
+    const NAMES: [&[u8]; 3] = [b"skill_files", b"skill_content", b"file"];
     let bytes = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0;
-    'scan: while index < bytes.len() {
-        for tag in TAGS {
-            if index + tag.len() <= bytes.len()
-                && bytes[index..index + tag.len()].eq_ignore_ascii_case(tag)
-            {
-                index += tag.len();
-                continue 'scan;
+    while index < bytes.len() {
+        if bytes[index] == b'<' {
+            let mut cursor = index + 1;
+            if cursor < bytes.len() && bytes[cursor] == b'/' {
+                cursor += 1;
+            }
+            let name = NAMES.iter().find(|name| {
+                cursor + name.len() <= bytes.len()
+                    && bytes[cursor..cursor + name.len()].eq_ignore_ascii_case(name)
+            });
+            if let Some(name) = name {
+                let after = cursor + name.len();
+                let boundary = after >= bytes.len()
+                    || !(bytes[after].is_ascii_alphanumeric()
+                        || bytes[after] == b'_'
+                        || bytes[after] == b'-');
+                if boundary {
+                    if let Some(end) = bytes[after..].iter().position(|byte| *byte == b'>') {
+                        index = after + end + 1;
+                        continue;
+                    }
+                }
             }
         }
         out.push(bytes[index]);
@@ -277,7 +302,25 @@ mod tests {
             parse_skill("notes", "---\nname: x\n---\n\n# Heading\n\nBody."),
             Some(("notes".to_string(), "Heading".to_string()))
         );
+        assert_eq!(
+            parse_skill("notes", "---\ntitle: a---b\n---\n\n# Real\nBody."),
+            Some(("notes".to_string(), "Real".to_string()))
+        );
         assert!(parse_skill("notes", "---\n---\n").is_none());
+    }
+
+    #[test]
+    fn strips_attributed_and_nested_boundary_tags() {
+        assert_eq!(
+            strip_boundary_tags(r#"<skill_content name="x">body"#),
+            "body"
+        );
+        assert_eq!(strip_boundary_tags("</skill_content >"), "");
+        assert_eq!(strip_boundary_tags(r#"<file x="y">a"#), "a");
+        assert_eq!(strip_boundary_tags("</skill_content</skill_content>>"), ">");
+        assert_eq!(strip_boundary_tags("<file</file>>"), ">");
+        assert_eq!(strip_boundary_tags("<filename>"), "<filename>");
+        assert_eq!(strip_boundary_tags("plain text"), "plain text");
     }
 
     #[test]

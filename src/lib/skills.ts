@@ -1,6 +1,17 @@
 import { skillRead, type SkillInfo } from "./api";
 
-const BOUNDARY_TAGS = /<\/?(?:skill_content|skill_files|file)>/gi;
+const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?:\s[^>]*)?\s*>/gi;
+const MAX_STRIP_PASSES = 20;
+
+function stripBoundaryTags(text: string): string {
+  let current = text;
+  for (let pass = 0; pass < MAX_STRIP_PASSES; pass++) {
+    const next = current.replace(BOUNDARY_TAG, "");
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
 
 export function parseSkillMentions(text: string): string[] {
   const found: string[] = [];
@@ -43,5 +54,5 @@ export async function resolveSkillMentions(
     }
   }
   if (blocks.length === 0) return { content: text, unknown };
-  return { content: `${blocks.join("\n\n")}\n\n${text.replace(BOUNDARY_TAGS, "")}`, unknown };
+  return { content: `${blocks.join("\n\n")}\n\n${stripBoundaryTags(text)}`, unknown };
 }
