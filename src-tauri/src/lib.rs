@@ -9,6 +9,7 @@ mod skills;
 mod sse;
 mod state;
 mod tools;
+mod tooltext;
 mod vault;
 mod webfetch;
 mod websearch;
