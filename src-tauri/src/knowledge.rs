@@ -30,6 +30,9 @@ pub async fn knowledge_sidecar_write(
     sha256: String,
     text: String,
 ) -> Result<String, String> {
+    if text.len() as u64 > MAX_SIDECAR_BYTES {
+        return Err(format!("sidecar exceeds {MAX_SIDECAR_BYTES} bytes"));
+    }
     let path = sidecar_path(&app, &project_id, &sha256)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;

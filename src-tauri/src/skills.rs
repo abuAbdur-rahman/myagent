@@ -204,6 +204,13 @@ pub async fn skill_index(app: AppHandle) -> Result<Vec<SkillInfo>, String> {
 
 #[tauri::command]
 pub async fn skill_read(app: AppHandle, id: String) -> Result<String, String> {
+    let resources = vec![id.clone()];
+    let effect = permissions::check(&app, "skill", &resources, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    if effect == permissions::Effect::Deny {
+        return Err("skill denied by rule".to_string());
+    }
     prepare_skill(&app, &id)
 }
 

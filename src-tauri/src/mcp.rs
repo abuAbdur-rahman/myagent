@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 pub const MAX_TIMEOUTS_BEFORE_RESTART: u32 = 3;
+const MCP_PREFIX: &str = "mcp__";
 const PROTOCOL_VERSION: &str = "2024-11-05";
+const MAX_MCP_TEXT_BYTES: usize = 64 * 1024;
 
 pub fn mcp_namespace(server: &str) -> String {
     server
@@ -24,15 +27,63 @@ pub fn mcp_namespace(server: &str) -> String {
 }
 
 pub fn mcp_name(server: &str, tool: &str) -> String {
-    format!("{}_{}", mcp_namespace(server), mcp_namespace(tool))
+    format!(
+        "{MCP_PREFIX}{}__{}",
+        mcp_namespace(server),
+        mcp_namespace(tool)
+    )
 }
 
-pub fn split_mcp_name(name: &str) -> Option<(String, String)> {
-    let (server, tool) = name.split_once('_')?;
-    if server.is_empty() || tool.is_empty() {
-        return None;
+fn cap_mcp_text(text: String) -> String {
+    if text.len() <= MAX_MCP_TEXT_BYTES {
+        return text;
     }
-    Some((server.to_string(), tool.to_string()))
+    let mut end = MAX_MCP_TEXT_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n[MCP output truncated: {} of {} bytes shown]",
+        &text[..end],
+        end,
+        text.len()
+    )
+}
+
+fn split_command(cmd: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut started = false;
+    for ch in cmd.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                    started = true;
+                } else if ch.is_whitespace() {
+                    if started {
+                        parts.push(std::mem::take(&mut current));
+                        started = false;
+                    }
+                } else {
+                    current.push(ch);
+                    started = true;
+                }
+            }
+        }
+    }
+    if started {
+        parts.push(current);
+    }
+    parts
 }
 
 pub fn unavailable(server: &str) -> String {
@@ -49,18 +100,42 @@ mod tests {
 
     #[test]
     fn names_sanitize_and_join() {
-        assert_eq!(mcp_name("srv-a", "do.things"), "srv-a_do_things");
-        assert_eq!(mcp_name("weird name!", "x/y"), "weird_name__x_y");
+        assert_eq!(mcp_name("srv-a", "do.things"), "mcp__srv-a__do_things");
+        assert_eq!(mcp_name("weird name!", "x/y"), "mcp__weird_name___x_y");
     }
 
     #[test]
-    fn splits_namespaced_names() {
+    fn alias_prefix_cannot_shadow_builtins() {
+        for (server, tool) in [("get", "time"), ("recall", "memory"), ("save", "artifact")] {
+            let alias = mcp_name(server, tool);
+            assert!(alias.starts_with(MCP_PREFIX));
+            assert_ne!(alias, format!("{server}_{tool}"));
+        }
+    }
+
+    #[test]
+    fn aliases_are_unambiguous_across_underscores() {
+        assert_ne!(mcp_name("fs_server", "read"), mcp_name("fs", "server_read"));
+    }
+
+    #[test]
+    fn caps_long_output() {
+        let short = "ok".to_string();
+        assert_eq!(cap_mcp_text(short), "ok");
+        let long = "x".repeat(MAX_MCP_TEXT_BYTES + 10);
+        let capped = cap_mcp_text(long);
+        assert!(capped.starts_with(&"x".repeat(MAX_MCP_TEXT_BYTES)));
+        assert!(capped.ends_with("bytes shown]"));
+    }
+
+    #[test]
+    fn splits_command_respecting_quotes() {
+        assert_eq!(split_command("npx -y server"), vec!["npx", "-y", "server"]);
         assert_eq!(
-            split_mcp_name("srv_tool"),
-            Some(("srv".to_string(), "tool".to_string()))
+            split_command(r#""C:\Program Files\srv.exe" --port 1"#),
+            vec![r"C:\Program Files\srv.exe", "--port", "1"]
         );
-        assert!(split_mcp_name("plain").is_none());
-        assert!(split_mcp_name("_tool").is_none());
+        assert_eq!(split_command("  "), Vec::<String>::new());
     }
 
     #[test]
@@ -170,6 +245,8 @@ pub async fn mcp_add(
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
             return Err("sse servers need an http(s) url".to_string());
         }
+        crate::webfetch::validate_url_opts(endpoint, true, false)
+            .map_err(|e| format!("sse url rejected: {e}"))?;
     }
     let pool = crate::tools::memory_pool(&app)
         .await
@@ -251,7 +328,7 @@ type McpRow = (
 );
 
 struct StdioHandles {
-    child: Child,
+    _child: Child,
     stdin: tokio::process::ChildStdin,
     stdout: BufReader<tokio::process::ChildStdout>,
 }
@@ -272,9 +349,17 @@ impl Session {
     }
 }
 
+struct CatalogEntry {
+    alias: String,
+    key: String,
+    tool: String,
+    project: Option<String>,
+}
+
 #[derive(Default)]
 pub struct McpState {
-    sessions: tokio::sync::Mutex<HashMap<String, Session>>,
+    sessions: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Session>>>>,
+    catalog: std::sync::RwLock<Vec<CatalogEntry>>,
 }
 
 impl McpState {
@@ -354,6 +439,32 @@ fn initialize_body(id: u64) -> Value {
     })
 }
 
+async fn read_line_capped<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<String>, String> {
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let available = reader.fill_buf().await.map_err(|e| e.to_string())?;
+        if available.is_empty() {
+            if out.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        let newline = available.iter().position(|&b| b == b'\n');
+        let take = newline.map(|i| i + 1).unwrap_or(available.len());
+        if out.len() + take > MAX_MCP_TEXT_BYTES {
+            return Err("MCP_LINE_TOO_LARGE".to_string());
+        }
+        out.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            break;
+        }
+    }
+    Ok(Some(String::from_utf8_lossy(&out).into_owned()))
+}
+
 async fn stdio_roundtrip(
     stdin: &mut tokio::process::ChildStdin,
     stdout: &mut BufReader<tokio::process::ChildStdout>,
@@ -370,18 +481,14 @@ async fn stdio_roundtrip(
     stdin.flush().await.map_err(|e| e.to_string())?;
     let deadline = tokio::time::sleep(timeout);
     tokio::pin!(deadline);
-    let mut buf = String::new();
     loop {
-        buf.clear();
-        tokio::select! {
-            read = stdout.read_line(&mut buf) => {
-                let n = read.map_err(|e| e.to_string())?;
-                if n == 0 {
-                    return Err("server closed stdio".to_string());
-                }
-            }
+        let incoming = tokio::select! {
+            line = read_line_capped(stdout) => line?,
             _ = &mut deadline => return Err("timeout".to_string()),
-        }
+        };
+        let Some(buf) = incoming else {
+            return Err("server closed stdio".to_string());
+        };
         let trimmed = buf.trim();
         if trimmed.is_empty() {
             continue;
@@ -412,11 +519,11 @@ async fn spawn_stdio(config: &McpServerConfig) -> Result<ActiveTransport, String
     if cmd.is_empty() {
         return Err("stdio server needs a command".to_string());
     }
-    let mut parts = cmd.split_whitespace();
-    let program = parts.next().ok_or_else(|| "empty command".to_string())?;
+    let parts = split_command(cmd);
+    let program = parts.first().ok_or_else(|| "empty command".to_string())?;
     let mut command = Command::new(program);
     command
-        .args(parts)
+        .args(&parts[1..])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -425,7 +532,7 @@ async fn spawn_stdio(config: &McpServerConfig) -> Result<ActiveTransport, String
     let stdin = child.stdin.take().ok_or_else(|| "no stdin".to_string())?;
     let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
     Ok(ActiveTransport::Stdio(Box::new(StdioHandles {
-        child,
+        _child: child,
         stdin,
         stdout: BufReader::new(stdout),
     })))
@@ -488,7 +595,34 @@ fn filter_tools(config: &McpServerConfig, tools: Vec<McpToolDef>) -> Vec<McpTool
     }
 }
 
+async fn read_body_capped(
+    mut response: reqwest::Response,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    loop {
+        let chunk = tokio::select! {
+            chunk = response.chunk() => chunk.map_err(|e| e.to_string())?,
+            _ = &mut deadline => return Err("timeout".to_string()),
+        };
+        match chunk {
+            Some(bytes) => {
+                if buf.len() + bytes.len() > MAX_MCP_TEXT_BYTES {
+                    break;
+                }
+                buf.extend_from_slice(&bytes);
+            }
+            None => break,
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 async fn sse_request(url: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
+    crate::webfetch::validate_url_opts(url, true, false)
+        .map_err(|e| format!("mcp url rejected: {e}"))?;
     let client = reqwest::Client::new();
     let response = tokio::time::timeout(timeout, client.post(url).json(request).send())
         .await
@@ -497,10 +631,7 @@ async fn sse_request(url: &str, request: &Value, timeout: Duration) -> Result<Va
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let text = tokio::time::timeout(timeout, response.text())
-        .await
-        .map_err(|_| "timeout".to_string())?
-        .map_err(|e| e.to_string())?;
+    let text = read_body_capped(response, timeout).await?;
     let wanted = request.get("id").and_then(|v| v.as_u64());
     for chunk in text.split("data:") {
         let trimmed = chunk.trim();
@@ -627,51 +758,84 @@ async fn load_configs(
 pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpToolDef>, String> {
     let configs = load_configs(app, project).await?;
     let state = app.state::<McpState>();
-    let mut guard = state.sessions.lock().await;
     let live: HashSet<String> = configs.iter().map(McpState::key).collect();
-    guard.retain(|key, _| live.contains(key));
-    let mut defs = Vec::new();
+    {
+        let mut guard = state.sessions.lock().await;
+        guard.retain(|key, _| live.contains(key));
+    }
+    let mut defs: Vec<McpToolDef> = Vec::new();
+    let mut catalog: Vec<CatalogEntry> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for config in configs {
         let key = McpState::key(&config);
-        if !guard.contains_key(&key) {
-            let transport = if config.transport == "sse" {
-                ActiveTransport::Sse {
-                    url: config.url.clone().unwrap_or_default(),
-                }
-            } else {
-                match spawn_stdio(&config).await {
-                    Ok(transport) => transport,
-                    Err(error) => {
-                        eprintln!("mcp: spawn {} failed: {error}", config.name);
+        let existing = state.sessions.lock().await.get(&key).cloned();
+        let handle = match existing {
+            Some(handle) => handle,
+            None => {
+                let transport = if config.transport == "sse" {
+                    let endpoint = config.url.as_deref().unwrap_or("");
+                    if crate::webfetch::validate_url_opts(endpoint, true, false).is_err() {
+                        eprintln!("mcp: {} rejected (invalid or non-public url)", config.name);
                         continue;
                     }
-                }
-            };
-            guard.insert(
-                key.clone(),
-                Session {
+                    ActiveTransport::Sse {
+                        url: endpoint.to_string(),
+                    }
+                } else {
+                    match spawn_stdio(&config).await {
+                        Ok(transport) => transport,
+                        Err(error) => {
+                            eprintln!("mcp: spawn {} failed: {error}", config.name);
+                            continue;
+                        }
+                    }
+                };
+                let created = Arc::new(tokio::sync::Mutex::new(Session {
                     config,
                     transport,
                     tools: Vec::new(),
                     timeouts: 0,
                     next_id: 0,
-                },
-            );
-        }
-        let session = guard.get_mut(&key).expect("just inserted");
-        if session.tools.is_empty() {
-            match initialize_session(session).await {
-                Ok(()) => {}
-                Err(error) => {
-                    eprintln!("mcp: initialize {} failed: {error}", session.config.name);
-                    if let Some(dead) = guard.remove(&key) {
-                        kill_session(dead).await;
+                }));
+                {
+                    let mut session = created.lock().await;
+                    if let Err(error) = initialize_session(&mut session).await {
+                        eprintln!("mcp: initialize {} failed: {error}", session.config.name);
+                        continue;
                     }
-                    continue;
                 }
+                state
+                    .sessions
+                    .lock()
+                    .await
+                    .insert(key.clone(), created.clone());
+                created
+            }
+        };
+        let mut session = handle.lock().await;
+        if session.tools.is_empty() {
+            if let Err(error) = initialize_session(&mut session).await {
+                eprintln!("mcp: initialize {} failed: {error}", session.config.name);
+                continue;
             }
         }
-        defs.extend(session.tools.clone());
+        for def in &session.tools {
+            let alias = mcp_name(&def.server, &def.tool);
+            if !seen.insert(alias.clone()) {
+                eprintln!("mcp: duplicate tool alias {alias} ignored");
+                continue;
+            }
+            defs.push(def.clone());
+            catalog.push(CatalogEntry {
+                alias,
+                key: key.clone(),
+                tool: def.tool.clone(),
+                project: session.config.project_id.clone(),
+            });
+        }
+    }
+    if let Ok(mut guard) = state.catalog.write() {
+        *guard = catalog;
     }
     Ok(defs)
 }
@@ -687,36 +851,25 @@ pub fn spec_for(def: &McpToolDef) -> Value {
     })
 }
 
-fn find_key(
-    guard: &HashMap<String, Session>,
+fn resolve_catalog(
+    state: &McpState,
     project: Option<&str>,
-    server: &str,
-    tool: &str,
-) -> Option<String> {
+    name: &str,
+) -> Option<(String, String)> {
+    let guard = state.catalog.read().ok()?;
     let mut fallback = None;
-    for (key, session) in guard {
-        let scope = session.config.project_id.as_deref();
-        if scope != project && scope.is_some() {
-            continue;
+    for entry in guard.iter().filter(|entry| entry.alias == name) {
+        match entry.project.as_deref() {
+            Some(scope) if Some(scope) == project => {
+                return Some((entry.key.clone(), entry.tool.clone()));
+            }
+            None if fallback.is_none() => {
+                fallback = Some((entry.key.clone(), entry.tool.clone()));
+            }
+            _ => {}
         }
-        if mcp_namespace(&session.config.name) != server {
-            continue;
-        }
-        if !session.tools.iter().any(|t| mcp_namespace(&t.tool) == tool) {
-            continue;
-        }
-        if scope == project {
-            return Some(key.clone());
-        }
-        fallback = Some(key.clone());
     }
     fallback
-}
-
-async fn kill_session(session: Session) {
-    if let ActiveTransport::Stdio(mut handles) = session.transport {
-        let _ = handles.child.kill().await;
-    }
 }
 
 pub async fn try_execute(
@@ -724,42 +877,44 @@ pub async fn try_execute(
     project: Option<&str>,
     name: &str,
     args: Value,
-    _cancel: &tokio::sync::Notify,
+    cancel: &tokio::sync::Notify,
 ) -> Option<Result<crate::tools::ExecOutput, String>> {
-    let (server, tool) = split_mcp_name(name)?;
-    let state = app.state::<McpState>();
-    let mut guard = state.sessions.lock().await;
-    let key = find_key(&guard, project, &server, &tool)?;
-    let session = guard.get_mut(&key)?;
-    if session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART {
-        if let Some(session) = guard.remove(&key) {
-            kill_session(session).await;
-        }
-        return Some(Err(unavailable(&server)));
+    if !name.starts_with(MCP_PREFIX) {
+        return None;
     }
-    let qualified = mcp_name(&session.config.name, &tool);
-    let outcome = call_on_session(session, &tool, &args).await;
+    let state = app.state::<McpState>();
+    let (key, tool) = resolve_catalog(&state, project, name)?;
+    let handle = state.sessions.lock().await.get(&key).cloned()?;
+    let mut session = handle.lock().await;
+    if session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART {
+        drop(session);
+        state.sessions.lock().await.remove(&key);
+        return Some(Err(unavailable(name)));
+    }
+    let outcome = tokio::select! {
+        outcome = call_on_session(&mut session, &tool, &args) => outcome,
+        _ = cancel.notified() => {
+            drop(session);
+            state.sessions.lock().await.remove(&key);
+            return Some(Err("cancelled by user".to_string()));
+        }
+    };
     match outcome {
         Ok(text) => {
-            if let Some(session) = guard.get_mut(&key) {
-                session.timeouts = 0;
-            }
+            session.timeouts = 0;
             Some(Ok(crate::tools::ExecOutput {
-                output: text,
+                output: cap_mcp_text(text),
                 artifact: None,
             }))
         }
         Err(error) => {
             if error == "timeout" {
-                let dead = guard
-                    .get(&key)
-                    .is_some_and(|s| s.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART);
+                let dead = session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART;
+                drop(session);
                 if dead {
-                    if let Some(session) = guard.remove(&key) {
-                        kill_session(session).await;
-                    }
+                    state.sessions.lock().await.remove(&key);
                 }
-                return Some(Err(timed_out(&qualified)));
+                return Some(Err(timed_out(name)));
             }
             Some(Err(error))
         }

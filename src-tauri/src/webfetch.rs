@@ -93,7 +93,7 @@ fn ip_blocked(ip: &IpAddr) -> bool {
     }
 }
 
-fn validate_url_opts(
+pub(crate) fn validate_url_opts(
     raw: &str,
     allow_http: bool,
     allow_private: bool,

@@ -40,6 +40,15 @@ describe("audit log reader", () => {
     expect(select).toHaveBeenCalledWith(expect.stringContaining("LIKE $1"), ["%web%", 50]);
   });
 
+  it("escapes LIKE wildcards in the search term", async () => {
+    select.mockClear();
+    await listAuditLogs("100%_x", 50);
+    expect(select).toHaveBeenCalledWith(expect.stringContaining("ESCAPE '\\'"), [
+      "%100\\%\\_x%",
+      50,
+    ]);
+  });
+
   it("clears all rows", async () => {
     execute.mockClear();
     await clearAuditLog();

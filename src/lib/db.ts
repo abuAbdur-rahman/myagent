@@ -927,8 +927,8 @@ export async function listAuditLogs(search: string, limit = 200): Promise<AuditL
   const capped = Math.min(Math.max(limit, 1), 500);
   const rows = term
     ? await db.select<unknown[]>(
-        "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log WHERE tool LIKE $1 OR decision LIKE $1 OR detail LIKE $1 ORDER BY ts DESC LIMIT $2",
-        [`%${term}%`, capped],
+        "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log WHERE tool LIKE $1 ESCAPE '\\' OR decision LIKE $1 ESCAPE '\\' OR detail LIKE $1 ESCAPE '\\' ORDER BY ts DESC LIMIT $2",
+        [`%${escapeLike(term)}%`, capped],
       )
     : await db.select<unknown[]>(
         "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log ORDER BY ts DESC LIMIT $1",

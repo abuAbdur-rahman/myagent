@@ -174,6 +174,20 @@ fn describe_image_args(args: &Value) -> Result<(u64, String), String> {
     Ok((index, question))
 }
 
+fn spill_stamp(file_name: &str) -> Option<u64> {
+    let rest = file_name.strip_prefix("img-")?;
+    rest.split_once('-')?.0.parse::<u64>().ok()
+}
+
+fn spill_index(file_name: &str) -> u64 {
+    file_name
+        .strip_prefix("img-")
+        .and_then(|rest| rest.split_once('-'))
+        .and_then(|(_, tail)| tail.split('.').next())
+        .and_then(|index| index.parse::<u64>().ok())
+        .unwrap_or(u64::MAX)
+}
+
 fn read_spill_image(
     app: &AppHandle,
     conversation_id: &str,
@@ -190,15 +204,30 @@ fn read_spill_image(
         .join("spill")
         .join(conversation)
         .join("images");
-    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+    let entries: Vec<_> = std::fs::read_dir(&dir)
         .map_err(|_| "no attached images found for this conversation".to_string())?
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().is_file())
         .collect();
-    entries.sort_by_key(|entry| entry.file_name());
-    let picked = entries
+    let newest = entries
+        .iter()
+        .filter_map(|entry| entry.file_name().to_str().and_then(spill_stamp))
+        .max()
+        .ok_or_else(|| "no attached images found for this conversation".to_string())?;
+    let mut group: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| entry.file_name().to_str().and_then(spill_stamp) == Some(newest))
+        .collect();
+    group.sort_by_key(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .map(spill_index)
+            .unwrap_or(u64::MAX)
+    });
+    let picked = group
         .get(index as usize)
-        .ok_or_else(|| format!("image index out of range ({} attached)", entries.len()))?;
+        .ok_or_else(|| format!("image index out of range ({} attached)", group.len()))?;
     let bytes = std::fs::read(picked.path()).map_err(|e| e.to_string())?;
     let mime = match picked.path().extension().and_then(|e| e.to_str()) {
         Some("png") => "image/png",
