@@ -36,7 +36,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 ## A4. Retry with backoff
 - **Status:** Missing
 - **Ref:** † OpenRouter: pre-stream errors are normal HTTP errors; mid-stream errors arrive as SSE with HTTP 200. Claude Code and OpenCode retry transient failures.
-- **Build:** Retry only on 429, 5xx and network errors, and only if no token was received. Exponential backoff with jitter, max 3 attempts, honor `Retry-After`. Show "Retrying (2/3)" in the UI.
+- **Build:** Retry only on 429, 5xx and network errors, and only if no token was received. Exponential backoff with jitter, max 10 attempts, honor `Retry-After`. Show "Retrying (2/10)" in the UI.
 - **Not:** Provider fallbacks, circuit breakers.
 - **Done:** 429-then-success fixture succeeds; 400 does not retry; mid-stream failure does not retry.
 
