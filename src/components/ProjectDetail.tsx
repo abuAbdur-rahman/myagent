@@ -1,10 +1,99 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowUp } from "lucide-react";
+import { ArrowLeft, ArrowUp, X } from "lucide-react";
 import { useApp } from "../lib/store";
-import { projectInputSchema } from "../lib/types";
+import { projectInputSchema, type Conversation } from "../lib/types";
+import { deleteKnowledgeDoc, listKnowledgeDocs, type KnowledgeDocRow } from "../lib/db";
+import { knowledgeSidecarDelete } from "../lib/api";
 import { MemoryEditor } from "./MemoryEditor";
 import { Button, Input, Textarea } from "./ui";
+import { confirmDialog } from "./ConfirmDialog";
 import { errorText } from "../lib/utils";
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function ProjectChats({ chats, onSelect }: { chats: Conversation[]; onSelect: (id: string) => void }) {
+  if (chats.length === 0) return <p className="text-sm text-muted">No chats yet.</p>;
+  return (
+    <>
+      {chats.map((chat) => (
+        <button
+          key={chat.id}
+          type="button"
+          onClick={() => onSelect(chat.id)}
+          className="block w-full rounded-card border border-border px-3 py-2.5 text-left text-sm hover:bg-hover"
+        >
+          {chat.title}
+        </button>
+      ))}
+    </>
+  );
+}
+
+function DocsPanel({
+  docs,
+  loaded,
+  error,
+  removingId,
+  onRemove,
+}: {
+  docs: KnowledgeDocRow[];
+  loaded: boolean;
+  error: string | null;
+  removingId: string | null;
+  onRemove: (doc: KnowledgeDocRow) => void;
+}) {
+  return (
+    <div className="rounded-card border border-border bg-surface p-3">
+      <b className="text-sm">Docs</b>
+      <p className="mb-2 mt-1 text-xs text-muted">
+        {docs.length} file{docs.length === 1 ? "" : "s"} · searched on every send here
+      </p>
+      {error && <p className="text-sm text-muted">{error}</p>}
+      {!loaded && !error && <p className="text-sm text-muted">Loading…</p>}
+      {loaded && !error && docs.length === 0 && (
+        <p className="text-sm text-muted">No docs yet. Attach files from the composer.</p>
+      )}
+      <ul className="flex flex-col gap-1.5">
+        {docs.map((doc) => (
+          <li
+            key={doc.id}
+            className="flex items-center gap-2 rounded-control border border-border bg-surface-2 px-2 py-1 text-xs"
+          >
+            <span className="min-w-0 flex-1 truncate" title={doc.name}>
+              {doc.name}
+            </span>
+            <span className="flex-none text-muted">{formatBytes(doc.size)}</span>
+            <button
+              type="button"
+              onClick={() => onRemove(doc)}
+              disabled={removingId === doc.id}
+              aria-label={`Remove ${doc.name}`}
+              className="flex-none text-muted hover:text-fg disabled:text-faint"
+            >
+              <X size={12} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ContextPanel({ capacity }: { capacity: number }) {
+  return (
+    <div className="rounded-card border border-border bg-surface p-3">
+      <b className="text-sm">Context</b>
+      <p className="mb-2 mt-1 text-xs text-muted">{capacity}% of project context used</p>
+      <div className="h-1 overflow-hidden rounded bg-active">
+        <div className="h-full bg-accent" style={{ width: `${capacity}%` }} />
+      </div>
+    </div>
+  );
+}
 
 export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const {
@@ -24,6 +113,10 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const [instructions, setInstructions] = useState(activeProject?.instructions ?? "");
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [docs, setDocs] = useState<KnowledgeDocRow[]>([]);
+  const [docsLoaded, setDocsLoaded] = useState(false);
+  const [docsError, setDocsError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   useEffect(() => {
     setName(activeProject?.name ?? "");
@@ -31,6 +124,31 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
     setInstructions(activeProject?.instructions ?? "");
     setStatus(null);
   }, [activeProject?.id, activeProject?.name, activeProject?.description, activeProject?.instructions]);
+
+  useEffect(() => {
+    const id = activeProject?.id;
+    setDocs([]);
+    setDocsError(null);
+    setDocsLoaded(false);
+    if (!id) return;
+    let live = true;
+    listKnowledgeDocs(id)
+      .then((rows) => {
+        if (live) {
+          setDocs(rows);
+          setDocsLoaded(true);
+        }
+      })
+      .catch((e) => {
+        if (live) {
+          setDocsError(errorText(e));
+          setDocsLoaded(true);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [activeProject?.id]);
 
   if (!activeProject) {
     return (
@@ -63,6 +181,26 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
       setStatus("Saved.");
     } catch (e) {
       setStatus(errorText(e));
+    }
+  };
+
+  const removeDoc = async (doc: KnowledgeDocRow) => {
+    const confirmed = await confirmDialog({
+      title: `Remove ${doc.name}?`,
+      body: "The file will be removed from this project's knowledge.",
+      danger: true,
+      ok: "Remove",
+    });
+    if (!confirmed) return;
+    setRemovingId(doc.id);
+    try {
+      await deleteKnowledgeDoc(doc.id);
+      setDocs((prev) => prev.filter((row) => row.id !== doc.id));
+      await knowledgeSidecarDelete(project.id, doc.sha256).catch(() => undefined);
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -123,17 +261,7 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
           </div>
 
           <h3 className="mb-0 mt-2 text-sm font-semibold">Chats</h3>
-          {chats.length === 0 && <p className="text-sm text-muted">No chats yet.</p>}
-          {chats.map((chat) => (
-            <button
-              key={chat.id}
-              type="button"
-              onClick={() => void selectConversation(chat.id).catch(() => undefined)}
-              className="block w-full rounded-card border border-border px-3 py-2.5 text-left text-sm hover:bg-hover"
-            >
-              {chat.title}
-            </button>
-          ))}
+          <ProjectChats chats={chats} onSelect={(id) => void selectConversation(id).catch(() => undefined)} />
           {status && (
             <p className="text-xs text-muted" role="status">
               {status}
@@ -182,15 +310,15 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
             />
           </div>
 
-          <div className="rounded-card border border-border bg-surface p-3">
-            <b className="text-sm">Context</b>
-            <p className="mb-2 mt-1 text-xs text-muted">
-              {capacity}% of project context used
-            </p>
-            <div className="h-1 overflow-hidden rounded bg-active">
-              <div className="h-full bg-accent" style={{ width: `${capacity}%` }} />
-            </div>
-          </div>
+          <DocsPanel
+            docs={docs}
+            loaded={docsLoaded}
+            error={docsError}
+            removingId={removingId}
+            onRemove={(doc) => void removeDoc(doc)}
+          />
+
+          <ContextPanel capacity={capacity} />
         </div>
       </div>
     </div>

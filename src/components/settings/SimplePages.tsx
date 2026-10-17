@@ -19,7 +19,7 @@ import {
   installUpdate,
   type Update,
 } from "../../lib/updater";
-import type { Memory } from "../../lib/types";
+import type { AuditLog, Memory } from "../../lib/types";
 
 function SettingRow({
   label,
@@ -39,6 +39,70 @@ function SettingRow({
       <div className="flex w-[260px] flex-none items-center justify-end gap-1.5">{children}</div>
     </div>
   );
+}
+
+function mcpTargets(transport: string, target: string): { cmd: string | null; url: string | null } {
+  const trimmed = target.trim();
+  return {
+    cmd: transport === "stdio" ? trimmed : null,
+    url: transport === "sse" ? trimmed : null,
+  };
+}
+
+const MCP_TARGET_HINTS: Record<string, { placeholder: string; label: string }> = {
+  stdio: { placeholder: "npx my-server", label: "Command" },
+  sse: { placeholder: "https://host:8000/sse", label: "URL" },
+};
+
+function McpServerRow({
+  server,
+  onToggle,
+  onRemove,
+}: {
+  server: api.McpServerRow;
+  onToggle: (id: string, enabled: boolean) => void;
+  onRemove: (id: string) => void;
+}) {
+  const detail = server.transport === "stdio" ? (server.cmd ?? "") : (server.url ?? "");
+  return (
+    <SettingRow label={server.name} description={`${server.transport} · ${detail}`}>
+      <Toggle
+        checked={server.enabled}
+        onChange={(next) => onToggle(server.id, next)}
+        label={`Enable ${server.name}`}
+      />
+      <Button variant="danger" size="sm" onClick={() => onRemove(server.id)}>
+        Remove
+      </Button>
+    </SettingRow>
+  );
+}
+
+function AuditRow({ row }: { row: AuditLog }) {
+  const detail = row.detail ? ` · ${row.detail}` : "";
+  return (
+    <SettingRow
+      label={row.tool}
+      description={`${row.decision} · ${new Date(row.ts).toLocaleString()}${detail}`}
+    >
+      <span className="text-xs text-muted">{row.conversation_id ?? "global"}</span>
+    </SettingRow>
+  );
+}
+
+function auditEmptyText(search: string): string {
+  return search.trim() ? "No matching audit entries." : "No approval decisions recorded yet.";
+}
+
+function modelSelectData(models: string[]) {
+  const options = models.map((id) => ({ value: id, label: id }));
+  const has = models.length > 0;
+  return {
+    options,
+    visionOptions: [{ value: "", label: "None (text only)" }, ...options],
+    placeholder: has ? "Select a model" : "No models",
+    visionPlaceholder: has ? "None" : "No models",
+  };
 }
 
 export function GeneralPage() {
@@ -101,8 +165,202 @@ export function GeneralPage() {
   );
 }
 
-export function SearchPage() {
-  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
+export function McpPage() {
+  const { activeProject } = useApp();
+  const projectId = activeProject?.id ?? null;
+  const [servers, setServers] = useState<api.McpServerRow[]>([]);
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState("stdio");
+  const [target, setTarget] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      setServers(await api.mcpList(projectId));
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const add = async () => {
+    if (!name.trim() || !target.trim()) {
+      setStatus("Name and command/URL are required.");
+      return;
+    }
+    try {
+      const { cmd, url } = mcpTargets(transport, target);
+      await api.mcpAdd(projectId, name.trim(), transport, cmd, url);
+      setName("");
+      setTarget("");
+      setStatus("Server added. It connects on the next send.");
+      await reload();
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const toggle = async (id: string, enabled: boolean) => {
+    try {
+      await api.mcpToggle(id, enabled);
+      await reload();
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const remove = async (id: string) => {
+    try {
+      await api.mcpRemove(id);
+      await reload();
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const targetHint = MCP_TARGET_HINTS[transport] ?? MCP_TARGET_HINTS.stdio;
+
+  return (
+    <div>
+      <SettingRow
+        label="Scope"
+        description={activeProject ? `Project: ${activeProject.name}` : "Global (all chats)"}
+      >
+        <span className="text-sm text-muted">
+          {servers.length} server{servers.length === 1 ? "" : "s"}
+        </span>
+      </SettingRow>
+      {servers.map((server) => (
+        <McpServerRow
+          key={server.id}
+          server={server}
+          onToggle={(id, next) => void toggle(id, next)}
+          onRemove={(id) => void remove(id)}
+        />
+      ))}
+      <SettingRow label="New server" description="stdio needs a command; sse needs an http(s) URL">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="fs"
+          aria-label="Server name"
+          autoComplete="off"
+        />
+      </SettingRow>
+      <SettingRow label="Transport" description="How MyAgent reaches the server">
+        <Select
+          size="sm"
+          value={transport}
+          onChange={setTransport}
+          aria-label="Transport"
+          options={[
+            { value: "stdio", label: "stdio" },
+            { value: "sse", label: "sse" },
+          ]}
+        />
+        <Input
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          placeholder={targetHint.placeholder}
+          aria-label={targetHint.label}
+          autoComplete="off"
+        />
+        <Button variant="primary" size="sm" onClick={() => void add()}>
+          Add
+        </Button>
+      </SettingRow>
+      {status && (
+        <p className="px-2 py-2 text-xs text-muted" role="status">
+          {status}
+        </p>
+      )}
+      <p className="px-2 py-2 text-xs text-muted">
+        Every MCP tool call asks first unless you allow it. Per-tool Always lives on the approval
+        card.
+      </p>
+    </div>
+  );
+}
+
+export function AuditPage() {
+  const [rows, setRows] = useState<AuditLog[]>([]);
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(search), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const reload = useCallback(async () => {
+    try {
+      setRows(await db.listAuditLogs(debounced));
+      setStatus(null);
+      setLoaded(true);
+    } catch (e) {
+      setStatus(errorText(e));
+      setLoaded(true);
+    }
+  }, [debounced]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const clear = async () => {
+    const confirmed = await confirmDialog({
+      title: "Clear the audit log?",
+      body: "Every recorded approval decision will be permanently removed. This cannot be undone.",
+      danger: true,
+      ok: "Clear log",
+    });
+    if (!confirmed) return;
+    try {
+      await db.clearAuditLog();
+      toast("Audit log cleared");
+      await reload();
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  return (
+    <div>
+      <SettingRow label="Search" description="Filter by tool, decision or detail">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="web_fetch"
+          aria-label="Search audit log"
+          autoComplete="off"
+        />
+      </SettingRow>
+      {loaded && rows.length === 0 && (
+        <p className="px-2 py-3 text-xs text-muted">{auditEmptyText(search)}</p>
+      )}
+      {rows.map((row) => (
+        <AuditRow key={row.id} row={row} />
+      ))}
+      <SettingRow label="Clear log" description="Remove every recorded decision">
+        <Button variant="danger" size="sm" onClick={() => void clear()}>
+          Clear
+        </Button>
+      </SettingRow>
+      {status && (
+        <p className="px-2 py-2 text-xs text-muted" role="status">
+          {status}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function SearchPage() {  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
   const [key, setKey] = useState("");
   const [keyCount, setKeyCount] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
@@ -294,7 +552,8 @@ export function AppearancePage() {
 }
 
 export function ModelsPage() {
-  const { models, model, setModel, activeConnection, refreshModels, loadingModels } = useApp();
+  const { models, model, setModel, activeConnection, refreshModels, loadingModels, visionFallbackModel, setVisionFallbackModel } = useApp();
+  const { options, visionOptions, placeholder, visionPlaceholder } = modelSelectData(models);
   return (
     <div>
       <SettingRow
@@ -305,10 +564,24 @@ export function ModelsPage() {
           size="sm"
           value={model || null}
           onChange={(next) => setModel(next)}
-          placeholder={models.length ? "Select a model" : "No models"}
+          placeholder={placeholder}
           aria-label="Default model"
           disabled={models.length === 0}
-          options={models.map((id) => ({ value: id, label: id }))}
+          options={options}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Vision fallback model"
+        description="Reads attached images when the active model cannot"
+      >
+        <Select
+          size="sm"
+          value={visionFallbackModel || null}
+          onChange={(next) => setVisionFallbackModel(next)}
+          placeholder={visionPlaceholder}
+          aria-label="Vision fallback model"
+          disabled={models.length === 0}
+          options={visionOptions}
         />
       </SettingRow>
       <SettingRow label="Refresh models" description="Re-fetch the list from the provider">

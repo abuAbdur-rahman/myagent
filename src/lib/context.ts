@@ -3,6 +3,7 @@ import { toolListSentence } from "./tools";
 
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
+const IMAGE_PART_CHARS = 1500;
 const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
 const MAX_TURNS_WINDOW = 60;
@@ -12,6 +13,8 @@ export interface ContextInput {
   project: Project | null;
   projectMemories: Memory[];
   userName?: string;
+  knowledgeBlock?: string;
+  skillIndexBlock?: string;
 }
 
 const IDENTITY_LINES = [
@@ -35,40 +38,61 @@ function renderMemories(memories: Memory[]): string {
     .join("\n");
 }
 
-export function buildSystemPrompt(input: ContextInput): string | null {
-  const blocks: string[] = [
-    input.userName?.trim()
-      ? `${IDENTITY_LINES[0]} The user's name is ${input.userName.trim()}.`
-      : IDENTITY_LINES[0],
-    ...IDENTITY_LINES.slice(1),
-  ];
-
-  const global = renderMemories(input.globalMemories);
-  if (global) {
-    blocks.push(`## Durable memory\n${global}`);
-  }
-
-  if (input.project) {
-    const parts: string[] = [`## Project: ${input.project.name}`];
-    const description = input.project.description.trim();
-    const instructions = input.project.instructions.trim();
-    const projectMemory = renderMemories(input.projectMemories);
-
-    if (description) parts.push(description);
-    if (instructions) parts.push(`### Project instructions\n${instructions}`);
-    if (projectMemory) parts.push(`### Project memory\n${projectMemory}`);
-
-    if (parts.length > 1) {
-      blocks.push(parts.join("\n\n"));
-    }
-  }
-
-  if (blocks.length === 0) return null;
-
-  return blocks.join("\n\n").slice(0, MAX_CHARS);
+function identityBlocks(userName?: string): string[] {
+  const first = userName?.trim()
+    ? `${IDENTITY_LINES[0]} The user's name is ${userName.trim()}.`
+    : IDENTITY_LINES[0];
+  return [first, ...IDENTITY_LINES.slice(1)];
 }
 
-export function applyCompactWindow<T extends { content: string }>(turns: T[], compacted: boolean): T[] {
+function projectBlock(project: Project, projectMemories: Memory[]): string | null {
+  const parts: string[] = [`## Project: ${project.name}`];
+  const description = project.description.trim();
+  const instructions = project.instructions.trim();
+  const projectMemory = renderMemories(projectMemories);
+
+  if (description) parts.push(description);
+  if (instructions) parts.push(`### Project instructions\n${instructions}`);
+  if (projectMemory) parts.push(`### Project memory\n${projectMemory}`);
+
+  return parts.length > 1 ? parts.join("\n\n") : null;
+}
+
+function appendWithinBudget(base: string, knowledge?: string, skills?: string): string {
+  const used = base.length + (base ? 2 : 0);
+  const skillsRoom = skills ? skills.length + 2 : 0;
+  const knowledgeRoom = Math.max(0, MAX_CHARS - used - skillsRoom);
+  const clippedKnowledge = knowledge?.slice(0, knowledgeRoom).trim();
+  const tail = [clippedKnowledge, skills].filter(
+    (part): part is string => Boolean(part && part.length > 0),
+  );
+  return [base, ...tail]
+    .filter((part) => part.length > 0)
+    .join("\n\n")
+    .slice(0, MAX_CHARS);
+}
+
+export function buildSystemPrompt(input: ContextInput): string | null {
+  const blocks = identityBlocks(input.userName);
+
+  const global = renderMemories(input.globalMemories);
+  if (global) blocks.push(`## Durable memory\n${global}`);
+
+  if (input.project) {
+    const project = projectBlock(input.project, input.projectMemories);
+    if (project) blocks.push(project);
+  }
+
+  const base = blocks.join("\n\n");
+  const skills = input.skillIndexBlock?.trim();
+  const knowledge = input.knowledgeBlock?.trim();
+
+  if (knowledge || skills) return appendWithinBudget(base, knowledge, skills);
+  if (!base) return null;
+  return base.slice(0, MAX_CHARS);
+}
+
+export function applyCompactWindow<T extends { content: string | { type: string }[] }>(turns: T[], compacted: boolean): T[] {
   if (compacted) return turns.slice(-COMPACT_WINDOW);
   if (turns.length > MAX_TURNS_WINDOW) return turns.slice(-MAX_TURNS_WINDOW);
   return turns;
@@ -80,7 +104,7 @@ export interface SummaryWindow {
 }
 
 export function applySummaryWindow<
-  T extends { content: string; created_at?: number },
+  T extends { content: string | { type: string }[]; created_at?: number },
 >(turns: T[], window: SummaryWindow): T[] {
   let kept = turns;
   if (window.summary && window.through !== null) {
@@ -99,12 +123,22 @@ export function summarySystemTurn(summary: string): { role: string; content: str
 }
 
 export function estimateContext(
-  turns: { content: string }[],
+  turns: { content: string | { type: string; text?: string }[] }[],
   system: string | null,
   limit = DEFAULT_MODEL_CONTEXT,
 ): { tokens: number; limit: number; pct: number } {
   const chars =
-    (system ?? "").length + turns.reduce((sum, turn) => sum + turn.content.length, 0);
+    (system ?? "").length +
+    turns.reduce((sum, turn) => {
+      if (typeof turn.content === "string") return sum + turn.content.length;
+      return (
+        sum +
+        turn.content.reduce(
+          (part, item) => part + (item.type === "text" ? (item.text?.length ?? 0) : IMAGE_PART_CHARS),
+          0,
+        )
+      );
+    }, 0);
   const tokens = Math.round(chars / 4);
   const pct = Math.min(100, Math.round((tokens / limit) * 100));
   return { tokens, limit, pct };

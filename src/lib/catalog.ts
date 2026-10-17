@@ -7,6 +7,7 @@ const backendCapsSchema = z.object({
   context_length: z.number().nullable().optional(),
   supports_tools: z.boolean().nullable().optional(),
   supports_reasoning: z.boolean().nullable().optional(),
+  supports_vision: z.boolean().nullable().optional(),
   efforts: z.array(z.string()).nullable().optional(),
   mandatory: z.boolean().optional(),
 });
@@ -17,6 +18,7 @@ export interface ModelCapabilities {
   id: string;
   contextLength: number | null;
   supportsTools: boolean | null;
+  supportsVision: boolean | null;
   reasoningEfforts: string[] | null;
   reasoningMandatory: boolean;
 }
@@ -55,10 +57,18 @@ export function parseBackendCaps(raw: unknown): ModelCapabilities[] {
     id: m.id,
     contextLength: m.context_length ?? null,
     supportsTools: m.supports_tools ?? null,
+    supportsVision: m.supports_vision ?? null,
     reasoningEfforts:
       m.efforts ?? (m.supports_reasoning ? [...GATEWAY_EFFORTS] : null),
     reasoningMandatory: m.mandatory ?? false,
   }));
+}
+
+export function lookupSupportsVision(
+  catalog: ModelCapabilities[] | null,
+  modelId: string,
+): boolean {
+  return catalog?.find((m) => m.id === modelId)?.supportsVision === true;
 }
 
 export function lookupEfforts(

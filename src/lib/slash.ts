@@ -1,8 +1,13 @@
+import type { FileCommand } from "./types";
+
+export type { FileCommand };
+
 export interface SlashCommand {
   name: string;
   label: string;
   hint?: string;
   takesArgs?: boolean;
+  shadowed?: boolean;
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -16,14 +21,46 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 ];
 
 export function parseSlash(text: string): { name: string; args: string } | null {
-  const match = text.trim().match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
+  const match = text.trim().match(/^\/([\w-]+)(?:\s+([\s\S]*))?$/);
   if (!match) return null;
   return { name: match[1].toLowerCase(), args: (match[2] ?? "").trim() };
 }
 
-export function matchSlash(query: string): SlashCommand[] {
+export function matchSlash(query: string, commands: SlashCommand[] = SLASH_COMMANDS): SlashCommand[] {
   const q = query.replace(/^\//, "").toLowerCase();
-  return SLASH_COMMANDS.filter((command) => command.name.startsWith(q));
+  return commands.filter((command) => command.name.startsWith(q));
+}
+
+export function mergeSlashCommands(files: FileCommand[]): SlashCommand[] {
+  const builtins = new Set(SLASH_COMMANDS.map((command) => command.name));
+  const merged: SlashCommand[] = [...SLASH_COMMANDS];
+  for (const file of files) {
+    if (builtins.has(file.name)) {
+      const index = merged.findIndex((command) => command.name === file.name);
+      if (index >= 0) {
+        merged[index] = { ...merged[index], shadowed: true };
+      }
+      continue;
+    }
+    merged.push({
+      name: file.name,
+      label: file.description,
+      hint: "$ARGUMENTS",
+      takesArgs: true,
+    });
+  }
+  return merged;
+}
+
+export function expandFileCommand(
+  command: FileCommand,
+  args: string,
+): { text: string; appended: boolean } {
+  if (command.body.includes("$ARGUMENTS")) {
+    return { text: command.body.split("$ARGUMENTS").join(args), appended: false };
+  }
+  if (!args) return { text: command.body, appended: false };
+  return { text: `${command.body}\n${args}`, appended: true };
 }
 
 export function resolveExportFormat(args: string): "md" | "json" | null {

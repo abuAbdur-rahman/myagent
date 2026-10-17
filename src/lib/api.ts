@@ -1,5 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { StreamEvent } from "./types";
+import type { FileCommand, StreamEvent } from "./types";
 import { parseBackendCaps, type ModelCapabilities } from "./catalog";
 
 export const SEARCH_KEY_ACCOUNT = "search:tavily";
@@ -159,12 +159,16 @@ export function formatInvokeError(error: unknown): string {
   return "Something went wrong.";
 }
 
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: string } };
+
 export interface ChatStreamArgs {
   requestId: string;
   baseUrl: string;
   connectionId: string;
   model: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string | ChatContentPart[] }[];
   temperature?: number;
   enableTools?: boolean;
   maxIterations?: number;
@@ -174,6 +178,7 @@ export interface ChatStreamArgs {
   connectionKind?: string;
   searchBackend?: string | null;
   searchEndpoint?: string | null;
+  visionFallbackModel?: string | null;
 }
 
 export async function chatStream(
@@ -195,9 +200,10 @@ export async function chatStream(
       project_id: args.projectId ?? null,
       conversation_id: args.conversationId ?? null,
       reasoning_effort: args.reasoningEffort ?? null,
-      connection_kind: args.connectionKind ?? null,
-      search_backend: args.searchBackend ?? null,
-      search_endpoint: args.searchEndpoint ?? null,
+          connection_kind: args.connectionKind ?? null,
+          search_backend: args.searchBackend ?? null,
+          search_endpoint: args.searchEndpoint ?? null,
+          vision_fallback_model: args.visionFallbackModel ?? null,
     },
     onEvent: channel,
   });
@@ -205,6 +211,82 @@ export async function chatStream(
 
 export function deleteSpill(conversationId: string) {
   return invoke<void>("delete_spill", { conversationId });
+}
+
+export function spillImageWrite(conversationId: string, name: string, dataUrl: string) {
+  return invoke<string>("spill_image_write", { conversationId, name, dataUrl });
+}
+
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export function skillIndex() {
+  return invoke<SkillInfo[]>("skill_index");
+}
+
+export function skillRead(id: string) {
+  return invoke<string>("skill_read", { id });
+}
+
+export interface McpServerRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  transport: string;
+  cmd: string | null;
+  url: string | null;
+  allow_tools: string | null;
+  timeout_ms: number | null;
+  enabled: boolean;
+}
+
+export function mcpList(projectId: string | null) {
+  return invoke<McpServerRow[]>("mcp_list", { projectId });
+}
+
+export function mcpAdd(
+  projectId: string | null,
+  name: string,
+  transport: string,
+  cmd: string | null,
+  url: string | null,
+) {
+  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, cmd, url });
+}
+
+export function mcpRemove(id: string) {
+  return invoke<void>("mcp_remove", { id });
+}
+
+export function mcpToggle(id: string, enabled: boolean) {
+  return invoke<void>("mcp_toggle", { id, enabled });
+}
+
+export function listCommands(projectId: string | null) {
+  return invoke<FileCommand[]>("list_commands_cmd", { projectId });
+}
+
+export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {
+  return invoke<string>("knowledge_sidecar_write", { projectId, sha256, text });
+}
+
+export function knowledgeSidecarRead(projectId: string, sha256: string) {
+  return invoke<string>("knowledge_sidecar_read", { projectId, sha256 });
+}
+
+export function knowledgeSidecarWipe(projectId: string) {
+  return invoke<void>("knowledge_sidecar_wipe", { projectId });
+}
+
+export function knowledgeSidecarDelete(projectId: string, sha256: string) {
+  return invoke<void>("knowledge_sidecar_delete", { projectId, sha256 });
+}
+
+export function knowledgeSidecarWipeAll() {
+  return invoke<void>("knowledge_sidecar_wipe_all");
 }
 
 export function summarize(

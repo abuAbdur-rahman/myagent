@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, ChevronDown, Paperclip, Square, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
 import { Select } from "./ui/select";
@@ -8,16 +8,149 @@ import { cn, downloadText } from "../lib/utils";
 import { buildChatExport, conversationToMarkdown, safeFilename } from "../lib/export";
 import {
   dispatchSlash,
+  expandFileCommand,
   matchSlash,
+  mergeSlashCommands,
+  parseSlash,
   resolveExportFormat,
   resolveModelArg,
   type SlashCommand,
 } from "../lib/slash";
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
+import { buildAttachmentSend, ingestDoc, isSupportedMime } from "../lib/knowledge";
+import { downscaleImage, isSupportedImage } from "../lib/image";
+import type { FileCommand } from "../lib/types";
+
+const MAX_ATTACH_BYTES = 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+const TEXT_EXTENSIONS: Record<string, string> = {
+  md: "text/markdown",
+  markdown: "text/markdown",
+  txt: "text/plain",
+  json: "application/json",
+  yml: "application/yaml",
+  yaml: "application/yaml",
+  xml: "application/xml",
+  csv: "text/csv",
+  html: "text/html",
+  css: "text/css",
+  js: "application/javascript",
+  jsx: "application/javascript",
+  ts: "application/typescript",
+  tsx: "application/typescript",
+  toml: "text/plain",
+  ini: "text/plain",
+  log: "text/plain",
+  sh: "text/plain",
+  ps1: "text/plain",
+  py: "text/plain",
+  rs: "text/plain",
+  go: "text/plain",
+  java: "text/plain",
+  c: "text/plain",
+  cpp: "text/plain",
+  h: "text/plain",
+};
+
+function mimeForFile(name: string, declared: string): string {
+  if (declared) return declared;
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return "";
+  const ext = name.slice(dot + 1).toLowerCase();
+  return TEXT_EXTENSIONS[ext] ?? "";
+}
+
+interface AttachChip {
+  key: string;
+  kind: "file" | "image";
+  name: string;
+  excerpt: string;
+  dataUrl?: string;
+}
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+type ParsedSlash = { name: string; args: string };
+
+function warnIfShadowed(parsed: ParsedSlash | null, commands: SlashCommand[]): void {
+  if (!parsed) return;
+  if (commands.find((item) => item.name === parsed.name)?.shadowed) {
+    toast(`Built-in /${parsed.name} shadows your file command.`);
+  }
+}
+
+function expandCommandText(
+  text: string,
+  parsed: ParsedSlash | null,
+  commands: FileCommand[],
+): string {
+  if (!parsed) return text;
+  const file = commands.find((command) => command.name === parsed.name);
+  if (!file) return text;
+  const expanded = expandFileCommand(file, parsed.args);
+  if (expanded.appended) toast("Args appended (template has no $ARGUMENTS).");
+  return expanded.text;
+}
+
+async function buildImageChip(file: File, index: number): Promise<AttachChip | null> {
+  if (file.size > MAX_IMAGE_BYTES) {
+    toast(`"${file.name}": over 10 MB, skipped.`);
+    return null;
+  }
+  try {
+    const downscaled = await downscaleImage(file);
+    return {
+      key: `img-${index}-${Date.now()}`,
+      kind: "image",
+      name: file.name,
+      excerpt: "",
+      dataUrl: downscaled.dataUrl,
+    };
+  } catch {
+    toast(`"${file.name}": couldn't read as image.`);
+    return null;
+  }
+}
+
+async function buildFileChip(
+  file: File,
+  projectId: string,
+  index: number,
+): Promise<AttachChip | null> {
+  const mime = mimeForFile(file.name, file.type);
+  if (!isSupportedMime(mime)) {
+    toast(`"${file.name}": type not supported in v1 (text/code/images only).`);
+    return null;
+  }
+  if (file.size > MAX_ATTACH_BYTES) {
+    toast(`"${file.name}": over 1 MB, skipped.`);
+    return null;
+  }
+  try {
+    const text = await file.text();
+    const bytes = new TextEncoder().encode(text);
+    const result = await ingestDoc({ projectId, name: file.name, mime, bytes });
+    if (result.status === "unsupported") {
+      toast(`"${file.name}": type not supported.`);
+      return null;
+    }
+    if (result.status === "duplicate") {
+      toast(`"${file.name}": already in project knowledge, attached anyway.`);
+    }
+    return {
+      key: result.id ?? `${file.name}-${index}`,
+      kind: "file",
+      name: file.name,
+      excerpt: text,
+    };
+  } catch {
+    toast(`"${file.name}": couldn't attach.`);
+    return null;
+  }
 }
 
 function SlashMenu({
@@ -63,6 +196,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     streaming,
     sendWith,
     activeConnection,
+    activeProject,
     model,
     models,
     setModel,
@@ -76,13 +210,58 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     reasoningEffort,
     setReasoningEffort,
     supportedEfforts,
+    fileCommands,
+    loadFileCommands,
   } = useApp();
   const editorRef = useRef<TipTapHandle | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [chips, setChips] = useState<AttachChip[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const chipsRef = useRef(chips);
+  chipsRef.current = chips;
 
   const concreteDraft = (editorRef.current?.getMarkdown() ?? composerDraft).trim();
-  const slashItems = /^\/\w*$/.test(concreteDraft) ? matchSlash(concreteDraft) : [];
+  const mergedCommands = useMemo(() => mergeSlashCommands(fileCommands), [fileCommands]);
+  const slashItems = /^\/[\w-]*$/.test(concreteDraft) ? matchSlash(concreteDraft, mergedCommands) : [];
+
+  useEffect(() => {
+    const onFocus = () => void loadFileCommands();
+    window.addEventListener("focus", onFocus);
+    void loadFileCommands();
+    return () => window.removeEventListener("focus", onFocus);
+  }, [loadFileCommands]);
+
+  const menuOpenRef = useRef(false);
+  useEffect(() => {
+    const open = slashItems.length > 0;
+    if (open && !menuOpenRef.current) void loadFileCommands();
+    menuOpenRef.current = open;
+  }, [slashItems.length, loadFileCommands]);
+
+  const attachFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setAttaching(true);
+    try {
+      for (const [index, file] of files.entries()) {
+        let chip: AttachChip | null = null;
+        if (isSupportedImage(file.type)) {
+          chip = await buildImageChip(file, index);
+        } else if (activeProject) {
+          chip = await buildFileChip(file, activeProject.id, index);
+        } else {
+          toast("Select a project first to attach files.");
+        }
+        if (chip) setChips((prev) => [...prev, chip]);
+      }
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  const removeChip = (key: string) =>
+    setChips((prev) => prev.filter((chip) => chip.key !== key));
 
   const historyEntries = useMemo(() => {
     const users = messages
@@ -94,7 +273,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   }, [messages]);
 
   const canSend =
-    !streaming && !!activeConnection && !!model && composerDraft.trim().length > 0;
+    !streaming &&
+    !attaching &&
+    !!activeConnection &&
+    !!model &&
+    (composerDraft.trim().length > 0 || chips.length > 0);
 
   const runExport = (args: string) => {
     const chat = conversations.find((item) => item.id === activeConversationId) ?? null;
@@ -149,16 +332,29 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   const submit = () => {
     const handle = editorRef.current;
     const text = (handle?.getMarkdown() ?? composerDraft).trim();
-    if (!text || streaming || !activeConnection || !model) return;
+    const pending = chipsRef.current;
+    if ((!text && pending.length === 0) || streaming || !activeConnection || !model) return;
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
+    setChips([]);
     handle?.focus();
+    const parsed = parseSlash(text);
+    warnIfShadowed(parsed, mergedCommands);
     if (dispatchSlash(text, slashHandlers)) return;
-    void sendMessage(text).then((accepted) => {
+    const sendText = expandCommandText(text, parsed, fileCommands);
+    const fileChips = pending.filter((chip) => chip.kind === "file");
+    const imagePayloads = pending
+      .filter((chip) => chip.kind === "image" && chip.dataUrl)
+      .map((chip) => ({ dataUrl: chip.dataUrl as string }));
+    const send = buildAttachmentSend(sendText, fileChips);
+    const outgoing =
+      send.outgoing.trim() || (imagePayloads.length > 0 ? "See the attached image." : "");
+    void sendMessage(outgoing, send.block, imagePayloads).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
         setComposerDraft(text);
+        setChips(pending);
         toast("Couldn't send that message.");
       }
     });
@@ -178,7 +374,13 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     editorRef.current?.clear();
     setComposerDraft("");
     setSlashIndex(0);
-    dispatchSlash(`/${name}`, slashHandlers);
+    if (!dispatchSlash(`/${name}`, slashHandlers)) {
+      if (fileCommands.some((file) => file.name === name)) {
+        editorRef.current?.setMarkdown(`/${name} `);
+        setComposerDraft(`/${name} `);
+        editorRef.current?.focus();
+      }
+    }
   };
   actionsRef.current.runSlash = runSlash;
 
@@ -230,13 +432,47 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   };
 
   return (
-    <div>
+    <div
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault();
+        void attachFiles([...event.dataTransfer.files]);
+      }}
+      onPaste={(event) => {
+        const files = [...event.clipboardData.files];
+        if (files.length > 0) {
+          event.preventDefault();
+          void attachFiles(files);
+        }
+      }}
+    >
       <div className="composer relative rounded-composer border border-border bg-surface-2 px-2.5 pb-2 pt-2 focus-within:border-accent/70">
         <SlashMenu
           items={slashItems}
           index={Math.min(slashIndex, Math.max(0, slashItems.length - 1))}
           onPick={runSlash}
         />
+        {chips.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap gap-1.5">
+            {chips.map((chip) => (
+              <span
+                key={chip.key}
+                className="flex max-w-[220px] items-center gap-1 rounded-control border border-border bg-surface px-2 py-0.5 text-xs"
+                title={chip.name}
+              >
+                <span className="truncate">{chip.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removeChip(chip.key)}
+                  aria-label={`Remove ${chip.name}`}
+                  className="flex-none text-muted hover:text-fg"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <TipTapEditor
           placeholder="Message MyAgent… (Markdown supported, / for commands)"
           autoFocus={autoFocus}
@@ -250,6 +486,26 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           onKeyDown={(event) => keyDownRef.current(event)}
         />
         <div className="mt-1 flex items-center gap-1">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              void attachFiles([...(event.target.files ?? [])]);
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+            title="Attach text files (project knowledge)"
+            disabled={attaching || streaming}
+            className="grid h-7 w-7 flex-none place-items-center rounded-control border border-border bg-surface text-muted hover:bg-hover disabled:text-faint"
+          >
+            <Paperclip size={14} />
+          </button>
           <button
             type="button"
             ref={modelButtonRef}

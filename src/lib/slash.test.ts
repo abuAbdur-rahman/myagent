@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   dispatchSlash,
+  expandFileCommand,
   matchSlash,
+  mergeSlashCommands,
   parseSlash,
   resolveExportFormat,
   resolveModelArg,
   SLASH_COMMANDS,
+  type FileCommand,
   type SlashHandlers,
 } from "./slash";
 
@@ -39,6 +42,44 @@ describe("parseSlash", () => {
   it("rejects non-commands", () => {
     expect(parseSlash("hello")).toBeNull();
     expect(parseSlash("/ model")).toBeNull();
+  });
+  it("parses hyphenated names", () => {
+    expect(parseSlash("/my-cmd args here")).toEqual({ name: "my-cmd", args: "args here" });
+  });
+});
+
+const files: FileCommand[] = [
+  { name: "deploy", description: "Ship it", body: "Run `./ship $ARGUMENTS`." },
+  { name: "model", description: "File shadow", body: "Should never win." },
+];
+
+describe("mergeSlashCommands", () => {
+  it("merges files after builtins and flags shadows", () => {
+    const merged = mergeSlashCommands(files);
+    expect(merged.map((c) => c.name)).toContain("deploy");
+    expect(merged.find((c) => c.name === "model")?.label).toBe("Switch model");
+    expect(merged.find((c) => c.name === "model")?.shadowed).toBe(true);
+  });
+  it("shows the args hint for file commands", () => {
+    const merged = mergeSlashCommands(files);
+    expect(merged.find((c) => c.name === "deploy")?.hint).toBe("$ARGUMENTS");
+  });
+});
+
+describe("expandFileCommand", () => {
+  it("substitutes $ARGUMENTS", () => {
+    expect(expandFileCommand(files[0], "prod")).toEqual({
+      text: "Run `./ship prod`.",
+      appended: false,
+    });
+  });
+  it("appends args when no placeholder exists", () => {
+    const cmd: FileCommand = { name: "hi", description: "Hi", body: "Say hi." };
+    expect(expandFileCommand(cmd, "bob")).toEqual({ text: "Say hi.\nbob", appended: true });
+  });
+  it("leaves clean bodies alone", () => {
+    const cmd: FileCommand = { name: "hi", description: "Hi", body: "Say hi." };
+    expect(expandFileCommand(cmd, "")).toEqual({ text: "Say hi.", appended: false });
   });
 });
 

@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Eye } from "lucide-react";
 import { useApp } from "../lib/store";
+import { lookupSupportsVision } from "../lib/catalog";
 import * as api from "../lib/api";
 import * as db from "../lib/db";
 import {
@@ -44,7 +46,7 @@ function closeModelPicker() {
 }
 
 export function ModelPickerHost() {
-  const { connections, activeConnectionId, selectConnection, model, setModel } = useApp();
+  const { connections, activeConnectionId, selectConnection, model, setModel, catalog } = useApp();
   const [state, setState] = useState<Anchor | null>(null);
   const [options, setOptions] = useState<Option[] | null>(null);
   const [query, setQuery] = useState("");
@@ -75,7 +77,11 @@ export function ModelPickerHost() {
           const hiddenSet = new Set(hidden);
           return list
             .filter((m) => !hiddenSet.has(m))
-            .map((m) => ({ value: `${connection.id}/${m}`, label: m, group: connection.name }));
+            .map((m) => ({
+              value: `${connection.id}/${m}`,
+              label: m,
+              group: connection.name,
+            }));
         } catch (cause) {
           console.warn("model list failed", connection.name, cause);
           return [];
@@ -110,12 +116,21 @@ export function ModelPickerHost() {
 
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => {
-    const list = options ?? [];
+    const list = (options ?? []).map((option) => {
+      const connectionId = option.value.split("/")[0];
+      const vision =
+        connectionId === activeConnectionId &&
+        lookupSupportsVision(catalog, option.label);
+      return {
+        ...option,
+        icon: vision ? <Eye size={14} aria-label="Vision capable" /> : undefined,
+      };
+    });
     if (!q) return list;
     return list.filter(
       (o) => o.label.toLowerCase().includes(q) || o.group?.toLowerCase().includes(q),
     );
-  }, [options, q]);
+  }, [options, q, activeConnectionId, catalog]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   useEffect(() => {

@@ -6,6 +6,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tauri::{AppHandle, Manager};
 
 use crate::error::{AppError, AppResult};
+use crate::vault;
 use crate::webfetch;
 use crate::websearch;
 
@@ -91,6 +92,208 @@ fn write_spill(
         return None;
     }
     path.to_str().map(str::to_string)
+}
+
+fn decode_data_url(value: &str) -> Result<(String, Vec<u8>), String> {
+    let (meta, payload) = value
+        .split_once(',')
+        .ok_or_else(|| "not a data URL".to_string())?;
+    let meta = meta
+        .strip_prefix("data:")
+        .ok_or_else(|| "not a data URL".to_string())?;
+    let (mime, encoding) = meta
+        .split_once(';')
+        .ok_or_else(|| "data URL missing encoding".to_string())?;
+    if encoding != "base64" {
+        return Err("only base64 data URLs supported".to_string());
+    }
+    if mime.is_empty() || !mime.contains('/') {
+        return Err("data URL missing mime type".to_string());
+    }
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, payload)
+        .map_err(|e| e.to_string())?;
+    Ok((mime.to_string(), bytes))
+}
+
+fn spill_image_path(
+    app: &AppHandle,
+    conversation_id: &str,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    let conversation = safe_segment(conversation_id);
+    if conversation.is_empty() {
+        return None;
+    }
+    let mut safe_name: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .take(64)
+        .collect();
+    if safe_name.is_empty() {
+        safe_name = "image".to_string();
+    }
+    let dir = app.path().app_data_dir().ok()?;
+    Some(
+        dir.join("spill")
+            .join(conversation)
+            .join("images")
+            .join(safe_name),
+    )
+}
+
+#[tauri::command]
+pub fn spill_image_write(
+    app: AppHandle,
+    conversation_id: String,
+    name: String,
+    data_url: String,
+) -> Result<String, String> {
+    let (mime, bytes) = decode_data_url(&data_url)?;
+    let ext = mime.split('/').nth(1).unwrap_or("bin");
+    let path = spill_image_path(&app, &conversation_id, &format!("{name}.{ext}"))
+        .ok_or_else(|| "invalid conversation id".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    path.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| "path not representable".to_string())
+}
+
+fn describe_image_args(args: &Value) -> Result<(u64, String), String> {
+    let index = args.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
+        "index is required (0-based into this turn's attached images)".to_string()
+    })?;
+    let question = arg_str(args, "question")
+        .filter(|q| !q.trim().is_empty())
+        .unwrap_or_else(|| "Describe this image in detail.".to_string());
+    if question.chars().count() > 1000 {
+        return Err("question too long (max 1000 chars)".to_string());
+    }
+    Ok((index, question))
+}
+
+fn spill_stamp(file_name: &str) -> Option<u64> {
+    let rest = file_name.strip_prefix("img-")?;
+    rest.split_once('-')?.0.parse::<u64>().ok()
+}
+
+fn spill_index(file_name: &str) -> u64 {
+    file_name
+        .strip_prefix("img-")
+        .and_then(|rest| rest.split_once('-'))
+        .and_then(|(_, tail)| tail.split('.').next())
+        .and_then(|index| index.parse::<u64>().ok())
+        .unwrap_or(u64::MAX)
+}
+
+fn read_spill_image(
+    app: &AppHandle,
+    conversation_id: &str,
+    index: u64,
+) -> Result<(String, Vec<u8>), String> {
+    let conversation = safe_segment(conversation_id);
+    if conversation.is_empty() {
+        return Err("invalid conversation id".to_string());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("spill")
+        .join(conversation)
+        .join("images");
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .map_err(|_| "no attached images found for this conversation".to_string())?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .collect();
+    let newest = entries
+        .iter()
+        .filter_map(|entry| entry.file_name().to_str().and_then(spill_stamp))
+        .max()
+        .ok_or_else(|| "no attached images found for this conversation".to_string())?;
+    let mut group: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| entry.file_name().to_str().and_then(spill_stamp) == Some(newest))
+        .collect();
+    group.sort_by_key(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .map(spill_index)
+            .unwrap_or(u64::MAX)
+    });
+    let picked = group
+        .get(index as usize)
+        .ok_or_else(|| format!("image index out of range ({} attached)", group.len()))?;
+    let bytes = std::fs::read(picked.path()).map_err(|e| e.to_string())?;
+    let mime = match picked.path().extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    };
+    Ok((mime.to_string(), bytes))
+}
+
+async fn describe_image_via_fallback(
+    base_url: &str,
+    key: &str,
+    model: &str,
+    mime: &str,
+    bytes: &[u8],
+    question: &str,
+    cancel: &tokio::sync::Notify,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let payload = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": model,
+        "stream": false,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{payload}")}},
+            ],
+        }],
+    });
+    let client = reqwest::Client::new();
+    let response = tokio::select! {
+        response = client.post(url).bearer_auth(key).json(&body).send() => response.map_err(|e| e.to_string())?,
+        _ = cancel.notified() => return Err("cancelled by user".to_string()),
+    };
+    if !response.status().is_success() {
+        return Err(format!(
+            "fallback vision model error: HTTP {}",
+            response.status()
+        ));
+    }
+    let value: Value = tokio::select! {
+        value = response.json::<Value>() => value.map_err(|e| e.to_string())?,
+        _ = cancel.notified() => return Err("cancelled by user".to_string()),
+    };
+    let content = &value["choices"][0]["message"]["content"];
+    if let Some(text) = content.as_str() {
+        if !text.trim().is_empty() {
+            return Ok(text.to_string());
+        }
+    }
+    if let Some(parts) = content.as_array() {
+        let mut out = String::new();
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                out.push_str(text);
+            }
+        }
+        if !out.trim().is_empty() {
+            return Ok(out);
+        }
+    }
+    Err("fallback vision model returned no description".to_string())
 }
 
 fn cap_output(text: &str, spill: Option<&str>) -> String {
@@ -270,7 +473,7 @@ pub fn tool_specs() -> Value {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "question": { "type": "string", "description": "The question, one or two sentences." },
+                        "question": { "type": "string" },
                         "options": { "type": "array", "items": { "type": "string" }, "description": "Up to four short options. May be empty when free text suffices.", "maxItems": 4 },
                         "allow_custom": { "type": "boolean", "description": "Offer a free-text answer too (default true)." },
                     },
@@ -279,10 +482,40 @@ pub fn tool_specs() -> Value {
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "skill",
+                "description": "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description. The skill ID must match an available skill or a skill explicitly referenced by the user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "The ID of an available skill." },
+                    },
+                    "required": ["id"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "describe_image",                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer", "minimum": 0, "description": "0-based index into this turn's attached images, oldest first." },
+                        "question": { "type": "string", "description": "What to look for in the image. Defaults to a general description." },
+                    },
+                    "required": ["index"],
+                    "additionalProperties": false,
+                },
+            },
+        },
     ])
 }
 
-async fn memory_pool(app: &AppHandle) -> AppResult<SqlitePool> {
+pub(crate) async fn memory_pool(app: &AppHandle) -> AppResult<SqlitePool> {
     let dir = app
         .path()
         .app_data_dir()
@@ -371,6 +604,13 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
             let status = arg_str(args, "status").unwrap_or_default();
             format!("Checklist #{index} -> {status}")
         }
+        "skill" => {
+            format!("Skill: {}", arg_str(args, "id").unwrap_or_default())
+        }
+        "describe_image" => {
+            let index = args.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+            format!("Describe attached image #{index} via fallback vision model")
+        }
         _ => name.to_string(),
     }
 }
@@ -423,6 +663,9 @@ pub struct ExecContext<'a> {
     pub project_id: Option<&'a str>,
     pub search_backend: Option<&'a str>,
     pub search_endpoint: Option<&'a str>,
+    pub base_url: Option<&'a str>,
+    pub connection_id: Option<&'a str>,
+    pub vision_fallback_model: Option<&'a str>,
 }
 
 pub async fn execute(
@@ -755,6 +998,34 @@ pub async fn execute(
                 artifact: None,
             })
         }
+        "skill" => {
+            let id = arg_str(&args, "id").ok_or("missing skill id")?;
+            let block = crate::skills::prepare_skill(app, &id)?;
+            Ok(ExecOutput {
+                output: cap_output(&block, None),
+                artifact: None,
+            })
+        }
+        "describe_image" => {
+            let (index, question) = describe_image_args(&args)?;
+            let conversation = conversation_id.ok_or("no active conversation")?;
+            let base_url = context.base_url.ok_or("no provider configured")?;
+            let connection = context.connection_id.ok_or("no provider configured")?;
+            let fallback = context
+                .vision_fallback_model
+                .filter(|m| !m.trim().is_empty())
+                .ok_or("no vision fallback model set (Settings → Models)")?;
+            let bytes = read_spill_image(app, conversation, index)?;
+            let key = vault::get_api_key(connection).map_err(|e| e.to_string())?;
+            let body = describe_image_via_fallback(
+                base_url, &key, fallback, &bytes.0, &bytes.1, &question, cancel,
+            )
+            .await?;
+            Ok(ExecOutput {
+                output: cap_output(&body, None),
+                artifact: None,
+            })
+        }
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -860,6 +1131,35 @@ mod tests {
         assert_eq!(safe_segment("../../etc/passwd"), "etcpasswd");
         assert_eq!(safe_segment("call_abc 123!"), "call_abc123");
         assert!(safe_segment("").is_empty());
+    }
+
+    #[test]
+    fn data_url_round_trips_bytes() {
+        let (mime, bytes) = decode_data_url("data:image/jpeg;base64,aGk=").expect("decodes");
+        assert_eq!(mime, "image/jpeg");
+        assert_eq!(bytes, b"hi");
+    }
+
+    #[test]
+    fn data_url_rejects_non_base64() {
+        assert!(decode_data_url("data:image/png,plain").is_err());
+        assert!(decode_data_url("not-a-url").is_err());
+        assert!(decode_data_url("data:image/png;base64,!!!").is_err());
+    }
+
+    #[test]
+    fn describe_image_args_validates() {
+        assert!(describe_image_args(&serde_json::json!({})).is_err());
+        let (index, question) =
+            describe_image_args(&serde_json::json!({"index": 2})).expect("defaults");
+        assert_eq!(index, 2);
+        assert!(question.contains("Describe"));
+        assert!(
+            describe_image_args(
+                &serde_json::json!({"index": 0, "question": "x".repeat(1001).as_str()})
+            )
+            .is_err()
+        );
     }
 
     #[test]

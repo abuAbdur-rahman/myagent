@@ -1,6 +1,10 @@
+mod commands;
 mod error;
+mod knowledge;
 mod llm;
+mod mcp;
 mod permissions;
+mod skills;
 mod sse;
 mod state;
 mod tools;
@@ -217,6 +221,49 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "add_knowledge_docs",
+            sql: "
+                CREATE TABLE IF NOT EXISTS knowledge_docs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    chat_id TEXT,
+                    name TEXT NOT NULL,
+                    mime TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    UNIQUE (project_id, sha256)
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_docs(project_id);
+            ",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 16,
+            description: "add_mcp_servers",
+            sql: "
+                CREATE TABLE IF NOT EXISTS mcp_servers (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    name TEXT NOT NULL,
+                    transport TEXT NOT NULL,
+                    cmd TEXT,
+                    url TEXT,
+                    allow_tools TEXT,
+                    timeout_ms INTEGER,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(project_id, name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_global_name ON mcp_servers(name) WHERE project_id IS NULL;
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -239,6 +286,7 @@ pub fn run() {
                 .build()
                 .expect("failed to build HTTP client"),
         )
+        .manage(mcp::McpState::default())
         .manage(state::StreamState::default())
         .invoke_handler(tauri::generate_handler![
             vault::set_api_key,
@@ -251,11 +299,24 @@ pub fn run() {
             llm::suggest_title,
             llm::summarize,
             delete_spill,
+            tools::spill_image_write,
+            knowledge::knowledge_sidecar_write,
+            knowledge::knowledge_sidecar_read,
+            knowledge::knowledge_sidecar_wipe,
+            knowledge::knowledge_sidecar_delete,
+            knowledge::knowledge_sidecar_wipe_all,
             websearch::search_key_count,
             websearch::search_key_add,
             websearch::search_key_remove,
             permissions::permission_check,
             permissions::permission_allow,
+            skills::skill_index,
+            skills::skill_read,
+            mcp::mcp_list,
+            mcp::mcp_add,
+            mcp::mcp_remove,
+            mcp::mcp_toggle,
+            commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,
         ])
@@ -285,6 +346,56 @@ mod migration_tests {
                     panic!("migration {} does not apply: {e}", migration.description)
                 });
         }
+    }
+
+    #[tokio::test]
+    async fn mcp_servers_unique_name_per_project() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('s1', 'p1', 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("first server");
+        let dup = sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('s2', 'p1', 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 2)")
+            .execute(&pool)
+            .await;
+        assert!(dup.is_err(), "duplicate server name per project rejected");
+        sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('g1', NULL, 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 3)")
+            .execute(&pool)
+            .await
+            .expect("first global server");
+        let global_dup = sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('g2', NULL, 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 4)")
+            .execute(&pool)
+            .await;
+        assert!(global_dup.is_err(), "duplicate global server name rejected");
+    }
+
+    #[tokio::test]
+    async fn knowledge_docs_rejects_duplicate_sha_per_project() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        for id in ["p1", "p2"] {
+            sqlx::query(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, 1, 1)",
+            )
+            .bind(id)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("seed project");
+        }
+        sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k1', 'p1', NULL, 'notes.md', 'text/markdown', 'abc123', 'knowledge/p1/abc123.txt', 9, 1)")
+            .execute(&pool)
+            .await
+            .expect("first ingest");
+        let dup = sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k2', 'p1', NULL, 'notes-copy.md', 'text/markdown', 'abc123', 'knowledge/p1/abc123.txt', 9, 2)")
+            .execute(&pool)
+            .await;
+        assert!(dup.is_err(), "duplicate sha256 in same project rejected");
+        sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k3', 'p2', NULL, 'notes.md', 'text/markdown', 'abc123', 'knowledge/p2/abc123.txt', 9, 3)")
+            .execute(&pool)
+            .await
+            .expect("same sha allowed in another project");
     }
 
     #[tokio::test]
