@@ -1,15 +1,13 @@
+import type { FileCommand } from "./types";
+
+export type { FileCommand };
+
 export interface SlashCommand {
   name: string;
   label: string;
   hint?: string;
   takesArgs?: boolean;
   shadowed?: boolean;
-}
-
-export interface FileCommand {
-  name: string;
-  description: string;
-  body: string;
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [

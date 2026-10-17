@@ -35,6 +35,10 @@ describe("targetSize", () => {
   it("leaves small images untouched", () => {
     expect(targetSize(800, 600, 1568)).toEqual({ width: 800, height: 600 });
   });
+
+  it("clamps extreme aspect ratios to at least one pixel", () => {
+    expect(targetSize(12000, 1, 1568)).toEqual({ width: 1568, height: 1 });
+  });
 });
 
 describe("budgets", () => {
@@ -69,11 +73,12 @@ describe("fitImageBudget", () => {
 describe("downscaleImage", () => {
   it("draws to canvas and returns a JPEG data-URL", async () => {
     const drawImage = vi.fn();
+    const fillRect = vi.fn();
     const toDataURL = vi.fn(() => "data:image/jpeg;base64,AAA");
     const canvas = {
       width: 0,
       height: 0,
-      getContext: () => ({ drawImage }),
+      getContext: () => ({ drawImage, fillRect, fillStyle: "" }),
       toDataURL,
     };
     vi.stubGlobal("document", {
@@ -96,6 +101,7 @@ describe("downscaleImage", () => {
     expect(canvas.width).toBe(1568);
     expect(canvas.height).toBe(784);
     expect(drawImage).toHaveBeenCalledOnce();
+    expect(fillRect).toHaveBeenCalledOnce();
     expect(out.dataUrl).toBe("data:image/jpeg;base64,AAA");
     vi.unstubAllGlobals();
   });

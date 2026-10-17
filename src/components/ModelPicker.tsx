@@ -81,10 +81,6 @@ export function ModelPickerHost() {
               value: `${connection.id}/${m}`,
               label: m,
               group: connection.name,
-              icon:
-                connection.id === activeConnectionId && lookupSupportsVision(catalog, m) ? (
-                  <Eye size={14} aria-label="Vision capable" />
-                ) : undefined,
             }));
         } catch (cause) {
           console.warn("model list failed", connection.name, cause);
@@ -120,12 +116,21 @@ export function ModelPickerHost() {
 
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => {
-    const list = options ?? [];
+    const list = (options ?? []).map((option) => {
+      const connectionId = option.value.split("/")[0];
+      const vision =
+        connectionId === activeConnectionId &&
+        lookupSupportsVision(catalog, option.label);
+      return {
+        ...option,
+        icon: vision ? <Eye size={14} aria-label="Vision capable" /> : undefined,
+      };
+    });
     if (!q) return list;
     return list.filter(
       (o) => o.label.toLowerCase().includes(q) || o.group?.toLowerCase().includes(q),
     );
-  }, [options, q]);
+  }, [options, q, activeConnectionId, catalog]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   useEffect(() => {

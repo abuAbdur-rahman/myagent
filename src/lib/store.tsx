@@ -23,7 +23,6 @@ import {
 } from "./catalog";
 import { toast } from "./toast";
 import { fileCommandSchema, memoryInputSchema } from "./types";
-import { z } from "zod";
 import { newId } from "./utils";
 import { deriveFallbackTitle } from "./title";
 import type {
@@ -40,7 +39,7 @@ import type {
   Message,
   Todo,
   ToolLogEntry,
-  FileCommandRow,
+  FileCommand,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
@@ -175,7 +174,7 @@ interface AppContextValue {
   streamingId: string | null;
   toolLog: ToolEntry[];
   sendMessage: (text: string, attachmentBlock?: string, images?: { dataUrl: string }[]) => Promise<boolean>;
-  fileCommands: FileCommandRow[];
+  fileCommands: FileCommand[];
   loadFileCommands: () => Promise<void>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
@@ -270,8 +269,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [fileCommands, setFileCommands] = useState<FileCommandRow[]>([]);
-  const fileCommandsRef = useRef<FileCommandRow[]>([]);
+  const [fileCommands, setFileCommands] = useState<FileCommand[]>([]);
+  const fileCommandsRef = useRef<FileCommand[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
@@ -720,13 +719,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadFileCommands = useCallback(async () => {
     try {
       const raw: unknown = await api.listCommands(projectRef.current?.id ?? null);
-      const parsed = z.array(fileCommandSchema).safeParse(raw);
-      const rows = parsed.success ? parsed.data : [];
+      const list = Array.isArray(raw) ? raw : [];
+      const rows: FileCommand[] = [];
+      let invalid = 0;
+      for (const item of list) {
+        const parsed = fileCommandSchema.safeParse(item);
+        if (parsed.success) rows.push(parsed.data);
+        else invalid += 1;
+      }
+      if (invalid > 0) toast(`${invalid} command file(s) skipped (invalid).`);
       fileCommandsRef.current = rows;
       setFileCommands(rows);
     } catch {
-      fileCommandsRef.current = [];
-      setFileCommands([]);
+      toast("Couldn't load file commands.");
     }
   }, []);
 

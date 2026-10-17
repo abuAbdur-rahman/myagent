@@ -114,9 +114,9 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
     if (!confirmed) return;
     setRemovingId(doc.id);
     try {
-      await knowledgeSidecarDelete(project.id, doc.sha256);
       await deleteKnowledgeDoc(doc.id);
       setDocs((prev) => prev.filter((row) => row.id !== doc.id));
+      await knowledgeSidecarDelete(project.id, doc.sha256).catch(() => undefined);
     } catch (e) {
       setStatus(errorText(e));
     } finally {

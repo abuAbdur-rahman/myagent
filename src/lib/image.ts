@@ -45,7 +45,10 @@ export function targetSize(
   const long = Math.max(width, height);
   if (long <= maxSide) return { width, height };
   const scale = maxSide / long;
-  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
 }
 
 export interface DownscaledImage {
@@ -77,6 +80,8 @@ export async function downscaleImage(blob: Blob): Promise<DownscaledImage> {
     canvas.height = size.height;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("2d canvas unavailable");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size.width, size.height);
     ctx.drawImage(image, 0, 0, size.width, size.height);
     return { dataUrl: canvas.toDataURL("image/jpeg", 0.8), ...size };
   } finally {

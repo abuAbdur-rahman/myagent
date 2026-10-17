@@ -154,10 +154,10 @@ export const fileCommandSchema = z.object({
   name: z
     .string()
     .regex(/^[a-z0-9-]+$/, "Letters, numbers and dashes only"),
-  description: z.string().min(1).max(200),
-  body: z.string().min(1).max(8000),
+  description: z.string().min(1).max(500),
+  body: z.string().min(1).max(256 * 1024),
 });
-export type FileCommandRow = z.infer<typeof fileCommandSchema>;
+export type FileCommand = z.infer<typeof fileCommandSchema>;
 
 export const auditLogSchema = z.object({
   id: z.string(),
