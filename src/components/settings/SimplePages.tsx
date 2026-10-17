@@ -36,13 +36,7 @@ import { downloadText, errorText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { check } from "@tauri-apps/plugin-updater";
-import {
-  channelMessage,
-  getAppVersion,
-  installUpdate,
-  type Update,
-} from "../../lib/updater";
+import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Memory } from "../../lib/types";
 
 function SettingRow({
@@ -1572,58 +1566,8 @@ export function ShortcutsPage() {
 }
 
 export function AboutPage() {
-  const [version, setVersion] = useState("…");
-  const [update, setUpdate] = useState<Update | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [progress, setProgress] = useState<number | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    getAppVersion().then((v) => {
-      if (live) setVersion(v);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  useEffect(
-    () => () => {
-      update?.close().catch(() => undefined);
-    },
-    [update],
-  );
-
-  const checkNow = async () => {
-    setChecking(true);
-    setStatus(null);
-    try {
-      const found = await check();
-      if (!found) {
-        setUpdate(null);
-        setStatus(`You're on the latest version (${version}).`);
-      } else {
-        setUpdate(found);
-      }
-    } catch (e) {
-      setUpdate(null);
-      setStatus(channelMessage(e));
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const install = async () => {
-    if (!update) return;
-    setProgress(0);
-    try {
-      await installUpdate(update, (pct) => setProgress(pct));
-    } catch (e) {
-      setProgress(null);
-      setStatus(channelMessage(e));
-    }
-  };
+  const { setSettingsPage } = useApp();
+  const { version, update, checking, progress, status, checkNow, install } = useAppUpdate();
 
   return (
     <div>
@@ -1667,6 +1611,11 @@ export function AboutPage() {
           {status}
         </p>
       )}
+      <SettingRow label="What's new" description="Every release, newest first">
+        <Button variant="default" size="sm" onClick={() => setSettingsPage("changelog")}>
+          Changelog
+        </Button>
+      </SettingRow>
       <SettingRow label="Source" description="Issues and contributions welcome">
         <Button
           variant="default"

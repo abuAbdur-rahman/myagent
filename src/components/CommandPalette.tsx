@@ -6,6 +6,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Database,
 } from "lucide-react";
 import { useApp } from "../lib/store";
@@ -64,6 +65,12 @@ export function CommandPalette({
         label: "Open Global memory",
         icon: <Database size={16} />,
         run: () => setSettingsPage("memory"),
+      },
+      {
+        section: "Actions",
+        label: "What's new",
+        icon: <Sparkles size={16} />,
+        run: () => setSettingsPage("changelog"),
       },
       ...conversations.map((c) => ({
         section: "Chats" as const,
