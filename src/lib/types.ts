@@ -150,6 +150,15 @@ export const tagSchema = z
   .regex(/^[a-z0-9-]+$/, "Letters, numbers and dashes only");
 export type Tag = z.infer<typeof tagSchema>;
 
+export const fileCommandSchema = z.object({
+  name: z
+    .string()
+    .regex(/^[a-z0-9-]+$/, "Letters, numbers and dashes only"),
+  description: z.string().min(1).max(200),
+  body: z.string().min(1).max(8000),
+});
+export type FileCommandRow = z.infer<typeof fileCommandSchema>;
+
 export interface SearchHit {
   conversationId: string;
   messageId: string | null;

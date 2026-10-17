@@ -22,7 +22,8 @@ import {
   type ModelCapabilities,
 } from "./catalog";
 import { toast } from "./toast";
-import { memoryInputSchema } from "./types";
+import { fileCommandSchema, memoryInputSchema } from "./types";
+import { z } from "zod";
 import { newId } from "./utils";
 import { deriveFallbackTitle } from "./title";
 import type {
@@ -39,6 +40,7 @@ import type {
   Message,
   Todo,
   ToolLogEntry,
+  FileCommandRow,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
@@ -173,6 +175,8 @@ interface AppContextValue {
   streamingId: string | null;
   toolLog: ToolEntry[];
   sendMessage: (text: string, attachmentBlock?: string, images?: { dataUrl: string }[]) => Promise<boolean>;
+  fileCommands: FileCommandRow[];
+  loadFileCommands: () => Promise<void>;
   regenerate: () => Promise<void>;
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
@@ -266,6 +270,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [fileCommands, setFileCommands] = useState<FileCommandRow[]>([]);
+  const fileCommandsRef = useRef<FileCommandRow[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
@@ -709,6 +715,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (value) localStorage.setItem("visionFallbackModel", value);
     else localStorage.removeItem("visionFallbackModel");
     setVisionFallbackModelState(value);
+  }, []);
+
+  const loadFileCommands = useCallback(async () => {
+    try {
+      const raw: unknown = await api.listCommands(projectRef.current?.id ?? null);
+      const parsed = z.array(fileCommandSchema).safeParse(raw);
+      const rows = parsed.success ? parsed.data : [];
+      fileCommandsRef.current = rows;
+      setFileCommands(rows);
+    } catch {
+      fileCommandsRef.current = [];
+      setFileCommands([]);
+    }
   }, []);
 
   const setReasoningEffort = useCallback((effort: string | null) => {
@@ -1867,6 +1886,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     streamingId,
     toolLog,
     sendMessage,
+    fileCommands,
+    loadFileCommands,
     regenerate,
     continueTurn,
     editAndResubmit,

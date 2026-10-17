@@ -1,5 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { StreamEvent } from "./types";
+import type { FileCommandRow, StreamEvent } from "./types";
 import { parseBackendCaps, type ModelCapabilities } from "./catalog";
 
 export const SEARCH_KEY_ACCOUNT = "search:tavily";
@@ -263,6 +263,10 @@ export function mcpRemove(id: string) {
 
 export function mcpToggle(id: string, enabled: boolean) {
   return invoke<void>("mcp_toggle", { id, enabled });
+}
+
+export function listCommands(projectId: string | null) {
+  return invoke<FileCommandRow[]>("list_commands_cmd", { projectId });
 }
 
 export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {

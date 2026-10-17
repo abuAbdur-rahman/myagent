@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, Paperclip, Square, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
@@ -8,7 +8,10 @@ import { cn, downloadText } from "../lib/utils";
 import { buildChatExport, conversationToMarkdown, safeFilename } from "../lib/export";
 import {
   dispatchSlash,
+  expandFileCommand,
   matchSlash,
+  mergeSlashCommands,
+  parseSlash,
   resolveExportFormat,
   resolveModelArg,
   type SlashCommand,
@@ -99,6 +102,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     reasoningEffort,
     setReasoningEffort,
     supportedEfforts,
+    fileCommands,
+    loadFileCommands,
   } = useApp();
   const editorRef = useRef<TipTapHandle | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement>(null);
@@ -110,7 +115,22 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   chipsRef.current = chips;
 
   const concreteDraft = (editorRef.current?.getMarkdown() ?? composerDraft).trim();
-  const slashItems = /^\/\w*$/.test(concreteDraft) ? matchSlash(concreteDraft) : [];
+  const mergedCommands = useMemo(() => mergeSlashCommands(fileCommands), [fileCommands]);
+  const slashItems = /^\/[\w-]*$/.test(concreteDraft) ? matchSlash(concreteDraft, mergedCommands) : [];
+
+  useEffect(() => {
+    const onFocus = () => void loadFileCommands();
+    window.addEventListener("focus", onFocus);
+    void loadFileCommands();
+    return () => window.removeEventListener("focus", onFocus);
+  }, [loadFileCommands]);
+
+  const menuOpenRef = useRef(false);
+  useEffect(() => {
+    const open = slashItems.length > 0;
+    if (open && !menuOpenRef.current) void loadFileCommands();
+    menuOpenRef.current = open;
+  });
 
   const attachFiles = async (files: File[]) => {
     if (files.length === 0) return;
@@ -259,11 +279,25 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setChips([]);
     handle?.focus();
     if (dispatchSlash(text, slashHandlers)) return;
+    let sendText = text;
+    const parsed = parseSlash(text);
+    if (parsed) {
+      const menuItem = mergedCommands.find((item) => item.name === parsed.name);
+      if (menuItem?.shadowed) {
+        toast(`Built-in /${parsed.name} shadows your file command.`);
+      }
+      const file = fileCommands.find((command) => command.name === parsed.name);
+      if (file) {
+        const expanded = expandFileCommand(file, parsed.args);
+        if (expanded.appended) toast("Args appended (template has no $ARGUMENTS).");
+        sendText = expanded.text;
+      }
+    }
     const fileChips = pending.filter((chip) => chip.kind === "file");
     const imagePayloads = pending
       .filter((chip) => chip.kind === "image" && chip.dataUrl)
       .map((chip) => ({ dataUrl: chip.dataUrl as string }));
-    const send = buildAttachmentSend(text, fileChips);
+    const send = buildAttachmentSend(sendText, fileChips);
     void sendMessage(send.outgoing, send.block, imagePayloads).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
@@ -288,7 +322,13 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     editorRef.current?.clear();
     setComposerDraft("");
     setSlashIndex(0);
-    dispatchSlash(`/${name}`, slashHandlers);
+    if (!dispatchSlash(`/${name}`, slashHandlers)) {
+      if (fileCommands.some((file) => file.name === name)) {
+        editorRef.current?.setMarkdown(`/${name} `);
+        setComposerDraft(`/${name} `);
+        editorRef.current?.focus();
+      }
+    }
   };
   actionsRef.current.runSlash = runSlash;
 

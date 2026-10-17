@@ -1,3 +1,4 @@
+mod commands;
 mod error;
 mod knowledge;
 mod llm;
@@ -313,6 +314,7 @@ pub fn run() {
             mcp::mcp_add,
             mcp::mcp_remove,
             mcp::mcp_toggle,
+            commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,
         ])
