@@ -11,7 +11,7 @@ import {
 import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
-import { buildUserContent, resolveImageSend, searchKnowledge } from "./knowledge";
+import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
 import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
 import { fitImageBudget } from "./image";
 import {
@@ -1426,12 +1426,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [setCompacted]);
 
   const buildPayload = useCallback(
-    (conversationId: string | null, turns: { role: string; content: string | api.ChatContentPart[]; created_at?: number }[]) => {
+    (conversationId: string | null, turns: { role: string; content: string | api.ChatContentPart[]; attachments?: string | null; created_at?: number }[]) => {
       const { summary, through } = summaryFor(conversationId);
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
         : applyCompactWindow(turns, resolveCompact(conversationId, turns));
-      const slim = windowed.map(({ role, content }) => ({ role, content }));
+      const slim = withFinalTurnImages(windowed).map((turn) => ({
+        role: turn.role,
+        content: turn.content,
+      }));
       return withSystem(slim, summary);
     },
     [resolveCompact, summaryFor, withSystem],
@@ -1458,6 +1461,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const history = messages.filter((m) => m.content.length > 0);
 
       let conversationId = convIdRef.current;
+      let userMsg: Message;
       let assistantMsg: Message;
       let provisionalTitle: string | null = null;
       try {
@@ -1474,7 +1478,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setTodos([]);
         }
 
-        const userMsg = await db.addMessage(conversationId, "user", text);
+        userMsg = await db.addMessage(conversationId, "user", text);
         assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
         setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
@@ -1571,6 +1575,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       if (imagesForPayload.length > 0) {
+        try {
+          await db.updateMessageAttachments(userMsg.id, imagesForPayload);
+          const attachments = JSON.stringify(imagesForPayload);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === userMsg.id ? { ...m, attachments } : m)),
+          );
+        } catch (e) {
+          reportError(e);
+        }
         outgoing.push({ role: "user", content: buildUserContent(sendText, imagesForPayload) });
       } else {
         outgoing.push({ role: "user", content: sendText });

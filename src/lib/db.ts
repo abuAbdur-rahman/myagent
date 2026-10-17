@@ -12,6 +12,7 @@ import type {
   MemoryKind,
   MemoryScope,
   Message,
+  MessageAttachment,
   Project,
   ProjectInput,
   Role,
@@ -24,6 +25,7 @@ import type {
 import {
   auditLogSchema,
   declaredArtifactSchema,
+  messageAttachmentsSchema,
   searchQuerySchema,
   tagSchema,
   todoSchema,
@@ -411,6 +413,34 @@ export async function updateMessage(id: string, content: string): Promise<void> 
   ]);
 }
 
+export function parseMessageAttachments(raw: unknown): MessageAttachment[] {
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    console.warn("parseMessageAttachments: invalid JSON, dropping attachments");
+    return [];
+  }
+  const parsed = messageAttachmentsSchema.safeParse(value);
+  if (!parsed.success) {
+    console.warn("parseMessageAttachments: invalid attachments, dropping");
+    return [];
+  }
+  return parsed.data;
+}
+
+export async function updateMessageAttachments(
+  id: string,
+  attachments: MessageAttachment[],
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE messages SET attachments = $1 WHERE id = $2", [
+    attachments.length > 0 ? JSON.stringify(attachments) : null,
+    id,
+  ]);
+}
+
 export interface FullMessageInput {
   role: Role;
   content: string;
@@ -602,7 +632,7 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
       [
         newId(),
         branched.id,
@@ -616,6 +646,7 @@ export async function branchConversation(
         sqlNull(m.finish_reason),
         sqlNull(m.tool_log),
         sqlNull(m.artifacts),
+        sqlNull(m.attachments),
         sqlNull(m.model),
         m.created_at,
       ],

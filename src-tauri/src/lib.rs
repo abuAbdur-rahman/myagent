@@ -285,6 +285,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE mcp_servers ADD COLUMN ask_tools TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "add_message_attachments",
+            sql: "ALTER TABLE messages ADD COLUMN attachments TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

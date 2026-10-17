@@ -55,6 +55,12 @@ export const todoSchema = z.object({
 });
 export type Todo = z.infer<typeof todoSchema>;
 
+const messageAttachmentSchema = z.object({
+  dataUrl: z.string().min(1),
+});
+export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
+export const messageAttachmentsSchema = z.array(messageAttachmentSchema);
+
 const messageSchema = z.object({
   id: z.string(),
   conversation_id: z.string(),
@@ -68,6 +74,7 @@ const messageSchema = z.object({
   finish_reason: z.string().nullish(),
   tool_log: z.string().nullish(),
   artifacts: z.string().nullish(),
+  attachments: z.string().nullish(),
   model: z.string().nullish(),
   created_at: z.number(),
 });
