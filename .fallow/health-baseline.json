@@ -1,0 +1,282 @@
+{
+  "kind": "health",
+  "finding_counts": {
+    "src/App.tsx": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "src/components/ArtifactsPanel.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/ChatHeader.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/components/CommandPalette.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/Composer.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 4
+      }
+    },
+    "src/components/ConfirmDialog.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/ContextBar.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/components/Markdown.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/MessageList.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/components/ModelPicker.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "src/components/OnboardingDialog.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/components/ProjectDetail.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/ProjectDialog.tsx": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/components/Sidebar.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/TitleBar.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/TodoChecklist.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/components/TurnCards.tsx": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/components/composer/TipTapEditor.tsx": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/components/composer/chatKeys.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/components/settings/ProvidersPage.tsx": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 4
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/components/settings/SettingsDialog.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/components/settings/SimplePages.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/components/ui.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/lib/api.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/lib/artifacts.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/lib/db.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/lib/export.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/lib/grouping.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/lib/store.tsx": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 8
+      },
+      "crap_high": {
+        "count": 4
+      },
+      "crap_moderate": {
+        "count": 10
+      }
+    },
+    "src/lib/toast.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/lib/updater.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    }
+  },
+  "runtime_coverage_findings": [],
+  "target_keys": [
+    "src/lib/store.tsx:complexity",
+    "src/components/ModelPicker.tsx:untested risk",
+    "src/components/Composer.tsx:complexity",
+    "src/lib/catalog.ts:high impact",
+    "src/lib/export.ts:untested risk",
+    "src/components/composer/TipTapEditor.tsx:untested risk",
+    "src/components/Sidebar.tsx:complexity",
+    "src/lib/updater.ts:untested risk"
+  ]
+}

@@ -5,5 +5,11 @@
   // complexity findings only — dead-code still checks them.
   "health": {
     "ignore": ["src/components/ui/select/**"]
+  },
+  // Pin the complexity gate to the v0.3.0 baseline so `fallow audit` fails only
+  // on regressions introduced after it, not on the inherited hot functions
+  // (AppProvider, sendMessage, …) that predate this release.
+  "audit": {
+    "healthBaseline": ".fallow/health-baseline.json"
   }
 }
