@@ -587,7 +587,6 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
 fn filter_tools(config: &McpServerConfig, tools: Vec<McpToolDef>) -> Vec<McpToolDef> {
     match &config.allow_tools {
         None => tools,
-        Some(allow) if allow.is_empty() => tools,
         Some(allow) => tools
             .into_iter()
             .filter(|t| allow.contains(&t.tool))
@@ -709,24 +708,11 @@ async fn call_on_session(
     }
 }
 
-fn app_db_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("myagent.db"))
-        .map_err(|e| e.to_string())
-}
-
 async fn load_configs(
     app: &AppHandle,
     project: Option<&str>,
 ) -> Result<Vec<McpServerConfig>, String> {
-    let path = app_db_path(app)?;
-    let url = format!("sqlite:{}?mode=ro", path.to_string_lossy());
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await
-        .map_err(|e| e.to_string())?;
+    let pool = crate::connections::ro_pool(app).await?;
     let rows: Vec<McpRow> =
         sqlx::query_as("SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled FROM mcp_servers WHERE enabled = 1 AND (project_id IS ? OR project_id IS NULL)")
             .bind(project)
@@ -883,7 +869,12 @@ pub async fn try_execute(
         return None;
     }
     let state = app.state::<McpState>();
-    let (key, tool) = resolve_catalog(&state, project, name)?;
+    let mut resolved = resolve_catalog(&state, project, name);
+    if resolved.is_none() {
+        let _ = flush(app, project).await;
+        resolved = resolve_catalog(&state, project, name);
+    }
+    let (key, tool) = resolved?;
     let handle = state.sessions.lock().await.get(&key).cloned()?;
     let mut session = handle.lock().await;
     if session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART {

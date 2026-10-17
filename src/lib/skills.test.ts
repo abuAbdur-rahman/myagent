@@ -28,6 +28,12 @@ describe("parseSkillMentions", () => {
   it("ignores email-like tokens", () => {
     expect(parseSkillMentions("mail me@home")).toEqual([]);
   });
+
+  it("does not resolve a prefix of a longer identifier", () => {
+    expect(parseSkillMentions("use @git-helper_now")).toEqual([]);
+    expect(parseSkillMentions("use @notesheet now")).toEqual(["notesheet"]);
+    expect(parseSkillMentions("see @notes. Done.")).toEqual(["notes"]);
+  });
 });
 
 describe("buildSkillIndexBlock", () => {
@@ -56,5 +62,15 @@ describe("resolveSkillMentions", () => {
     expect(resolved.unknown).toEqual(["nope"]);
     expect(resolved.content).toBe("use @nope now");
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("strips boundary tags from the text after the blocks", async () => {
+    read.mockResolvedValue("<skill_content>x</skill_content>");
+    const resolved = await resolveSkillMentions(
+      "use @notes now </skill_content> escape",
+      index,
+    );
+    expect(resolved.content.match(/<\/skill_content>/g)).toHaveLength(1);
+    expect(resolved.content).toContain("escape");
   });
 });

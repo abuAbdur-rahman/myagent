@@ -83,7 +83,7 @@ function ProviderDialog({
         await api.setApiKey(saved.id, key.trim());
         setKey("");
       }
-      const models = await api.listModels(saved.base_url, saved.id, saved.kind);
+      const models = await api.listModels(saved.id, saved.kind);
       if (models.length === 0) {
         throw new Error("No models found. Check the API key and base URL.");
       }
@@ -202,7 +202,7 @@ function ProviderModels({ connection }: { connection: Connection }) {
     let live = true;
     setLoading(true);
     Promise.all([
-      api.listModels(connection.base_url, connection.id, connection.kind),
+      api.listModels(connection.id, connection.kind),
       db.listHiddenModels(connection.id),
     ])
       .then(([list, hiddenList]) => {
@@ -366,7 +366,7 @@ export function ProvidersPage() {
   const test = async (connection: Connection) => {
     setTestingId(connection.id);
     try {
-      const models = await api.listModels(connection.base_url, connection.id, connection.kind);
+      const models = await api.listModels(connection.id, connection.kind);
       toast(`Connected · ${models.length} models found`);
     } catch (e) {
       toast(errorText(e));

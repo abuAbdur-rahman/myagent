@@ -7,6 +7,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tokio::sync::Notify;
 
+use crate::connections;
 use crate::error::{AppError, AppResult};
 use crate::permissions::{self, ApprovalReply};
 use crate::sse;
@@ -98,6 +99,7 @@ pub struct ChatMessage {
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub request_id: String,
+    #[serde(skip)]
     pub base_url: String,
     pub connection_id: String,
     pub model: String,
@@ -125,6 +127,7 @@ pub struct ChatRequest {
 
 #[derive(Deserialize)]
 pub struct TitleRequest {
+    #[serde(skip)]
     pub base_url: String,
     pub connection_id: String,
     pub model: String,
@@ -617,22 +620,24 @@ async fn fetch_model_caps(
 
 #[tauri::command]
 pub async fn list_model_caps(
-    base_url: String,
+    app: AppHandle,
     connection_id: String,
     connection_kind: Option<String>,
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<ModelCaps>> {
+    let base_url = connections::base_url_for(&app, &connection_id).await?;
     let key = vault::get_api_key(&connection_id)?;
     fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await
 }
 
 #[tauri::command]
 pub async fn list_models(
-    base_url: String,
+    app: AppHandle,
     connection_id: String,
     connection_kind: Option<String>,
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
+    let base_url = connections::base_url_for(&app, &connection_id).await?;
     let key = vault::get_api_key(&connection_id)?;
     Ok(
         fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref())
@@ -650,6 +655,7 @@ pub fn cancel_stream(request_id: String, state: State<'_, StreamState>) -> AppRe
 
 #[derive(Deserialize)]
 pub struct SummaryRequest {
+    #[serde(skip)]
     pub base_url: String,
     pub connection_id: String,
     pub model: String,
@@ -679,9 +685,11 @@ fn summary_body(model: &str, text: &str) -> serde_json::Value {
 
 #[tauri::command]
 pub async fn summarize(
-    req: SummaryRequest,
+    mut req: SummaryRequest,
     client: State<'_, reqwest::Client>,
+    app: AppHandle,
 ) -> AppResult<String> {
+    req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
     let key = vault::get_api_key(&req.connection_id)?;
     let cancel = Notify::new();
     let resp = post_with_retry(
@@ -708,9 +716,11 @@ pub async fn summarize(
 
 #[tauri::command]
 pub async fn suggest_title(
-    req: TitleRequest,
+    mut req: TitleRequest,
     client: State<'_, reqwest::Client>,
+    app: AppHandle,
 ) -> AppResult<String> {
+    req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
     let key = vault::get_api_key(&req.connection_id)?;
     let url = endpoint(&req.base_url, "chat/completions");
     let body = serde_json::json!({
@@ -761,12 +771,13 @@ pub async fn suggest_title(
 
 #[tauri::command]
 pub async fn chat_stream(
-    req: ChatRequest,
+    mut req: ChatRequest,
     on_event: Channel<StreamEvent>,
     state: State<'_, StreamState>,
     client: State<'_, reqwest::Client>,
     app: AppHandle,
 ) -> AppResult<()> {
+    req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
     let key = vault::get_api_key(&req.connection_id)?;
     let cancel = state.register(&req.request_id)?;
 
@@ -927,7 +938,7 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             return vec![format!("image#{index}")];
         }
     }
-    vec!["*".to_string()]
+    vec![name.to_string()]
 }
 
 fn assistant_tool_message(
@@ -1719,6 +1730,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn renderer_cannot_supply_base_url() {
+        let chat: ChatRequest = serde_json::from_str(
+            r#"{"request_id":"r1","base_url":"https://attacker.example","connection_id":"c1","model":"m","messages":[]}"#,
+        )
+        .expect("chat request parses");
+        assert!(chat.base_url.is_empty());
+
+        let title: TitleRequest = serde_json::from_str(
+            r#"{"base_url":"https://attacker.example","connection_id":"c1","model":"m","user_text":"u","assistant_text":"a"}"#,
+        )
+        .expect("title request parses");
+        assert!(title.base_url.is_empty());
+
+        let summary: SummaryRequest = serde_json::from_str(
+            r#"{"base_url":"https://attacker.example","connection_id":"c1","model":"m","text":"t"}"#,
+        )
+        .expect("summary request parses");
+        assert!(summary.base_url.is_empty());
+    }
+
+    #[test]
     fn approval_audit_labels_cover_every_reply() {
         assert_eq!(approval_audit_label(ApprovalReply::Once), "once");
         assert_eq!(approval_audit_label(ApprovalReply::Always), "always");
@@ -1833,8 +1865,13 @@ mod tests {
         );
         assert_eq!(
             approval_resources("fs_read", &serde_json::json!({"path": "/tmp"})),
-            vec!["*".to_string()],
-            "mcp tools use action-only granularity"
+            vec!["fs_read".to_string()],
+            "unknown tools scope to their own name"
+        );
+        assert_eq!(
+            approval_resources("mcp__fs__read_file", &serde_json::json!({})),
+            vec!["mcp__fs__read_file".to_string()],
+            "mcp tools scope to the server/tool alias so Always persists"
         );
     }
     use std::cell::{Cell, RefCell};

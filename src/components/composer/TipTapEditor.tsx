@@ -81,7 +81,9 @@ export function TipTapEditor({
       onCreate: ({ editor: created }) => {
         syncEmptyClass(created);
         if (autoFocus) {
-          requestAnimationFrame(() => created.commands.focus("end"));
+          requestAnimationFrame(() => {
+            if (!created.isDestroyed) created.commands.focus("end");
+          });
         }
       },
       onUpdate: ({ editor: updated }) => {

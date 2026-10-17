@@ -1,8 +1,10 @@
 import { skillRead, type SkillInfo } from "./api";
 
+const BOUNDARY_TAGS = /<\/?(?:skill_content|skill_files|file)>/gi;
+
 export function parseSkillMentions(text: string): string[] {
   const found: string[] = [];
-  const pattern = /(^|[\s(>"'])@([a-z0-9-]+)/g;
+  const pattern = /(^|[\s(>"'])@([a-z0-9-]+)(?![A-Za-z0-9_-])/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
     const name = match[2] as string;
@@ -41,5 +43,5 @@ export async function resolveSkillMentions(
     }
   }
   if (blocks.length === 0) return { content: text, unknown };
-  return { content: `${blocks.join("\n\n")}\n\n${text}`, unknown };
+  return { content: `${blocks.join("\n\n")}\n\n${text.replace(BOUNDARY_TAGS, "")}`, unknown };
 }

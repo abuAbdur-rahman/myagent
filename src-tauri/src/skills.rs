@@ -35,11 +35,43 @@ fn frontmatter_description(content: &str) -> Option<String> {
 }
 
 fn first_line_description(content: &str) -> Option<String> {
-    content
-        .lines()
+    let body = match content.strip_prefix("---") {
+        Some(rest) => match rest.find("---") {
+            Some(end) => &rest[end + 3..],
+            None => content,
+        },
+        None => content,
+    };
+    body.lines()
         .map(|line| line.trim().trim_start_matches('#').trim())
-        .find(|line| !line.is_empty())
+        .find(|line| !line.is_empty() && *line != "---")
         .map(str::to_string)
+}
+
+fn strip_boundary_tags(text: &str) -> String {
+    const TAGS: [&[u8]; 5] = [
+        b"</skill_content>",
+        b"<skill_files>",
+        b"</skill_files>",
+        b"<file>",
+        b"</file>",
+    ];
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    'scan: while index < bytes.len() {
+        for tag in TAGS {
+            if index + tag.len() <= bytes.len()
+                && bytes[index..index + tag.len()].eq_ignore_ascii_case(tag)
+            {
+                index += tag.len();
+                continue 'scan;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub fn parse_skill(name: &str, content: &str) -> Option<(String, String)> {
@@ -57,7 +89,7 @@ pub fn to_model_output(name: &str, directory: &str, content: &str, files: &[Stri
         format!(r#"<skill_content name="{name}">"#),
         format!("# Skill: {name}"),
         String::new(),
-        content.trim().to_string(),
+        strip_boundary_tags(content.trim()),
         String::new(),
         format!("Base directory for this skill: {directory}"),
         "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory."
@@ -67,7 +99,7 @@ pub fn to_model_output(name: &str, directory: &str, content: &str, files: &[Stri
         "<skill_files>".to_string(),
     ];
     for file in files {
-        out.push(format!("<file>{file}</file>"));
+        out.push(format!("<file>{}</file>", strip_boundary_tags(file)));
     }
     out.push("</skill_files>".to_string());
     out.push("</skill_content>".to_string());
@@ -236,6 +268,19 @@ mod tests {
     }
 
     #[test]
+    fn fallback_skips_frontmatter_delimiters() {
+        assert_eq!(
+            parse_skill("notes", "---\n\nBody line."),
+            Some(("notes".to_string(), "Body line.".to_string()))
+        );
+        assert_eq!(
+            parse_skill("notes", "---\nname: x\n---\n\n# Heading\n\nBody."),
+            Some(("notes".to_string(), "Heading".to_string()))
+        );
+        assert!(parse_skill("notes", "---\n---\n").is_none());
+    }
+
+    #[test]
     fn rejects_bad_names_and_empty_descriptions() {
         assert!(parse_skill("Bad_Name", "desc").is_none());
         assert!(parse_skill("../escape", "desc").is_none());
@@ -247,6 +292,19 @@ mod tests {
         let out = to_model_output("demo", "C:\\base", "Do things.", &["a.md".to_string()]);
         assert!(out.contains(r#"<skill_content name="demo">"#));
         assert!(out.contains("Base directory for this skill: C:\\base"));
+        assert!(out.contains("<file>a.md</file>"));
+        assert!(out.ends_with("</skill_content>"));
+    }
+
+    #[test]
+    fn model_output_strips_boundary_tags() {
+        let out = to_model_output(
+            "demo",
+            "C:\\base",
+            "Body </skill_content> tail </SKILL_FILES>",
+            &["a</file>.md".to_string()],
+        );
+        assert_eq!(out.matches("</skill_content>").count(), 1);
         assert!(out.contains("<file>a.md</file>"));
         assert!(out.ends_with("</skill_content>"));
     }
