@@ -15,6 +15,17 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ## Now
 
+### v0.3.2: code-mode Phase 0 and Changelog
+
+Exit: every tool result is capped and reports `truncated`; the Changelog page ships.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [x] | D19 | Tool output controls (code-mode Phase 0) | Missing | M | D13 |
+| [x] | G8 | Changelog page (settings, before About) | Missing | S | none |
+
+Plan: `docs/plan/code-mode-migration.md`. Phases 1 and 2 stay in Later.
+
 ### Phase 1: Foundation
 Exit: one command runs green tests on a clean checkout.
 
@@ -164,6 +175,19 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
 | [ ] | J11 | Scheduled runs | Missing | L | B8 |
 | [ ] | J12 | MCP and skills | Missing | L | D4, D5 |
+
+---
+
+### Phase 13: Code mode, Phases 1-2 (gated)
+
+Exit: big results are handles, tool definitions load on demand, and `execute_js` runs behind a setting.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [ ] | D20 | Result handles, `read_result`, on-demand tool definitions | Missing | M | D19 |
+| [ ] | D21 | `execute_js` (QuickJS via `rquickjs`, off by default) | Missing | L | D20, D4, D5 |
+
+Trigger: measured intermediate tokens over ~10K per turn on a regular basis. Spike `rquickjs` on Windows first. Plan: `docs/plan/code-mode-migration.md`.
 
 ---
 
