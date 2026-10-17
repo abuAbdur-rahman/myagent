@@ -3,7 +3,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import Database from "@tauri-apps/plugin-sql";
 import {
   deleteConversation,
-  parseMessageAttachments,
   updateMessageAttachments,
 } from "./db";
 
@@ -35,24 +34,6 @@ describe("deleteConversation", () => {
     await deleteConversation("c1");
     const statements = execute.mock.calls.map(([sql]) => sql as string);
     expect(statements.some((sql) => sql.includes("knowledge_docs"))).toBe(false);
-  });
-});
-
-describe("parseMessageAttachments", () => {
-  it("returns the stored images", () => {
-    const stored = JSON.stringify([{ dataUrl: "data:image/png;base64,AAA" }]);
-    expect(parseMessageAttachments(stored)).toEqual([
-      { dataUrl: "data:image/png;base64,AAA" },
-    ]);
-  });
-
-  it("returns nothing for absent, empty, or malformed values", () => {
-    expect(parseMessageAttachments(null)).toEqual([]);
-    expect(parseMessageAttachments(undefined)).toEqual([]);
-    expect(parseMessageAttachments("")).toEqual([]);
-    expect(parseMessageAttachments("[{}]")).toEqual([]);
-    expect(parseMessageAttachments('{"dataUrl":"x"}')).toEqual([]);
-    expect(parseMessageAttachments("{ not json")).toEqual([]);
   });
 });
 

@@ -25,7 +25,6 @@ import type {
 import {
   auditLogSchema,
   declaredArtifactSchema,
-  messageAttachmentsSchema,
   searchQuerySchema,
   tagSchema,
   todoSchema,
@@ -411,23 +410,6 @@ export async function updateMessage(id: string, content: string): Promise<void> 
     content,
     id,
   ]);
-}
-
-export function parseMessageAttachments(raw: unknown): MessageAttachment[] {
-  if (typeof raw !== "string" || raw.length === 0) return [];
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    console.warn("parseMessageAttachments: invalid JSON, dropping attachments");
-    return [];
-  }
-  const parsed = messageAttachmentsSchema.safeParse(value);
-  if (!parsed.success) {
-    console.warn("parseMessageAttachments: invalid attachments, dropping");
-    return [];
-  }
-  return parsed.data;
 }
 
 export async function updateMessageAttachments(

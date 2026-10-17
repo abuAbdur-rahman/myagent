@@ -7,8 +7,8 @@ import {
   addKnowledgeDoc,
   knowledgeShaExists,
   listKnowledgeDocs,
-  parseMessageAttachments,
 } from "./db";
+import { parseMessageAttachments } from "./attachments";
 import { newId } from "./utils";
 
 export const MAX_FILES_PER_QUERY = 3;
