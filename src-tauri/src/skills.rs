@@ -53,45 +53,73 @@ fn first_line_description(content: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+const MAX_STRIP_PASSES: usize = 8;
+const BOUNDARY_NAMES: [&[u8]; 3] = [b"skill_files", b"skill_content", b"file"];
+
+fn is_tag_boundary(byte: Option<&u8>) -> bool {
+    match byte {
+        None => true,
+        Some(byte) => *byte == b'>' || *byte == b'/' || byte.is_ascii_whitespace(),
+    }
+}
+
+fn match_boundary_tag(bytes: &[u8], index: usize) -> Option<usize> {
+    if bytes[index] != b'<' {
+        return None;
+    }
+    let mut cursor = index + 1;
+    if cursor < bytes.len() && bytes[cursor] == b'/' {
+        cursor += 1;
+    }
+    let name = BOUNDARY_NAMES.iter().find(|name| {
+        cursor + name.len() <= bytes.len()
+            && bytes[cursor..cursor + name.len()].eq_ignore_ascii_case(name)
+    })?;
+    let after = cursor + name.len();
+    if !is_tag_boundary(bytes.get(after)) {
+        return None;
+    }
+    let end = bytes[after..].iter().position(|byte| *byte == b'>')?;
+    Some(after + end + 1)
+}
+
 fn strip_boundary_tags(text: &str) -> String {
     let mut current = text.to_string();
-    loop {
+    for _ in 0..MAX_STRIP_PASSES {
         let next = strip_boundary_tags_once(&current);
         if next == current {
             return current;
         }
         current = next;
     }
+    neutralize_boundary_tags(&current)
 }
 
 fn strip_boundary_tags_once(text: &str) -> String {
-    const NAMES: [&[u8]; 3] = [b"skill_files", b"skill_content", b"file"];
     let bytes = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'<' {
-            let mut cursor = index + 1;
-            if cursor < bytes.len() && bytes[cursor] == b'/' {
-                cursor += 1;
-            }
-            let name = NAMES.iter().find(|name| {
-                cursor + name.len() <= bytes.len()
-                    && bytes[cursor..cursor + name.len()].eq_ignore_ascii_case(name)
-            });
-            if let Some(name) = name {
-                let after = cursor + name.len();
-                let boundary = after >= bytes.len()
-                    || !(bytes[after].is_ascii_alphanumeric()
-                        || bytes[after] == b'_'
-                        || bytes[after] == b'-');
-                if boundary {
-                    if let Some(end) = bytes[after..].iter().position(|byte| *byte == b'>') {
-                        index = after + end + 1;
-                        continue;
-                    }
-                }
-            }
+        if let Some(end) = match_boundary_tag(bytes, index) {
+            index = end;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn neutralize_boundary_tags(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(end) = match_boundary_tag(bytes, index) {
+            out.extend_from_slice(b"&lt;");
+            out.extend_from_slice(&bytes[index + 1..end]);
+            index = end;
+            continue;
         }
         out.push(bytes[index]);
         index += 1;
@@ -317,10 +345,23 @@ mod tests {
         );
         assert_eq!(strip_boundary_tags("</skill_content >"), "");
         assert_eq!(strip_boundary_tags(r#"<file x="y">a"#), "a");
-        assert_eq!(strip_boundary_tags("</skill_content</skill_content>>"), ">");
-        assert_eq!(strip_boundary_tags("<file</file>>"), ">");
+        assert_eq!(strip_boundary_tags("</skill_content</skill_content>>"), "");
+        assert_eq!(strip_boundary_tags("<file</file>>"), "");
         assert_eq!(strip_boundary_tags("<filename>"), "<filename>");
+        assert_eq!(strip_boundary_tags("<file.md>"), "<file.md>");
+        assert_eq!(strip_boundary_tags("<fi<file>le>"), "");
         assert_eq!(strip_boundary_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn neutralizes_tags_recombined_beyond_pass_limit() {
+        let nested = format!(
+            "<sk{}<file>{}ill_content>",
+            "<fi".repeat(9),
+            "le>".repeat(9)
+        );
+        let out = strip_boundary_tags(&nested);
+        assert!(!out.contains("<skill_content>"));
     }
 
     #[test]

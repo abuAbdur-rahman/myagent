@@ -6,7 +6,7 @@ use crate::error::{AppError, AppResult};
 
 pub(crate) fn app_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
-        .app_data_dir()
+        .app_config_dir()
         .map(|dir| dir.join("myagent.db"))
         .map_err(|e| e.to_string())
 }

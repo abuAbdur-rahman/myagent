@@ -119,22 +119,13 @@ mod tests {
     }
 
     #[test]
-    fn known_server_matches_catalog_prefix() {
-        let state = McpState::default();
-        state
-            .catalog
-            .write()
-            .expect("catalog lock")
-            .push(CatalogEntry {
-                alias: mcp_name("srv-a", "do.things"),
-                key: "k".to_string(),
-                tool: "do.things".to_string(),
-                project: None,
-            });
-        assert!(known_server(&state, &mcp_name("srv-a", "do.things")));
-        assert!(known_server(&state, &mcp_name("srv-a", "missing")));
-        assert!(!known_server(&state, &mcp_name("other", "x")));
-        assert!(!known_server(&state, "fs_read"));
+    fn server_namespace_extracts_prefix() {
+        assert_eq!(
+            server_namespace(&mcp_name("srv-a", "do.things")),
+            Some("srv-a")
+        );
+        assert_eq!(server_namespace("mcp__srv-a"), None);
+        assert_eq!(server_namespace("fs_read"), None);
     }
 
     #[test]
@@ -453,7 +444,7 @@ fn initialize_body(id: u64) -> Value {
         "params": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "myagent", "version": "0.3.0"},
+            "clientInfo": {"name": "myagent", "version": env!("CARGO_PKG_VERSION")},
         },
     })
 }
@@ -760,6 +751,44 @@ async fn load_configs(
         .collect())
 }
 
+async fn collect_catalog(
+    state: &McpState,
+    configs: &[McpServerConfig],
+) -> (Vec<McpToolDef>, Vec<CatalogEntry>) {
+    let mut defs: Vec<McpToolDef> = Vec::new();
+    let mut catalog: Vec<CatalogEntry> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for config in configs {
+        let key = McpState::key(config);
+        let handle = state.sessions.lock().await.get(&key).cloned();
+        let Some(handle) = handle else {
+            continue;
+        };
+        let session = handle.lock().await;
+        for def in &session.tools {
+            let alias = mcp_name(&def.server, &def.tool);
+            if !seen.insert(alias.clone()) {
+                eprintln!("mcp: duplicate tool alias {alias} ignored");
+                continue;
+            }
+            defs.push(def.clone());
+            catalog.push(CatalogEntry {
+                alias,
+                key: key.clone(),
+                tool: def.tool.clone(),
+                project: session.config.project_id.clone(),
+            });
+        }
+    }
+    (defs, catalog)
+}
+
+fn publish_catalog(state: &McpState, catalog: Vec<CatalogEntry>) {
+    if let Ok(mut guard) = state.catalog.write() {
+        *guard = catalog;
+    }
+}
+
 pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpToolDef>, String> {
     let configs = load_configs(app, project).await?;
     let state = app.state::<McpState>();
@@ -768,11 +797,8 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
         let mut guard = state.sessions.lock().await;
         guard.retain(|key, _| live.contains(key));
     }
-    let mut defs: Vec<McpToolDef> = Vec::new();
-    let mut catalog: Vec<CatalogEntry> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for config in configs {
-        let key = McpState::key(&config);
+    for config in &configs {
+        let key = McpState::key(config);
         let existing = state.sessions.lock().await.get(&key).cloned();
         let handle = match existing {
             Some(handle) => handle,
@@ -787,7 +813,7 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
                         url: endpoint.to_string(),
                     }
                 } else {
-                    match spawn_stdio(&config).await {
+                    match spawn_stdio(config).await {
                         Ok(transport) => transport,
                         Err(error) => {
                             eprintln!("mcp: spawn {} failed: {error}", config.name);
@@ -796,7 +822,7 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
                     }
                 };
                 let created = Arc::new(tokio::sync::Mutex::new(Session {
-                    config,
+                    config: config.clone(),
                     transport,
                     tools: Vec::new(),
                     timeouts: 0,
@@ -824,25 +850,39 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
                 continue;
             }
         }
-        for def in &session.tools {
-            let alias = mcp_name(&def.server, &def.tool);
-            if !seen.insert(alias.clone()) {
-                eprintln!("mcp: duplicate tool alias {alias} ignored");
-                continue;
-            }
-            defs.push(def.clone());
-            catalog.push(CatalogEntry {
-                alias,
-                key: key.clone(),
-                tool: def.tool.clone(),
-                project: session.config.project_id.clone(),
-            });
+    }
+    let (defs, catalog) = collect_catalog(&state, &configs).await;
+    publish_catalog(&state, catalog);
+    Ok(defs)
+}
+
+async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> Result<(), String> {
+    let state = app.state::<McpState>();
+    let configs = load_configs(app, project).await?;
+    let targets: Vec<String> = configs
+        .iter()
+        .filter(|config| mcp_namespace(&config.name) == server)
+        .map(McpState::key)
+        .collect();
+    let mut relisted = false;
+    for key in &targets {
+        let handle = state.sessions.lock().await.get(key).cloned();
+        let Some(handle) = handle else {
+            continue;
+        };
+        let mut session = handle.lock().await;
+        match initialize_session(&mut session).await {
+            Ok(()) => relisted = true,
+            Err(error) => eprintln!("mcp: re-list {} failed: {error}", session.config.name),
         }
     }
-    if let Ok(mut guard) = state.catalog.write() {
-        *guard = catalog;
+    if !relisted {
+        flush(app, project).await?;
+        return Ok(());
     }
-    Ok(defs)
+    let (_defs, catalog) = collect_catalog(&state, &configs).await;
+    publish_catalog(&state, catalog);
+    Ok(())
 }
 
 pub fn spec_for(def: &McpToolDef) -> Value {
@@ -877,20 +917,10 @@ fn resolve_catalog(
     fallback
 }
 
-fn known_server(state: &McpState, name: &str) -> bool {
-    let rest = match name.strip_prefix(MCP_PREFIX) {
-        Some(rest) => rest,
-        None => return false,
-    };
-    let target = match rest.split_once("__") {
-        Some((server, _)) => format!("{MCP_PREFIX}{server}__"),
-        None => return false,
-    };
-    state
-        .catalog
-        .read()
-        .map(|guard| guard.iter().any(|entry| entry.alias.starts_with(&target)))
-        .unwrap_or(false)
+fn server_namespace(name: &str) -> Option<&str> {
+    name.strip_prefix(MCP_PREFIX)?
+        .split_once("__")
+        .map(|(server, _)| server)
 }
 
 pub async fn try_execute(
@@ -905,8 +935,12 @@ pub async fn try_execute(
     }
     let state = app.state::<McpState>();
     let mut resolved = resolve_catalog(&state, project, name);
-    if resolved.is_none() && !known_server(&state, name) {
-        if let Err(error) = flush(app, project).await {
+    if resolved.is_none() {
+        let refreshed = match server_namespace(name) {
+            Some(server) => relist_server(app, project, server).await,
+            None => flush(app, project).await.map(|_| ()),
+        };
+        if let Err(error) = refreshed {
             eprintln!("mcp: refresh for {name} failed: {error}");
         }
         resolved = resolve_catalog(&state, project, name);
