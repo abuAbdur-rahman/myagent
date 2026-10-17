@@ -19,7 +19,7 @@ import {
   installUpdate,
   type Update,
 } from "../../lib/updater";
-import type { Memory } from "../../lib/types";
+import type { AuditLog, Memory } from "../../lib/types";
 
 function SettingRow({
   label,
@@ -228,6 +228,77 @@ export function McpPage() {
         Every MCP tool call asks first unless you allow it. Per-tool Always lives on the approval
         card.
       </p>
+    </div>
+  );
+}
+
+export function AuditPage() {
+  const [rows, setRows] = useState<AuditLog[]>([]);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      setRows(await db.listAuditLogs(search));
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, [search]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const clear = async () => {
+    const confirmed = await confirmDialog({
+      title: "Clear the audit log?",
+      body: "Every recorded approval decision will be permanently removed. This cannot be undone.",
+      danger: true,
+      ok: "Clear log",
+    });
+    if (!confirmed) return;
+    try {
+      await db.clearAuditLog();
+      toast("Audit log cleared");
+      await reload();
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  return (
+    <div>
+      <SettingRow label="Search" description="Filter by tool, decision or detail">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="web_fetch"
+          aria-label="Search audit log"
+          autoComplete="off"
+        />
+      </SettingRow>
+      {rows.length === 0 && (
+        <p className="px-2 py-3 text-xs text-muted">No approval decisions recorded yet.</p>
+      )}
+      {rows.map((row) => (
+        <SettingRow
+          key={row.id}
+          label={row.tool}
+          description={`${row.decision} · ${new Date(row.ts).toLocaleString()}${row.detail ? ` · ${row.detail}` : ""}`}
+        >
+          <span className="text-xs text-muted">{row.conversation_id ?? "global"}</span>
+        </SettingRow>
+      ))}
+      <SettingRow label="Clear log" description="Remove every recorded decision">
+        <Button variant="danger" size="sm" onClick={() => void clear()}>
+          Clear
+        </Button>
+      </SettingRow>
+      {status && (
+        <p className="px-2 py-2 text-xs text-muted" role="status">
+          {status}
+        </p>
+      )}
     </div>
   );
 }

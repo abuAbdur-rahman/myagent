@@ -5,6 +5,7 @@ import {
   Database,
   Info,
   Keyboard,
+  History,
   Palette,
   Plug,
   Search,
@@ -17,6 +18,7 @@ import { ProvidersPage } from "./ProvidersPage";
 import {
   AboutPage,
   AppearancePage,
+  AuditPage,
   DataPage,
   GeneralPage,
   McpPage,
@@ -34,6 +36,7 @@ const PAGES = [
   { id: "models", label: "Models", icon: <Cpu size={16} /> },
   { id: "search", label: "Search", icon: <Search size={16} /> },
   { id: "mcp", label: "MCP", icon: <Blocks size={16} /> },
+  { id: "audit", label: "Audit", icon: <History size={16} /> },
   { id: "memory", label: "Memory", icon: <Brain size={16} /> },
   { id: "data", label: "Data", icon: <Database size={16} /> },
   { id: "shortcuts", label: "Shortcuts", icon: <Keyboard size={16} /> },
@@ -125,6 +128,7 @@ export function SettingsDialog() {
           {page === "models" && <ModelsPage />}
           {page === "search" && <SearchPage />}
           {page === "mcp" && <McpPage />}
+          {page === "audit" && <AuditPage />}
           {page === "memory" && <MemoryPage />}
           {page === "data" && <DataPage />}
           {page === "shortcuts" && <ShortcutsPage />}

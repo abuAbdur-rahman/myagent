@@ -883,6 +883,14 @@ async fn post_with_retry(
     Err(last_error.unwrap_or_else(|| AppError::Network("retry exhausted".to_string())))
 }
 
+fn approval_audit_label(reply: ApprovalReply) -> &'static str {
+    match reply {
+        ApprovalReply::Always => "always",
+        ApprovalReply::Once => "once",
+        ApprovalReply::Deny => "deny(user)",
+    }
+}
+
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
     if name == "run_powershell" {
         if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
@@ -1393,14 +1401,24 @@ impl ToolRunner for RealTools<'_> {
             });
             let reply = tokio::select! {
                 reply = rx => reply.unwrap_or(ApprovalReply::Deny),
-                _ = self.cancel.notified() => return Ok(StepControl::StopTurn),
+                _ = self.cancel.notified() => {
+                    tools::log_audit(
+                        self.app,
+                        self.req.conversation_id.as_deref(),
+                        &name,
+                        approval_audit_label(ApprovalReply::Deny),
+                        &resources.join("\n"),
+                    )
+                    .await;
+                    return Ok(StepControl::StopTurn);
+                }
             };
             if reply == ApprovalReply::Deny {
                 tools::log_audit(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
-                    "deny(user)",
+                    approval_audit_label(reply),
                     &resources.join("\n"),
                 )
                 .await;
@@ -1416,11 +1434,7 @@ impl ToolRunner for RealTools<'_> {
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
-                if reply == ApprovalReply::Always {
-                    "always"
-                } else {
-                    "once"
-                },
+                approval_audit_label(reply),
                 &resources.join("\n"),
             )
             .await;
@@ -1703,6 +1717,13 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_audit_labels_cover_every_reply() {
+        assert_eq!(approval_audit_label(ApprovalReply::Once), "once");
+        assert_eq!(approval_audit_label(ApprovalReply::Always), "always");
+        assert_eq!(approval_audit_label(ApprovalReply::Deny), "deny(user)");
+    }
 
     #[test]
     fn parts_serialize_openai_shape() {

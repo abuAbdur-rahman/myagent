@@ -159,6 +159,16 @@ export const fileCommandSchema = z.object({
 });
 export type FileCommandRow = z.infer<typeof fileCommandSchema>;
 
+export const auditLogSchema = z.object({
+  id: z.string(),
+  ts: z.number(),
+  conversation_id: z.string().nullable(),
+  tool: z.string(),
+  decision: z.string(),
+  detail: z.string().nullable(),
+});
+export type AuditLog = z.infer<typeof auditLogSchema>;
+
 export interface SearchHit {
   conversationId: string;
   messageId: string | null;

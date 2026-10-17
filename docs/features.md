@@ -427,14 +427,14 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A test artifact that calls `parent`, `localStorage` and `invoke` fails on all three.
 
 ## F3. Attachments and project knowledge
-- **Status:** Missing
+- **Status:** Have (0.3.0: composer chips + project Docs tab, sha256 dedupe, sidecar store, capped excerpts)
 - **Ref:** Claude app Projects hold knowledge files every chat inherits; OpenWebUI accepts files in the composer.
 - **Build:** Two paths, one storage: composer attachments plus a project knowledge panel (text notes plus stored docs such as PDF). Files copied into the project docs folder, deduped by hash, shown as chips. Capped text excerpts injected into context; full file re-read waits for the file tools in v2. Size limit. No code execution.
 - **Not:** OCR, full binary parsing.
 - **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)
-- **Status:** Missing
+- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts)
 - **Ref:** Claude and OpenWebUI accept pasted images for vision models.
 - **Build:** Paste or attach, downscale to a max edge, send as a content part only if the model supports it (C3).
 - **Done:** A non-vision model never receives an image part.
@@ -552,12 +552,12 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Switching from the tree matches switching with the arrows.
 
 ## J8. Action audit log
-- **Status:** Missing
+- **Status:** Have (0.3.0: deny-rule/deny-user/once/always rows + Settings Audit page, search, clear-all; included in delete-all)
 - **Build:** An append-only table of tool calls, approvals, denials and "always allow" rule changes with timestamp, chat and exact command. Searchable list in settings; included in delete-all (B11).
 - **Done:** Every approval creates exactly one log row.
 
 ## J9. Prompt and command files
-- **Status:** Missing
+- **Status:** Have (0.3.0: app-data + bundled `commands/*.md` -> slash commands, `$ARGUMENTS`, no-restart refresh; true `.myagents/` on-disk deferred)
 - **Ref:** † Claude Code custom commands are markdown files in the project, now part of skills.
 - **Build:** Markdown files in `.myagents/commands/` become slash commands (G1) whose body is a prompt template with an optional `$ARGUMENTS`. Shown in the menu with their first line as description.
 - **Done:** Adding a file adds a command with no restart.
@@ -574,7 +574,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** A scheduled run produces a stored result.
 
 ## J12. MCP and skills
-- **Status:** Missing
+- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated, streamableHTTP unsupported)
 - **Ref:** † OpenCode and Claude Code both support MCP servers and skills (`SKILL.md`).
 - **Build:** Not before D4 and D5 are proven. Skills first (read a markdown file into context on demand), MCP second, every MCP tool going through the permission engine.
 - **Done:** An MCP tool cannot run without passing D4.

@@ -2,6 +2,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { knowledgeSidecarWipe, knowledgeSidecarWipeAll, type McpServerRow } from "./api";
 import { newId } from "./utils";
 import type {
+  AuditLog,
   Connection,
   ConnectionInput,
   Conversation,
@@ -21,6 +22,7 @@ import type {
   ToolLogEntry,
 } from "./types";
 import {
+  auditLogSchema,
   declaredArtifactSchema,
   searchQuerySchema,
   tagSchema,
@@ -174,6 +176,9 @@ export async function wipeAll(): Promise<void> {
   await db.execute("DELETE FROM conversations");
   await db.execute("DELETE FROM memories");
   await db.execute("DELETE FROM projects");
+  await db.execute("DELETE FROM audit_log");
+  await db.execute("DELETE FROM permission_rules");
+  await db.execute("DELETE FROM mcp_servers");
   await knowledgeSidecarWipeAll();
   await db.execute("VACUUM");
 }
@@ -909,4 +914,28 @@ export async function toggleMcpServer(id: string, enabled: boolean): Promise<voi
 export async function removeMcpServer(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM mcp_servers WHERE id = $1", [id]);
+}
+
+export async function listAuditLogs(search: string, limit = 200): Promise<AuditLog[]> {
+  const db = await getDb();
+  const term = search.trim();
+  const capped = Math.min(Math.max(limit, 1), 500);
+  const rows = term
+    ? await db.select<unknown[]>(
+        "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log WHERE tool LIKE $1 OR decision LIKE $1 OR detail LIKE $1 ORDER BY ts DESC LIMIT $2",
+        [`%${term}%`, capped],
+      )
+    : await db.select<unknown[]>(
+        "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log ORDER BY ts DESC LIMIT $1",
+        [capped],
+      );
+  return rows.flatMap((row) => {
+    const parsed = auditLogSchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export async function clearAuditLog(): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM audit_log");
 }
