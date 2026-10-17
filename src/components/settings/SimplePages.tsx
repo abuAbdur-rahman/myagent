@@ -1,12 +1,36 @@
-import { useCallback, useEffect, useState } from "react";
-import { Check, Moon, Sun, Monitor } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  Monitor,
+  Moon,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Sun,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { useApp, type ThemeMode } from "../../lib/store";
 import * as api from "../../lib/api";
 import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
 import { MemoryEditor } from "../MemoryEditor";
-import { Button, Input, Spinner, Toggle } from "../ui";
-import { Select } from "../ui/select";
+import {
+  Badge,
+  Button,
+  Dialog,
+  IconButton,
+  Input,
+  Pill,
+  Segmented,
+  Spinner,
+  Toggle,
+  type PillTone,
+} from "../ui";
+import { DropdownMenu, Select, type MenuEntry } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
@@ -41,41 +65,793 @@ function SettingRow({
   );
 }
 
-function mcpTargets(transport: string, target: string): { cmd: string | null; url: string | null } {
-  const trimmed = target.trim();
-  return {
-    cmd: transport === "stdio" ? trimmed : null,
-    url: transport === "sse" ? trimmed : null,
-  };
-}
-
 const MCP_TARGET_HINTS: Record<string, { placeholder: string; label: string }> = {
   stdio: { placeholder: "npx my-server", label: "Command" },
   sse: { placeholder: "https://host:8000/sse", label: "URL" },
 };
 
-function McpServerRow({
+const MCP_TRANSPORTS = [
+  { value: "stdio", label: "stdio (local command)" },
+  { value: "sse", label: "sse (remote URL)" },
+];
+
+interface McpPreset {
+  id: string;
+  label: string;
+  transport: string;
+  target: string;
+}
+
+const MCP_PRESETS: McpPreset[] = [
+  {
+    id: "filesystem",
+    label: "Filesystem",
+    transport: "stdio",
+    target: "npx -y @modelcontextprotocol/server-filesystem .",
+  },
+  {
+    id: "fetch",
+    label: "Fetch",
+    transport: "stdio",
+    target: "npx -y @modelcontextprotocol/server-fetch",
+  },
+  {
+    id: "git",
+    label: "Git",
+    transport: "stdio",
+    target: "npx -y @modelcontextprotocol/server-git --repository .",
+  },
+];
+
+type McpDecision = "ask" | "allow" | "block";
+
+interface McpDraft {
+  name: string;
+  transport: string;
+  command: string;
+  url: string;
+}
+
+interface McpPolicy {
+  ask: string[];
+  allow: string[];
+  deny: string[];
+}
+
+interface McpDialogState {
+  open: boolean;
+  editing: api.McpServerRow | null;
+  seed: McpDraft | null;
+}
+
+interface McpErrors {
+  name?: string;
+  target?: string;
+}
+
+type McpState = { tone: PillTone; label: string };
+
+const CLOSED_MCP_DIALOG: McpDialogState = { open: false, editing: null, seed: null };
+
+const EMPTY_MCP_DRAFT: McpDraft = { name: "", transport: "stdio", command: "", url: "" };
+
+const MCP_MODES: { value: string; label: string }[] = [
+  { value: "ask", label: "Ask" },
+  { value: "allow", label: "Allow" },
+  { value: "deny", label: "Block" },
+];
+
+const MCP_DECISIONS: { value: McpDecision; label: string }[] = [
+  { value: "ask", label: "Ask" },
+  { value: "allow", label: "Allow" },
+  { value: "block", label: "Block" },
+];
+
+const MCP_COMMAND_HINT = "Run on this machine. A missing binary shows as Failed until it starts.";
+const MCP_URL_HINT =
+  "Reached over the network. The URL is fetched from the Rust side, never the webview.";
+const MCP_NAME_HINT = "Letters, numbers, hyphen, or underscore. Shown on every approval prompt.";
+
+function mcpProjectId(project: { id: string } | null | undefined): string | null {
+  return project?.id ?? null;
+}
+
+function mcpScope(project: { name: string } | null | undefined): string {
+  return project ? "Project: " + project.name : "Global (all chats)";
+}
+
+function mcpTarget(server: api.McpServerRow): string {
+  return (server.transport === "stdio" ? server.cmd : server.url) ?? "";
+}
+
+function mcpTargetText(server: api.McpServerRow): { text: string; title?: string } {
+  const raw = mcpTarget(server);
+  return { text: raw || "No target set", title: raw || undefined };
+}
+
+function mcpDraftTarget(draft: McpDraft): string {
+  return draft.transport === "stdio" ? draft.command : draft.url;
+}
+
+function mcpDraftWithTarget(draft: McpDraft, value: string): McpDraft {
+  return draft.transport === "stdio" ? { ...draft, command: value } : { ...draft, url: value };
+}
+
+function mcpDraft(server: api.McpServerRow): McpDraft {
+  return {
+    name: server.name,
+    transport: server.transport,
+    command: server.cmd ?? "",
+    url: server.url ?? "",
+  };
+}
+
+function mcpPresetDraft(preset: McpPreset): McpDraft {
+  const stdio = preset.transport === "stdio";
+  return {
+    name: preset.id,
+    transport: preset.transport,
+    command: stdio ? preset.target : "",
+    url: stdio ? "" : preset.target,
+  };
+}
+
+function mcpHint(transport: string) {
+  return MCP_TARGET_HINTS[transport] ?? MCP_TARGET_HINTS.stdio;
+}
+
+function mcpPolicy(server: api.McpServerRow): McpPolicy {
+  return {
+    ask: api.mcpToolList(server.ask_tools),
+    allow: api.mcpToolList(server.allow_tools),
+    deny: api.mcpToolList(server.deny_tools),
+  };
+}
+
+function mcpInherited(server: api.McpServerRow): McpDecision {
+  if (server.approval_mode === "allow") return "allow";
+  if (server.approval_mode === "deny") return "block";
+  return "ask";
+}
+
+function mcpDecision(server: api.McpServerRow, tool: string): McpDecision {
+  const policy = mcpPolicy(server);
+  if (policy.deny.includes(tool)) return "block";
+  if (policy.allow.includes(tool)) return "allow";
+  if (policy.ask.includes(tool)) return "ask";
+  return mcpInherited(server);
+}
+
+function mcpWithDecision(
+  server: api.McpServerRow,
+  tool: string,
+  decision: McpDecision,
+): McpPolicy {
+  const policy = mcpPolicy(server);
+  const rest = {
+    ask: policy.ask.filter((name) => name !== tool),
+    allow: policy.allow.filter((name) => name !== tool),
+    deny: policy.deny.filter((name) => name !== tool),
+  };
+  if (decision === mcpInherited(server)) return rest;
+  if (decision === "ask") rest.ask.push(tool);
+  else if (decision === "allow") rest.allow.push(tool);
+  else rest.deny.push(tool);
+  return rest;
+}
+
+function mcpServerTools(probe: api.McpProbe | undefined): api.McpToolInfo[] {
+  return probe?.tools ?? [];
+}
+
+function mcpAllowedCount(server: api.McpServerRow, tools: api.McpToolInfo[]): number {
+  return tools.filter((tool) => mcpDecision(server, tool.name) === "allow").length;
+}
+
+function mcpProbeError(probe: api.McpProbe | undefined): string {
+  return probe?.error || "Could not connect.";
+}
+
+function mcpNameFormatError(name: string): string | null {
+  if (!name) return "Name is required.";
+  if (name.length > 64) return "Keep the name under 64 characters.";
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) return "Use letters, numbers, hyphen, or underscore.";
+  return null;
+}
+
+function mcpNameError(
+  name: string,
+  servers: api.McpServerRow[],
+  editing: string | null,
+): string | null {
+  const trimmed = name.trim();
+  const format = mcpNameFormatError(trimmed);
+  if (format) return format;
+  const clash = servers.some((server) => server.id !== editing && server.name === trimmed);
+  return clash ? "Another server in this scope already uses this name." : null;
+}
+
+function mcpTargetMissingError(transport: string): string {
+  return transport === "stdio" ? "Command is required." : "URL is required.";
+}
+
+function mcpTargetError(draft: McpDraft): string | null {
+  const target = mcpDraftTarget(draft).trim();
+  if (!target) return mcpTargetMissingError(draft.transport);
+  if (draft.transport !== "sse") return null;
+  return /^https?:\/\//i.test(target) ? null : "URL must start with http:// or https://.";
+}
+
+function mcpErrors(
+  draft: McpDraft,
+  servers: api.McpServerRow[],
+  editing: api.McpServerRow | null,
+): McpErrors {
+  const name = mcpNameError(draft.name, servers, editing?.id ?? null);
+  const target = mcpTargetError(draft);
+  return { name: name ?? undefined, target: target ?? undefined };
+}
+
+function mcpInvalid(error: string | undefined): boolean | undefined {
+  return error ? true : undefined;
+}
+
+function mcpProbeState(probe: api.McpProbe | undefined, probing: boolean): McpState {
+  if (probing) return { tone: "accent", label: "Connecting" };
+  if (!probe) return { tone: "neutral", label: "Not checked" };
+  return probe.status === "connected"
+    ? { tone: "success", label: "Connected" }
+    : { tone: "danger", label: "Failed" };
+}
+
+function mcpStatus(
+  server: api.McpServerRow,
+  probe: api.McpProbe | undefined,
+  probing: boolean,
+): McpState {
+  if (!server.enabled) return { tone: "neutral", label: "Off" };
+  return mcpProbeState(probe, probing);
+}
+
+function mcpToolSummary(count: number, allowed: number): string {
+  const tools = count === 1 ? "1 tool" : count + " tools";
+  return allowed > 0 ? tools + " · " + allowed + " always allowed" : tools;
+}
+
+function mcpDialogTitle(editing: api.McpServerRow | null): string {
+  return editing ? "Edit " + editing.name : "Add MCP server";
+}
+
+function Callout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-2 flex items-start gap-2.5 rounded-card border border-border bg-surface px-3 py-2.5">
+      <ShieldCheck size={15} className="mt-0.5 flex-none text-accent" aria-hidden />
+      <p className="text-xs text-muted">{children}</p>
+    </div>
+  );
+}
+
+function McpPageHeader({
+  scope,
+  count,
+  onAdd,
+}: {
+  scope: string;
+  count: number;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 px-2">
+      <div className="min-w-0">
+        <h3 className="text-sm font-medium">MCP servers</h3>
+        <p className="text-xs text-muted">
+          {scope} · {count} {count === 1 ? "server" : "servers"}
+        </p>
+      </div>
+      <Button variant="primary" size="sm" onClick={onAdd}>
+        <Plus size={14} />
+        Add server
+      </Button>
+    </div>
+  );
+}
+
+function McpToolList({
   server,
-  onToggle,
-  onRemove,
+  tools,
+  probing,
+  onReconnect,
+  onDecision,
 }: {
   server: api.McpServerRow;
-  onToggle: (id: string, enabled: boolean) => void;
-  onRemove: (id: string) => void;
+  tools: api.McpToolInfo[];
+  probing: boolean;
+  onReconnect: (id: string) => void;
+  onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
 }) {
-  const detail = server.transport === "stdio" ? (server.cmd ?? "") : (server.url ?? "");
+  if (tools.length === 0) {
+    return (
+      <p className="text-xs text-muted">
+        Tools are listed after a connection.{" "}
+        <button
+          type="button"
+          className="underline hover:text-text"
+          disabled={probing}
+          onClick={() => onReconnect(server.id)}
+        >
+          Connect now
+        </button>
+      </p>
+    );
+  }
   return (
-    <SettingRow label={server.name} description={`${server.transport} · ${detail}`}>
-      <Toggle
-        checked={server.enabled}
-        onChange={(next) => onToggle(server.id, next)}
-        label={`Enable ${server.name}`}
-      />
-      <Button variant="danger" size="sm" onClick={() => onRemove(server.id)}>
-        Remove
-      </Button>
-    </SettingRow>
+    <div className="flex flex-col gap-0.5">
+      <ul className="flex flex-col divide-y divide-border">
+        {tools.map((tool) => (
+          <li key={tool.name} className="flex items-center gap-3 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-mono text-xs">{tool.name}</div>
+              {tool.description && (
+                <div className="truncate text-xs text-muted" title={tool.description}>
+                  {tool.description}
+                </div>
+              )}
+            </div>
+            <Segmented<McpDecision>
+              value={mcpDecision(server, tool.name)}
+              options={MCP_DECISIONS}
+              onChange={(value) => onDecision(server, tool.name, value)}
+              label={"Approval for " + tool.name}
+            />
+          </li>
+        ))}
+      </ul>
+      <p className="pt-2 text-xs text-muted">
+        Blocked tools are hidden from the model. Allowed tools run without asking.
+      </p>
+    </div>
   );
+}
+
+function McpToolsPanel(props: {
+  server: api.McpServerRow;
+  tools: api.McpToolInfo[];
+  probing: boolean;
+  onReconnect: (id: string) => void;
+  onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
+}) {
+  if (!props.server.enabled) {
+    return (
+      <div className="border-t border-border px-3 py-2.5">
+        <p className="text-xs text-muted">Enable this server to see its tools.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="border-t border-border px-3 py-2.5">
+      <McpToolList {...props} />
+    </div>
+  );
+}
+
+function McpFailure({
+  id,
+  error,
+  onReconnect,
+}: {
+  id: string;
+  error: string;
+  onReconnect: (id: string) => void;
+}) {
+  return (
+    <div className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
+      <TriangleAlert size={13} className="mt-0.5 flex-none" aria-hidden />
+      <span className="min-w-0 break-words">{error}</span>
+      <button
+        type="button"
+        className="flex-none underline hover:no-underline"
+        onClick={() => onReconnect(id)}
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+function McpIdentity({
+  server,
+  probe,
+  state,
+  onReconnect,
+}: {
+  server: api.McpServerRow;
+  probe: api.McpProbe | undefined;
+  state: McpState;
+  onReconnect: (id: string) => void;
+}) {
+  const { text, title } = mcpTargetText(server);
+  const failed = state.label === "Failed";
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="truncate text-sm font-medium">{server.name}</span>
+        <Badge>{server.transport}</Badge>
+        <Pill tone={state.tone}>{state.label}</Pill>
+      </div>
+      <div className="mt-0.5 truncate font-mono text-xs text-muted" title={title}>
+        {text}
+      </div>
+      {failed && (
+        <McpFailure id={server.id} error={mcpProbeError(probe)} onReconnect={onReconnect} />
+      )}
+    </div>
+  );
+}
+
+function mcpServerMenu(
+  server: api.McpServerRow,
+  probing: boolean,
+  handlers: {
+    onEdit: (server: api.McpServerRow) => void;
+    onRemove: (server: api.McpServerRow) => void;
+    onReconnect: (id: string) => void;
+  },
+): MenuEntry[] {
+  return [
+    {
+      id: "edit",
+      label: "Edit",
+      icon: <Pencil size={15} />,
+      onSelect: () => handlers.onEdit(server),
+    },
+    {
+      id: "reconnect",
+      label: "Reconnect",
+      icon: <RefreshCw size={15} />,
+      disabled: !server.enabled || probing,
+      onSelect: () => handlers.onReconnect(server.id),
+    },
+    { id: "separator", type: "separator" },
+    {
+      id: "remove",
+      label: "Remove",
+      icon: <Trash2 size={15} />,
+      danger: true,
+      onSelect: () => handlers.onRemove(server),
+    },
+  ];
+}
+
+function McpServerDefaults({
+  server,
+  summary,
+  open,
+  onToggleOpen,
+  onApproval,
+}: {
+  server: api.McpServerRow;
+  summary: string;
+  open: boolean;
+  onToggleOpen: () => void;
+  onApproval: (id: string, mode: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-3 py-2">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted">Default for its tools</span>
+        <Segmented<string>
+          value={server.approval_mode}
+          options={MCP_MODES}
+          onChange={(value) => onApproval(server.id, value)}
+          label={"Default approval for " + server.name}
+        />
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-muted">{summary}</span>
+        <Button variant="ghost" size="sm" aria-expanded={open} onClick={onToggleOpen}>
+          {open ? "Hide tools" : "Tools"}
+          <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function McpServerCard({
+  index,
+  server,
+  probe,
+  probing,
+  onToggle,
+  onEdit,
+  onRemove,
+  onReconnect,
+  onDecision,
+  onApproval,
+}: {
+  index: number;
+  server: api.McpServerRow;
+  probe: api.McpProbe | undefined;
+  probing: boolean;
+  onToggle: (id: string, enabled: boolean) => void;
+  onEdit: (server: api.McpServerRow) => void;
+  onRemove: (server: api.McpServerRow) => void;
+  onReconnect: (id: string) => void;
+  onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
+  onApproval: (id: string, mode: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const tools = mcpServerTools(probe);
+  const state = mcpStatus(server, probe, probing);
+  const menu = mcpServerMenu(server, probing, { onEdit, onRemove, onReconnect });
+
+  return (
+    <div
+      className={cn(
+        "rounded-card border border-border bg-surface",
+        !server.enabled && "opacity-60",
+      )}
+    >
+      <div className="flex items-start gap-3 px-3 py-3">
+        <span className="mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-control border border-border text-xs tabular-nums text-muted">
+          {index + 1}
+        </span>
+        <McpIdentity server={server} probe={probe} state={state} onReconnect={onReconnect} />
+        <Toggle
+          checked={server.enabled}
+          onChange={(next) => onToggle(server.id, next)}
+          label={"Enable " + server.name}
+        />
+        <DropdownMenu
+          align="end"
+          aria-label={"Options for " + server.name}
+          trigger={
+            <IconButton label={"Options for " + server.name}>
+              <MoreHorizontal size={16} />
+            </IconButton>
+          }
+          items={menu}
+        />
+      </div>
+      <McpServerDefaults
+        server={server}
+        summary={mcpToolSummary(tools.length, mcpAllowedCount(server, tools))}
+        open={open}
+        onToggleOpen={() => setOpen((current) => !current)}
+        onApproval={onApproval}
+      />
+      {open && (
+        <McpToolsPanel
+          server={server}
+          tools={tools}
+          probing={probing}
+          onReconnect={onReconnect}
+          onDecision={onDecision}
+        />
+      )}
+    </div>
+  );
+}
+
+function McpEmptyState({ onPreset }: { onPreset: (preset: McpPreset) => void }) {
+  return (
+    <div className="mx-2 rounded-card border border-dashed border-border px-4 py-6 text-center">
+      <p className="text-sm">No servers in this scope yet.</p>
+      <p className="mt-1 text-xs text-muted">
+        Start from a preset and edit the command if your setup differs.
+      </p>
+      <div className="mt-3 flex flex-wrap justify-center gap-2">
+        {MCP_PRESETS.map((preset) => (
+          <Button key={preset.id} size="sm" onClick={() => onPreset(preset)}>
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function McpField({
+  label,
+  hint,
+  error,
+  children,
+}: {
+  label: string;
+  hint: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium">{label}</span>
+      {children}
+      <span className="text-xs text-muted">{hint}</span>
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </label>
+  );
+}
+
+function McpDialogFields({
+  draft,
+  setDraft,
+  errors,
+  nameRef,
+  targetRef,
+}: {
+  draft: McpDraft;
+  setDraft: (draft: McpDraft) => void;
+  errors: McpErrors;
+  nameRef: React.RefObject<HTMLInputElement | null>;
+  targetRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  const hint = mcpHint(draft.transport);
+  const stdio = draft.transport === "stdio";
+  return (
+    <div className="flex flex-col gap-3">
+      <McpField label="Name" hint={MCP_NAME_HINT} error={errors.name}>
+        <Input
+          ref={nameRef}
+          value={draft.name}
+          autoComplete="off"
+          placeholder="filesystem"
+          aria-invalid={mcpInvalid(errors.name)}
+          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+        />
+      </McpField>
+      <McpField label="Transport" hint="How MyAgent reaches the server.">
+        <Select
+          value={draft.transport}
+          onChange={(value) => setDraft({ ...draft, transport: value })}
+          aria-label="Transport"
+          options={MCP_TRANSPORTS}
+        />
+      </McpField>
+      <McpField
+        label={hint.label}
+        hint={stdio ? MCP_COMMAND_HINT : MCP_URL_HINT}
+        error={errors.target}
+      >
+        <Input
+          ref={targetRef}
+          value={mcpDraftTarget(draft)}
+          autoComplete="off"
+          placeholder={hint.placeholder}
+          aria-invalid={mcpInvalid(errors.target)}
+          onChange={(e) => setDraft(mcpDraftWithTarget(draft, e.target.value))}
+        />
+      </McpField>
+    </div>
+  );
+}
+
+function McpDialogFooter({
+  editing,
+  onClose,
+  onSave,
+}: {
+  editing: boolean;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="mt-4 flex justify-end gap-2">
+      <Button variant="ghost" size="sm" onClick={onClose}>
+        Cancel
+      </Button>
+      <Button variant="primary" size="sm" onClick={onSave}>
+        {editing ? "Save" : "Add server"}
+      </Button>
+    </div>
+  );
+}
+
+function McpServerDialog({
+  open,
+  editing,
+  seed,
+  servers,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  editing: api.McpServerRow | null;
+  seed: McpDraft | null;
+  servers: api.McpServerRow[];
+  onClose: () => void;
+  onSave: (draft: McpDraft) => void;
+}) {
+  const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP_DRAFT);
+  const [errors, setErrors] = useState<McpErrors>({});
+  const nameRef = useRef<HTMLInputElement>(null);
+  const targetRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
+    setErrors({});
+  }, [open, editing, seed]);
+
+  const submit = () => {
+    const found = mcpErrors(draft, servers, editing);
+    setErrors(found);
+    if (found.name) {
+      nameRef.current?.focus();
+      return;
+    }
+    if (found.target) {
+      targetRef.current?.focus();
+      return;
+    }
+    onSave(draft);
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} title={mcpDialogTitle(editing)}>
+      <McpDialogFields
+        draft={draft}
+        setDraft={setDraft}
+        errors={errors}
+        nameRef={nameRef}
+        targetRef={targetRef}
+      />
+      <McpDialogFooter
+        editing={editing !== null}
+        onClose={onClose}
+        onSave={submit}
+      />
+    </Dialog>
+  );
+}
+
+function useMcpServers(projectId: string | null) {
+  const [servers, setServers] = useState<api.McpServerRow[]>([]);
+  const [probes, setProbes] = useState<Record<string, api.McpProbe>>({});
+  const [probing, setProbing] = useState<Record<string, boolean>>({});
+  const [status, setStatus] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const rows = await api.mcpList(projectId);
+      setServers(rows);
+      const cached = await api.mcpStatus();
+      setProbes(Object.fromEntries(cached.map((probe) => [probe.id, probe])));
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const run = useCallback(
+    async (action: () => Promise<unknown>, message?: string) => {
+      try {
+        await action();
+        setStatus(null);
+        if (message) toast(message);
+        await reload();
+      } catch (e) {
+        setStatus(errorText(e));
+      }
+    },
+    [reload],
+  );
+
+  const reconnect = useCallback((id: string) => {
+    setProbing((current) => ({ ...current, [id]: true }));
+    void api
+      .mcpProbe(id)
+      .then((probe) => {
+        setProbes((current) => ({ ...current, [id]: probe }));
+        setStatus(null);
+      })
+      .catch((e: unknown) => setStatus(errorText(e)))
+      .finally(() => setProbing((current) => ({ ...current, [id]: false })));
+  }, []);
+
+  return { servers, probes, probing, status, run, reconnect };
 }
 
 function AuditRow({ row }: { row: AuditLog }) {
@@ -167,120 +943,95 @@ export function GeneralPage() {
 
 export function McpPage() {
   const { activeProject } = useApp();
-  const projectId = activeProject?.id ?? null;
-  const [servers, setServers] = useState<api.McpServerRow[]>([]);
-  const [name, setName] = useState("");
-  const [transport, setTransport] = useState("stdio");
-  const [target, setTarget] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
+  const projectId = mcpProjectId(activeProject);
+  const { servers, probes, probing, status, run, reconnect } = useMcpServers(projectId);
+  const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
 
-  const reload = useCallback(async () => {
-    try {
-      setServers(await api.mcpList(projectId));
-    } catch (e) {
-      setStatus(errorText(e));
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  const add = async () => {
-    if (!name.trim() || !target.trim()) {
-      setStatus("Name and command/URL are required.");
-      return;
-    }
-    try {
-      const { cmd, url } = mcpTargets(transport, target);
-      await api.mcpAdd(projectId, name.trim(), transport, cmd, url);
-      setName("");
-      setTarget("");
-      setStatus("Server added. It connects on the next send.");
-      await reload();
-    } catch (e) {
-      setStatus(errorText(e));
-    }
+  const save = (draft: McpDraft) => {
+    const name = draft.name.trim();
+    const target = mcpDraftTarget(draft).trim();
+    const cmd = draft.transport === "stdio" ? target : null;
+    const url = draft.transport === "sse" ? target : null;
+    const current = dialog.editing;
+    setDialog(CLOSED_MCP_DIALOG);
+    void run(
+      () =>
+        current
+          ? api.mcpUpdate(current.id, name, draft.transport, cmd, url)
+          : api.mcpAdd(projectId, name, draft.transport, cmd, url),
+      current ? "Server updated" : "Server added. It connects on the next send.",
+    );
   };
 
-  const toggle = async (id: string, enabled: boolean) => {
-    try {
-      await api.mcpToggle(id, enabled);
-      await reload();
-    } catch (e) {
-      setStatus(errorText(e));
-    }
+  const remove = async (server: api.McpServerRow) => {
+    const confirmed = await confirmDialog({
+      title: "Remove " + server.name + "?",
+      body: "The server, its tool policy, and its cached tools are removed from this scope.",
+      danger: true,
+      ok: "Remove",
+    });
+    if (confirmed) void run(() => api.mcpRemove(server.id), "Server removed");
   };
 
-  const remove = async (id: string) => {
-    try {
-      await api.mcpRemove(id);
-      await reload();
-    } catch (e) {
-      setStatus(errorText(e));
-    }
+  const decide = (server: api.McpServerRow, tool: string, decision: McpDecision) => {
+    const policy = mcpWithDecision(server, tool, decision);
+    void run(() => api.mcpSetPolicy(server.id, policy.ask, policy.allow, policy.deny));
   };
 
-  const targetHint = MCP_TARGET_HINTS[transport] ?? MCP_TARGET_HINTS.stdio;
+  const close = () => setDialog(CLOSED_MCP_DIALOG);
 
   return (
-    <div>
-      <SettingRow
-        label="Scope"
-        description={activeProject ? `Project: ${activeProject.name}` : "Global (all chats)"}
-      >
-        <span className="text-sm text-muted">
-          {servers.length} server{servers.length === 1 ? "" : "s"}
-        </span>
-      </SettingRow>
-      {servers.map((server) => (
-        <McpServerRow
-          key={server.id}
-          server={server}
-          onToggle={(id, next) => void toggle(id, next)}
-          onRemove={(id) => void remove(id)}
+    <div className="flex flex-col gap-3 pb-2">
+      <McpPageHeader
+        scope={mcpScope(activeProject)}
+        count={servers.length}
+        onAdd={() => setDialog({ open: true, editing: null, seed: null })}
+      />
+      <Callout>
+        Every tool call asks first until you decide otherwise. Allow runs a tool without asking,
+        Block hides it from the model, and a per-tool choice overrides the server default.
+      </Callout>
+      {servers.length === 0 ? (
+        <McpEmptyState
+          onPreset={(preset) => setDialog({ open: true, editing: null, seed: mcpPresetDraft(preset) })}
         />
-      ))}
-      <SettingRow label="New server" description="stdio needs a command; sse needs an http(s) URL">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="fs"
-          aria-label="Server name"
-          autoComplete="off"
-        />
-      </SettingRow>
-      <SettingRow label="Transport" description="How MyAgent reaches the server">
-        <Select
-          size="sm"
-          value={transport}
-          onChange={setTransport}
-          aria-label="Transport"
-          options={[
-            { value: "stdio", label: "stdio" },
-            { value: "sse", label: "sse" },
-          ]}
-        />
-        <Input
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          placeholder={targetHint.placeholder}
-          aria-label={targetHint.label}
-          autoComplete="off"
-        />
-        <Button variant="primary" size="sm" onClick={() => void add()}>
-          Add
-        </Button>
-      </SettingRow>
+      ) : (
+        <div className="flex flex-col gap-2 px-2">
+          {servers.map((server, index) => (
+            <McpServerCard
+              key={server.id}
+              index={index}
+              server={server}
+              probe={probes[server.id]}
+              probing={probing[server.id] === true}
+              onToggle={(id, enabled) =>
+                void run(
+                  () => api.mcpToggle(id, enabled),
+                  enabled ? "Server enabled" : "Server disabled",
+                )
+              }
+              onEdit={(target) => setDialog({ open: true, editing: target, seed: null })}
+              onRemove={(target) => void remove(target)}
+              onReconnect={reconnect}
+              onDecision={decide}
+              onApproval={(id, mode) => void run(() => api.mcpSetApproval(id, mode))}
+            />
+          ))}
+        </div>
+      )}
       {status && (
-        <p className="px-2 py-2 text-xs text-muted" role="status">
+        <p className="px-2 text-xs text-muted" role="status">
           {status}
         </p>
       )}
-      <p className="px-2 py-2 text-xs text-muted">
-        Every MCP tool call asks first unless you allow it. Per-tool Always lives on the approval
-        card.
-      </p>
+      <McpServerDialog
+        open={dialog.open}
+        editing={dialog.editing}
+        seed={dialog.seed}
+        servers={servers}
+        onClose={close}
+        onSave={save}
+      />
     </div>
   );
 }

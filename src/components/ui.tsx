@@ -143,6 +143,115 @@ export function Badge({ children, className }: { children: ReactNode; className?
   );
 }
 
+export type PillTone = "neutral" | "accent" | "success" | "warn" | "danger";
+
+const pillTone: Record<PillTone, string> = {
+  neutral: "border-border text-muted",
+  accent: "border-accent text-accent",
+  success: "border-success text-success",
+  warn: "border-warn text-warn",
+  danger: "border-danger text-danger",
+};
+
+export function Pill({
+  tone = "neutral",
+  children,
+  className,
+}: {
+  tone?: PillTone;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 flex-none items-center gap-1 rounded-full border px-2 text-[11px] font-medium",
+        pillTone[tone],
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+const SEGMENT_STEPS: Record<string, number> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
+function segmentedTabIndex(active: boolean, index: number, position: number): number {
+  if (active) return 0;
+  return index < 0 && position === 0 ? 0 : -1;
+}
+
+function segmentedTone(active: boolean): string {
+  return active ? "bg-active font-semibold text-text" : "text-muted hover:bg-hover";
+}
+
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+  disabled,
+  className,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const index = options.findIndex((option) => option.value === value);
+  const move = (step: number) => {
+    if (options.length === 0) return;
+    const next = (index + step + options.length) % options.length;
+    onChange(options[next].value);
+  };
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className={cn(
+        "inline-flex flex-none rounded-control border border-border p-0.5",
+        className,
+      )}
+    >
+      {options.map((option, position) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={segmentedTabIndex(active, index, position)}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            onKeyDown={(event) => {
+              const step = SEGMENT_STEPS[event.key];
+              if (!step) return;
+              event.preventDefault();
+              move(step);
+            }}
+            className={cn(
+              "h-6 rounded-control px-2 text-xs transition-colors disabled:pointer-events-none disabled:opacity-50",
+              segmentedTone(active),
+              focusRing,
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Avatar({ initials, size = 28 }: { initials: string; size?: number }) {
   return (
     <span

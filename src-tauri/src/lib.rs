@@ -279,6 +279,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE mcp_servers ADD COLUMN deny_tools TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 19,
+            description: "add_mcp_ask_tools",
+            sql: "ALTER TABLE mcp_servers ADD COLUMN ask_tools TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -331,6 +337,11 @@ pub fn run() {
             mcp::mcp_add,
             mcp::mcp_remove,
             mcp::mcp_toggle,
+            mcp::mcp_update,
+            mcp::mcp_set_policy,
+            mcp::mcp_set_approval,
+            mcp::mcp_status,
+            mcp::mcp_probe,
             commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,
@@ -548,7 +559,7 @@ mod migration_tests {
 
         apply_versions(&pool, |v| v > 16).await;
 
-        let row = sqlx::query("SELECT name, transport, cmd, allow_tools, timeout_ms, enabled, approval_mode, deny_tools FROM mcp_servers WHERE id = 's1'")
+        let row = sqlx::query("SELECT name, transport, cmd, allow_tools, timeout_ms, enabled, approval_mode, deny_tools, ask_tools FROM mcp_servers WHERE id = 's1'")
             .fetch_one(&pool)
             .await
             .expect("server survives the upgrade");
@@ -564,6 +575,7 @@ mod migration_tests {
             "existing rows keep asking per call"
         );
         assert_eq!(row.get::<Option<String>, _>("deny_tools"), None);
+        assert_eq!(row.get::<Option<String>, _>("ask_tools"), None);
 
         let servers: i64 = sqlx::query("SELECT COUNT(*) AS c FROM mcp_servers")
             .fetch_one(&pool)

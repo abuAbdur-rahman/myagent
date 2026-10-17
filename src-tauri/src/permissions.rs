@@ -170,6 +170,9 @@ pub async fn check(
     resources: &[String],
     project_id: Option<&str>,
 ) -> AppResult<Effect> {
+    if let Some(effect) = crate::mcp::policy(app, project_id, action).await {
+        return Ok(effect);
+    }
     let rules = load_rules(app, project_id).await?;
     Ok(decide(action, resources, &rules))
 }

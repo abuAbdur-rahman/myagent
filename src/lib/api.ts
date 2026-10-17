@@ -234,6 +234,7 @@ export interface McpServerRow {
   url: string | null;
   allow_tools: string | null;
   deny_tools: string | null;
+  ask_tools: string | null;
   approval_mode: string;
   timeout_ms: number | null;
   enabled: boolean;
@@ -241,6 +242,29 @@ export interface McpServerRow {
 
 export function mcpList(projectId: string | null) {
   return invoke<McpServerRow[]>("mcp_list", { projectId });
+}
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+}
+
+export interface McpProbe {
+  id: string;
+  status: string;
+  error: string | null;
+  tools: McpToolInfo[];
+}
+
+export function mcpToolList(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === "string");
+  } catch {
+    return [];
+  }
 }
 
 export function mcpAdd(
@@ -251,6 +275,32 @@ export function mcpAdd(
   url: string | null,
 ) {
   return invoke<McpServerRow>("mcp_add", { projectId, name, transport, cmd, url });
+}
+
+export function mcpUpdate(
+  id: string,
+  name: string,
+  transport: string,
+  cmd: string | null,
+  url: string | null,
+) {
+  return invoke<McpServerRow>("mcp_update", { id, name, transport, cmd, url });
+}
+
+export function mcpSetPolicy(id: string, ask: string[], allow: string[], deny: string[]) {
+  return invoke<McpServerRow>("mcp_set_policy", { id, ask, allow, deny });
+}
+
+export function mcpSetApproval(id: string, mode: string) {
+  return invoke<McpServerRow>("mcp_set_approval", { id, mode });
+}
+
+export function mcpStatus() {
+  return invoke<McpProbe[]>("mcp_status");
+}
+
+export function mcpProbe(id: string) {
+  return invoke<McpProbe>("mcp_probe", { id });
 }
 
 export function mcpRemove(id: string) {
