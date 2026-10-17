@@ -1,6 +1,6 @@
 import { skillRead, type SkillInfo } from "./api";
 
-const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?=[\s/>])[^>]*>/gi;
+const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?=[\s\u0085/>])[^>]*>/gi;
 const MAX_STRIP_PASSES = 8;
 
 function stripBoundaryTags(text: string): string {

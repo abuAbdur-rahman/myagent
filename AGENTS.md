@@ -78,9 +78,11 @@ Run every check before saying "done".
 3. **Before every push:** run BOTH gates and fix what they find:
    - `fallow dead-code` (and `fallow audit --base main` on a branch)
    - `ocr review -c <sha>`
-4. **If `ocr` fails after 3 attempts:** confirm both `fallow audit --base main`
-   **and** the impeccable audit were run, then push and open the PR. Wait for
-   CodeRabbit; if CodeRabbit also fails (large diff or rate limit), spin up the
-   `audit` and `review` subagents on the commit(s) as the review gate.
-5. **Push only when the gates are clean** or only minor/nit findings remain.
+4. **Push only when the gates are clean** or only minor/nit findings remain.
+5. **If `ocr` fails after 3 attempts** (it is allowed to fail as an override of
+   step 4): confirm `fallow audit --base main` and the impeccable audit
+   (`node <impeccable-skill>/scripts/detect.mjs <changed files>`) were run, then
+   push and open the PR. Wait for CodeRabbit; if CodeRabbit also fails (large
+   diff or rate limit), spin up the `audit` and `review` subagents on the
+   commit(s) as the review gate.
 6. Never force-push, never commit secrets, never commit `node_modules`/`target`/`dist`.

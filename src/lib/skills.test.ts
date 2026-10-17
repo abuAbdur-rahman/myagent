@@ -81,7 +81,7 @@ describe("resolveSkillMentions", () => {
   it("strips self-closing and slash-suffixed boundary tags", async () => {
     read.mockResolvedValue("block");
     const resolved = await resolveSkillMentions(
-      "use @notes <file/> <file /> <file/x> </SKILL_CONTENT/X> end",
+      "use @notes <file/> <file /> <file/x> <file//> </SKILL_CONTENT/X> end",
       index,
     );
     expect(resolved.content).not.toContain("<file");
@@ -92,7 +92,7 @@ describe("resolveSkillMentions", () => {
   it("strips Unicode-whitespace boundary tags", async () => {
     read.mockResolvedValue("block");
     const resolved = await resolveSkillMentions(
-      "use @notes <file\u00A0x> <file\u3000> end",
+      "use @notes <file\u00A0x> <file\u2000> <file\u3000> <file\uFEFFx> end",
       index,
     );
     expect(resolved.content).not.toContain("<file");
@@ -110,8 +110,9 @@ describe("resolveSkillMentions", () => {
 
   it("cannot recombine a boundary tag in the user text", async () => {
     read.mockResolvedValue("block");
-    const nested = `</sk${"<fi".repeat(9)}<file>${"le>".repeat(9)}ill_content>`;
+    const nested = `<sk${"<fi".repeat(7)}<file>${"le>".repeat(7)}ill_content>`;
     const resolved = await resolveSkillMentions(`use @notes ${nested}`, index);
     expect(resolved.content).not.toContain("</skill_content>");
+    expect(resolved.content).toContain("&lt;skill_content>");
   });
 });

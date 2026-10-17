@@ -95,7 +95,7 @@ fn is_tag_boundary(bytes: &[u8], index: usize) -> bool {
 }
 
 fn match_boundary_tag(bytes: &[u8], next_gt: &[usize], index: usize) -> Option<usize> {
-    if bytes[index] != b'<' {
+    if *bytes.get(index)? != b'<' {
         return None;
     }
     let mut cursor = index + 1;
