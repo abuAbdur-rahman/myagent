@@ -41,6 +41,70 @@ function SettingRow({
   );
 }
 
+function mcpTargets(transport: string, target: string): { cmd: string | null; url: string | null } {
+  const trimmed = target.trim();
+  return {
+    cmd: transport === "stdio" ? trimmed : null,
+    url: transport === "sse" ? trimmed : null,
+  };
+}
+
+const MCP_TARGET_HINTS: Record<string, { placeholder: string; label: string }> = {
+  stdio: { placeholder: "npx my-server", label: "Command" },
+  sse: { placeholder: "https://host:8000/sse", label: "URL" },
+};
+
+function McpServerRow({
+  server,
+  onToggle,
+  onRemove,
+}: {
+  server: api.McpServerRow;
+  onToggle: (id: string, enabled: boolean) => void;
+  onRemove: (id: string) => void;
+}) {
+  const detail = server.transport === "stdio" ? (server.cmd ?? "") : (server.url ?? "");
+  return (
+    <SettingRow label={server.name} description={`${server.transport} · ${detail}`}>
+      <Toggle
+        checked={server.enabled}
+        onChange={(next) => onToggle(server.id, next)}
+        label={`Enable ${server.name}`}
+      />
+      <Button variant="danger" size="sm" onClick={() => onRemove(server.id)}>
+        Remove
+      </Button>
+    </SettingRow>
+  );
+}
+
+function AuditRow({ row }: { row: AuditLog }) {
+  const detail = row.detail ? ` · ${row.detail}` : "";
+  return (
+    <SettingRow
+      label={row.tool}
+      description={`${row.decision} · ${new Date(row.ts).toLocaleString()}${detail}`}
+    >
+      <span className="text-xs text-muted">{row.conversation_id ?? "global"}</span>
+    </SettingRow>
+  );
+}
+
+function auditEmptyText(search: string): string {
+  return search.trim() ? "No matching audit entries." : "No approval decisions recorded yet.";
+}
+
+function modelSelectData(models: string[]) {
+  const options = models.map((id) => ({ value: id, label: id }));
+  const has = models.length > 0;
+  return {
+    options,
+    visionOptions: [{ value: "", label: "None (text only)" }, ...options],
+    placeholder: has ? "Select a model" : "No models",
+    visionPlaceholder: has ? "None" : "No models",
+  };
+}
+
 export function GeneralPage() {
   const {
     displayName,
@@ -128,13 +192,8 @@ export function McpPage() {
       return;
     }
     try {
-      await api.mcpAdd(
-        projectId,
-        name.trim(),
-        transport,
-        transport === "stdio" ? target.trim() : null,
-        transport === "sse" ? target.trim() : null,
-      );
+      const { cmd, url } = mcpTargets(transport, target);
+      await api.mcpAdd(projectId, name.trim(), transport, cmd, url);
       setName("");
       setTarget("");
       setStatus("Server added. It connects on the next send.");
@@ -162,6 +221,8 @@ export function McpPage() {
     }
   };
 
+  const targetHint = MCP_TARGET_HINTS[transport] ?? MCP_TARGET_HINTS.stdio;
+
   return (
     <div>
       <SettingRow
@@ -173,20 +234,12 @@ export function McpPage() {
         </span>
       </SettingRow>
       {servers.map((server) => (
-        <SettingRow
+        <McpServerRow
           key={server.id}
-          label={server.name}
-          description={`${server.transport} · ${server.transport === "stdio" ? (server.cmd ?? "") : (server.url ?? "")}`}
-        >
-          <Toggle
-            checked={server.enabled}
-            onChange={(next) => void toggle(server.id, next)}
-            label={`Enable ${server.name}`}
-          />
-          <Button variant="danger" size="sm" onClick={() => void remove(server.id)}>
-            Remove
-          </Button>
-        </SettingRow>
+          server={server}
+          onToggle={(id, next) => void toggle(id, next)}
+          onRemove={(id) => void remove(id)}
+        />
       ))}
       <SettingRow label="New server" description="stdio needs a command; sse needs an http(s) URL">
         <Input
@@ -211,8 +264,8 @@ export function McpPage() {
         <Input
           value={target}
           onChange={(e) => setTarget(e.target.value)}
-          placeholder={transport === "stdio" ? "npx my-server" : "https://host:8000/sse"}
-          aria-label={transport === "stdio" ? "Command" : "URL"}
+          placeholder={targetHint.placeholder}
+          aria-label={targetHint.label}
           autoComplete="off"
         />
         <Button variant="primary" size="sm" onClick={() => void add()}>
@@ -288,18 +341,10 @@ export function AuditPage() {
         />
       </SettingRow>
       {loaded && rows.length === 0 && (
-        <p className="px-2 py-3 text-xs text-muted">
-          {search.trim() ? "No matching audit entries." : "No approval decisions recorded yet."}
-        </p>
+        <p className="px-2 py-3 text-xs text-muted">{auditEmptyText(search)}</p>
       )}
       {rows.map((row) => (
-        <SettingRow
-          key={row.id}
-          label={row.tool}
-          description={`${row.decision} · ${new Date(row.ts).toLocaleString()}${row.detail ? ` · ${row.detail}` : ""}`}
-        >
-          <span className="text-xs text-muted">{row.conversation_id ?? "global"}</span>
-        </SettingRow>
+        <AuditRow key={row.id} row={row} />
       ))}
       <SettingRow label="Clear log" description="Remove every recorded decision">
         <Button variant="danger" size="sm" onClick={() => void clear()}>
@@ -508,6 +553,7 @@ export function AppearancePage() {
 
 export function ModelsPage() {
   const { models, model, setModel, activeConnection, refreshModels, loadingModels, visionFallbackModel, setVisionFallbackModel } = useApp();
+  const { options, visionOptions, placeholder, visionPlaceholder } = modelSelectData(models);
   return (
     <div>
       <SettingRow
@@ -518,10 +564,10 @@ export function ModelsPage() {
           size="sm"
           value={model || null}
           onChange={(next) => setModel(next)}
-          placeholder={models.length ? "Select a model" : "No models"}
+          placeholder={placeholder}
           aria-label="Default model"
           disabled={models.length === 0}
-          options={models.map((id) => ({ value: id, label: id }))}
+          options={options}
         />
       </SettingRow>
       <SettingRow
@@ -532,10 +578,10 @@ export function ModelsPage() {
           size="sm"
           value={visionFallbackModel || null}
           onChange={(next) => setVisionFallbackModel(next)}
-          placeholder={models.length ? "None" : "No models"}
+          placeholder={visionPlaceholder}
           aria-label="Vision fallback model"
           disabled={models.length === 0}
-          options={[{ value: "", label: "None (text only)" }, ...models.map((id) => ({ value: id, label: id }))]}
+          options={visionOptions}
         />
       </SettingRow>
       <SettingRow label="Refresh models" description="Re-fetch the list from the provider">

@@ -77,6 +77,18 @@ function defaultPanelTab(lang: string): PanelTab {
   return "code";
 }
 
+function parseFileCommands(raw: unknown): { rows: FileCommand[]; invalid: number } {
+  const list = Array.isArray(raw) ? raw : [];
+  const rows: FileCommand[] = [];
+  let invalid = 0;
+  for (const item of list) {
+    const parsed = fileCommandSchema.safeParse(item);
+    if (parsed.success) rows.push(parsed.data);
+    else invalid += 1;
+  }
+  return { rows, invalid };
+}
+
 interface AppContextValue {
   ready: boolean;
   error: string | null;
@@ -718,15 +730,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loadFileCommands = useCallback(async () => {
     try {
-      const raw: unknown = await api.listCommands(projectRef.current?.id ?? null);
-      const list = Array.isArray(raw) ? raw : [];
-      const rows: FileCommand[] = [];
-      let invalid = 0;
-      for (const item of list) {
-        const parsed = fileCommandSchema.safeParse(item);
-        if (parsed.success) rows.push(parsed.data);
-        else invalid += 1;
-      }
+      const { rows, invalid } = parseFileCommands(
+        await api.listCommands(projectRef.current?.id ?? null),
+      );
       if (invalid > 0) toast(`${invalid} command file(s) skipped (invalid).`);
       fileCommandsRef.current = rows;
       setFileCommands(rows);
@@ -1013,23 +1019,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .catch(reportError);
   }, []);
 
-  const withSystem = useCallback(
-    (turns: { role: string; content: string | api.ChatContentPart[] }[], summary: string | null = null) => {
-      const system = buildSystemPrompt({
+  const systemPromptFromRefs = useCallback(
+    () =>
+      buildSystemPrompt({
         globalMemories: globalMemoriesRef.current,
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
         skillIndexBlock: skillIndexRef.current || undefined,
-      });
+      }),
+    [],
+  );
+
+  const withSystem = useCallback(
+    (turns: { role: string; content: string | api.ChatContentPart[] }[], summary: string | null = null) => {
+      const system = systemPromptFromRefs();
       return [
         ...(system ? [{ role: "system", content: system }] : []),
         ...(summary ? [summarySystemTurn(summary)] : []),
         ...turns,
       ];
     },
-    [],
+    [systemPromptFromRefs],
   );
 
   const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
@@ -1289,21 +1301,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ? conversationsRef.current.find((c) => c.id === conversationId)
         : undefined;
       if (conversation?.compacted === 1) return true;
-      const system = buildSystemPrompt({
-        globalMemories: globalMemoriesRef.current,
-        project: projectRef.current,
-        projectMemories: projectMemoriesRef.current,
-        userName: displayNameRef.current || undefined,
-        knowledgeBlock: knowledgeBlockRef.current || undefined,
-        skillIndexBlock: skillIndexRef.current || undefined,
-      });
+      const system = systemPromptFromRefs();
       if (estimateContext(turns, system, contextLimitRef.current).pct > 80) {
         toast("Context is over 80% full - sending recent messages only.");
         return true;
       }
       return false;
     },
-    [],
+    [systemPromptFromRefs],
   );
 
   const setCompacted = useCallback(async (id: string, value: boolean) => {
@@ -1369,14 +1374,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const turns = messagesRef.current.filter((m) => m.content.length > 0);
       const fresh = through !== null ? turns.filter((m) => m.created_at > through) : turns;
       if (fresh.length === 0) return;
-      const system = buildSystemPrompt({
-        globalMemories: globalMemoriesRef.current,
-        project: projectRef.current,
-        projectMemories: projectMemoriesRef.current,
-        userName: displayNameRef.current || undefined,
-        knowledgeBlock: knowledgeBlockRef.current || undefined,
-        skillIndexBlock: skillIndexRef.current || undefined,
-      });
+      const system = systemPromptFromRefs();
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
         : applyCompactWindow(turns, false);
@@ -1398,7 +1396,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         count: messagesRef.current.length,
       };
     },
-    [compactActive, summaryFor],
+    [compactActive, summaryFor, systemPromptFromRefs],
   );
 
   const uncompactActive = useCallback(async () => {

@@ -20,6 +20,7 @@ import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
 import { buildAttachmentSend, ingestDoc, isSupportedMime } from "../lib/knowledge";
 import { downscaleImage, isSupportedImage } from "../lib/image";
+import type { FileCommand } from "../lib/types";
 
 const MAX_ATTACH_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -71,6 +72,85 @@ interface AttachChip {
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+type ParsedSlash = { name: string; args: string };
+
+function warnIfShadowed(parsed: ParsedSlash | null, commands: SlashCommand[]): void {
+  if (!parsed) return;
+  if (commands.find((item) => item.name === parsed.name)?.shadowed) {
+    toast(`Built-in /${parsed.name} shadows your file command.`);
+  }
+}
+
+function expandCommandText(
+  text: string,
+  parsed: ParsedSlash | null,
+  commands: FileCommand[],
+): string {
+  if (!parsed) return text;
+  const file = commands.find((command) => command.name === parsed.name);
+  if (!file) return text;
+  const expanded = expandFileCommand(file, parsed.args);
+  if (expanded.appended) toast("Args appended (template has no $ARGUMENTS).");
+  return expanded.text;
+}
+
+async function buildImageChip(file: File, index: number): Promise<AttachChip | null> {
+  if (file.size > MAX_IMAGE_BYTES) {
+    toast(`"${file.name}": over 10 MB, skipped.`);
+    return null;
+  }
+  try {
+    const downscaled = await downscaleImage(file);
+    return {
+      key: `img-${index}-${Date.now()}`,
+      kind: "image",
+      name: file.name,
+      excerpt: "",
+      dataUrl: downscaled.dataUrl,
+    };
+  } catch {
+    toast(`"${file.name}": couldn't read as image.`);
+    return null;
+  }
+}
+
+async function buildFileChip(
+  file: File,
+  projectId: string,
+  index: number,
+): Promise<AttachChip | null> {
+  const mime = mimeForFile(file.name, file.type);
+  if (!isSupportedMime(mime)) {
+    toast(`"${file.name}": type not supported in v1 (text/code/images only).`);
+    return null;
+  }
+  if (file.size > MAX_ATTACH_BYTES) {
+    toast(`"${file.name}": over 1 MB, skipped.`);
+    return null;
+  }
+  try {
+    const text = await file.text();
+    const bytes = new TextEncoder().encode(text);
+    const result = await ingestDoc({ projectId, name: file.name, mime, bytes });
+    if (result.status === "unsupported") {
+      toast(`"${file.name}": type not supported.`);
+      return null;
+    }
+    if (result.status === "duplicate") {
+      toast(`"${file.name}": already in project knowledge, attached anyway.`);
+    }
+    return {
+      key: result.id ?? `${file.name}-${index}`,
+      kind: "file",
+      name: file.name,
+      excerpt: text,
+    };
+  } catch {
+    toast(`"${file.name}": couldn't attach.`);
+    return null;
+  }
 }
 
 function SlashMenu({
@@ -164,65 +244,16 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     if (files.length === 0) return;
     setAttaching(true);
     try {
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
+        let chip: AttachChip | null = null;
         if (isSupportedImage(file.type)) {
-          if (file.size > MAX_IMAGE_BYTES) {
-            toast(`"${file.name}": over 10 MB, skipped.`);
-            continue;
-          }
-          try {
-            const downscaled = await downscaleImage(file);
-            setChips((prev) => [
-              ...prev,
-              {
-                key: `img-${prev.length}-${Date.now()}`,
-                kind: "image",
-                name: file.name,
-                excerpt: "",
-                dataUrl: downscaled.dataUrl,
-              },
-            ]);
-          } catch {
-            toast(`"${file.name}": couldn't read as image.`);
-          }
-          continue;
-        }
-        if (!activeProject) {
+          chip = await buildImageChip(file, index);
+        } else if (activeProject) {
+          chip = await buildFileChip(file, activeProject.id, index);
+        } else {
           toast("Select a project first to attach files.");
-          continue;
         }
-        const mime = mimeForFile(file.name, file.type);
-        if (!isSupportedMime(mime)) {
-          toast(`"${file.name}": type not supported in v1 (text/code/images only).`);
-          continue;
-        }
-        if (file.size > MAX_ATTACH_BYTES) {
-          toast(`"${file.name}": over 1 MB, skipped.`);
-          continue;
-        }
-        try {
-          const text = await file.text();
-          const bytes = new TextEncoder().encode(text);
-          const result = await ingestDoc({
-            projectId: activeProject.id,
-            name: file.name,
-            mime,
-            bytes,
-          });
-          if (result.status === "unsupported") {
-            toast(`"${file.name}": type not supported.`);
-            continue;
-          }
-          if (result.status === "duplicate") {
-            toast(`"${file.name}": already in project knowledge, attached anyway.`);
-          }
-          setChips((prev) => [
-            ...prev,
-            { key: result.id ?? `${file.name}-${prev.length}`, kind: "file", name: file.name, excerpt: text },
-          ]);
-        } catch {
-          toast(`"${file.name}": couldn't attach.`);
-        }
+        if (chip) setChips((prev) => [...prev, chip]);
       }
     } finally {
       setAttaching(false);
@@ -309,22 +340,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setChips([]);
     handle?.focus();
     const parsed = parseSlash(text);
-    if (parsed) {
-      const menuItem = mergedCommands.find((item) => item.name === parsed.name);
-      if (menuItem?.shadowed) {
-        toast(`Built-in /${parsed.name} shadows your file command.`);
-      }
-    }
+    warnIfShadowed(parsed, mergedCommands);
     if (dispatchSlash(text, slashHandlers)) return;
-    let sendText = text;
-    if (parsed) {
-      const file = fileCommands.find((command) => command.name === parsed.name);
-      if (file) {
-        const expanded = expandFileCommand(file, parsed.args);
-        if (expanded.appended) toast("Args appended (template has no $ARGUMENTS).");
-        sendText = expanded.text;
-      }
-    }
+    const sendText = expandCommandText(text, parsed, fileCommands);
     const fileChips = pending.filter((chip) => chip.kind === "file");
     const imagePayloads = pending
       .filter((chip) => chip.kind === "image" && chip.dataUrl)

@@ -38,52 +38,57 @@ function renderMemories(memories: Memory[]): string {
     .join("\n");
 }
 
+function identityBlocks(userName?: string): string[] {
+  const first = userName?.trim()
+    ? `${IDENTITY_LINES[0]} The user's name is ${userName.trim()}.`
+    : IDENTITY_LINES[0];
+  return [first, ...IDENTITY_LINES.slice(1)];
+}
+
+function projectBlock(project: Project, projectMemories: Memory[]): string | null {
+  const parts: string[] = [`## Project: ${project.name}`];
+  const description = project.description.trim();
+  const instructions = project.instructions.trim();
+  const projectMemory = renderMemories(projectMemories);
+
+  if (description) parts.push(description);
+  if (instructions) parts.push(`### Project instructions\n${instructions}`);
+  if (projectMemory) parts.push(`### Project memory\n${projectMemory}`);
+
+  return parts.length > 1 ? parts.join("\n\n") : null;
+}
+
+function appendWithinBudget(base: string, knowledge?: string, skills?: string): string {
+  const used = base.length + (base ? 2 : 0);
+  const skillsRoom = skills ? skills.length + 2 : 0;
+  const knowledgeRoom = Math.max(0, MAX_CHARS - used - skillsRoom);
+  const clippedKnowledge = knowledge?.slice(0, knowledgeRoom).trim();
+  const tail = [clippedKnowledge, skills].filter(
+    (part): part is string => Boolean(part && part.length > 0),
+  );
+  return [base, ...tail]
+    .filter((part) => part.length > 0)
+    .join("\n\n")
+    .slice(0, MAX_CHARS);
+}
+
 export function buildSystemPrompt(input: ContextInput): string | null {
-  const blocks: string[] = [
-    input.userName?.trim()
-      ? `${IDENTITY_LINES[0]} The user's name is ${input.userName.trim()}.`
-      : IDENTITY_LINES[0],
-    ...IDENTITY_LINES.slice(1),
-  ];
+  const blocks = identityBlocks(input.userName);
 
   const global = renderMemories(input.globalMemories);
-  if (global) {
-    blocks.push(`## Durable memory\n${global}`);
-  }
+  if (global) blocks.push(`## Durable memory\n${global}`);
 
   if (input.project) {
-    const parts: string[] = [`## Project: ${input.project.name}`];
-    const description = input.project.description.trim();
-    const instructions = input.project.instructions.trim();
-    const projectMemory = renderMemories(input.projectMemories);
-
-    if (description) parts.push(description);
-    if (instructions) parts.push(`### Project instructions\n${instructions}`);
-    if (projectMemory) parts.push(`### Project memory\n${projectMemory}`);
-
-    if (parts.length > 1) {
-      blocks.push(parts.join("\n\n"));
-    }
+    const project = projectBlock(input.project, input.projectMemories);
+    if (project) blocks.push(project);
   }
 
+  const base = blocks.join("\n\n");
   const skills = input.skillIndexBlock?.trim();
   const knowledge = input.knowledgeBlock?.trim();
-  const base = blocks.join("\n\n");
 
-  if (knowledge || skills) {
-    const used = base.length + (base ? 2 : 0);
-    const skillsRoom = skills ? skills.length + 2 : 0;
-    const knowledgeRoom = Math.max(0, MAX_CHARS - used - skillsRoom);
-    const tail: string[] = [];
-    const clippedKnowledge = knowledge?.slice(0, knowledgeRoom).trim();
-    if (clippedKnowledge) tail.push(clippedKnowledge);
-    if (skills) tail.push(skills);
-    const combined = [base, ...tail].filter((part) => part.length > 0).join("\n\n");
-    return combined.slice(0, MAX_CHARS);
-  }
-
-  if (blocks.length === 0) return null;
-
+  if (knowledge || skills) return appendWithinBudget(base, knowledge, skills);
+  if (!base) return null;
   return base.slice(0, MAX_CHARS);
 }
 
