@@ -35,11 +35,96 @@ fn frontmatter_description(content: &str) -> Option<String> {
 }
 
 fn first_line_description(content: &str) -> Option<String> {
-    content
-        .lines()
+    let lines: Vec<&str> = content.lines().collect();
+    let start = match lines.first().map(|line| line.trim()) {
+        Some("---") => lines
+            .iter()
+            .skip(1)
+            .position(|line| line.trim() == "---")
+            .map(|index| index + 2)
+            .unwrap_or(1),
+        _ => 0,
+    };
+    lines
+        .get(start..)?
+        .iter()
         .map(|line| line.trim().trim_start_matches('#').trim())
         .find(|line| !line.is_empty())
         .map(str::to_string)
+}
+
+const MAX_STRIP_PASSES: usize = 8;
+const BOUNDARY_NAMES: [&[u8]; 3] = [b"skill_files", b"skill_content", b"file"];
+
+fn is_tag_boundary(byte: Option<&u8>) -> bool {
+    match byte {
+        None => true,
+        Some(byte) => *byte == b'>' || *byte == b'/' || byte.is_ascii_whitespace(),
+    }
+}
+
+fn match_boundary_tag(bytes: &[u8], index: usize) -> Option<usize> {
+    if bytes[index] != b'<' {
+        return None;
+    }
+    let mut cursor = index + 1;
+    if cursor < bytes.len() && bytes[cursor] == b'/' {
+        cursor += 1;
+    }
+    let name = BOUNDARY_NAMES.iter().find(|name| {
+        cursor + name.len() <= bytes.len()
+            && bytes[cursor..cursor + name.len()].eq_ignore_ascii_case(name)
+    })?;
+    let after = cursor + name.len();
+    if !is_tag_boundary(bytes.get(after)) {
+        return None;
+    }
+    let end = bytes[after..].iter().position(|byte| *byte == b'>')?;
+    Some(after + end + 1)
+}
+
+fn strip_boundary_tags(text: &str) -> String {
+    let mut current = text.to_string();
+    for _ in 0..MAX_STRIP_PASSES {
+        let next = strip_boundary_tags_once(&current);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+    neutralize_boundary_tags(&current)
+}
+
+fn strip_boundary_tags_once(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(end) = match_boundary_tag(bytes, index) {
+            index = end;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn neutralize_boundary_tags(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(end) = match_boundary_tag(bytes, index) {
+            out.extend_from_slice(b"&lt;");
+            out.extend_from_slice(&bytes[index + 1..end]);
+            index = end;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub fn parse_skill(name: &str, content: &str) -> Option<(String, String)> {
@@ -57,7 +142,7 @@ pub fn to_model_output(name: &str, directory: &str, content: &str, files: &[Stri
         format!(r#"<skill_content name="{name}">"#),
         format!("# Skill: {name}"),
         String::new(),
-        content.trim().to_string(),
+        strip_boundary_tags(content.trim()),
         String::new(),
         format!("Base directory for this skill: {directory}"),
         "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory."
@@ -67,7 +152,7 @@ pub fn to_model_output(name: &str, directory: &str, content: &str, files: &[Stri
         "<skill_files>".to_string(),
     ];
     for file in files {
-        out.push(format!("<file>{file}</file>"));
+        out.push(format!("<file>{}</file>", strip_boundary_tags(file)));
     }
     out.push("</skill_files>".to_string());
     out.push("</skill_content>".to_string());
@@ -236,6 +321,50 @@ mod tests {
     }
 
     #[test]
+    fn fallback_skips_frontmatter_delimiters() {
+        assert_eq!(
+            parse_skill("notes", "---\n\nBody line."),
+            Some(("notes".to_string(), "Body line.".to_string()))
+        );
+        assert_eq!(
+            parse_skill("notes", "---\nname: x\n---\n\n# Heading\n\nBody."),
+            Some(("notes".to_string(), "Heading".to_string()))
+        );
+        assert_eq!(
+            parse_skill("notes", "---\ntitle: a---b\n---\n\n# Real\nBody."),
+            Some(("notes".to_string(), "Real".to_string()))
+        );
+        assert!(parse_skill("notes", "---\n---\n").is_none());
+    }
+
+    #[test]
+    fn strips_attributed_and_nested_boundary_tags() {
+        assert_eq!(
+            strip_boundary_tags(r#"<skill_content name="x">body"#),
+            "body"
+        );
+        assert_eq!(strip_boundary_tags("</skill_content >"), "");
+        assert_eq!(strip_boundary_tags(r#"<file x="y">a"#), "a");
+        assert_eq!(strip_boundary_tags("</skill_content</skill_content>>"), "");
+        assert_eq!(strip_boundary_tags("<file</file>>"), "");
+        assert_eq!(strip_boundary_tags("<filename>"), "<filename>");
+        assert_eq!(strip_boundary_tags("<file.md>"), "<file.md>");
+        assert_eq!(strip_boundary_tags("<fi<file>le>"), "");
+        assert_eq!(strip_boundary_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn neutralizes_tags_recombined_beyond_pass_limit() {
+        let nested = format!(
+            "<sk{}<file>{}ill_content>",
+            "<fi".repeat(9),
+            "le>".repeat(9)
+        );
+        let out = strip_boundary_tags(&nested);
+        assert!(!out.contains("<skill_content>"));
+    }
+
+    #[test]
     fn rejects_bad_names_and_empty_descriptions() {
         assert!(parse_skill("Bad_Name", "desc").is_none());
         assert!(parse_skill("../escape", "desc").is_none());
@@ -247,6 +376,19 @@ mod tests {
         let out = to_model_output("demo", "C:\\base", "Do things.", &["a.md".to_string()]);
         assert!(out.contains(r#"<skill_content name="demo">"#));
         assert!(out.contains("Base directory for this skill: C:\\base"));
+        assert!(out.contains("<file>a.md</file>"));
+        assert!(out.ends_with("</skill_content>"));
+    }
+
+    #[test]
+    fn model_output_strips_boundary_tags() {
+        let out = to_model_output(
+            "demo",
+            "C:\\base",
+            "Body </skill_content> tail </SKILL_FILES>",
+            &["a</file>.md".to_string()],
+        );
+        assert_eq!(out.matches("</skill_content>").count(), 1);
         assert!(out.contains("<file>a.md</file>"));
         assert!(out.ends_with("</skill_content>"));
     }

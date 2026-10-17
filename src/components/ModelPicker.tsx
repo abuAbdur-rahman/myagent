@@ -71,7 +71,7 @@ export function ModelPickerHost() {
           const hasKey = await api.hasApiKey(connection.id);
           if (!hasKey) return [];
           const [list, hidden] = await Promise.all([
-            api.listModels(connection.base_url, connection.id, connection.kind),
+            api.listModels(connection.id, connection.kind),
             db.listHiddenModels(connection.id),
           ]);
           const hiddenSet = new Set(hidden);

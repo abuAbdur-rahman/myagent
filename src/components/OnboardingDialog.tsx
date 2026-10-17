@@ -90,7 +90,7 @@ export function OnboardingDialog() {
       const saved = await saveConnection(parsed.data);
       savedId = saved.id;
       await api.setApiKey(saved.id, key.trim());
-      const found = await api.listModels(saved.base_url, saved.id, saved.kind);
+      const found = await api.listModels(saved.id, saved.kind);
       if (found.length === 0) {
         throw new Error("No models found. Check the API key and base URL.");
       }

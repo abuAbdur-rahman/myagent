@@ -617,7 +617,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       setLoadingModels(true);
       const [list, hidden] = await Promise.all([
-        api.listModels(connection.base_url, connection.id, connection.kind),
+        api.listModels(connection.id, connection.kind),
         db.listHiddenModels(connection.id),
       ]);
       const hiddenSet = new Set(hidden);
@@ -646,7 +646,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     let live = true;
     api
-      .listModelCaps(activeConnection.base_url, activeConnection.id, activeConnection.kind)
+      .listModelCaps(activeConnection.id, activeConnection.kind)
       .then((rows) => {
         if (live) setCatalog(rows);
       })
@@ -776,6 +776,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     contextLimitRef.current = modelContextLimit ?? 128_000;
   }, [modelContextLimit]);
+
+  const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
+  const knowledgeBlockRef = useRef("");
+  const skillIndexRef = useRef("");
+  const pendingVisionFallbackRef = useRef<string | null>(null);
 
   const contextInfo = useMemo(() => {
     const system = buildSystemPrompt({
@@ -1044,11 +1049,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [systemPromptFromRefs],
   );
 
-  const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
-  const knowledgeBlockRef = useRef("");
-  const skillIndexRef = useRef("");
-  const pendingVisionFallbackRef = useRef<string | null>(null);
-
   const streamTurn = useCallback(
     async (
       conversationId: string,
@@ -1099,11 +1099,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
       };
 
+      const hasImages = payload.some(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some((part) => part.type === "image_url"),
+      );
+      const fallbackModel = visionFallbackModelRef.current.trim();
+      pendingVisionFallbackRef.current =
+        hasImages &&
+        fallbackModel &&
+        resolveTools() &&
+        !lookupSupportsVision(catalogRef.current, modelName)
+          ? fallbackModel
+          : null;
+
       try {
         await api.chatStream(
           {
             requestId,
-            baseUrl: connection.base_url,
             connectionId: connection.id,
             model: modelName,
             messages: payload,
@@ -1233,6 +1246,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           assistantMsgIdRef.current = null;
           setStreamingId(null);
           setStreaming(false);
+          pendingVisionFallbackRef.current = null;
           finalize(assistantMsg.id, conversationId);
         }
       }
@@ -1256,7 +1270,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       for (const candidate of candidates) {
         try {
           const title = await api.suggestTitle(
-            connection.base_url,
             connection.id,
             candidate,
             userText,
@@ -1345,7 +1358,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ].join("\n\n");
       try {
         const summary = await api.summarize(
-          connection.base_url,
           connection.id,
           model,
           text,
@@ -1535,13 +1547,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } else if (routed) {
         toast("Reading images with the fallback vision model…");
       }
-      pendingVisionFallbackRef.current = routed ? fallback : null;
       if (gated.dropped || fit.dropped > 0) {
         knowledge = [knowledge, "[Some attached images were removed: no vision support or over budget.]"]
           .filter((part) => part.length > 0)
           .join("\n\n");
       }
       knowledgeBlockRef.current = knowledge;
+      let imagesForPayload = fit.kept;
       if (fit.kept.length > 0) {
         try {
           const stamp = Date.now();
@@ -1550,12 +1562,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
               api.spillImageWrite(conversationId, `img-${stamp}-${index}`, image.dataUrl),
             ),
           );
-        } catch {
-          // spill is best-effort; the payload still carries the images
+        } catch (e) {
+          reportError(e);
+          if (routed) {
+            toast("Couldn't hand images to the vision model — sending text only.");
+            imagesForPayload = [];
+          }
         }
       }
-      if (fit.kept.length > 0) {
-        outgoing.push({ role: "user", content: buildUserContent(sendText, fit.kept) });
+      if (imagesForPayload.length > 0) {
+        outgoing.push({ role: "user", content: buildUserContent(sendText, imagesForPayload) });
       } else {
         outgoing.push({ role: "user", content: sendText });
       }

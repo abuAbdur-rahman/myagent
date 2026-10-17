@@ -28,17 +28,15 @@ export function removeSearchKey(index: number) {
   return invoke<number>("search_key_remove", { index });
 }
 
-export function listModels(baseUrl: string, connectionId: string, connectionKind?: string) {
-  return invoke<string[]>("list_models", { baseUrl, connectionId, connectionKind });
+export function listModels(connectionId: string, connectionKind?: string) {
+  return invoke<string[]>("list_models", { connectionId, connectionKind });
 }
 
 export async function listModelCaps(
-  baseUrl: string,
   connectionId: string,
   connectionKind?: string,
 ): Promise<ModelCapabilities[]> {
   const raw: unknown = await invoke("list_model_caps", {
-    baseUrl,
     connectionId,
     connectionKind,
   });
@@ -58,7 +56,6 @@ export function cancelStream(requestId: string) {
 }
 
 export function suggestTitle(
-  baseUrl: string,
   connectionId: string,
   model: string,
   userText: string,
@@ -67,7 +64,6 @@ export function suggestTitle(
 ) {
   return invoke<string>("suggest_title", {
     req: {
-      base_url: baseUrl,
       connection_id: connectionId,
       model,
       user_text: userText,
@@ -165,7 +161,6 @@ export type ChatContentPart =
 
 export interface ChatStreamArgs {
   requestId: string;
-  baseUrl: string;
   connectionId: string;
   model: string;
   messages: { role: string; content: string | ChatContentPart[] }[];
@@ -190,7 +185,6 @@ export async function chatStream(
   await invoke("chat_stream", {
     req: {
       request_id: args.requestId,
-      base_url: args.baseUrl,
       connection_id: args.connectionId,
       model: args.model,
       messages: args.messages,
@@ -290,7 +284,6 @@ export function knowledgeSidecarWipeAll() {
 }
 
 export function summarize(
-  baseUrl: string,
   connectionId: string,
   model: string,
   text: string,
@@ -298,7 +291,6 @@ export function summarize(
 ) {
   return invoke<string>("summarize", {
     req: {
-      base_url: baseUrl,
       connection_id: connectionId,
       model,
       text,

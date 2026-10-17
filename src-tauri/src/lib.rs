@@ -1,4 +1,5 @@
 mod commands;
+mod connections;
 mod error;
 mod knowledge;
 mod llm;
