@@ -1,4 +1,8 @@
-import { knowledgeSidecarRead, knowledgeSidecarWrite } from "./api";
+import {
+  knowledgeSidecarDelete,
+  knowledgeSidecarRead,
+  knowledgeSidecarWrite,
+} from "./api";
 import {
   addKnowledgeDoc,
   knowledgeShaExists,
@@ -8,6 +12,7 @@ import { newId } from "./utils";
 
 export const MAX_FILES_PER_QUERY = 3;
 export const MAX_EXCERPT_CHARS = 4000;
+const MAX_INGEST_BYTES = 1024 * 1024;
 
 export interface KnowledgeDoc {
   name: string;
@@ -58,8 +63,9 @@ export function rankDocs(docs: KnowledgeDoc[], query: string): KnowledgeDoc[] {
 export function buildKnowledgeBlock(docs: KnowledgeDoc[]): string {
   if (docs.length === 0) return "";
   const parts = docs.slice(0, MAX_FILES_PER_QUERY).map((doc) => {
-    const safeName = doc.name.replace(/[<>]/g, "");
-    return `<source name=${safeName}>${excerptOf(doc.excerpt)}</source>`;
+    const safeName = doc.name.replace(/["<>]/g, "").slice(0, 120);
+    const body = excerptOf(doc.excerpt).replace(/<\/source>/gi, "");
+    return `<source name="${safeName}">${body}</source>`;
   });
   return `## Attached knowledge\n${parts.join("\n\n")}`;
 }
@@ -78,21 +84,32 @@ export async function ingestDoc(
   input: IngestInput,
 ): Promise<{ status: IngestStatus; id?: string }> {
   if (!isSupportedMime(input.mime)) return { status: "unsupported" };
+  if (input.bytes.length > MAX_INGEST_BYTES) return { status: "unsupported" };
   const sha = await sha256Hex(input.bytes);
-  if (await knowledgeShaExists(sha)) return { status: "duplicate" };
-  const text = new TextDecoder().decode(input.bytes);
+  if (await knowledgeShaExists(input.projectId, sha)) return { status: "duplicate" };
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(input.bytes);
+  } catch {
+    return { status: "unsupported" };
+  }
   const path = await knowledgeSidecarWrite(input.projectId, sha, text);
   const id = newId();
-  await addKnowledgeDoc({
-    id,
-    project_id: input.projectId,
-    chat_id: input.chatId ?? null,
-    name: input.name,
-    mime: input.mime,
-    sha256: sha,
-    path,
-    size: input.bytes.length,
-  });
+  try {
+    await addKnowledgeDoc({
+      id,
+      project_id: input.projectId,
+      chat_id: input.chatId ?? null,
+      name: input.name,
+      mime: input.mime,
+      sha256: sha,
+      path,
+      size: input.bytes.length,
+    });
+  } catch (error) {
+    await knowledgeSidecarDelete(input.projectId, sha).catch(() => undefined);
+    throw error;
+  }
   return { status: "added", id };
 }
 
@@ -147,19 +164,19 @@ export function buildUserContent(text: string, images: ImageAttachment[]): strin
   return parts;
 }
 
-export async function searchKnowledge(projectId: string, query: string): Promise<string> {  const terms = query.trim().split(/\s+/).filter((term) => term.length > 0);
-  if (terms.length === 0) return "";
-  const like = terms[0] as string;
-  const rows = await listKnowledgeDocs(projectId, like);
+export async function searchKnowledge(projectId: string, query: string): Promise<string> {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return "";
+  const rows = await listKnowledgeDocs(projectId, trimmed);
   if (rows.length === 0) return "";
-  const withExcerpts: KnowledgeDoc[] = [];
-  for (const row of rows.slice(0, 20)) {
-    try {
-      const excerpt = await knowledgeSidecarRead(projectId, row.sha256);
-      withExcerpts.push({ name: row.name, excerpt });
-    } catch {
-      continue;
-    }
-  }
+  const reads = await Promise.allSettled(
+    rows.map(async (row) => ({
+      name: row.name,
+      excerpt: excerptOf(await knowledgeSidecarRead(projectId, row.sha256)),
+    })),
+  );
+  const withExcerpts = reads.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
   return buildKnowledgeBlock(rankDocs(withExcerpts, query));
 }

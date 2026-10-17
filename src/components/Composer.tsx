@@ -24,13 +24,41 @@ import { downscaleImage, isSupportedImage } from "../lib/image";
 const MAX_ATTACH_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
+const TEXT_EXTENSIONS: Record<string, string> = {
+  md: "text/markdown",
+  markdown: "text/markdown",
+  txt: "text/plain",
+  json: "application/json",
+  yml: "application/yaml",
+  yaml: "application/yaml",
+  xml: "application/xml",
+  csv: "text/csv",
+  html: "text/html",
+  css: "text/css",
+  js: "application/javascript",
+  jsx: "application/javascript",
+  ts: "application/typescript",
+  tsx: "application/typescript",
+  toml: "text/plain",
+  ini: "text/plain",
+  log: "text/plain",
+  sh: "text/plain",
+  ps1: "text/plain",
+  py: "text/plain",
+  rs: "text/plain",
+  go: "text/plain",
+  java: "text/plain",
+  c: "text/plain",
+  cpp: "text/plain",
+  h: "text/plain",
+};
+
 function mimeForFile(name: string, declared: string): string {
   if (declared) return declared;
-  const lower = name.toLowerCase();
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
-  if (lower.endsWith(".json")) return "application/json";
-  if (lower.endsWith(".txt")) return "text/plain";
-  return "text/plain";
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return "";
+  const ext = name.slice(dot + 1).toLowerCase();
+  return TEXT_EXTENSIONS[ext] ?? "";
 }
 
 interface AttachChip {
@@ -130,7 +158,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     const open = slashItems.length > 0;
     if (open && !menuOpenRef.current) void loadFileCommands();
     menuOpenRef.current = open;
-  });
+  }, [slashItems.length, loadFileCommands]);
 
   const attachFiles = async (files: File[]) => {
     if (files.length === 0) return;
@@ -172,28 +200,30 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           toast(`"${file.name}": over 1 MB, skipped.`);
           continue;
         }
-        const text = await file.text();
-        const bytes = new TextEncoder().encode(text);
-        const result = await ingestDoc({
-          projectId: activeProject.id,
-          name: file.name,
-          mime,
-          bytes,
-        });
-        if (result.status === "unsupported") {
-          toast(`"${file.name}": type not supported.`);
-          continue;
+        try {
+          const text = await file.text();
+          const bytes = new TextEncoder().encode(text);
+          const result = await ingestDoc({
+            projectId: activeProject.id,
+            name: file.name,
+            mime,
+            bytes,
+          });
+          if (result.status === "unsupported") {
+            toast(`"${file.name}": type not supported.`);
+            continue;
+          }
+          if (result.status === "duplicate") {
+            toast(`"${file.name}": already in project knowledge, attached anyway.`);
+          }
+          setChips((prev) => [
+            ...prev,
+            { key: result.id ?? `${file.name}-${prev.length}`, kind: "file", name: file.name, excerpt: text },
+          ]);
+        } catch {
+          toast(`"${file.name}": couldn't attach.`);
         }
-        if (result.status === "duplicate") {
-          toast(`"${file.name}": already in project knowledge, attached anyway.`);
-        }
-        setChips((prev) => [
-          ...prev,
-          { key: result.id ?? `${file.name}-${prev.length}`, kind: "file", name: file.name, excerpt: text },
-        ]);
       }
-    } catch {
-      toast("Couldn't attach those files.");
     } finally {
       setAttaching(false);
     }
@@ -278,14 +308,16 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setSlashIndex(0);
     setChips([]);
     handle?.focus();
-    if (dispatchSlash(text, slashHandlers)) return;
-    let sendText = text;
     const parsed = parseSlash(text);
     if (parsed) {
       const menuItem = mergedCommands.find((item) => item.name === parsed.name);
       if (menuItem?.shadowed) {
         toast(`Built-in /${parsed.name} shadows your file command.`);
       }
+    }
+    if (dispatchSlash(text, slashHandlers)) return;
+    let sendText = text;
+    if (parsed) {
       const file = fileCommands.find((command) => command.name === parsed.name);
       if (file) {
         const expanded = expandFileCommand(file, parsed.args);
@@ -298,7 +330,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
       .filter((chip) => chip.kind === "image" && chip.dataUrl)
       .map((chip) => ({ dataUrl: chip.dataUrl as string }));
     const send = buildAttachmentSend(sendText, fileChips);
-    void sendMessage(send.outgoing, send.block, imagePayloads).then((accepted) => {
+    const outgoing =
+      send.outgoing.trim() || (imagePayloads.length > 0 ? "See the attached image." : "");
+    void sendMessage(outgoing, send.block, imagePayloads).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
         setComposerDraft(text);
@@ -388,7 +422,10 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
       }}
       onPaste={(event) => {
         const files = [...event.clipboardData.files];
-        if (files.length > 0) void attachFiles(files);
+        if (files.length > 0) {
+          event.preventDefault();
+          void attachFiles(files);
+        }
       }}
     >
       <div className="composer relative rounded-composer border border-border bg-surface-2 px-2.5 pb-2 pt-2 focus-within:border-accent/70">

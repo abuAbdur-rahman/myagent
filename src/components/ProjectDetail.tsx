@@ -6,7 +6,14 @@ import { deleteKnowledgeDoc, listKnowledgeDocs, type KnowledgeDocRow } from "../
 import { knowledgeSidecarDelete } from "../lib/api";
 import { MemoryEditor } from "./MemoryEditor";
 import { Button, Input, Textarea } from "./ui";
+import { confirmDialog } from "./ConfirmDialog";
 import { errorText } from "../lib/utils";
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const {
@@ -27,6 +34,9 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [docs, setDocs] = useState<KnowledgeDocRow[]>([]);
+  const [docsLoaded, setDocsLoaded] = useState(false);
+  const [docsError, setDocsError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   useEffect(() => {
     setName(activeProject?.name ?? "");
@@ -37,16 +47,24 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     const id = activeProject?.id;
-    if (!id) {
-      setDocs([]);
-      return;
-    }
+    setDocs([]);
+    setDocsError(null);
+    setDocsLoaded(false);
+    if (!id) return;
     let live = true;
     listKnowledgeDocs(id)
       .then((rows) => {
-        if (live) setDocs(rows);
+        if (live) {
+          setDocs(rows);
+          setDocsLoaded(true);
+        }
       })
-      .catch(() => undefined);
+      .catch((e) => {
+        if (live) {
+          setDocsError(errorText(e));
+          setDocsLoaded(true);
+        }
+      });
     return () => {
       live = false;
     };
@@ -87,12 +105,22 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
   };
 
   const removeDoc = async (doc: KnowledgeDocRow) => {
+    const confirmed = await confirmDialog({
+      title: `Remove ${doc.name}?`,
+      body: "The file will be removed from this project's knowledge.",
+      danger: true,
+      ok: "Remove",
+    });
+    if (!confirmed) return;
+    setRemovingId(doc.id);
     try {
-      await deleteKnowledgeDoc(doc.id);
       await knowledgeSidecarDelete(project.id, doc.sha256);
+      await deleteKnowledgeDoc(doc.id);
       setDocs((prev) => prev.filter((row) => row.id !== doc.id));
     } catch (e) {
       setStatus(errorText(e));
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -217,7 +245,9 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
             <p className="mb-2 mt-1 text-xs text-muted">
               {docs.length} file{docs.length === 1 ? "" : "s"} · searched on every send here
             </p>
-            {docs.length === 0 && (
+            {docsError && <p className="text-sm text-muted">{docsError}</p>}
+            {!docsLoaded && !docsError && <p className="text-sm text-muted">Loading…</p>}
+            {docsLoaded && !docsError && docs.length === 0 && (
               <p className="text-sm text-muted">No docs yet. Attach files from the composer.</p>
             )}
             <ul className="flex flex-col gap-1.5">
@@ -229,14 +259,13 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
                   <span className="min-w-0 flex-1 truncate" title={doc.name}>
                     {doc.name}
                   </span>
-                  <span className="flex-none text-muted">
-                    {Math.max(1, Math.round(doc.size / 1024))} KB
-                  </span>
+                  <span className="flex-none text-muted">{formatBytes(doc.size)}</span>
                   <button
                     type="button"
                     onClick={() => void removeDoc(doc)}
+                    disabled={removingId === doc.id}
                     aria-label={`Remove ${doc.name}`}
-                    className="flex-none text-muted hover:text-fg"
+                    className="flex-none text-muted hover:text-fg disabled:text-faint"
                   >
                     <X size={12} />
                   </button>

@@ -708,6 +708,7 @@ export async function deleteProject(id: string): Promise<void> {
     id,
   ]);
   await db.execute("DELETE FROM knowledge_docs WHERE project_id = $1", [id]);
+  await db.execute("DELETE FROM mcp_servers WHERE project_id = $1", [id]);
   await knowledgeSidecarWipe(id);
   await db.execute("DELETE FROM projects WHERE id = $1", [id]);
 }
@@ -862,13 +863,17 @@ export async function addKnowledgeDoc(row: Omit<KnowledgeDocRow, "created_at">):
   );
 }
 
-export async function knowledgeShaExists(sha256: string): Promise<boolean> {
+export async function knowledgeShaExists(projectId: string, sha256: string): Promise<boolean> {
   const db = await getDb();
   const rows = await db.select<{ id: string }[]>(
-    "SELECT id FROM knowledge_docs WHERE sha256 = $1 LIMIT 1",
-    [sha256],
+    "SELECT id FROM knowledge_docs WHERE project_id = $1 AND sha256 = $2 LIMIT 1",
+    [projectId, sha256],
   );
   return rows.length > 0;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 export async function listKnowledgeDocs(
@@ -877,9 +882,9 @@ export async function listKnowledgeDocs(
 ): Promise<KnowledgeDocRow[]> {
   const db = await getDb();
   if (query && query.trim().length > 0) {
-    const like = `%${query.trim()}%`;
+    const like = `%${escapeLike(query.trim())}%`;
     return db.select<KnowledgeDocRow[]>(
-      "SELECT * FROM knowledge_docs WHERE project_id = $1 AND name LIKE $2 ORDER BY created_at DESC LIMIT 20",
+      "SELECT * FROM knowledge_docs WHERE project_id = $1 AND name LIKE $2 ESCAPE '\\' ORDER BY created_at DESC LIMIT 20",
       [projectId, like],
     );
   }

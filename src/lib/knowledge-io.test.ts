@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { knowledgeSidecarRead, knowledgeSidecarWrite } from "./api";
+import { knowledgeSidecarDelete, knowledgeSidecarRead, knowledgeSidecarWrite } from "./api";
 import { addKnowledgeDoc, knowledgeShaExists, listKnowledgeDocs } from "./db";
 import { ingestDoc, buildAttachmentSend, resolveImageSend, searchKnowledge } from "./knowledge";
 
 vi.mock("./api", () => ({
   knowledgeSidecarWrite: vi.fn(),
   knowledgeSidecarRead: vi.fn(),
+  knowledgeSidecarDelete: vi.fn(async () => undefined),
 }));
 
 vi.mock("./db", () => ({
@@ -21,6 +22,7 @@ vi.mock("./utils", () => ({
 
 const write = vi.mocked(knowledgeSidecarWrite);
 const read = vi.mocked(knowledgeSidecarRead);
+const removeSidecar = vi.mocked(knowledgeSidecarDelete);
 const shaExists = vi.mocked(knowledgeShaExists);
 const list = vi.mocked(listKnowledgeDocs);
 const add = vi.mocked(addKnowledgeDoc);
@@ -72,6 +74,32 @@ describe("ingestDoc", () => {
       expect.objectContaining({ project_id: "p1", name: "notes.md", size: 5 }),
     );
   });
+
+  it("removes the sidecar when the row insert fails", async () => {
+    shaExists.mockResolvedValue(false);
+    write.mockResolvedValue("knowledge/p1/sha.txt");
+    add.mockRejectedValue(new Error("db down"));
+    await expect(
+      ingestDoc({
+        projectId: "p1",
+        name: "notes.md",
+        mime: "text/markdown",
+        bytes: bytesOf("hello"),
+      }),
+    ).rejects.toThrow("db down");
+    expect(removeSidecar).toHaveBeenCalledWith("p1", expect.any(String));
+  });
+
+  it("rejects oversized text before hashing", async () => {
+    const result = await ingestDoc({
+      projectId: "p1",
+      name: "huge.txt",
+      mime: "text/plain",
+      bytes: new Uint8Array(1024 * 1024 + 1),
+    });
+    expect(result).toEqual({ status: "unsupported" });
+    expect(write).not.toHaveBeenCalled();
+  });
 });
 
 describe("buildAttachmentSend", () => {
@@ -83,7 +111,7 @@ describe("buildAttachmentSend", () => {
   it("falls back to chip names when text is empty", () => {
     const send = buildAttachmentSend("  ", chips);
     expect(send.outgoing).toBe("a.md, b.md");
-    expect(send.block).toContain("<source name=a.md>alpha</source>");
+    expect(send.block).toContain('<source name="a.md">alpha</source>');
   });
 
   it("keeps user text and appends chip excerpts", () => {
@@ -156,7 +184,7 @@ describe("searchKnowledge", () => {
       sha === "s1" ? "async runtimes power the app" : "unrelated body",
     );
     const block = await searchKnowledge("p1", "async");
-    expect(block).toContain("<source name=async-guide.md>");
+    expect(block).toContain('<source name="async-guide.md">');
     expect(block).toContain("unrelated body");
   });
 });

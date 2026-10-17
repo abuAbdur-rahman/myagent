@@ -3,6 +3,7 @@ import { toolListSentence } from "./tools";
 
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
+const IMAGE_PART_CHARS = 1500;
 const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
 const MAX_TURNS_WINDOW = 60;
@@ -65,19 +66,25 @@ export function buildSystemPrompt(input: ContextInput): string | null {
     }
   }
 
-  const knowledge = input.knowledgeBlock?.trim();
-  if (knowledge) {
-    blocks.push(knowledge);
-  }
-
   const skills = input.skillIndexBlock?.trim();
-  if (skills) {
-    blocks.push(skills);
+  const knowledge = input.knowledgeBlock?.trim();
+  const base = blocks.join("\n\n");
+
+  if (knowledge || skills) {
+    const used = base.length + (base ? 2 : 0);
+    const skillsRoom = skills ? skills.length + 2 : 0;
+    const knowledgeRoom = Math.max(0, MAX_CHARS - used - skillsRoom);
+    const tail: string[] = [];
+    const clippedKnowledge = knowledge?.slice(0, knowledgeRoom).trim();
+    if (clippedKnowledge) tail.push(clippedKnowledge);
+    if (skills) tail.push(skills);
+    const combined = [base, ...tail].filter((part) => part.length > 0).join("\n\n");
+    return combined.slice(0, MAX_CHARS);
   }
 
   if (blocks.length === 0) return null;
 
-  return blocks.join("\n\n").slice(0, MAX_CHARS);
+  return base.slice(0, MAX_CHARS);
 }
 
 export function applyCompactWindow<T extends { content: string | { type: string }[] }>(turns: T[], compacted: boolean): T[] {
@@ -111,7 +118,7 @@ export function summarySystemTurn(summary: string): { role: string; content: str
 }
 
 export function estimateContext(
-  turns: { content: string | { type: string }[] }[],
+  turns: { content: string | { type: string; text?: string }[] }[],
   system: string | null,
   limit = DEFAULT_MODEL_CONTEXT,
 ): { tokens: number; limit: number; pct: number } {
@@ -122,7 +129,7 @@ export function estimateContext(
       return (
         sum +
         turn.content.reduce(
-          (part, item) => part + (item.type === "text" ? 200 : 1500),
+          (part, item) => part + (item.type === "text" ? (item.text?.length ?? 0) : IMAGE_PART_CHARS),
           0,
         )
       );

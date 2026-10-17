@@ -231,11 +231,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
                     chat_id TEXT,
                     name TEXT NOT NULL,
                     mime TEXT NOT NULL,
-                    sha256 TEXT NOT NULL UNIQUE,
+                    sha256 TEXT NOT NULL,
                     path TEXT NOT NULL,
                     size INTEGER NOT NULL,
                     created_at INTEGER NOT NULL,
-                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    UNIQUE (project_id, sha256)
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_docs(project_id);
             ",
@@ -259,6 +260,7 @@ pub(crate) fn migrations() -> Vec<Migration> {
                     UNIQUE(project_id, name)
                 );
                 CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_global_name ON mcp_servers(name) WHERE project_id IS NULL;
             ",
             kind: MigrationKind::Up,
         },
@@ -358,18 +360,30 @@ mod migration_tests {
             .execute(&pool)
             .await;
         assert!(dup.is_err(), "duplicate server name per project rejected");
+        sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('g1', NULL, 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 3)")
+            .execute(&pool)
+            .await
+            .expect("first global server");
+        let global_dup = sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES ('g2', NULL, 'fs', 'stdio', 'npx srv', NULL, NULL, NULL, 1, 4)")
+            .execute(&pool)
+            .await;
+        assert!(global_dup.is_err(), "duplicate global server name rejected");
     }
 
     #[tokio::test]
-    async fn knowledge_docs_rejects_duplicate_sha() {
+    async fn knowledge_docs_rejects_duplicate_sha_per_project() {
         let pool = pool().await;
         apply_all(&pool).await;
-        sqlx::query(
-            "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'P', 1, 1)",
-        )
-        .execute(&pool)
-        .await
-        .expect("seed project");
+        for id in ["p1", "p2"] {
+            sqlx::query(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, 1, 1)",
+            )
+            .bind(id)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("seed project");
+        }
         sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k1', 'p1', NULL, 'notes.md', 'text/markdown', 'abc123', 'knowledge/p1/abc123.txt', 9, 1)")
             .execute(&pool)
             .await
@@ -377,7 +391,11 @@ mod migration_tests {
         let dup = sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k2', 'p1', NULL, 'notes-copy.md', 'text/markdown', 'abc123', 'knowledge/p1/abc123.txt', 9, 2)")
             .execute(&pool)
             .await;
-        assert!(dup.is_err(), "duplicate sha256 rejected");
+        assert!(dup.is_err(), "duplicate sha256 in same project rejected");
+        sqlx::query("INSERT INTO knowledge_docs (id, project_id, chat_id, name, mime, sha256, path, size, created_at) VALUES ('k3', 'p2', NULL, 'notes.md', 'text/markdown', 'abc123', 'knowledge/p2/abc123.txt', 9, 3)")
+            .execute(&pool)
+            .await
+            .expect("same sha allowed in another project");
     }
 
     #[tokio::test]

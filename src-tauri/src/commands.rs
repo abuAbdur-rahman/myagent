@@ -1,5 +1,9 @@
 use tauri::{AppHandle, Manager};
 
+use crate::tools::safe_segment;
+
+const MAX_COMMAND_BYTES: u64 = 256 * 1024;
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FileCommand {
     pub name: String,
@@ -39,23 +43,19 @@ pub fn parse_command(name: &str, content: &str) -> Option<(String, String)> {
 
 fn command_dirs(app: &AppHandle, project_id: Option<&str>) -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
+    if let Ok(data) = app.path().app_data_dir() {
+        if let Some(project) = project_id {
+            let safe = safe_segment(project);
+            if !safe.is_empty() {
+                dirs.push(data.join("commands").join(safe));
+            }
+        }
+        dirs.push(data.join("commands"));
+    }
     if let Ok(resource) = app.path().resource_dir() {
         let bundled = resource.join("commands");
         if bundled.is_dir() {
             dirs.push(bundled);
-        }
-    }
-    if let Ok(data) = app.path().app_data_dir() {
-        dirs.push(data.join("commands"));
-        if let Some(project) = project_id {
-            let safe: String = project
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                .take(64)
-                .collect();
-            if !safe.is_empty() {
-                dirs.push(data.join("commands").join(safe));
-            }
         }
     }
     dirs
@@ -76,7 +76,14 @@ fn scan_dir(dir: &std::path::Path) -> Vec<(String, String)> {
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_string();
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > MAX_COMMAND_BYTES {
+                eprintln!("commands: skipping oversized file {}", path.display());
+                continue;
+            }
+        }
         let Ok(content) = std::fs::read_to_string(&path) else {
+            eprintln!("commands: cannot read {}", path.display());
             continue;
         };
         found.push((name, content));
@@ -92,12 +99,13 @@ pub fn list_commands(app: &AppHandle, project_id: Option<&str>) -> Vec<FileComma
             if all.iter().any(|c| c.name == name) {
                 continue;
             }
-            if let Some((description, body)) = parse_command(&name, &content) {
-                all.push(FileCommand {
+            match parse_command(&name, &content) {
+                Some((description, body)) => all.push(FileCommand {
                     name,
                     description,
                     body,
-                });
+                }),
+                None => eprintln!("commands: ignoring invalid file '{name}.md'"),
             }
         }
     }

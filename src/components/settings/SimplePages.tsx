@@ -235,15 +235,25 @@ export function McpPage() {
 export function AuditPage() {
   const [rows, setRows] = useState<AuditLog[]>([]);
   const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(search), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const reload = useCallback(async () => {
     try {
-      setRows(await db.listAuditLogs(search));
+      setRows(await db.listAuditLogs(debounced));
+      setStatus(null);
+      setLoaded(true);
     } catch (e) {
       setStatus(errorText(e));
+      setLoaded(true);
     }
-  }, [search]);
+  }, [debounced]);
 
   useEffect(() => {
     void reload();
@@ -277,8 +287,10 @@ export function AuditPage() {
           autoComplete="off"
         />
       </SettingRow>
-      {rows.length === 0 && (
-        <p className="px-2 py-3 text-xs text-muted">No approval decisions recorded yet.</p>
+      {loaded && rows.length === 0 && (
+        <p className="px-2 py-3 text-xs text-muted">
+          {search.trim() ? "No matching audit entries." : "No approval decisions recorded yet."}
+        </p>
       )}
       {rows.map((row) => (
         <SettingRow

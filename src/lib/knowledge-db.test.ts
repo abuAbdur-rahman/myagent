@@ -24,7 +24,8 @@ const load = vi.mocked(Database.load);
 
 describe("knowledge_docs crud", () => {
   const select = vi.fn(async (sql: string, params: unknown[]) => {
-    if (sql.includes("WHERE sha256")) return params[0] === "known" ? [{ id: "k1" }] : [];
+    if (sql.includes("WHERE project_id = $1 AND sha256"))
+      return params[1] === "known" ? [{ id: "k1" }] : [];
     if (sql.includes("FROM knowledge_docs")) {
       return [
         {
@@ -48,9 +49,9 @@ describe("knowledge_docs crud", () => {
     load.mockResolvedValue({ select, execute } as never);
   });
 
-  it("detects an ingested sha", async () => {
-    expect(await knowledgeShaExists("known")).toBe(true);
-    expect(await knowledgeShaExists("fresh")).toBe(false);
+  it("detects an ingested sha within a project", async () => {
+    expect(await knowledgeShaExists("p1", "known")).toBe(true);
+    expect(await knowledgeShaExists("p1", "fresh")).toBe(false);
   });
 
   it("inserts a row with the sidecar pointer", async () => {
