@@ -1058,6 +1058,8 @@ async fn render_todos(pool: &SqlitePool, conversation: &str) -> Result<String, S
     Ok(out.trim_end().to_string())
 }
 
+const AUDIT_LOG_CAP: i64 = 500;
+
 pub async fn log_audit(
     app: &AppHandle,
     conversation_id: Option<&str>,
@@ -1084,13 +1086,70 @@ pub async fn log_audit(
     .await
     {
         eprintln!("audit: insert failed: {error}");
+        return;
     }
+    if let Err(error) = trim_audit_log(&pool).await {
+        eprintln!("audit: trim failed: {error}");
+    }
+}
+
+pub(crate) async fn trim_audit_log(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY ts DESC, rowid DESC LIMIT ?)",
+    )
+    .bind(AUDIT_LOG_CAP)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    async fn memory_db() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("memory db");
+        for migration in crate::migrations() {
+            sqlx::raw_sql(migration.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("migration {} does not apply: {e}", migration.description)
+                });
+        }
+        pool
+    }
+
+    #[tokio::test]
+    async fn audit_log_keeps_the_newest_rows() {
+        let pool = memory_db().await;
+        for index in 0..(AUDIT_LOG_CAP + 60) {
+            sqlx::query(
+                "INSERT INTO audit_log (id, ts, conversation_id, tool, decision, detail) VALUES (?, ?, NULL, 'run_powershell', 'once', '')",
+            )
+            .bind(format!("id-{index:04}"))
+            .bind(index)
+            .execute(&pool)
+            .await
+            .expect("audit row");
+        }
+        trim_audit_log(&pool).await.expect("trim");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, AUDIT_LOG_CAP);
+        let oldest: i64 = sqlx::query_scalar("SELECT MIN(ts) FROM audit_log")
+            .fetch_one(&pool)
+            .await
+            .expect("oldest");
+        assert_eq!(oldest, 60);
+    }
 
     #[test]
     fn parses_valid_question() {

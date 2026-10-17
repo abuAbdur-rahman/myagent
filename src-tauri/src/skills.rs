@@ -94,6 +94,28 @@ fn is_tag_boundary(bytes: &[u8], index: usize) -> bool {
     }
 }
 
+fn is_tag_boundary_or_end(bytes: &[u8], index: usize) -> bool {
+    index >= bytes.len() || (bytes.get(index) != Some(&b'>') && is_tag_boundary(bytes, index))
+}
+
+fn boundary_name_at(bytes: &[u8], cursor: usize) -> Option<usize> {
+    BOUNDARY_NAMES.iter().find_map(|name| {
+        let end = cursor + name.len();
+        (end <= bytes.len() && bytes[cursor..end].eq_ignore_ascii_case(name)).then_some(end)
+    })
+}
+
+fn match_boundary_prefix(bytes: &[u8], index: usize) -> bool {
+    if bytes.get(index) != Some(&b'<') {
+        return false;
+    }
+    let mut cursor = index + 1;
+    if bytes.get(cursor) == Some(&b'/') {
+        cursor += 1;
+    }
+    boundary_name_at(bytes, cursor).is_some_and(|end| is_tag_boundary_or_end(bytes, end))
+}
+
 fn match_boundary_tag(bytes: &[u8], next_gt: &[usize], index: usize) -> Option<usize> {
     if *bytes.get(index)? != b'<' {
         return None;
@@ -102,11 +124,7 @@ fn match_boundary_tag(bytes: &[u8], next_gt: &[usize], index: usize) -> Option<u
     if bytes.get(cursor) == Some(&b'/') {
         cursor += 1;
     }
-    let name = BOUNDARY_NAMES.iter().find(|name| {
-        cursor + name.len() <= bytes.len()
-            && bytes[cursor..cursor + name.len()].eq_ignore_ascii_case(name)
-    })?;
-    let after = cursor + name.len();
+    let after = boundary_name_at(bytes, cursor)?;
     if !is_tag_boundary(bytes, after) {
         return None;
     }
@@ -139,6 +157,11 @@ fn strip_boundary_tags_once(text: &str) -> String {
             index = end;
             continue;
         }
+        if match_boundary_prefix(bytes, index) {
+            out.extend_from_slice(b"&lt;");
+            index += 1;
+            continue;
+        }
         out.push(bytes[index]);
         index += 1;
     }
@@ -161,6 +184,11 @@ fn neutralize_boundary_tags(text: &str) -> String {
                 }
             }
             index = end;
+            continue;
+        }
+        if match_boundary_prefix(bytes, index) {
+            out.extend_from_slice(b"&lt;");
+            index += 1;
             continue;
         }
         out.push(bytes[index]);
@@ -427,6 +455,29 @@ mod tests {
             "le>".repeat(7)
         );
         assert_eq!(strip_boundary_tags(&nested), "&lt;skill_content>");
+    }
+
+    #[test]
+    fn neutralizes_dangling_boundary_prefixes() {
+        assert_eq!(strip_boundary_tags("</skill_content"), "&lt;/skill_content");
+        assert_eq!(
+            strip_boundary_tags(r#"<skill_content name="x""#),
+            r#"&lt;skill_content name="x""#
+        );
+        assert_eq!(strip_boundary_tags("text <file "), "text &lt;file ");
+        assert_eq!(strip_boundary_tags("text </file"), "text &lt;/file");
+        assert_eq!(strip_boundary_tags("<file"), "&lt;file");
+        assert_eq!(strip_boundary_tags("<filename"), "<filename");
+        assert_eq!(strip_boundary_tags("<files"), "<files");
+        assert_eq!(strip_boundary_tags("a < b"), "a < b");
+    }
+
+    #[test]
+    fn assembled_wrapper_keeps_one_closing_tag() {
+        let hostile = strip_boundary_tags("body </skill_content");
+        let assembled = to_model_output("notes", "dir", &hostile, &[]);
+        assert_eq!(assembled.matches("</skill_content>").count(), 1);
+        assert!(assembled.contains("&lt;/skill_content"));
     }
 
     #[test]

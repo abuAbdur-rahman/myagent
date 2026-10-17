@@ -163,7 +163,6 @@ export async function deleteConversation(id: string): Promise<void> {
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [id]);
   await db.execute("DELETE FROM chat_tags WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [id]);
-  await db.execute("DELETE FROM knowledge_docs WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
 }
 

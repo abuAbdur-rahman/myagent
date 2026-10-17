@@ -51,14 +51,52 @@ fn matches(pattern: &str, value: &str) -> bool {
 }
 
 pub fn split_segments(command: &str) -> Vec<String> {
-    command
-        .replace("&&", "\n")
-        .replace("||", "\n")
-        .replace(';', "\n")
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect()
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if let Some(open) = quote {
+            current.push(ch);
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '`' => {
+                current.push(ch);
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            ';' | '|' => {
+                if ch == '|' && chars.peek() == Some(&'|') {
+                    chars.next();
+                }
+                push_segment(&mut segments, &mut current);
+            }
+            '&' if chars.peek() == Some(&'&') => {
+                chars.next();
+                push_segment(&mut segments, &mut current);
+            }
+            _ => current.push(ch),
+        }
+    }
+    push_segment(&mut segments, &mut current);
+    segments
+}
+
+fn push_segment(segments: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        segments.push(trimmed.to_string());
+    }
+    current.clear();
 }
 
 pub fn decide(action: &str, resources: &[String], rules: &[Rule]) -> Effect {
@@ -368,6 +406,54 @@ mod tests {
         );
         assert_eq!(split_segments("  Get-X  \n\n"), vec!["Get-X"]);
         assert!(split_segments("").is_empty());
+    }
+
+    #[test]
+    fn segments_split_pipelines() {
+        assert_eq!(
+            split_segments("Get-Process | Where-Object CPU -gt 10 | Stop-Process"),
+            vec!["Get-Process", "Where-Object CPU -gt 10", "Stop-Process"]
+        );
+        assert_eq!(
+            split_segments("Get-Content a.txt > b.txt || Write-Output failed"),
+            vec!["Get-Content a.txt > b.txt", "Write-Output failed"]
+        );
+    }
+
+    #[test]
+    fn segments_split_subexpressions() {
+        assert_eq!(
+            split_segments("$x = $(Get-Date; Remove-Item C:\\tmp)"),
+            vec!["$x = $(Get-Date", "Remove-Item C:\\tmp)"]
+        );
+        assert_eq!(
+            split_segments("Get-Item `$env:TEMP"),
+            vec!["Get-Item `$env:TEMP"]
+        );
+    }
+
+    #[test]
+    fn segments_keep_quoted_separators() {
+        assert_eq!(
+            split_segments("Write-Output \"one;two|three\" ; Get-Date"),
+            vec!["Write-Output \"one;two|three\"", "Get-Date"]
+        );
+        assert_eq!(
+            split_segments("Remove-Item 'a && b'"),
+            vec!["Remove-Item 'a && b'"]
+        );
+    }
+
+    #[test]
+    fn segments_keep_escaped_separators() {
+        assert_eq!(
+            split_segments("Write-Output one`;two"),
+            vec!["Write-Output one`;two"]
+        );
+        assert_eq!(
+            split_segments("Get-Date & Get-Item x"),
+            vec!["Get-Date & Get-Item x"]
+        );
     }
 
     #[test]
