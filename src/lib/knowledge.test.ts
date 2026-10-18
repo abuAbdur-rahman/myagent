@@ -5,6 +5,8 @@ import {
   isSupportedMime,
   rankDocs,
   sha256Hex,
+  turnContent,
+  withFinalTurnImages,
   MAX_EXCERPT_CHARS,
   MAX_FILES_PER_QUERY,
 } from "./knowledge";
@@ -77,5 +79,67 @@ describe("buildKnowledgeBlock", () => {
 
   it("returns empty string for no docs", () => {
     expect(buildKnowledgeBlock([])).toBe("");
+  });
+});
+
+describe("turnContent", () => {
+  it("keeps plain text when there are no attachments", () => {
+    expect(turnContent({ content: "hello" })).toBe("hello");
+    expect(turnContent({ content: "hello", attachments: null })).toBe("hello");
+    expect(turnContent({ content: "hello", attachments: "" })).toBe("hello");
+  });
+
+  it("rebuilds image parts from stored attachments", () => {
+    const stored = JSON.stringify([{ dataUrl: "data:image/png;base64,AAA" }]);
+    const content = turnContent({ content: "look", attachments: stored });
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toEqual([
+      { type: "text", text: "look" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+    ]);
+  });
+
+  it("drops malformed attachments instead of throwing", () => {
+    expect(turnContent({ content: "text", attachments: "{ not json" })).toBe("text");
+    expect(turnContent({ content: "text", attachments: '{"dataUrl":"x"}' })).toBe("text");
+    expect(turnContent({ content: "text", attachments: "[]" })).toBe("text");
+  });
+
+  it("passes through content that is already parts", () => {
+    const parts = [{ type: "image_url" as const, image_url: { url: "data:x" } }];
+    expect(turnContent({ content: parts })).toBe(parts);
+  });
+});
+
+describe("withFinalTurnImages", () => {
+  const stored = JSON.stringify([{ dataUrl: "data:image/png;base64,AAA" }]);
+
+  it("reattaches images to the last user turn only", () => {
+    const turns = [
+      { role: "user", content: "old", attachments: stored },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "new", attachments: stored },
+    ];
+    const result = withFinalTurnImages(turns);
+    expect(result[0].content).toBe("old");
+    expect(Array.isArray(result[2].content)).toBe(true);
+    expect(result[2].content).toEqual([
+      { type: "text", text: "new" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+    ]);
+  });
+
+  it("leaves assistant turns and attachment-free turns alone", () => {
+    const turns = [
+      { role: "user", content: "plain" },
+      { role: "assistant", content: "a", attachments: stored },
+    ];
+    const result = withFinalTurnImages(turns);
+    expect(result).toEqual(turns);
+  });
+
+  it("returns the same list when there is no user turn", () => {
+    const turns = [{ role: "assistant", content: "a" }];
+    expect(withFinalTurnImages(turns)).toEqual(turns);
   });
 });

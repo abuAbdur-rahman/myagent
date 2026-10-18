@@ -51,14 +51,105 @@ fn matches(pattern: &str, value: &str) -> bool {
 }
 
 pub fn split_segments(command: &str) -> Vec<String> {
-    command
-        .replace("&&", "\n")
-        .replace("||", "\n")
-        .replace(';', "\n")
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect()
+    let mut segments: Vec<String> = Vec::new();
+    scan_segments(command, &mut segments);
+    segments
+}
+
+fn scan_segments(source: &str, segments: &mut Vec<String>) {
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = source.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if let Some(open) = quote {
+            if open == '"' && ch == '$' && chars.peek() == Some(&'(') {
+                chars.next();
+                current.push_str("$(");
+                let inner = take_balanced(&mut chars);
+                scan_segments(&inner, segments);
+                current.push(')');
+                continue;
+            }
+            current.push(ch);
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '`' => {
+                current.push(ch);
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            ';' | '|' | '\n' | '\r' => {
+                if ch == '|' && chars.peek() == Some(&'|') {
+                    chars.next();
+                }
+                push_segment(segments, &mut current);
+            }
+            '&' if chars.peek() == Some(&'&') => {
+                chars.next();
+                push_segment(segments, &mut current);
+            }
+            _ => current.push(ch),
+        }
+    }
+    push_segment(segments, &mut current);
+}
+
+fn take_balanced(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let mut inner = String::new();
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        if quote.is_none() && ch == '`' {
+            inner.push(ch);
+            if let Some(escaped) = chars.next() {
+                inner.push(escaped);
+            }
+            continue;
+        }
+        if let Some(open) = quote {
+            inner.push(ch);
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                inner.push(ch);
+            }
+            '(' => {
+                depth += 1;
+                inner.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return inner;
+                }
+                inner.push(ch);
+            }
+            _ => inner.push(ch),
+        }
+    }
+    inner
+}
+
+fn push_segment(segments: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        segments.push(trimmed.to_string());
+    }
+    current.clear();
 }
 
 pub fn decide(action: &str, resources: &[String], rules: &[Rule]) -> Effect {
@@ -170,6 +261,9 @@ pub async fn check(
     resources: &[String],
     project_id: Option<&str>,
 ) -> AppResult<Effect> {
+    if let Some(effect) = crate::mcp::policy(app, project_id, action).await {
+        return Ok(effect);
+    }
     let rules = load_rules(app, project_id).await?;
     Ok(decide(action, resources, &rules))
 }
@@ -365,6 +459,78 @@ mod tests {
         );
         assert_eq!(split_segments("  Get-X  \n\n"), vec!["Get-X"]);
         assert!(split_segments("").is_empty());
+    }
+
+    #[test]
+    fn segments_split_pipelines() {
+        assert_eq!(
+            split_segments("Get-Process | Where-Object CPU -gt 10 | Stop-Process"),
+            vec!["Get-Process", "Where-Object CPU -gt 10", "Stop-Process"]
+        );
+        assert_eq!(
+            split_segments("Get-Content a.txt > b.txt || Write-Output failed"),
+            vec!["Get-Content a.txt > b.txt", "Write-Output failed"]
+        );
+    }
+
+    #[test]
+    fn segments_split_subexpressions() {
+        assert_eq!(
+            split_segments("$x = $(Get-Date; Remove-Item C:\\tmp)"),
+            vec!["$x = $(Get-Date", "Remove-Item C:\\tmp)"]
+        );
+        assert_eq!(
+            split_segments("Get-Item `$env:TEMP"),
+            vec!["Get-Item `$env:TEMP"]
+        );
+    }
+
+    #[test]
+    fn segments_keep_quoted_separators() {
+        assert_eq!(
+            split_segments("Write-Output \"one;two|three\" ; Get-Date"),
+            vec!["Write-Output \"one;two|three\"", "Get-Date"]
+        );
+        assert_eq!(
+            split_segments("Remove-Item 'a && b'"),
+            vec!["Remove-Item 'a && b'"]
+        );
+    }
+
+    #[test]
+    fn segments_keep_escaped_separators() {
+        assert_eq!(
+            split_segments("Write-Output one`;two"),
+            vec!["Write-Output one`;two"]
+        );
+        assert_eq!(
+            split_segments("Get-Date & Get-Item x"),
+            vec!["Get-Date & Get-Item x"]
+        );
+    }
+
+    #[test]
+    fn segments_split_quoted_subexpressions() {
+        assert_eq!(
+            split_segments("Write-Output \"$(Get-Date; Remove-Item C:\\x)\""),
+            vec!["Get-Date", "Remove-Item C:\\x", "Write-Output \"$()\""]
+        );
+        assert_eq!(
+            split_segments("Remove-Item '$(a; b)'"),
+            vec!["Remove-Item '$(a; b)'"]
+        );
+    }
+
+    #[test]
+    fn segments_split_statements_on_newlines() {
+        assert_eq!(
+            split_segments("Get-ChildItem\r\nRemove-Item C:\\x"),
+            vec!["Get-ChildItem", "Remove-Item C:\\x"]
+        );
+        assert_eq!(
+            split_segments("Get-Date \"a\nb\"\nRemove-Item C:\\x"),
+            vec!["Get-Date \"a\nb\"", "Remove-Item C:\\x"]
+        );
     }
 
     #[test]

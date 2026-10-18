@@ -55,6 +55,14 @@ export const todoSchema = z.object({
 });
 export type Todo = z.infer<typeof todoSchema>;
 
+const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+const messageAttachmentSchema = z.object({
+  dataUrl: z.string().max(8_000_000).regex(IMAGE_DATA_URL),
+});
+export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
+export const messageAttachmentsSchema = z.array(messageAttachmentSchema).max(12);
+
 const messageSchema = z.object({
   id: z.string(),
   conversation_id: z.string(),
@@ -68,6 +76,7 @@ const messageSchema = z.object({
   finish_reason: z.string().nullish(),
   tool_log: z.string().nullish(),
   artifacts: z.string().nullish(),
+  attachments: z.string().nullish(),
   model: z.string().nullish(),
   created_at: z.number(),
 });

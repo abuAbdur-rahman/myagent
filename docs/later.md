@@ -15,6 +15,19 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ## Now
 
+### v0.3.2: design system pass, MCP migrations, issue fixes
+
+Exit: the Changelog page ships; MCP upgrades from 0.3.1 with no data loss; #10, #13 and #15 are closed.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [x] | G8 | Changelog page (settings, before About) | Have (0.3.2) | S | none |
+| [x] | J12 | MCP migrations (`approval_mode`, `deny_tools`, `ask_tools`) + MCP page | Have (0.3.2) | M | D4 |
+| [x] | D19 | Tool output controls (code-mode Phase 0) | Have (0.3.2) | M | D13 |
+| [x] | — | Issue fixes #10, #13, #15 | Closed (0.3.2) | M | none |
+
+Detail: `docs/releases/v0.3.2.md`. Code-mode Phases 1 and 2 stay in Later.
+
 ### Phase 1: Foundation
 Exit: one command runs green tests on a clean checkout.
 
@@ -164,6 +177,19 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
 | [ ] | J11 | Scheduled runs | Missing | L | B8 |
 | [ ] | J12 | MCP and skills | Missing | L | D4, D5 |
+
+---
+
+### Phase 13: Code mode, Phases 1-2 (gated)
+
+Exit: big results are handles, tool definitions load on demand, and `execute_js` runs behind a setting.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [ ] | D20 | Result handles, `read_result`, on-demand tool definitions | Missing | M | D19 |
+| [ ] | D21 | `execute_js` (QuickJS via `rquickjs`, off by default) | Missing | L | D20, D4, D5 |
+
+Trigger: measured intermediate tokens over ~10K per turn on a regular basis. Spike `rquickjs` on Windows first. Plan: `docs/plan/code-mode-migration.md`.
 
 ---
 

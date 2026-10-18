@@ -23,6 +23,7 @@ import { classifyStreamError } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments } from "../lib/artifacts";
+import { parseMessageAttachments } from "../lib/attachments";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
@@ -187,6 +188,23 @@ function ActionButton({
   );
 }
 
+export function MessageImages({ message }: { message: Message }) {
+  const images = parseMessageAttachments(message.attachments);
+  if (images.length === 0) return null;
+  return (
+    <div className="mb-1 flex max-w-[80%] flex-wrap justify-end gap-1.5">
+      {images.map((image, index) => (
+        <img
+          key={`${message.id}-${index}`}
+          src={image.dataUrl}
+          alt={`Attached image ${index + 1}`}
+          className="h-32 w-32 rounded-control border border-border bg-surface object-cover"
+        />
+      ))}
+    </div>
+  );
+}
+
 function UserMessage({
   message,
   onEdit,
@@ -200,6 +218,7 @@ function UserMessage({
   if (editing) {
     return (
       <div className="msg user flex flex-col items-end">
+        <MessageImages message={message} />
         <div className="w-[80%]">
           <div className="rounded-card border border-accent bg-surface-2 px-2.5 py-2">
             <TipTapEditor
@@ -231,6 +250,7 @@ function UserMessage({
 
   return (
     <div className="msg user group flex flex-col items-end" data-mid={message.id}>
+      <MessageImages message={message} />
       <div className="max-w-[80%] break-words rounded-composer border border-border bg-surface-2 px-3.5 py-2.5">
         <Markdown content={message.content} />
       </div>
