@@ -51,8 +51,8 @@ fn grep_for(args: &Value) -> Result<Option<Regex>, String> {
     let Some(raw) = args.get("grep").and_then(|v| v.as_str()) else {
         return Ok(None);
     };
-    let pattern = raw.trim();
-    if pattern.is_empty() {
+    let pattern = raw.trim_matches(|ch| ch == '\n' || ch == '\r');
+    if pattern.trim().is_empty() {
         return Ok(None);
     }
     if pattern.chars().count() > GREP_CAP {
@@ -1398,5 +1398,33 @@ mod tests {
         assert!(capped.is_char_boundary(capped.len()));
         assert!(!capped.contains(&euro));
         assert!(capped.contains("truncated"));
+    }
+
+    #[test]
+    fn grep_arguments_keep_spaces_and_drop_line_ends() {
+        let spaced = json!({ "grep": "^error " });
+        let regex = grep_for(&spaced).expect("pattern").expect("regex");
+        assert_eq!(regex.as_str(), "^error ");
+        assert!(regex.is_match("error one"));
+        assert!(!regex.is_match("errorone"));
+
+        let line_end = json!({ "grep": "error\r\n" });
+        assert_eq!(
+            grep_for(&line_end)
+                .expect("pattern")
+                .expect("regex")
+                .as_str(),
+            "error"
+        );
+
+        assert!(
+            grep_for(&json!({ "grep": "   " }))
+                .expect("blank")
+                .is_none()
+        );
+        assert!(grep_for(&json!({})).expect("absent").is_none());
+        assert!(grep_for(&json!({ "grep": "([ " })).is_err());
+        let long = json!({ "grep": "x".repeat(GREP_CAP + 1) });
+        assert!(grep_for(&long).is_err());
     }
 }
