@@ -24,7 +24,7 @@ export const RELEASES: readonly Release[] = [
   {
     version: "0.3.4",
     date: "2026-10-18",
-    summary: "A vision and model-selection fix: a model whose provider does not report image support is no longer treated as blind, and Settings → Models now lists models from every provider with a vision fallback that only offers models that can see.",
+    summary: "A vision, model-selection and composer fix: a model whose provider does not report image support is no longer treated as blind, Settings → Models now lists models from every provider with a vision fallback that only offers models that can see, and markdown shortcuts in the composer now work when there is already text above.",
     changes: [
       {
         kind: "fixed",
@@ -41,6 +41,10 @@ export const RELEASES: readonly Release[] = [
       {
         kind: "improved",
         text: "The vision fallback dropdown only lists models that can see images, and a new Image reading row lets you mark one model as able to see, or unable to see, when detection is wrong.",
+      },
+      {
+        kind: "fixed",
+        text: "Markdown shortcuts work when there is already text above: Shift-Enter starts a new block instead of a soft line break, so 1. / - / > / # and ```ts format wherever you type them, not only on the first line.",
       },
     ],
   },

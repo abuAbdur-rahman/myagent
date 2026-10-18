@@ -79,7 +79,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Copy output equals the fenced source exactly.
 
 ## A11. Composer (input)
-- **Status:** Partial (0.1.3: TipTap rich text with Shift-Enter code blocks, Enter sends and ArrowUp history; the composer acceptance list is still unverified)
+- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; the composer acceptance list is still unverified)
 - **Ref:** Claude Code: multiline input, history with Up arrow, Esc Esc for rewind. Claude app: rich input with shortcuts.
 - **Build:** Rich-text editor serializing to markdown. Single focus ring on the container. Clear immediately on send. History on ArrowUp at doc start, ArrowDown at doc end. Lists continue with Shift+Enter. "```lang" plus Space or Shift+Enter makes a code block. Enter sends outside code blocks.
 - **Done:** The acceptance list from the composer spec passes.

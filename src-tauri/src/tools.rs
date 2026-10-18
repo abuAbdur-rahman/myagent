@@ -293,16 +293,16 @@ fn read_spill_image(
 }
 
 async fn describe_image_via_fallback(
+    client: &reqwest::Client,
     base_url: &str,
     key: &str,
     model: &str,
-    mime: &str,
-    bytes: &[u8],
+    image: &(String, Vec<u8>),
     question: &str,
     cancel: &tokio::sync::Notify,
 ) -> Result<String, String> {
     use base64::Engine as _;
-    let payload = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let payload = base64::engine::general_purpose::STANDARD.encode(&image.1);
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": model,
@@ -311,11 +311,10 @@ async fn describe_image_via_fallback(
             "role": "user",
             "content": [
                 {"type": "text", "text": question},
-                {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{payload}")}},
+                {"type": "image_url", "image_url": {"url": format!("data:{};base64,{payload}", image.0)}},
             ],
         }],
     });
-    let client = reqwest::Client::new();
     let response = tokio::select! {
         response = client.post(url).bearer_auth(key).json(&body).send() => response.map_err(|e| e.to_string())?,
         _ = cancel.notified() => return Err("cancelled by user".to_string()),
@@ -1177,10 +1176,11 @@ pub async fn execute(
                     context.connection_id.ok_or("no provider configured")?,
                 ),
             };
-            let bytes = read_spill_image(app, conversation, index)?;
+            let image = read_spill_image(app, conversation, index)?;
             let key = vault::get_api_key(connection).map_err(|e| e.to_string())?;
+            let client = app.state::<reqwest::Client>();
             let body = describe_image_via_fallback(
-                &base_url, &key, fallback, &bytes.0, &bytes.1, &question, cancel,
+                &client, &base_url, &key, fallback, &image, &question, cancel,
             )
             .await?;
             Ok(ExecOutput {

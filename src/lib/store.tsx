@@ -71,15 +71,28 @@ function canSeeFor(
   return modelCanSeeImages(scoped, modelId, visionOverrideFor(overrides, connectionId, modelId));
 }
 
+function knownVisionFallback(
+  fallback: VisionFallback | null,
+  connections: Connection[],
+): VisionFallback | null {
+  if (!fallback) return null;
+  if (fallback.connectionId && !connections.some((row) => row.id === fallback.connectionId)) {
+    return null;
+  }
+  return fallback;
+}
+
 function visionFallbackFor(
   hasImages: boolean,
   fallback: VisionFallback | null,
   toolsOn: boolean,
   seesImages: boolean,
   activeConnectionId: string,
+  connections: Connection[],
 ): VisionFallback | null {
-  if (!hasImages || !fallback || !toolsOn || seesImages) return null;
-  return { connectionId: fallback.connectionId || activeConnectionId, model: fallback.model };
+  const known = knownVisionFallback(fallback, connections);
+  if (!hasImages || !known || !toolsOn || seesImages) return null;
+  return { connectionId: known.connectionId || activeConnectionId, model: known.model };
 }
 
 function fallbackFields(fallback: VisionFallback | null): {
@@ -100,7 +113,6 @@ function imageDropToast(hasFallback: boolean): string {
 
 async function collectModelOptions(
   connections: Connection[],
-  overrides: Record<string, VisionOverride>,
   report: (cause: unknown) => void,
 ): Promise<ConnectionModelOption[]> {
   const options: ConnectionModelOption[] = [];
@@ -119,11 +131,7 @@ async function collectModelOptions(
           connectionId: connection.id,
           connectionName: connection.name,
           modelId: id,
-          seesImages: modelCanSeeImages(
-            caps,
-            id,
-            visionOverrideFor(overrides, connection.id, id),
-          ),
+          seesImages: modelCanSeeImages(caps, id),
         });
       }
     } catch (cause) {
@@ -451,10 +459,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     visionFallbackRef.current = visionFallback;
   }, [visionFallback]);
-  const visionOverridesRef = useRef(visionOverrides);
-  useEffect(() => {
-    visionOverridesRef.current = visionOverrides;
-  }, [visionOverrides]);
   useEffect(() => {
     convIdRef.current = activeConversationId;
   }, [activeConversationId]);
@@ -849,7 +853,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const loadAllModelOptions = useCallback(
-    () => collectModelOptions(connections, visionOverridesRef.current, reportError),
+    () => collectModelOptions(connections, reportError),
     [connections, reportError],
   );
 
@@ -1236,6 +1240,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         resolveTools(),
         canSeeImages(connection.id, modelName),
         connection.id,
+        connections,
       );
 
       try {
@@ -1378,6 +1383,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [
       canSeeImages,
+      connections,
       finalize,
       openArtifact,
       resolveEffort,
@@ -1567,7 +1573,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : applyCompactWindow(turns, resolveCompact(conversationId, turns));
       const activeModelSees =
         canSeeImages(connRef.current?.id ?? null, modelRef.current) ||
-        (visionFallbackRef.current !== null && resolveTools());
+        (knownVisionFallback(visionFallbackRef.current, connections) !== null && resolveTools());
       const shaped = activeModelSees ? withFinalTurnImages(windowed) : windowed;
       const slim = shaped.map((turn) => ({
         role: turn.role,
@@ -1575,7 +1581,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
       return withSystem(slim, summary);
     },
-    [canSeeImages, resolveCompact, resolveTools, summaryFor, withSystem],
+    [canSeeImages, connections, resolveCompact, resolveTools, summaryFor, withSystem],
   );
 
   const sendMessage = useCallback(
@@ -1677,7 +1683,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         .join("\n\n");
       const vision = canSeeImages(connRef.current?.id ?? null, modelRef.current);
       const toolsOn = resolveTools();
-      const fallback = visionFallbackRef.current;
+      const fallback = knownVisionFallback(visionFallbackRef.current, connections);
       const imageCount = images?.length ?? 0;
       const routed = !vision && fallback !== null && toolsOn && imageCount > 0;
       const gated = resolveImageSend(vision || routed, images ?? []);
@@ -1737,6 +1743,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [
       canSeeImages,
+      connections,
       conversations,
       finalize,
       messages,
