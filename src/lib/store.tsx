@@ -1211,10 +1211,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
       setStreaming(true);
-      toolLogRef.current = [];
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantMsg.id ? { ...m, tool_log: null } : m)),
-      );
+      toolLogRef.current = keepSeed ? db.parseToolLog(seed?.tool_log) : [];
+      if (!keepSeed) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantMsg.id ? { ...m, tool_log: null } : m)),
+        );
+      }
       setApproval(null);
       setQuestion(null);
       let lastFlush = 0;

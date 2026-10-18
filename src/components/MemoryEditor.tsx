@@ -10,6 +10,14 @@ import { Select } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { cn, errorText } from "../lib/utils";
 
+const SNIPPET_MAX = 80;
+
+function snippet(content: string): string {
+  const flat = content.replace(/\s+/g, " ").trim();
+  const chars = Array.from(flat);
+  return chars.length > SNIPPET_MAX ? `${chars.slice(0, SNIPPET_MAX).join("")}…` : flat;
+}
+
 function KindChip({ kind }: { kind: string }) {
   return (
     <span className="rounded-control bg-vault-raised px-1.5 py-0.5 text-xs uppercase tracking-wide text-text-muted">
@@ -62,8 +70,10 @@ export function MemoryEditor({
   const [editError, setEditError] = useState<string | null>(null);
 
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const rowLocked = busy || confirmingId !== null;
 
   const parseDraft = (
     rawContent: string,
@@ -135,19 +145,25 @@ export function MemoryEditor({
     });
   };
 
-  const remove = async (id: string) => {
+  const remove = async (memory: Memory) => {
     if (busyRef.current) return;
-    const confirmed = await confirmDialog({
-      title: "Delete this memory?",
-      body: "This cannot be undone.",
-      ok: "Delete",
-      danger: true,
-    });
-    if (!confirmed || busyRef.current) return;
-    await runLocked(setDeleteError, async () => {
-      await onDelete(id);
-      return true;
-    });
+    if (confirmingId) return;
+    setConfirmingId(memory.id);
+    try {
+      const confirmed = await confirmDialog({
+        title: "Delete this memory?",
+        body: `"${snippet(memory.content)}" will be removed. This cannot be undone.`,
+        ok: "Delete",
+        danger: true,
+      });
+      if (!confirmed) return;
+      await runLocked(setDeleteError, async () => {
+        await onDelete(memory.id);
+        return true;
+      });
+    } finally {
+      setConfirmingId(null);
+    }
   };
 
   return (
@@ -230,15 +246,15 @@ export function MemoryEditor({
                     variant="ghost"
                     size="sm"
                     onClick={() => startEdit(memory)}
-                    disabled={busy}
+                    disabled={rowLocked}
                   >
                     Edit
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void remove(memory.id)}
-                    disabled={busy}
+                    onClick={() => void remove(memory)}
+                    disabled={rowLocked}
                     aria-label="Delete memory"
                   >
                     Delete
