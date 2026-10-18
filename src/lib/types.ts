@@ -57,10 +57,25 @@ export type Todo = z.infer<typeof todoSchema>;
 
 const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
 
-const messageAttachmentSchema = z.object({
+const imageAttachmentSchema = z.object({
+  kind: z.literal("image").default("image"),
   dataUrl: z.string().max(8_000_000).regex(IMAGE_DATA_URL),
 });
+
+const docAttachmentSchema = z.object({
+  kind: z.literal("doc"),
+  name: z.string().min(1).max(200),
+  mime: z.string().max(200),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  size: z.number().int().nonnegative().optional(),
+  chars: z.number().int().nonnegative().optional(),
+});
+
+const messageAttachmentSchema = z.union([imageAttachmentSchema, docAttachmentSchema]);
+export type MessageImageAttachment = z.infer<typeof imageAttachmentSchema>;
+export type MessageDocAttachment = z.infer<typeof docAttachmentSchema>;
 export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
+export type MessageAttachmentInput = z.input<typeof messageAttachmentSchema>;
 export const messageAttachmentsSchema = z.array(messageAttachmentSchema).max(12);
 
 const messageSchema = z.object({

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import Database from "@tauri-apps/plugin-sql";
-import { knowledgeSidecarWipeAll } from "./api";
+import { documentsWipeAll, documentsWipeUnreferenced, knowledgeSidecarWipeAll } from "./api";
 import {
   addKnowledgeDoc,
   deleteKnowledgeDoc,
@@ -15,10 +15,16 @@ vi.mock("@tauri-apps/plugin-sql", () => ({
 }));
 
 vi.mock("./api", () => ({
+  documentsWipeAll: vi.fn(async () => undefined),
+  documentsWipeUnreferenced: vi.fn(async () => 1),
+  knowledgeSidecarDelete: vi.fn(async () => undefined),
+  knowledgeSidecarWipe: vi.fn(async () => undefined),
   knowledgeSidecarWipeAll: vi.fn(),
 }));
 
 const wipeSidecars = vi.mocked(knowledgeSidecarWipeAll);
+const wipeDocuments = vi.mocked(documentsWipeAll);
+const wipeUnreferenced = vi.mocked(documentsWipeUnreferenced);
 
 const load = vi.mocked(Database.load);
 
@@ -80,20 +86,25 @@ describe("knowledge_docs crud", () => {
     ]);
   });
 
-  it("deletes a doc row", async () => {
-    await deleteKnowledgeDoc("k1");
+  it("deletes a doc row and frees the stored text when nothing else points at it", async () => {
+    execute.mockClear();
+    wipeUnreferenced.mockClear();
+    await deleteKnowledgeDoc("k1", "p1", "known");
     expect(execute).toHaveBeenCalledWith("DELETE FROM knowledge_docs WHERE id = $1", [
       "k1",
     ]);
+    expect(wipeUnreferenced).toHaveBeenCalledWith(["known"]);
   });
 
-  it("wipeAll clears knowledge_docs and sidecars", async () => {
+  it("wipeAll clears knowledge_docs, sidecars, and stored documents", async () => {
     execute.mockClear();
+    wipeDocuments.mockClear();
     await wipeAll();
     const wiped = execute.mock.calls.some(([sql]) =>
       (sql as string).includes("DELETE FROM knowledge_docs"),
     );
     expect(wiped).toBe(true);
     expect(wipeSidecars).toHaveBeenCalledOnce();
+    expect(wipeDocuments).toHaveBeenCalledOnce();
   });
 });

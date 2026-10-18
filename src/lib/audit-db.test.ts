@@ -8,7 +8,9 @@ vi.mock("@tauri-apps/plugin-sql", () => ({
 }));
 
 vi.mock("./api", () => ({
-  knowledgeSidecarWipeAll: vi.fn(),
+  documentsWipeAll: vi.fn(async () => undefined),
+  documentsWipeUnreferenced: vi.fn(async () => 0),
+  knowledgeSidecarWipeAll: vi.fn(async () => undefined),
 }));
 
 const load = vi.mocked(Database.load);

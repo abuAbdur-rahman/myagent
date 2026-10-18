@@ -1,5 +1,12 @@
 import Database from "@tauri-apps/plugin-sql";
-import { knowledgeSidecarWipe, knowledgeSidecarWipeAll, type McpServerRow } from "./api";
+import {
+  documentsWipeAll,
+  documentsWipeUnreferenced,
+  knowledgeSidecarDelete,
+  knowledgeSidecarWipe,
+  knowledgeSidecarWipeAll,
+  type McpServerRow,
+} from "./api";
 import { newId } from "./utils";
 import type {
   AuditLog,
@@ -12,7 +19,7 @@ import type {
   MemoryKind,
   MemoryScope,
   Message,
-  MessageAttachment,
+  MessageAttachmentInput,
   Project,
   ProjectInput,
   Role,
@@ -161,10 +168,13 @@ export async function touchConversation(
 
 export async function deleteConversation(id: string): Promise<void> {
   const db = await getDb();
+  const shas = await conversationDocShas(id);
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [id]);
   await db.execute("DELETE FROM chat_tags WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [id]);
+  await db.execute("DELETE FROM chat_docs WHERE conversation_id = $1", [id]);
   await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
+  await wipeUnreferencedDocs(shas);
 }
 
 export async function wipeAll(): Promise<void> {
@@ -172,6 +182,7 @@ export async function wipeAll(): Promise<void> {
   await db.execute("DELETE FROM chat_tags");
   await db.execute("DELETE FROM todos");
   await db.execute("DELETE FROM knowledge_docs");
+  await db.execute("DELETE FROM chat_docs");
   await db.execute("DELETE FROM messages");
   await db.execute("DELETE FROM conversations");
   await db.execute("DELETE FROM memories");
@@ -180,6 +191,7 @@ export async function wipeAll(): Promise<void> {
   await db.execute("DELETE FROM permission_rules");
   await db.execute("DELETE FROM mcp_servers");
   await knowledgeSidecarWipeAll();
+  await documentsWipeAll();
   await db.execute("VACUUM");
 }
 
@@ -414,7 +426,7 @@ export async function updateMessage(id: string, content: string): Promise<void> 
 
 export async function updateMessageAttachments(
   id: string,
-  attachments: MessageAttachment[],
+  attachments: MessageAttachmentInput[],
 ): Promise<void> {
   const db = await getDb();
   await db.execute("UPDATE messages SET attachments = $1 WHERE id = $2", [
@@ -567,8 +579,11 @@ export async function truncateConversation(
 
 export async function clearConversation(conversationId: string): Promise<void> {
   const db = await getDb();
+  const shas = await conversationDocShas(conversationId);
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [conversationId]);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [conversationId]);
+  await db.execute("DELETE FROM chat_docs WHERE conversation_id = $1", [conversationId]);
+  await wipeUnreferencedDocs(shas);
 }
 
 export async function branchConversation(
@@ -712,6 +727,7 @@ export async function updateProject(project: Project): Promise<void> {
 
 export async function deleteProject(id: string): Promise<void> {
   const db = await getDb();
+  const shas = await projectDocShas(id);
   await db.execute(
     "DELETE FROM memories WHERE scope = 'project' AND project_id = $1",
     [id],
@@ -723,6 +739,7 @@ export async function deleteProject(id: string): Promise<void> {
   await db.execute("DELETE FROM mcp_servers WHERE project_id = $1", [id]);
   await knowledgeSidecarWipe(id);
   await db.execute("DELETE FROM projects WHERE id = $1", [id]);
+  await wipeUnreferencedDocs(shas);
 }
 
 export async function listMemories(
@@ -906,9 +923,96 @@ export async function listKnowledgeDocs(
   );
 }
 
-export async function deleteKnowledgeDoc(id: string): Promise<void> {
+export async function deleteKnowledgeDoc(
+  id: string,
+  projectId: string,
+  sha256: string,
+): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM knowledge_docs WHERE id = $1", [id]);
+  try {
+    await knowledgeSidecarDelete(projectId, sha256);
+    await documentsWipeUnreferenced([sha256]);
+  } catch (error) {
+    console.warn("documents: project doc cleanup failed", error);
+  }
+}
+
+export interface ChatDocRow {
+  id: string;
+  conversation_id: string;
+  name: string;
+  mime: string;
+  sha256: string;
+  path: string;
+  size: number;
+  chars: number;
+  created_at: number;
+}
+
+export async function addChatDoc(row: Omit<ChatDocRow, "created_at">): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT INTO chat_docs (id, conversation_id, name, mime, sha256, path, size, chars, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    [
+      row.id,
+      row.conversation_id,
+      row.name,
+      row.mime,
+      row.sha256,
+      row.path,
+      row.size,
+      row.chars,
+      Date.now(),
+    ],
+  );
+}
+
+export async function findChatDoc(
+  conversationId: string,
+  sha256: string,
+): Promise<ChatDocRow | null> {
+  const db = await getDb();
+  const rows = await db.select<ChatDocRow[]>(
+    "SELECT * FROM chat_docs WHERE conversation_id = $1 AND sha256 = $2 LIMIT 1",
+    [conversationId, sha256],
+  );
+  return rows[0] ?? null;
+}
+
+export async function listChatDocs(conversationId: string): Promise<ChatDocRow[]> {
+  const db = await getDb();
+  return db.select<ChatDocRow[]>(
+    "SELECT * FROM chat_docs WHERE conversation_id = $1 ORDER BY created_at ASC",
+    [conversationId],
+  );
+}
+
+async function conversationDocShas(conversationId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.select<{ sha256: string }[]>(
+    "SELECT sha256 FROM chat_docs WHERE conversation_id = $1",
+    [conversationId],
+  );
+  return rows.map((row) => row.sha256);
+}
+
+async function projectDocShas(projectId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.select<{ sha256: string }[]>(
+    "SELECT sha256 FROM knowledge_docs WHERE project_id = $1",
+    [projectId],
+  );
+  return rows.map((row) => row.sha256);
+}
+
+async function wipeUnreferencedDocs(shas: string[]): Promise<void> {
+  if (shas.length === 0) return;
+  try {
+    await documentsWipeUnreferenced(shas);
+  } catch (error) {
+    console.warn("documents: unreferenced wipe failed", error);
+  }
 }
 
 export async function listMcpServers(projectId: string | null): Promise<McpServerRow[]> {

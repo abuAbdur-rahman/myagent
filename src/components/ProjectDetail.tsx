@@ -3,7 +3,6 @@ import { ArrowLeft, ArrowUp, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectInputSchema, type Conversation } from "../lib/types";
 import { deleteKnowledgeDoc, listKnowledgeDocs, type KnowledgeDocRow } from "../lib/db";
-import { knowledgeSidecarDelete } from "../lib/api";
 import { MemoryEditor } from "./MemoryEditor";
 import { Button, Input, Textarea } from "./ui";
 import { confirmDialog } from "./ConfirmDialog";
@@ -194,9 +193,8 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
     if (!confirmed) return;
     setRemovingId(doc.id);
     try {
-      await deleteKnowledgeDoc(doc.id);
+      await deleteKnowledgeDoc(doc.id, project.id, doc.sha256);
       setDocs((prev) => prev.filter((row) => row.id !== doc.id));
-      await knowledgeSidecarDelete(project.id, doc.sha256).catch(() => undefined);
     } catch (e) {
       setStatus(errorText(e));
     } finally {

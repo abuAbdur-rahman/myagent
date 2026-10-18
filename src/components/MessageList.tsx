@@ -23,7 +23,7 @@ import { classifyStreamError } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments } from "../lib/artifacts";
-import { parseMessageAttachments } from "../lib/attachments";
+import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
@@ -189,7 +189,7 @@ function ActionButton({
 }
 
 export function MessageImages({ message }: { message: Message }) {
-  const images = parseMessageAttachments(message.attachments);
+  const images = parseImageAttachments(message.attachments);
   if (images.length === 0) return null;
   return (
     <div className="mb-1 flex max-w-[80%] flex-wrap justify-end gap-1.5">
@@ -200,6 +200,28 @@ export function MessageImages({ message }: { message: Message }) {
           alt={`Attached image ${index + 1}`}
           className="h-32 w-32 rounded-control border border-border bg-surface object-cover"
         />
+      ))}
+    </div>
+  );
+}
+
+export function MessageDocuments({ message }: { message: Message }) {
+  const docs = parseDocAttachments(message.attachments);
+  if (docs.length === 0) return null;
+  return (
+    <div className="mb-1 flex max-w-[80%] flex-wrap justify-end gap-1.5">
+      {docs.map((doc, index) => (
+        <span
+          key={`${message.id}-doc-${index}`}
+          title={`${doc.mime || "document"} · the model can read more with read_document`}
+          className="flex max-w-[280px] items-center gap-1.5 rounded-control border border-border bg-surface px-2 py-1 text-xs"
+        >
+          <FileText size={13} className="flex-none text-muted" />
+          <span className="truncate">{doc.name}</span>
+          {typeof doc.chars === "number" && doc.chars > 0 && (
+            <span className="flex-none text-muted">{doc.chars.toLocaleString()} chars</span>
+          )}
+        </span>
       ))}
     </div>
   );
@@ -219,6 +241,7 @@ function UserMessage({
     return (
       <div className="msg user flex flex-col items-end">
         <MessageImages message={message} />
+        <MessageDocuments message={message} />
         <div className="w-[80%]">
           <div className="rounded-card border border-accent bg-surface-2 px-2.5 py-2">
             <TipTapEditor
@@ -251,6 +274,7 @@ function UserMessage({
   return (
     <div className="msg user group flex flex-col items-end" data-mid={message.id}>
       <MessageImages message={message} />
+      <MessageDocuments message={message} />
       <div className="max-w-[80%] break-words rounded-composer border border-border bg-surface-2 px-3.5 py-2.5">
         <Markdown content={message.content} />
       </div>

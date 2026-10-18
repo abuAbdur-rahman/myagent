@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildKnowledgeBlock,
-  isSupportedMime,
   rankDocs,
   sha256Hex,
   turnContent,
@@ -10,20 +9,6 @@ import {
   MAX_EXCERPT_CHARS,
   MAX_FILES_PER_QUERY,
 } from "./knowledge";
-
-describe("isSupportedMime", () => {
-  it("accepts plain text, markdown, and code types", () => {
-    expect(isSupportedMime("text/plain")).toBe(true);
-    expect(isSupportedMime("text/markdown")).toBe(true);
-    expect(isSupportedMime("application/json")).toBe(true);
-  });
-
-  it("rejects binary types with UNSUPPORTED_TYPE signal", () => {
-    expect(isSupportedMime("application/pdf")).toBe(false);
-    expect(isSupportedMime("application/vnd.openxmlformats")).toBe(false);
-    expect(isSupportedMime("image/png")).toBe(false);
-  });
-});
 
 describe("sha256Hex", () => {
   it("hashes identical bytes to the same digest", async () => {
@@ -97,6 +82,18 @@ describe("turnContent", () => {
       { type: "text", text: "look" },
       { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
     ]);
+  });
+
+  it("ignores document references, which live in the text", () => {
+    const stored = JSON.stringify([
+      {
+        kind: "doc",
+        name: "report.pdf",
+        mime: "application/pdf",
+        sha256: "a".repeat(64),
+      },
+    ]);
+    expect(turnContent({ content: "summarize", attachments: stored })).toBe("summarize");
   });
 
   it("drops malformed attachments instead of throwing", () => {

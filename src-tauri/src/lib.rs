@@ -351,8 +351,6 @@ pub fn run() {
             llm::summarize,
             delete_spill,
             tools::spill_image_write,
-            knowledge::knowledge_sidecar_write,
-            knowledge::knowledge_sidecar_read,
             knowledge::knowledge_sidecar_wipe,
             knowledge::knowledge_sidecar_delete,
             knowledge::knowledge_sidecar_wipe_all,

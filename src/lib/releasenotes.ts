@@ -22,6 +22,33 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.3.5",
+    date: "2026-10-18",
+    summary: "Documents come to every chat: attach a PDF, Word file, spreadsheet, markdown or code file and its text goes into the message, with a read_document tool that lets the model pull more of a file later. No project required.",
+    changes: [
+      {
+        kind: "new",
+        text: "Any chat can take file attachments. Text, markdown and code files, HTML, PDF, Word (.docx) and Excel or OpenDocument spreadsheets (.xlsx, .xls, .ods) are read inside the app and their text is added to the message you send — up to three files per message, 10 MB each.",
+      },
+      {
+        kind: "new",
+        text: "read_document lets the model ask for the rest of a file: it lists the documents a chat holds, returns a named one, or searches inside it, so a long document does not have to fit in one message.",
+      },
+      {
+        kind: "improved",
+        text: "Attaching a file no longer needs a project. Inside a project the document is still added to that project's knowledge, so every chat there can search it, and it is stored once no matter how many chats point at it.",
+      },
+      {
+        kind: "improved",
+        text: "Attached documents show as a card under the message with the file name and the amount of text extracted, and they are still there when the chat is reopened, because the reference is saved on the message.",
+      },
+      {
+        kind: "improved",
+        text: "A damaged or unsupported file cannot take the app down: extraction runs behind a guard and reports a short message instead, and written-out text removed with the chat, the project doc, or Delete everything.",
+      },
+    ],
+  },
+  {
     version: "0.3.4",
     date: "2026-10-18",
     summary: "A vision, model-selection and composer fix: a model whose provider does not report image support is no longer treated as blind, Settings → Models now lists models from every provider with a vision fallback that only offers models that can see, and markdown shortcuts in the composer now work when there is already text above.",
