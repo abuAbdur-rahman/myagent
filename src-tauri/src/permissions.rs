@@ -193,6 +193,16 @@ pub fn default_rules() -> Vec<Rule> {
             effect: Effect::Allow,
         },
         Rule {
+            action: "update_memory".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "delete_memory".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Ask,
+        },
+        Rule {
             action: "save_artifact".to_string(),
             resource: "*".to_string(),
             effect: Effect::Allow,
@@ -624,6 +634,14 @@ mod tests {
         assert_eq!(
             decide("remember", &["*".to_string()], &rules),
             Effect::Allow
+        );
+        assert_eq!(
+            decide("update_memory", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("delete_memory", &["*".to_string()], &rules),
+            Effect::Ask
         );
         assert_eq!(
             decide("save_artifact", &["*".to_string()], &rules),

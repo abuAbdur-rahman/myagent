@@ -15,6 +15,7 @@ import {
   Search,
   Terminal,
   Clock,
+  Trash2,
   X,
   Wrench,
 } from "lucide-react";
@@ -28,9 +29,9 @@ import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
 import { Button, IconButton } from "./ui";
-import type { Message } from "../lib/types";
 import { cn } from "../lib/utils";
-import { parseDeclaredArtifacts } from "../lib/db";
+import { parseToolLog, parseDeclaredArtifacts } from "../lib/db";
+import type { Message, ToolLogEntry } from "../lib/types";
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   const { canRetry, retryTurn, streaming } = useApp();
@@ -76,6 +77,10 @@ function ToolIcon({ name }: { name: string }) {
     case "remember":
     case "recall_memory":
       return <FileText {...props} />;
+    case "update_memory":
+      return <Pencil {...props} />;
+    case "delete_memory":
+      return <Trash2 {...props} />;
     case "web_fetch":
       return <Globe {...props} />;
     case "web_search":
@@ -88,15 +93,22 @@ function ToolIcon({ name }: { name: string }) {
   }
 }
 
-function ToolLogView({ resetKey }: { resetKey: string | null }) {
-  const { toolLog, collapseToolCalls } = useApp();
+export function ToolLogView({
+  entries,
+  collapseToolCalls,
+  resetKey,
+}: {
+  entries: ToolLogEntry[];
+  collapseToolCalls: boolean;
+  resetKey: string | null;
+}) {
   const [collapsed, setCollapsed] = useState(collapseToolCalls);
   useEffect(() => {
     setCollapsed(collapseToolCalls);
   }, [resetKey, collapseToolCalls]);
-  if (toolLog.length === 0) return null;
-  const running = toolLog.filter((e) => e.status === "running").length;
-  const failed = toolLog.filter((e) => e.status === "err").length;
+  if (entries.length === 0) return null;
+  const running = entries.filter((e) => e.status === "running").length;
+  const failed = entries.filter((e) => e.status === "err").length;
   return (
     <div
       className="mb-6 rounded-card border border-border bg-surface px-3 py-2"
@@ -111,7 +123,7 @@ function ToolLogView({ resetKey }: { resetKey: string | null }) {
       >
         <Wrench size={14} />
         <span className="flex-1">
-          {toolLog.length} tool call{toolLog.length === 1 ? "" : "s"}
+          {entries.length} tool call{entries.length === 1 ? "" : "s"}
           {running > 0 && ` · ${running} running`}
           {failed > 0 && ` · ${failed} failed`}
         </span>
@@ -121,7 +133,7 @@ function ToolLogView({ resetKey }: { resetKey: string | null }) {
       </button>
       {!collapsed && (
         <div className="flex flex-col gap-1">
-          {toolLog.map((entry) => (
+          {entries.map((entry) => (
             <details key={entry.id} className="text-[13px]">
               <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
                 {entry.status === "running" && (
@@ -373,6 +385,7 @@ function AssistantMessage({
   streaming,
   streamingId,
   resetKey,
+  collapseToolCalls,
   onRemember,
 }: {
   message: Message;
@@ -381,12 +394,14 @@ function AssistantMessage({
   streaming: boolean;
   streamingId: string | null;
   resetKey: string | null;
+  collapseToolCalls: boolean;
   onRemember: (content: string) => Promise<void>;
 }) {
   const live = streaming && streamingId === message.id;
   const segments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
   const fenceCount = segments.filter((s) => s.kind === "artifact").length;
   const declared = useMemo(() => parseDeclaredArtifacts(message.artifacts), [message.artifacts]);
+  const toolEntries = useMemo(() => parseToolLog(message.tool_log), [message.tool_log]);
   const [rememberLabel, setRememberLabel] = useState("Remember");
   const busy = live && message.content.length === 0;
 
@@ -408,7 +423,11 @@ function AssistantMessage({
       </div>
       <div className="md">
         <ThinkingBlock message={message} live={live} />
-        {live && <ToolLogView resetKey={resetKey} />}
+        <ToolLogView
+          entries={toolEntries}
+          collapseToolCalls={collapseToolCalls}
+          resetKey={resetKey}
+        />
         {busy ? (
           <span className="dots" aria-label="Waiting for response">
             <i />
@@ -520,6 +539,7 @@ export function MessageList() {
     editAndResubmit,
     conversations,
     activeConversationId,
+    collapseToolCalls,
   } = useApp();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(true);
@@ -600,6 +620,7 @@ export function MessageList() {
                 streaming={streaming}
                 streamingId={streamingId}
                 resetKey={activeConversationId}
+                collapseToolCalls={collapseToolCalls}
                 onRemember={remember}
               />
             </div>

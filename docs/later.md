@@ -141,6 +141,18 @@ first two are the abort class the extraction guard cannot catch.
 | A chip pending while its file is wiped | `chat-docs.ts` `releaseChatDoc` / `documents_wipe_unreferenced` | Clearing or deleting a chat, or Delete everything, while a chip is still in the composer removes text the later send needs; the send then shows a card whose text cannot be read. Needs a pending reference in the DB or a startup sweep of `documents/*.txt` against both tables. |
 | `too_large` cannot fire | `documents.rs` | `extract::cap` already truncates to exactly the store limit, so the code is unreachable as written. |
 
+### Deferred from v0.3.6 (memory tools and the tool log)
+
+Raised while building `update_memory` / `delete_memory` and moving the tool log
+onto the message. None blocks the release.
+
+| Item | Where | Note |
+|---|---|---|
+| A deleted memory cannot be recovered | `tools.rs` `delete_memory`, `db.deleteMemory` | Hard delete plus an audit row, by decision: the approval card is the only checkpoint. A `deleted_at` column with an undo toast is the fix if one is ever wanted. |
+| E2 gates no memory write | `tools.rs` `remember` / `update_memory` | Secret refusal is still Missing, and `update_memory` reuses the same validation so it inherits the gap rather than adding a second unchecked path. Land E2 once, in the shared helper. |
+| Approval copy for non-shell tools | `TurnCards.tsx` `ApprovalCard` | The card says "Always allows these `delete_memory` commands" and prints a working directory; for a memory row it shows `saved memory` and a per-id rule that can never fire again. Generalise the line when the next non-shell approval tool lands. |
+| Stored log folds again on a chat switch | `MessageList.tsx` `ToolLogView` | `resetKey` is the conversation id, so a list the user expanded is folded after leaving and returning. Persist the open/closed flag per message if that annoys. |
+
 ### Phase 7: Usage and context
 Exit: compaction runs once at the threshold and the model still recalls an early decision.
 

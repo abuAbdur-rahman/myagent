@@ -22,6 +22,30 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.3.6",
+    date: "2026-10-18",
+    summary:
+      "The assistant can edit and delete saved memories, and the tool-call list stops disappearing: it stays under the reply that used it, folded or open as you left it. Deleting a memory or a project now confirms in the app's own dialog.",
+    changes: [
+      {
+        kind: "new",
+        text: "Memories can be changed or removed by the assistant: recall_memory prints a short id beside each memory it finds, and update_memory or delete_memory act on that id, so a stale note is fixed or dropped without touching the others.",
+      },
+      {
+        kind: "improved",
+        text: "Every agent deletion asks first. The approval card shows the memory text about to go, the deletion is written to the audit log, and an id is pinned to that one memory, so approving once can never allow blanket deletion.",
+      },
+      {
+        kind: "fixed",
+        text: "The tool-call list no longer vanishes when the reply arrives. It used to live only while the answer streamed even though the calls were saved with the message; now it stays under that reply, follows the Collapse tool calls setting, and is still there when the chat is reopened.",
+      },
+      {
+        kind: "improved",
+        text: "Deleting a memory, or a project, confirms in the app's own dialog with the consequence spelled out and the action word on the button, instead of the bare Windows prompt. Escape or a click outside cancels.",
+      },
+    ],
+  },
+  {
     version: "0.3.5",
     date: "2026-10-18",
     summary: "Documents come to every chat: attach a PDF, Word file, spreadsheet, markdown or code file and its text goes into the message, with a read_document tool that lets the model pull more of a file later. No project required.",

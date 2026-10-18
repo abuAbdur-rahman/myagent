@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../lib/store";
 import { projectInputSchema, type Memory } from "../lib/types";
 import { MemoryEditor } from "./MemoryEditor";
+import { confirmDialog } from "./ConfirmDialog";
 import { Button, Dialog, Input, Textarea } from "./ui";
 
 export function ProjectDialog({
@@ -83,13 +84,13 @@ export function ProjectDialog({
 
   const remove = async () => {
     if (!currentId) return;
-    if (
-      !window.confirm(
-        "Delete this project? Its chats are kept but detached, and its memory is removed. This cannot be undone.",
-      )
-    ) {
-      return;
-    }
+    const confirmed = await confirmDialog({
+      title: "Delete this project?",
+      body: "Its chats are kept but detached, and its memory is removed. This cannot be undone.",
+      ok: "Delete project",
+      danger: true,
+    });
+    if (!confirmed) return;
     setBusy(true);
     try {
       await removeProject(currentId);

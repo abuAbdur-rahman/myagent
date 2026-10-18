@@ -7,6 +7,7 @@ import {
 } from "../lib/types";
 import { Button, Textarea } from "./ui";
 import { Select } from "./ui/select";
+import { confirmDialog } from "./ConfirmDialog";
 import { cn, errorText } from "../lib/utils";
 
 function KindChip({ kind }: { kind: string }) {
@@ -136,7 +137,13 @@ export function MemoryEditor({
 
   const remove = async (id: string) => {
     if (busyRef.current) return;
-    if (!window.confirm("Delete this memory? This cannot be undone.")) return;
+    const confirmed = await confirmDialog({
+      title: "Delete this memory?",
+      body: "This cannot be undone.",
+      ok: "Delete",
+      danger: true,
+    });
+    if (!confirmed || busyRef.current) return;
     await runLocked(setDeleteError, async () => {
       await onDelete(id);
       return true;
