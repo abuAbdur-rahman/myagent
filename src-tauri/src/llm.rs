@@ -123,6 +123,8 @@ pub struct ChatRequest {
     pub search_endpoint: Option<String>,
     #[serde(default)]
     pub vision_fallback_model: Option<String>,
+    #[serde(default)]
+    pub vision_fallback_connection: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1515,6 +1517,7 @@ impl ToolRunner for RealTools<'_> {
                         base_url: Some(self.req.base_url.as_str()),
                         connection_id: Some(self.req.connection_id.as_str()),
                         vision_fallback_model: self.req.vision_fallback_model.as_deref(),
+                        vision_fallback_connection: self.req.vision_fallback_connection.as_deref(),
                     },
                     self.cancel,
                 )
@@ -1589,6 +1592,10 @@ async fn run_agentic(
     }
     let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
+    let blind_model = req
+        .vision_fallback_model
+        .as_deref()
+        .is_some_and(|model| !model.trim().is_empty());
     let mut model = RealModel {
         client,
         url,
@@ -1597,7 +1604,7 @@ async fn run_agentic(
         cancel,
         state: state.inner(),
         on_event,
-        tool_specs: tools::tool_specs(),
+        tool_specs: tools::tool_specs(blind_model),
     };
     let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
         .await
@@ -1845,7 +1852,7 @@ mod tests {
 
     #[test]
     fn describe_image_tool_is_listed_and_gated() {
-        let specs = tools::tool_specs();
+        let specs = tools::tool_specs(true);
         let names: Vec<&str> = specs
             .as_array()
             .expect("array")
@@ -1853,6 +1860,17 @@ mod tests {
             .filter_map(|s| s["function"]["name"].as_str())
             .collect();
         assert!(names.contains(&"describe_image"), "spec listed: {names:?}");
+        let seeing = tools::tool_specs(false);
+        let seeing_names: Vec<&str> = seeing
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|s| s["function"]["name"].as_str())
+            .collect();
+        assert!(
+            !seeing_names.contains(&"describe_image"),
+            "hidden from a seeing model: {seeing_names:?}"
+        );
         assert_eq!(
             approval_resources("describe_image", &serde_json::json!({"index": 0})),
             vec!["image#0".to_string()],

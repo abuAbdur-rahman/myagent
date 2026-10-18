@@ -293,16 +293,16 @@ fn read_spill_image(
 }
 
 async fn describe_image_via_fallback(
+    client: &reqwest::Client,
     base_url: &str,
     key: &str,
     model: &str,
-    mime: &str,
-    bytes: &[u8],
+    image: &(String, Vec<u8>),
     question: &str,
     cancel: &tokio::sync::Notify,
 ) -> Result<String, String> {
     use base64::Engine as _;
-    let payload = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let payload = base64::engine::general_purpose::STANDARD.encode(&image.1);
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": model,
@@ -311,11 +311,10 @@ async fn describe_image_via_fallback(
             "role": "user",
             "content": [
                 {"type": "text", "text": question},
-                {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{payload}")}},
+                {"type": "image_url", "image_url": {"url": format!("data:{};base64,{payload}", image.0)}},
             ],
         }],
     });
-    let client = reqwest::Client::new();
     let response = tokio::select! {
         response = client.post(url).bearer_auth(key).json(&body).send() => response.map_err(|e| e.to_string())?,
         _ = cancel.notified() => return Err("cancelled by user".to_string()),
@@ -370,8 +369,8 @@ fn cap_output(text: &str, spill: Option<&str>) -> String {
     }
 }
 
-pub fn tool_specs() -> Value {
-    json!([
+pub fn tool_specs(include_describe_image: bool) -> Value {
+    let mut specs = json!([
         {
             "type": "function",
             "function": {
@@ -564,7 +563,8 @@ pub fn tool_specs() -> Value {
         {
             "type": "function",
             "function": {
-                "name": "describe_image",                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
+                "name": "describe_image",
+                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -576,7 +576,13 @@ pub fn tool_specs() -> Value {
                 },
             },
         },
-    ])
+    ]);
+    if !include_describe_image {
+        if let Some(list) = specs.as_array_mut() {
+            list.retain(|spec| spec["function"]["name"].as_str() != Some("describe_image"));
+        }
+    }
+    specs
 }
 
 pub(crate) async fn memory_pool(app: &AppHandle) -> AppResult<SqlitePool> {
@@ -730,6 +736,7 @@ pub struct ExecContext<'a> {
     pub base_url: Option<&'a str>,
     pub connection_id: Option<&'a str>,
     pub vision_fallback_model: Option<&'a str>,
+    pub vision_fallback_connection: Option<&'a str>,
 }
 
 pub async fn execute(
@@ -1147,16 +1154,33 @@ pub async fn execute(
         "describe_image" => {
             let (index, question) = describe_image_args(&args)?;
             let conversation = conversation_id.ok_or("no active conversation")?;
-            let base_url = context.base_url.ok_or("no provider configured")?;
-            let connection = context.connection_id.ok_or("no provider configured")?;
             let fallback = context
                 .vision_fallback_model
                 .filter(|m| !m.trim().is_empty())
                 .ok_or("no vision fallback model set (Settings → Models)")?;
-            let bytes = read_spill_image(app, conversation, index)?;
+            let (base_url, connection) = match context
+                .vision_fallback_connection
+                .filter(|id| !id.trim().is_empty())
+            {
+                Some(id) => (
+                    crate::connections::base_url_for(app, id)
+                        .await
+                        .map_err(|e| e.to_string())?,
+                    id,
+                ),
+                None => (
+                    context
+                        .base_url
+                        .ok_or("no provider configured")?
+                        .to_string(),
+                    context.connection_id.ok_or("no provider configured")?,
+                ),
+            };
+            let image = read_spill_image(app, conversation, index)?;
             let key = vault::get_api_key(connection).map_err(|e| e.to_string())?;
+            let client = app.state::<reqwest::Client>();
             let body = describe_image_via_fallback(
-                base_url, &key, fallback, &bytes.0, &bytes.1, &question, cancel,
+                &client, &base_url, &key, fallback, &image, &question, cancel,
             )
             .await?;
             Ok(ExecOutput {

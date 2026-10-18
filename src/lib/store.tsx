@@ -18,10 +18,21 @@ import {
   lookupContextLength,
   lookupEfforts,
   lookupSupportsTools,
-  lookupSupportsVision,
+  modelCanSeeImages,
   type ModelCapabilities,
+  type VisionOverride,
 } from "./catalog";
 import { toast } from "./toast";
+import {
+  readVisionFallback,
+  readVisionOverrides,
+  visionOverrideFor,
+  withVisionOverride,
+  writeVisionFallback,
+  writeVisionOverride,
+  type ConnectionModelOption,
+  type VisionFallback,
+} from "./vision";
 import { fileCommandSchema, memoryInputSchema } from "./types";
 import { newId } from "./utils";
 import { deriveFallbackTitle } from "./title";
@@ -49,6 +60,86 @@ const SIDEBAR_KEY = "sidebarCollapsed";
 const THEME_KEY = "theme";
 const DISPLAY_NAME_KEY = "displayName";
 const PANEL_WIDTH_KEY = "panelWidth";
+function canSeeFor(
+  catalog: ModelCapabilities[] | null,
+  overrides: Record<string, VisionOverride>,
+  activeConnectionId: string | null,
+  connectionId: string | null,
+  modelId: string,
+): boolean {
+  const scoped = connectionId !== null && connectionId === activeConnectionId ? catalog : null;
+  return modelCanSeeImages(scoped, modelId, visionOverrideFor(overrides, connectionId, modelId));
+}
+
+function knownVisionFallback(
+  fallback: VisionFallback | null,
+  connections: Connection[],
+): VisionFallback | null {
+  if (!fallback) return null;
+  if (fallback.connectionId && !connections.some((row) => row.id === fallback.connectionId)) {
+    return null;
+  }
+  return fallback;
+}
+
+function visionFallbackFor(
+  hasImages: boolean,
+  fallback: VisionFallback | null,
+  toolsOn: boolean,
+  seesImages: boolean,
+  activeConnectionId: string,
+  connections: Connection[],
+): VisionFallback | null {
+  const known = knownVisionFallback(fallback, connections);
+  if (!hasImages || !known || !toolsOn || seesImages) return null;
+  return { connectionId: known.connectionId || activeConnectionId, model: known.model };
+}
+
+function fallbackFields(fallback: VisionFallback | null): {
+  visionFallbackModel: string | null;
+  visionFallbackConnection: string | null;
+} {
+  return {
+    visionFallbackModel: fallback?.model ?? null,
+    visionFallbackConnection: fallback?.connectionId ?? null,
+  };
+}
+
+function imageDropToast(hasFallback: boolean): string {
+  return hasFallback
+    ? "This model can't read images and tools are off — sending text only."
+    : "This model can't read images and no vision fallback is set — sending text only.";
+}
+
+async function collectModelOptions(
+  connections: Connection[],
+  report: (cause: unknown) => void,
+): Promise<ConnectionModelOption[]> {
+  const options: ConnectionModelOption[] = [];
+  for (const connection of connections) {
+    try {
+      if (!(await api.hasApiKey(connection.id))) continue;
+      const [list, caps, hidden] = await Promise.all([
+        api.listModels(connection.id, connection.kind),
+        api.listModelCaps(connection.id, connection.kind),
+        db.listHiddenModels(connection.id),
+      ]);
+      const hiddenSet = new Set(hidden);
+      for (const id of list) {
+        if (hiddenSet.has(id)) continue;
+        options.push({
+          connectionId: connection.id,
+          connectionName: connection.name,
+          modelId: id,
+          seesImages: modelCanSeeImages(caps, id),
+        });
+      }
+    } catch (cause) {
+      report(cause);
+    }
+  }
+  return options;
+}
 
 function clampPanelWidth(width: number): number {
   return Math.min(720, Math.max(320, Math.round(width)));
@@ -121,8 +212,16 @@ interface AppContextValue {
   ) => Promise<void>;
   model: string;
   setModel: (model: string) => void;
-  visionFallbackModel: string;
-  setVisionFallbackModel: (model: string) => void;
+  visionFallback: VisionFallback | null;
+  setVisionFallback: (value: VisionFallback | null) => void;
+  modelVisionOverride: (connectionId: string | null, modelId: string) => VisionOverride;
+  setModelVisionOverride: (
+    connectionId: string | null,
+    modelId: string,
+    value: VisionOverride,
+  ) => void;
+  canSeeImages: (connectionId: string | null, modelId: string) => boolean;
+  loadAllModelOptions: () => Promise<ConnectionModelOption[]>;
   reasoningEffort: string | null;
   setReasoningEffort: (effort: string | null) => void;
   supportedEfforts: string[] | null;
@@ -258,8 +357,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [model, setModelState] = useState(() => localStorage.getItem(MODEL_KEY) ?? "");
-  const [visionFallbackModel, setVisionFallbackModelState] = useState(
-    () => localStorage.getItem("visionFallbackModel") ?? "",
+  const [visionFallback, setVisionFallbackState] = useState<VisionFallback | null>(() =>
+    readVisionFallback(),
+  );
+  const [visionOverrides, setVisionOverridesState] = useState<Record<string, VisionOverride>>(
+    () => readVisionOverrides(),
   );
   const [reasoningEffort, setReasoningEffortState] = useState<string | null>(() =>
     localStorage.getItem("reasoningEffort"),
@@ -353,10 +455,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
-  const visionFallbackModelRef = useRef(visionFallbackModel);
+  const visionFallbackRef = useRef(visionFallback);
   useEffect(() => {
-    visionFallbackModelRef.current = visionFallbackModel;
-  }, [visionFallbackModel]);
+    visionFallbackRef.current = visionFallback;
+  }, [visionFallback]);
   useEffect(() => {
     convIdRef.current = activeConversationId;
   }, [activeConversationId]);
@@ -645,6 +747,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     let live = true;
+    setCatalog(null);
     api
       .listModelCaps(activeConnection.id, activeConnection.kind)
       .then((rows) => {
@@ -722,11 +825,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setModel = useCallback((value: string) => setModelState(value), []);
 
-  const setVisionFallbackModel = useCallback((value: string) => {
-    if (value) localStorage.setItem("visionFallbackModel", value);
-    else localStorage.removeItem("visionFallbackModel");
-    setVisionFallbackModelState(value);
+  const setVisionFallback = useCallback((value: VisionFallback | null) => {
+    writeVisionFallback(value);
+    setVisionFallbackState(value);
   }, []);
+
+  const setModelVisionOverride = useCallback(
+    (connectionId: string | null, modelId: string, value: VisionOverride) => {
+      writeVisionOverride(connectionId, modelId, value);
+      setVisionOverridesState((previous) =>
+        withVisionOverride(previous, connectionId, modelId, value),
+      );
+    },
+    [],
+  );
+
+  const modelVisionOverride = useCallback(
+    (connectionId: string | null, modelId: string) =>
+      visionOverrideFor(visionOverrides, connectionId, modelId),
+    [visionOverrides],
+  );
+
+  const canSeeImages = useCallback(
+    (connectionId: string | null, modelId: string) =>
+      canSeeFor(catalog, visionOverrides, activeConnectionId, connectionId, modelId),
+    [activeConnectionId, catalog, visionOverrides],
+  );
+
+  const loadAllModelOptions = useCallback(
+    () => collectModelOptions(connections, reportError),
+    [connections, reportError],
+  );
 
   const loadFileCommands = useCallback(async () => {
     try {
@@ -780,7 +909,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
   const knowledgeBlockRef = useRef("");
   const skillIndexRef = useRef("");
-  const pendingVisionFallbackRef = useRef<string | null>(null);
+  const pendingVisionFallbackRef = useRef<VisionFallback | null>(null);
 
   const contextInfo = useMemo(() => {
     const system = buildSystemPrompt({
@@ -1104,14 +1233,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
           Array.isArray(message.content) &&
           message.content.some((part) => part.type === "image_url"),
       );
-      const fallbackModel = visionFallbackModelRef.current.trim();
-      pendingVisionFallbackRef.current =
-        hasImages &&
-        fallbackModel &&
-        resolveTools() &&
-        !lookupSupportsVision(catalogRef.current, modelName)
-          ? fallbackModel
-          : null;
+      const fallback = visionFallbackRef.current;
+      pendingVisionFallbackRef.current = visionFallbackFor(
+        hasImages,
+        fallback,
+        resolveTools(),
+        canSeeImages(connection.id, modelName),
+        connection.id,
+        connections,
+      );
 
       try {
         await api.chatStream(
@@ -1127,7 +1257,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             connectionKind: connection.kind,
             searchBackend,
             searchEndpoint,
-            visionFallbackModel: pendingVisionFallbackRef.current,
+            ...fallbackFields(pendingVisionFallbackRef.current),
           },
           (event) => {
             if (requestIdRef.current !== requestId) return;
@@ -1251,7 +1381,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [finalize, openArtifact, resolveEffort, resolveTools, refreshTodos, searchBackend, searchEndpoint],
+    [
+      canSeeImages,
+      connections,
+      finalize,
+      openArtifact,
+      resolveEffort,
+      resolveTools,
+      refreshTodos,
+      searchBackend,
+      searchEndpoint,
+    ],
   );
 
   const maybeGenerateTitle = useCallback(
@@ -1431,17 +1571,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
         : applyCompactWindow(turns, resolveCompact(conversationId, turns));
-      const canSeeImages =
-        lookupSupportsVision(catalogRef.current, modelRef.current) ||
-        (visionFallbackModelRef.current.trim().length > 0 && resolveTools());
-      const shaped = canSeeImages ? withFinalTurnImages(windowed) : windowed;
+      const activeModelSees =
+        canSeeImages(connRef.current?.id ?? null, modelRef.current) ||
+        (knownVisionFallback(visionFallbackRef.current, connections) !== null && resolveTools());
+      const shaped = activeModelSees ? withFinalTurnImages(windowed) : windowed;
       const slim = shaped.map((turn) => ({
         role: turn.role,
         content: turn.content,
       }));
       return withSystem(slim, summary);
     },
-    [resolveCompact, resolveTools, summaryFor, withSystem],
+    [canSeeImages, connections, resolveCompact, resolveTools, summaryFor, withSystem],
   );
 
   const sendMessage = useCallback(
@@ -1541,15 +1681,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       knowledge = [knowledge, attachmentBlock?.trim() ?? ""]
         .filter((part) => part.length > 0)
         .join("\n\n");
-      const vision = lookupSupportsVision(catalogRef.current, modelRef.current);
+      const vision = canSeeImages(connRef.current?.id ?? null, modelRef.current);
       const toolsOn = resolveTools();
-      const fallback = visionFallbackModelRef.current.trim();
+      const fallback = knownVisionFallback(visionFallbackRef.current, connections);
       const imageCount = images?.length ?? 0;
-      const routed = !vision && fallback.length > 0 && toolsOn && imageCount > 0;
+      const routed = !vision && fallback !== null && toolsOn && imageCount > 0;
       const gated = resolveImageSend(vision || routed, images ?? []);
       const fit = fitImageBudget(gated.kept);
       if (gated.dropped) {
-        toast("This model can't read images and no vision fallback is set — sending text only.");
+        toast(imageDropToast(fallback !== null));
       } else if (fit.dropped > 0) {
         toast(`${fit.dropped} image(s) dropped to fit the turn budget.`);
       } else if (routed) {
@@ -1602,6 +1742,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return true;
     },
     [
+      canSeeImages,
+      connections,
       conversations,
       finalize,
       messages,
@@ -1870,8 +2012,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAllModelsVisibility,
     model,
     setModel,
-    visionFallbackModel,
-    setVisionFallbackModel,
+    visionFallback,
+    setVisionFallback,
+    modelVisionOverride,
+    setModelVisionOverride,
+    canSeeImages,
+    loadAllModelOptions,
     reasoningEffort,
     setReasoningEffort,
     supportedEfforts,

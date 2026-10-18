@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Eye } from "lucide-react";
 import { useApp } from "../lib/store";
-import { lookupSupportsVision } from "../lib/catalog";
 import * as api from "../lib/api";
 import * as db from "../lib/db";
 import {
@@ -46,7 +45,7 @@ function closeModelPicker() {
 }
 
 export function ModelPickerHost() {
-  const { connections, activeConnectionId, selectConnection, model, setModel, catalog } = useApp();
+  const { connections, activeConnectionId, selectConnection, model, setModel, canSeeImages } = useApp();
   const [state, setState] = useState<Anchor | null>(null);
   const [options, setOptions] = useState<Option[] | null>(null);
   const [query, setQuery] = useState("");
@@ -118,9 +117,7 @@ export function ModelPickerHost() {
   const visible = useMemo(() => {
     const list = (options ?? []).map((option) => {
       const connectionId = option.value.split("/")[0];
-      const vision =
-        connectionId === activeConnectionId &&
-        lookupSupportsVision(catalog, option.label);
+      const vision = canSeeImages(connectionId, option.label);
       return {
         ...option,
         icon: vision ? <Eye size={14} aria-label="Vision capable" /> : undefined,
@@ -130,7 +127,7 @@ export function ModelPickerHost() {
     return list.filter(
       (o) => o.label.toLowerCase().includes(q) || o.group?.toLowerCase().includes(q),
     );
-  }, [options, q, activeConnectionId, catalog]);
+  }, [options, q, canSeeImages]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   useEffect(() => {

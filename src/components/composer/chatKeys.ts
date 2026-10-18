@@ -1,6 +1,7 @@
 import { Extension, type Editor } from "@tiptap/core";
 import { Selection } from "@tiptap/pm/state";
 import type { MarkdownStorage } from "tiptap-markdown";
+import { shiftEnterAction } from "./shiftEnter";
 
 export interface ChatKeyCallbacks {
   send: () => void;
@@ -18,8 +19,6 @@ interface ChatKeysStorage {
   historyIndex: number;
   draft: string;
 }
-
-const FENCE = /^```([\w+#-]*)$/;
 
 function getMarkdown(editor: Editor): string {
   const storage = editor.storage as unknown as { markdown?: MarkdownStorage };
@@ -54,29 +53,36 @@ export const ChatKeys = Extension.create<ChatKeysOptions, ChatKeysStorage>({
       "Shift-Enter": ({ editor }) => {
         const { $from } = editor.state.selection;
         const node = $from.parent;
+        const action = shiftEnterAction({
+          parentType: node.type.name,
+          depth: $from.depth,
+          textContent: node.textContent,
+          atParentEnd: $from.parentOffset === node.content.size,
+          inListItem: editor.isActive("listItem"),
+          listItemEmpty: node.content.size === 0,
+        });
 
-        if (node.type.name === "codeBlock") {
+        if (action.kind === "insertNewline") {
           return editor.commands.insertContent("\n");
         }
 
-        if (node.type.name === "paragraph" && $from.depth === 1) {
-          const match = FENCE.exec(node.textContent);
-          if (match && $from.parentOffset === node.content.size) {
-            return editor
-              .chain()
-              .deleteRange({ from: $from.start(), to: $from.end() })
-              .setCodeBlock({ language: match[1] ?? "" })
-              .run();
-          }
+        if (action.kind === "codeBlock") {
+          return editor
+            .chain()
+            .deleteRange({ from: $from.start(), to: $from.end() })
+            .setCodeBlock({ language: action.language })
+            .run();
         }
 
-        if (editor.isActive("listItem")) {
-          return node.content.size === 0
-            ? editor.commands.liftListItem("listItem")
-            : editor.commands.splitListItem("listItem");
+        if (action.kind === "liftListItem") {
+          return editor.commands.liftListItem("listItem");
         }
 
-        return editor.commands.setHardBreak();
+        if (action.kind === "splitListItem") {
+          return editor.commands.splitListItem("listItem");
+        }
+
+        return editor.commands.splitBlock();
       },
 
       Enter: ({ editor }) => {
