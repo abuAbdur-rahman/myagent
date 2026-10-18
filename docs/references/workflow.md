@@ -57,12 +57,27 @@ or run it via `npx -y`.
 ## GitHub Actions
 
 - `.github/workflows/ci.yml` — on push/PR to `main`: `npm ci`, `tsc --noEmit`,
-  `vite build`, `cargo fmt/clippy/check`, `fallow dead-code` on
-  `windows-latest`.
+  `vite build`, `cargo fmt/clippy/check`, `cargo test`, `fallow dead-code` on
+  `windows-latest`. The vitest suite runs locally (`npm test`) but is not yet a
+  CI step.
 - `.github/workflows/release.yml` — on a `v*` tag: `tauri-action` builds the NSIS
-  installer and drafts a GitHub Release.
+  installer and **publishes** a GitHub Release (not a draft), with the installer,
+  its `.sig` and `latest.json`. The in-app updater reads that release.
 - All third-party actions are pinned to full commit SHAs. Do not introduce a
   mutable tag; resolve the SHA and add the version as a comment.
+
+## Releases
+
+1. Land the release PR with a merge commit (merge commits are the convention;
+   the release PR keeps its own history).
+2. Tag that merge commit on `main` with the version, lightweight, no `v0.3.x`
+   annotation: `git tag vX.Y.Z && git push origin vX.Y.Z`. `v0.3.1` and `v0.3.2`
+   both point at their release PR's merge commit.
+3. `release.yml` runs on the tag and publishes; verify the workflow run and the
+   release assets before calling the release done.
+4. Bump the version in `package.json`, `src-tauri/tauri.conf.json`,
+   `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, and add the release to
+   `src/lib/releasenotes.ts` plus `docs/releases/vX.Y.Z.md`, in the release PR.
 
 ## Change summary
 
