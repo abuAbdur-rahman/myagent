@@ -93,8 +93,8 @@ parameter, the request degrades once to a plain streaming completion.
 | `get_time` | Current UTC time + Unix timestamp | — |
 | `remember` | Writes a memory (global or current project) | 2000 chars; project scope needs an active project |
 | `recall_memory` | Keyword search over global + project memories, each line prefixed with the row id | 20 results max |
-| `update_memory` | Rewrites one memory by id (content, kind, or both) | id must be a UUID visible to this chat; 2000 chars |
-| `delete_memory` | Deletes one memory by id, after the user approves | id must be a UUID visible to this chat; asks every time |
+| `update_memory` | Rewrites one memory by id (content, kind, or both) | id must be a UUID visible to this chat, canonicalised before the lookup; 2000 chars |
+| `delete_memory` | Deletes one memory by id, after the user approves | id must be a UUID visible to this chat, canonicalised before the lookup; asks every time |
 | `run_powershell` | Runs a non-interactive command, returns output | 60s default timeout (5–300s), 32KB output cap, home directory |
 | `save_artifact` | Opens a titled code artifact in the side panel | 120-char title, 200KB code cap |
 

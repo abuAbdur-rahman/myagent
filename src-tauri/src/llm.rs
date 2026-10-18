@@ -946,8 +946,12 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
         }
     }
     if name == "update_memory" || name == "delete_memory" {
-        if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
-            return vec![id.trim().to_string()];
+        if let Some(id) = args
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(tools::canonical_memory_id)
+        {
+            return vec![id];
         }
     }
     vec![name.to_string()]
@@ -1940,17 +1944,33 @@ mod tests {
             assert!(names.contains(&name), "{name} listed: {names:?}");
         }
         assert_eq!(
-            approval_resources("delete_memory", &serde_json::json!({"id": "row-1"})),
-            vec!["row-1".to_string()],
+            approval_resources(
+                "delete_memory",
+                &serde_json::json!({"id": "11111111-1111-4111-8111-111111111111"})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
             "a delete rule pins one row, never the whole tool"
         );
         assert_eq!(
             approval_resources(
                 "update_memory",
-                &serde_json::json!({"id": "row-1", "content": "x"})
+                &serde_json::json!({"id": "11111111-1111-4111-8111-111111111111", "content": "x"})
             ),
-            vec!["row-1".to_string()],
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
             "an update rule pins one row"
+        );
+        assert_eq!(
+            approval_resources("delete_memory", &serde_json::json!({"id": "1*"})),
+            vec!["delete_memory".to_string()],
+            "an id that is not a uuid stays the bare tool name, so a wildcard cannot be stored"
+        );
+        assert_eq!(
+            approval_resources(
+                "delete_memory",
+                &serde_json::json!({"id": "11111111111141118111111111111111"})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
+            "the resource is the canonical uuid, so the form the model sent does not matter"
         );
     }
 

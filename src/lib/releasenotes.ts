@@ -25,7 +25,7 @@ export const RELEASES: readonly Release[] = [
     version: "0.3.6",
     date: "2026-10-18",
     summary:
-      "The assistant can edit and delete saved memories, and the tool-call list stops disappearing: it stays under the reply that used it, folded or open as you left it. Deleting a memory or a project now confirms in the app's own dialog.",
+      "The assistant can edit and delete saved memories, and the tool-call list stops disappearing: it stays under the reply that used it and follows the Collapse tool calls setting. Deleting a memory or a project now confirms in the app's own dialog.",
     changes: [
       {
         kind: "new",

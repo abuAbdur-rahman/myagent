@@ -670,17 +670,18 @@ fn like_pattern(query: &str) -> String {
     format!("%{escaped}%")
 }
 
-fn valid_memory_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().count() <= 64 && uuid::Uuid::parse_str(id).is_ok()
+pub(crate) fn canonical_memory_id(id: &str) -> Option<String> {
+    if id.is_empty() || id.chars().count() > 64 {
+        return None;
+    }
+    uuid::Uuid::parse_str(id)
+        .ok()
+        .map(|parsed| parsed.hyphenated().to_string())
 }
 
 fn memory_id_arg(args: &Value) -> Result<String, String> {
-    let id = arg_str(args, "id").unwrap_or_default().trim().to_string();
-    if valid_memory_id(&id) {
-        Ok(id)
-    } else {
-        Err("missing id: pass the id recall_memory printed".to_string())
-    }
+    canonical_memory_id(arg_str(args, "id").unwrap_or_default().trim())
+        .ok_or_else(|| "missing id: pass the id recall_memory printed".to_string())
 }
 
 fn memory_preview(content: &str) -> String {
@@ -1736,13 +1737,22 @@ mod tests {
 
     #[test]
     fn memory_ids_must_be_uuids_and_previews_stay_short() {
-        assert!(valid_memory_id(GLOBAL_ID));
-        assert!(!valid_memory_id(""));
-        assert!(!valid_memory_id("drop table memories"));
+        assert!(canonical_memory_id(GLOBAL_ID).is_some());
+        assert!(canonical_memory_id("").is_none());
+        assert!(canonical_memory_id("drop table memories").is_none());
         assert_eq!(
             memory_id_arg(&json!({"id": format!("  {GLOBAL_ID}  ")})).expect("trimmed"),
             GLOBAL_ID
         );
+        assert_eq!(
+            memory_id_arg(&json!({"id": GLOBAL_ID.replace('-', "")})).expect("simple form"),
+            GLOBAL_ID
+        );
+        assert_eq!(
+            memory_id_arg(&json!({"id": format!("{{{GLOBAL_ID}}}")})).expect("braced form"),
+            GLOBAL_ID
+        );
+        assert!(memory_id_arg(&json!({"id": "1*"})).is_err());
         assert!(memory_id_arg(&json!({"id": "nope"})).is_err());
         assert!(memory_id_arg(&json!({})).is_err());
         assert_eq!(memory_preview("a\n\nb   c"), "a b c");
