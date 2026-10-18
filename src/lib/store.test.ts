@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { AppProvider, settleToolLog, toolLogPatch } from "./store";
+import { AppProvider, seedToolLog, settleToolLog, toolLogPatch } from "./store";
 import type { ToolLogEntry } from "./types";
 
 const memory = new Map<string, string>();
@@ -62,5 +62,23 @@ describe("tool log memo on the message", () => {
     const entries = [entry("ok"), entry("err")];
     expect(settleToolLog(entries)).toEqual(entries);
     expect(settleToolLog(entries)[0]).toBe(entries[0]);
+  });
+
+  it("gives a continued turn's seeded entries fresh ids", () => {
+    const seeded = seedToolLog([{ ...entry("ok"), id: "call_0" }], "msg-1");
+    expect(seeded[0].id).toBe("msg-1#0");
+    expect(seeded[0].status).toBe("ok");
+  });
+
+  it("keeps one id per seeded entry when a provider renumbers per response", () => {
+    const seeded = seedToolLog(
+      [
+        { ...entry("ok"), id: "call_0" },
+        { ...entry("ok"), id: "call_1" },
+      ],
+      "msg-1",
+    );
+    expect(seeded.map((item) => item.id)).toEqual(["msg-1#0", "msg-1#1"]);
+    expect(new Set(seeded.map((item) => item.id)).size).toBe(2);
   });
 });

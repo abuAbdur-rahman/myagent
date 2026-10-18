@@ -29,7 +29,7 @@ export const RELEASES: readonly Release[] = [
     changes: [
       {
         kind: "new",
-        text: "Memories can be changed or removed by the assistant: recall_memory prints a short id beside each memory it finds, and update_memory or delete_memory act on that id, so a stale note is fixed or dropped without touching the others.",
+        text: "Memories can be changed or removed by the assistant: recall_memory prints an id beside each memory it finds, and update_memory or delete_memory act on that id, so a stale note is fixed or dropped without touching the others.",
       },
       {
         kind: "improved",
