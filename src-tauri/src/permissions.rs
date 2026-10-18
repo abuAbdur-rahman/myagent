@@ -202,6 +202,11 @@ pub fn default_rules() -> Vec<Rule> {
             resource: "*".to_string(),
             effect: Effect::Allow,
         },
+        Rule {
+            action: "read_document".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
     ]
 }
 
@@ -622,6 +627,10 @@ mod tests {
         );
         assert_eq!(
             decide("save_artifact", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("read_document", &["report.pdf".to_string()], &rules),
             Effect::Allow
         );
         assert_eq!(

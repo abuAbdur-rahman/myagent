@@ -18,6 +18,7 @@ const COMMAND_CAP: usize = 8_000;
 const MEMORY_CAP: usize = 2_000;
 const TODO_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "cancelled"];
 const WEB_FETCH_CAP: usize = 8_000;
+const DOCUMENT_CAP: usize = 20_000;
 const SHELL_CAP: usize = 6_000;
 const MIN_CHARS_CAP: usize = 200;
 const WEB_SEARCH_CAP: usize = 5;
@@ -369,7 +370,7 @@ fn cap_output(text: &str, spill: Option<&str>) -> String {
     }
 }
 
-pub fn tool_specs(include_describe_image: bool) -> Value {
+pub fn tool_specs(include_describe_image: bool, include_read_document: bool) -> Value {
     let mut specs = json!([
         {
             "type": "function",
@@ -576,11 +577,31 @@ pub fn tool_specs(include_describe_image: bool) -> Value {
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_document",
+                "description": "Read a document attached to this conversation when the copy in the user message was truncated, or to search it. Reads the local extracted text only. Page with start, or narrow with grep instead of paging.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Document name as attached, or a prefix of its hash." },
+                        "start": { "type": "integer", "minimum": 0, "description": "Character offset to start from (default 0)." },
+                        "max_chars": { "type": "integer", "minimum": 200, "description": "How many characters to return (default 20000)." },
+                        "grep": { "type": "string", "description": "Return only lines matching this regular expression." },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false,
+                },
+            },
+        },
     ]);
-    if !include_describe_image {
-        if let Some(list) = specs.as_array_mut() {
-            list.retain(|spec| spec["function"]["name"].as_str() != Some("describe_image"));
-        }
+    if let Some(list) = specs.as_array_mut() {
+        list.retain(|spec| {
+            let name = spec["function"]["name"].as_str().unwrap_or_default();
+            (include_describe_image || name != "describe_image")
+                && (include_read_document || name != "read_document")
+        });
     }
     specs
 }
@@ -680,6 +701,14 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
         "describe_image" => {
             let index = args.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
             format!("Describe attached image #{index} via fallback vision model")
+        }
+        "read_document" => {
+            let name: String = arg_str(args, "name")
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            format!("Read document: {name}")
         }
         _ => name.to_string(),
     }
@@ -1148,6 +1177,58 @@ pub async fn execute(
             let block = crate::skills::prepare_skill(app, &id)?;
             Ok(ExecOutput {
                 output: cap_output(&block, None),
+                artifact: None,
+            })
+        }
+        "read_document" => {
+            let conversation = conversation_id.ok_or("no active conversation")?;
+            let requested = arg_str(&args, "name").ok_or("missing document name")?;
+            if requested.chars().count() > 200 {
+                return Err("document name too long (max 200 chars)".to_string());
+            }
+            let documents = crate::documents::conversation_documents(app, conversation)
+                .await
+                .map_err(|e| e.to_string())?;
+            let document =
+                crate::documents::match_document(&documents, &requested).ok_or_else(|| {
+                    format!(
+                        "no attached document matches {requested}; attached: {}",
+                        crate::documents::document_index(&documents)
+                    )
+                })?;
+            let project = crate::documents::conversation_project(app, conversation).await;
+            let text = crate::documents::read_text(app, &document.sha256, project.as_deref())
+                .map_err(|e| format!("could not read {}: {e}", document.name))?;
+            let grep = grep_for(&args)?;
+            let body = match &grep {
+                Some(regex) => {
+                    let kept = tooltext::grep_lines(&text, regex);
+                    if kept.is_empty() {
+                        format!("no line matched {} in {}", regex.as_str(), document.name)
+                    } else {
+                        kept
+                    }
+                }
+                None => text.clone(),
+            };
+            let start = arg_usize(&args, "start").unwrap_or(0);
+            let max_chars = capped_chars(&args, "max_chars", DOCUMENT_CAP);
+            let spill = if text.len() > OUTPUT_CAP {
+                conversation_id.and_then(|cid| write_spill(app, cid, call_id, &text))
+            } else {
+                None
+            };
+            let mut shaped = tooltext::report_body(&body, start, max_chars, |next| {
+                format!(
+                    "Call read_document again with name: {} and start: {next} to read more.",
+                    document.name
+                )
+            });
+            if let Some(path) = spill {
+                shaped.push_str(&format!("\nFull document saved at {path}."));
+            }
+            Ok(ExecOutput {
+                output: shaped,
                 artifact: None,
             })
         }

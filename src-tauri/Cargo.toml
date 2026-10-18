@@ -34,6 +34,9 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "macros", "process", "time", "net"] }
 chrono = "0.4"
 htmd = "0.5"
+pdf-extract = "0.12"
+docx-rs = { version = "0.4", default-features = false }
+calamine = "0.36"
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "derive"] }
 
@@ -46,7 +49,7 @@ tokio = { version = "1", features = ["macros", "rt"] }
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+panic = "unwind"
 strip = true
 
 
