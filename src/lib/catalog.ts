@@ -40,6 +40,40 @@ function familyEfforts(modelId: string): string[] | null {
   return null;
 }
 
+const VISION_YES: RegExp[] = [
+  /gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-4-vision|gpt-5|chatgpt-4o/i,
+  /^o[34](?!-?mini)(\b|[-.])/i,
+  /claude-(3|4)|claude-(sonnet|opus|haiku)/i,
+  /gemini/i,
+  /gemma-?3|llama-4|llama-3\.2.*vision/i,
+  /(^|[-/])(vl|vision)([-.]|$)|pixtral|llava|internvl|moondream|qwen.*vl/i,
+];
+
+const VISION_NO: RegExp[] = [
+  /deepseek-(chat|reasoner|coder|v[23])|deepseek-r1/i,
+  /^o[13]-?mini/i,
+  /^gpt-4(?!o|\.1|-turbo|-vision)|gpt-3\.5/i,
+  /llama-3([.][01])?[-.]|llama-2/i,
+  /mixtral|mistral-(small|nemo|7b|8x)/i,
+  /phi-[34]/i,
+  /gemma-?[12](\b|[-.])/i,
+  /^qwen/i,
+  /grok-[12](\b|[-.])/i,
+];
+
+export type VisionSupport = "yes" | "no" | "unknown";
+export type VisionOverride = "yes" | "no" | null;
+
+export function knownModelVision(modelId: string): VisionSupport {
+  for (const pattern of VISION_YES) {
+    if (pattern.test(modelId)) return "yes";
+  }
+  for (const pattern of VISION_NO) {
+    if (pattern.test(modelId)) return "no";
+  }
+  return "unknown";
+}
+
 export function lookupSupportsTools(
   catalog: ModelCapabilities[] | null,
   modelId: string,
@@ -64,11 +98,24 @@ export function parseBackendCaps(raw: unknown): ModelCapabilities[] {
   }));
 }
 
-export function lookupSupportsVision(
+export function lookupVisionSupport(
   catalog: ModelCapabilities[] | null,
   modelId: string,
+): VisionSupport {
+  const entry = catalog?.find((m) => m.id === modelId);
+  if (entry?.supportsVision === true) return "yes";
+  if (entry?.supportsVision === false) return "no";
+  return knownModelVision(modelId);
+}
+
+export function modelCanSeeImages(
+  catalog: ModelCapabilities[] | null,
+  modelId: string,
+  override: VisionOverride = null,
 ): boolean {
-  return catalog?.find((m) => m.id === modelId)?.supportsVision === true;
+  if (override === "yes") return true;
+  if (override === "no") return false;
+  return lookupVisionSupport(catalog, modelId) !== "no";
 }
 
 export function lookupEfforts(

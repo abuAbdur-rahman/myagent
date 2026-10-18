@@ -14,6 +14,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useApp, type ThemeMode } from "../../lib/store";
+import type { VisionOverride } from "../../lib/catalog";
+import { applyVisionOverride, type ConnectionModelOption, type VisionFallback } from "../../lib/vision";
 import * as api from "../../lib/api";
 import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
@@ -37,7 +39,7 @@ import { toast } from "../../lib/toast";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
-import type { AuditLog, Memory } from "../../lib/types";
+import type { AuditLog, Connection, Memory } from "../../lib/types";
 
 function SettingRow({
   label,
@@ -864,17 +866,6 @@ function auditEmptyText(search: string): string {
   return search.trim() ? "No matching audit entries." : "No approval decisions recorded yet.";
 }
 
-function modelSelectData(models: string[]) {
-  const options = models.map((id) => ({ value: id, label: id }));
-  const has = models.length > 0;
-  return {
-    options,
-    visionOptions: [{ value: "", label: "None (text only)" }, ...options],
-    placeholder: has ? "Select a model" : "No models",
-    visionPlaceholder: has ? "None" : "No models",
-  };
-}
-
 export function GeneralPage() {
   const {
     displayName,
@@ -1296,47 +1287,273 @@ export function AppearancePage() {
   );
 }
 
+const VISION_OVERRIDE_OPTIONS = [
+  { value: "auto", label: "Detect automatically" },
+  { value: "yes", label: "Can see images" },
+  { value: "no", label: "Cannot see images" },
+];
+
+type ModelOption = { value: string; label: string; group?: string };
+
+function modelOptionsFrom(rows: ConnectionModelOption[]): ModelOption[] {
+  return rows.map((option) => ({
+    value: `${option.connectionId}/${option.modelId}`,
+    label: option.modelId,
+    group: option.connectionName,
+  }));
+}
+
+function visionModelOptions(
+  rows: ConnectionModelOption[],
+  override: (connectionId: string, modelId: string) => VisionOverride,
+): ModelOption[] {
+  return [
+    { value: "", label: "None (send text only)" },
+    ...modelOptionsFrom(
+      rows.filter((option) =>
+        applyVisionOverride(option.seesImages, override(option.connectionId, option.modelId)),
+      ),
+    ),
+  ];
+}
+
+function keepSelected(
+  options: ModelOption[],
+  selected: string | null,
+  label: string,
+): ModelOption[] {
+  if (!selected || options.some((option) => option.value === selected)) return options;
+  return [...options, { value: selected, label: `${label} (now unavailable)` }];
+}
+
+function splitModelValue(value: string): { connectionId: string; modelId: string } {
+  const slash = value.indexOf("/");
+  return { connectionId: value.slice(0, slash), modelId: value.slice(slash + 1) };
+}
+
+function defaultModelDescription(connection: Connection | null): string {
+  return connection ? `Used in new chats · ${connection.name}` : "Add a provider first";
+}
+
+function imageReadingDescription(
+  model: string,
+  connectionId: string | null,
+  seesImages: boolean,
+  hasFallback: boolean,
+): string {
+  if (!model || !connectionId) return "Select a model first";
+  if (seesImages) return "This model receives images directly";
+  return hasFallback
+    ? "This model cannot read images; the vision fallback reads them"
+    : "This model cannot read images; images are dropped until a fallback is set";
+}
+
+function modelValue(connectionId: string | null, model: string): string | null {
+  return connectionId && model ? `${connectionId}/${model}` : null;
+}
+
+function fallbackValue(
+  fallback: VisionFallback | null,
+  activeConnectionId: string | null,
+): string | null {
+  if (!fallback) return null;
+  return `${fallback.connectionId || activeConnectionId || ""}/${fallback.model}`;
+}
+
+function overrideValue(override: VisionOverride): string {
+  return override ?? "auto";
+}
+
+function overrideFromPick(next: string): VisionOverride {
+  if (next === "yes" || next === "no") return next;
+  return null;
+}
+
+function canPickModelValue(connectionId: string | null, model: string): boolean {
+  return connectionId !== null && model.length > 0;
+}
+
+function seesImagesFor(
+  canSeeImages: (connectionId: string, model: string) => boolean,
+  connectionId: string | null,
+  model: string,
+): boolean {
+  if (!connectionId || !model) return false;
+  return canSeeImages(connectionId, model);
+}
+
+function useAllModelOptions() {
+  const { loadAllModelOptions } = useApp();
+  const [all, setAll] = useState<ConnectionModelOption[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      setAll(await loadAllModelOptions());
+    } catch (cause) {
+      toast(errorText(cause));
+    } finally {
+      setLoading(false);
+    }
+  }, [loadAllModelOptions]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { rows: all ?? [], loading, reload };
+}
+
+function DefaultModelRow({
+  rows,
+  loading,
+  connection,
+  model,
+}: {
+  rows: ConnectionModelOption[];
+  loading: boolean;
+  connection: Connection | null;
+  model: string;
+}) {
+  const { activeConnectionId, selectConnection, setModel } = useApp();
+  const options = modelOptionsFrom(rows);
+  const pick = (value: string) => {
+    const picked = splitModelValue(value);
+    if (picked.connectionId !== activeConnectionId) selectConnection(picked.connectionId);
+    setModel(picked.modelId);
+  };
+  return (
+    <SettingRow label="Default model" description={defaultModelDescription(connection)}>
+      <Select
+        size="sm"
+        value={modelValue(activeConnectionId, model)}
+        onChange={pick}
+        placeholder="Select a model"
+        aria-label="Default model"
+        disabled={options.length === 0}
+        loading={loading}
+        options={options}
+      />
+    </SettingRow>
+  );
+}
+
+function ImageReadingRow() {
+  const { model, activeConnectionId, canSeeImages, modelVisionOverride, setModelVisionOverride, visionFallback } =
+    useApp();
+  const override = activeConnectionId ? modelVisionOverride(activeConnectionId, model) : null;
+  const pick = (value: string) => {
+    if (activeConnectionId) {
+      setModelVisionOverride(activeConnectionId, model, overrideFromPick(value));
+    }
+  };
+  return (
+    <SettingRow
+      label="Image reading"
+      description={imageReadingDescription(
+        model,
+        activeConnectionId,
+        seesImagesFor(canSeeImages, activeConnectionId, model),
+        visionFallback !== null,
+      )}
+    >
+      <Select
+        size="sm"
+        value={overrideValue(override)}
+        onChange={pick}
+        aria-label="Image reading"
+        disabled={!canPickModelValue(activeConnectionId, model)}
+        options={VISION_OVERRIDE_OPTIONS}
+      />
+    </SettingRow>
+  );
+}
+
+function VisionFallbackRow({
+  rows,
+  loading,
+  fallback,
+  activeConnectionId,
+  onPick,
+}: {
+  rows: ConnectionModelOption[];
+  loading: boolean;
+  fallback: VisionFallback | null;
+  activeConnectionId: string | null;
+  onPick: (value: VisionFallback | null) => void;
+}) {
+  const { modelVisionOverride } = useApp();
+  const selected = fallbackValue(fallback, activeConnectionId);
+  const options = keepSelected(
+    visionModelOptions(rows, modelVisionOverride),
+    selected,
+    fallback?.model ?? "",
+  );
+  const pick = (value: string) => {
+    if (!value) {
+      onPick(null);
+      return;
+    }
+    const picked = splitModelValue(value);
+    onPick({ connectionId: picked.connectionId, model: picked.modelId });
+  };
+  return (
+    <SettingRow
+      label="Vision fallback model"
+      description="Reads attached images when the active model cannot. Only models that can see images are listed."
+    >
+      <Select
+        size="sm"
+        value={selected}
+        onChange={pick}
+        placeholder="None"
+        aria-label="Vision fallback model"
+        disabled={options.length <= 1 && fallback === null}
+        loading={loading}
+        options={options}
+      />
+    </SettingRow>
+  );
+}
+
 export function ModelsPage() {
-  const { models, model, setModel, activeConnection, refreshModels, loadingModels, visionFallbackModel, setVisionFallbackModel } = useApp();
-  const { options, visionOptions, placeholder, visionPlaceholder } = modelSelectData(models);
+  const {
+    model,
+    activeConnection,
+    activeConnectionId,
+    refreshModels,
+    loadingModels,
+    visionFallback,
+    setVisionFallback,
+  } = useApp();
+  const { rows, loading, reload } = useAllModelOptions();
+  const busy = loading || loadingModels;
+
   return (
     <div>
-      <SettingRow
-        label="Default model"
-        description={activeConnection ? `From ${activeConnection.name}` : "Add a provider first"}
-      >
-        <Select
-          size="sm"
-          value={model || null}
-          onChange={(next) => setModel(next)}
-          placeholder={placeholder}
-          aria-label="Default model"
-          disabled={models.length === 0}
-          options={options}
-        />
-      </SettingRow>
-      <SettingRow
-        label="Vision fallback model"
-        description="Reads attached images when the active model cannot"
-      >
-        <Select
-          size="sm"
-          value={visionFallbackModel || null}
-          onChange={(next) => setVisionFallbackModel(next)}
-          placeholder={visionPlaceholder}
-          aria-label="Vision fallback model"
-          disabled={models.length === 0}
-          options={visionOptions}
-        />
-      </SettingRow>
-      <SettingRow label="Refresh models" description="Re-fetch the list from the provider">
+      <DefaultModelRow
+        rows={rows}
+        loading={busy}
+        connection={activeConnection}
+        model={model}
+      />
+      <ImageReadingRow />
+      <VisionFallbackRow
+        rows={rows}
+        loading={loading}
+        fallback={visionFallback}
+        activeConnectionId={activeConnectionId}
+        onPick={setVisionFallback}
+      />
+      <SettingRow label="Refresh models" description="Re-fetch the list from every provider">
         <Button
           variant="default"
           size="sm"
-          disabled={!activeConnection || loadingModels}
-          onClick={() => void refreshModels()}
+          disabled={busy}
+          onClick={() => {
+            void refreshModels();
+            void reload();
+          }}
         >
-          {loadingModels ? "Loading…" : "Refresh"}
+          {busy ? "Loading…" : "Refresh"}
         </Button>
       </SettingRow>
     </div>

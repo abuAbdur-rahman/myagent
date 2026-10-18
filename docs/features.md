@@ -197,9 +197,9 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Switching mid-chat applies to the next turn only.
 
 ## C3. Model catalogue and capabilities
-- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model)
+- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider)
 - **Ref:** † OpenRouter's models list includes context length and supported parameters.
-- **Build:** Fetch, cache with a TTL, and read: context length, supports reasoning, supports tools. Disable UI that a model cannot use. Fall back to safe defaults when unknown.
+- **Build:** Fetch, cache with a TTL, and read: context length, supports reasoning, supports tools. Disable UI that a model cannot use. Fall back to safe defaults when unknown, to a known-family table for image support, and to a per-model override when the user knows better.
 - **Done:** A model without tool support never gets tools in its request.
 
 ## C4. Reasoning effort control
@@ -460,9 +460,9 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)
-- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts. 0.3.2: sent images are stored on the message, survive regenerate and edit-resubmit, and render after reload)
+- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts. 0.3.2: sent images are stored on the message, survive regenerate and edit-resubmit, and render after reload. 0.3.4: image support is tri-state — a provider that reports no modality reads unknown and is treated as able to see, a known-family table answers in between, a per-model override in Settings → Models wins over both; only a model that cannot see is routed to the fallback and offered describe_image, which now runs on the fallback model's own provider)
 - **Ref:** Claude and OpenWebUI accept pasted images for vision models.
-- **Build:** Paste or attach, downscale to a max edge, send as a content part only if the model supports it (C3).
+- **Build:** Paste or attach, downscale to a max edge, send as a content part unless the model is known not to see (C3), with a per-model override in Settings → Models.
 - **Done:** A non-vision model never receives an image part.
 
 ## F5. Mermaid and LaTeX

@@ -370,8 +370,8 @@ fn cap_output(text: &str, spill: Option<&str>) -> String {
     }
 }
 
-pub fn tool_specs() -> Value {
-    json!([
+pub fn tool_specs(include_describe_image: bool) -> Value {
+    let mut specs = json!([
         {
             "type": "function",
             "function": {
@@ -564,7 +564,8 @@ pub fn tool_specs() -> Value {
         {
             "type": "function",
             "function": {
-                "name": "describe_image",                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
+                "name": "describe_image",
+                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -576,7 +577,13 @@ pub fn tool_specs() -> Value {
                 },
             },
         },
-    ])
+    ]);
+    if !include_describe_image {
+        if let Some(list) = specs.as_array_mut() {
+            list.retain(|spec| spec["function"]["name"].as_str() != Some("describe_image"));
+        }
+    }
+    specs
 }
 
 pub(crate) async fn memory_pool(app: &AppHandle) -> AppResult<SqlitePool> {
@@ -730,6 +737,7 @@ pub struct ExecContext<'a> {
     pub base_url: Option<&'a str>,
     pub connection_id: Option<&'a str>,
     pub vision_fallback_model: Option<&'a str>,
+    pub vision_fallback_connection: Option<&'a str>,
 }
 
 pub async fn execute(
@@ -1147,16 +1155,32 @@ pub async fn execute(
         "describe_image" => {
             let (index, question) = describe_image_args(&args)?;
             let conversation = conversation_id.ok_or("no active conversation")?;
-            let base_url = context.base_url.ok_or("no provider configured")?;
-            let connection = context.connection_id.ok_or("no provider configured")?;
             let fallback = context
                 .vision_fallback_model
                 .filter(|m| !m.trim().is_empty())
                 .ok_or("no vision fallback model set (Settings → Models)")?;
+            let (base_url, connection) = match context
+                .vision_fallback_connection
+                .filter(|id| !id.trim().is_empty())
+            {
+                Some(id) => (
+                    crate::connections::base_url_for(app, id)
+                        .await
+                        .map_err(|e| e.to_string())?,
+                    id,
+                ),
+                None => (
+                    context
+                        .base_url
+                        .ok_or("no provider configured")?
+                        .to_string(),
+                    context.connection_id.ok_or("no provider configured")?,
+                ),
+            };
             let bytes = read_spill_image(app, conversation, index)?;
             let key = vault::get_api_key(connection).map_err(|e| e.to_string())?;
             let body = describe_image_via_fallback(
-                base_url, &key, fallback, &bytes.0, &bytes.1, &question, cancel,
+                &base_url, &key, fallback, &bytes.0, &bytes.1, &question, cancel,
             )
             .await?;
             Ok(ExecOutput {

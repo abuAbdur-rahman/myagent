@@ -174,6 +174,7 @@ export interface ChatStreamArgs {
   searchBackend?: string | null;
   searchEndpoint?: string | null;
   visionFallbackModel?: string | null;
+  visionFallbackConnection?: string | null;
 }
 
 export async function chatStream(
@@ -198,6 +199,7 @@ export async function chatStream(
           search_backend: args.searchBackend ?? null,
           search_endpoint: args.searchEndpoint ?? null,
           vision_fallback_model: args.visionFallbackModel ?? null,
+          vision_fallback_connection: args.visionFallbackConnection ?? null,
     },
     onEvent: channel,
   });

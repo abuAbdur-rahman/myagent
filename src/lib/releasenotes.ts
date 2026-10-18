@@ -22,6 +22,29 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.3.4",
+    date: "2026-10-18",
+    summary: "A vision and model-selection fix: a model whose provider does not report image support is no longer treated as blind, and Settings → Models now lists models from every provider with a vision fallback that only offers models that can see.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "A model whose provider does not report image support is no longer treated as blind. The capability check falls back to a known-model table, so a capable model receives images instead of being told it cannot see them.",
+      },
+      {
+        kind: "fixed",
+        text: "The describe-image tool is only offered to a model that cannot see, and it now runs on the fallback model's own provider, so the fallback may live on a different provider than the chat.",
+      },
+      {
+        kind: "improved",
+        text: "Settings → Models lists models from every configured provider, grouped by provider; picking one switches the active provider.",
+      },
+      {
+        kind: "improved",
+        text: "The vision fallback dropdown only lists models that can see images, and a new Image reading row lets you mark one model as able to see, or unable to see, when detection is wrong.",
+      },
+    ],
+  },
+  {
     version: "0.3.3",
     date: "2026-10-18",
     summary: "A verification release: retry and mid-stream stop are covered by tests, the step cap and repeat guard are recorded as done, and the roadmap now matches the code.",
