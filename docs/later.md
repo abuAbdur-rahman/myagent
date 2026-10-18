@@ -121,6 +121,12 @@ chose to defer.
 | Frontend tests not in CI | `.github/workflows/ci.yml` | `npm test` (vitest) is green locally but CI runs only the Rust suite. Add the step with the next CI change. |
 | `mcp_add` accepts any stdio command | Settings | Intentional: the user types it themselves behind the approval gate. Recorded so it is not re-flagged. |
 
+### Dependency advisories
+
+| Item | Where | Note |
+|---|---|---|
+| `zip 8.6.0` — RUSTSEC-2026-0367 / GHSA-vv5m-jxxh-4627 | transitive through `calamine 0.36.1` and `docx-rs 0.4.22` (`Cargo.lock`) | Flagged by the SafeDep scan on PR #21. Fixed only in `zip 9.0.0`, and both crates still pin `zip = "8"`, so no upgrade path exists. Every advisory covers the extraction APIs (`ZipArchive::extract`, stream extraction) that write entries to disk with attacker-controlled paths, permissions or symlinks; myagent calls none of them — the two crates only open `ZipArchive::new` and read entries in memory with `by_index`. Revisit when calamine or docx-rs allow `zip 9`. |
+
 ### Phase 7: Usage and context
 Exit: compaction runs once at the threshold and the model still recalls an early decision.
 
