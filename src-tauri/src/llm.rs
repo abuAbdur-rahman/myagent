@@ -1964,7 +1964,12 @@ mod tests {
         req
     }
 
-    fn serve_sse(chunks: Vec<&'static str>, connections: Arc<AtomicUsize>) -> String {
+    fn serve_sse(
+        first: &'static str,
+        rest: Vec<&'static str>,
+        gate: std::sync::mpsc::Receiver<()>,
+        connections: Arc<AtomicUsize>,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let addr = listener.local_addr().expect("test server addr");
         std::thread::spawn(move || {
@@ -1996,10 +2001,10 @@ mod tests {
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
             );
             let _ = stream.flush();
-            for (position, chunk) in chunks.iter().enumerate() {
-                if position > 0 {
-                    std::thread::sleep(Duration::from_millis(250));
-                }
+            let _ = stream.write_all(first.as_bytes());
+            let _ = stream.flush();
+            let _ = gate.recv();
+            for chunk in rest {
                 if stream.write_all(chunk.as_bytes()).is_err() {
                     return;
                 }
@@ -2080,11 +2085,12 @@ mod tests {
     #[tokio::test]
     async fn stream_error_mid_flight_is_not_retried() {
         let connections = Arc::new(AtomicUsize::new(0));
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
+        gate_tx.send(()).expect("pre-release the gate");
         let url = serve_sse(
-            vec![
-                "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
-                "data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n",
-            ],
+            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
+            vec!["data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n"],
+            gate_rx,
             connections.clone(),
         );
         let req = stream_request(&url);
@@ -2110,12 +2116,14 @@ mod tests {
     #[tokio::test]
     async fn cancel_mid_stream_keeps_the_text_already_sent() {
         let connections = Arc::new(AtomicUsize::new(0));
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
         let url = serve_sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
             vec![
-                "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
                 "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
                 "data: [DONE]\n\n",
             ],
+            gate_rx,
             connections.clone(),
         );
         let req = stream_request(&url);
@@ -2129,18 +2137,28 @@ mod tests {
                 stream_completion(&client, &req, "key".to_string(), vec![], &channel, &cancel).await
             })
         };
-        for _ in 0..200 {
+        for _ in 0..500 {
             let empty = seen.lock().map(|guard| guard.is_empty()).unwrap_or(true);
             if !empty {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        assert_eq!(
+            delta_texts(&seen),
+            vec!["one"],
+            "the first delta must arrive before the cancel"
+        );
         cancel.notify_one();
         let result = turn.await.expect("stream task");
         assert!(result.is_ok(), "cancel resolves the turn without an error");
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        assert_eq!(delta_texts(&seen), vec!["one"]);
+        gate_tx.send(()).expect("release the rest of the stream");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            delta_texts(&seen),
+            vec!["one"],
+            "later chunks never arrive after a cancel"
+        );
     }
 
     #[test]

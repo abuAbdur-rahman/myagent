@@ -24,19 +24,19 @@ export const RELEASES: readonly Release[] = [
   {
     version: "0.3.3",
     date: "2026-10-18",
-    summary: "A verification release: retry, mid-stream stop and the agent-loop guards are proven by tests, and the roadmap now matches the code.",
+    summary: "A verification release: retry and mid-stream stop are covered by tests, the step cap and repeat guard are recorded as done, and the roadmap now matches the code.",
     changes: [
       {
         kind: "improved",
-        text: "Retrying is proven end to end: a 429 retries with growing backoff and a mid-stream error never does, and the status line still shows Retrying (n/10).",
+        text: "Retrying is covered by tests: a 429 retries with growing backoff, a 400 does not, and an error that arrives mid-stream never does. The status line still shows Retrying (n/10).",
       },
       {
         kind: "improved",
-        text: "Stopping a reply mid-stream has a test: the turn ends at once, keeps the text already shown, and marks any interrupted tool as such.",
+        text: "Stopping a reply mid-stream now has a test: the turn ends at once and the text already shown is kept. A tool entry still open when the stream ends shows as interrupted.",
       },
       {
         kind: "improved",
-        text: "The step cap (25, clamped to 1 to 32, with a no-tools fallback at the cap) and the Keep going / Stop here guard against a repeating tool call are recorded as done.",
+        text: "The step cap (25, clamped to 1 to 32, with a no-tools fallback at the cap) and the Keep going / Stop here guard against a repeating tool call are recorded as done; the cap and the guard's counting are tested.",
       },
       {
         kind: "fixed",

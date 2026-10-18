@@ -68,16 +68,17 @@ or run it via `npx -y`.
 
 ## Releases
 
-1. Land the release PR with a merge commit (merge commits are the convention;
-   the release PR keeps its own history).
-2. Tag that merge commit on `main` with the version, lightweight, no `v0.3.x`
-   annotation: `git tag vX.Y.Z && git push origin vX.Y.Z`. `v0.3.1` and `v0.3.2`
-   both point at their release PR's merge commit.
-3. `release.yml` runs on the tag and publishes; verify the workflow run and the
+1. Open the release PR from `release/vX.Y.Z`. The PR carries the version bump in
+   `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and
+   `src-tauri/Cargo.lock`, the `src/lib/releasenotes.ts` entry and
+   `docs/releases/vX.Y.Z.md`, alongside the code it ships.
+2. Land it with a merge commit (merge commits are the convention; the release PR
+   keeps its own history).
+3. Tag that merge commit on `main` with the version, lightweight, no annotation:
+   `git tag vX.Y.Z && git push origin vX.Y.Z`. `v0.3.1` and `v0.3.2` both point
+   at their release PR's merge commit.
+4. `release.yml` runs on the tag and publishes; verify the workflow run and the
    release assets before calling the release done.
-4. Bump the version in `package.json`, `src-tauri/tauri.conf.json`,
-   `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, and add the release to
-   `src/lib/releasenotes.ts` plus `docs/releases/vX.Y.Z.md`, in the release PR.
 
 ## Change summary
 

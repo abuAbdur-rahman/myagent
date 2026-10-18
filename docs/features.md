@@ -66,13 +66,13 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Two quick sends produce two ordered turns.
 
 ## A9. Markdown rendering (assistant and user)
-- **Status:** Have (one Markdown component for both roles; marked + DOMPurify, no raw HTML; links open externally)
+- **Status:** Partial (one Markdown component for both roles, marked + DOMPurify, no raw HTML, links open externally; the identical-render acceptance test is missing)
 - **Ref:** All three render markdown for both sides. OpenWebUI and Claude store raw text and render on display.
 - **Build:** Store raw markdown only. One renderer for both roles (`react-markdown`, `remark-gfm`, `remark-breaks`). No raw HTML. Links get `rel="noopener noreferrer"` and open externally. Throttle re-render during streaming.
 - **Done:** The same markdown string renders identically for user and assistant bubbles.
 
 ## A10. Code blocks in messages
-- **Status:** Have (shiki highlighting after the stream settles, language label and Copy on each block; Copy takes the fenced source)
+- **Status:** Partial (shiki highlighting after the stream settles, language label and Copy ship; the Copy-equals-fenced-source acceptance test is missing)
 - **Ref:** Claude and OpenWebUI: language label, copy button, syntax highlighting; OpenWebUI also allows editable code blocks.
 - **Build:** Header with language and Copy; monospace; horizontal scroll; highlight lazily after streaming finishes. Copy copies raw text only.
 - **Not:** Editable code blocks, run buttons.
@@ -185,7 +185,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Have (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer; a rejected key shows a clear hint)
+- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
