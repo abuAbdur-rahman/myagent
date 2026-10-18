@@ -33,7 +33,6 @@ export type DocIngestResult =
 
 export interface DocIngestInput {
   conversationId: string | null;
-  projectId: string | null;
   name: string;
   mime: string;
   bytes: Uint8Array;
@@ -149,13 +148,13 @@ export async function ingestChatDoc(input: DocIngestInput): Promise<DocIngestRes
     chars,
     path,
   };
-  if (input.projectId) await linkProjectDoc(input.projectId, input.conversationId, doc);
   return { status: "added", doc };
 }
 
 export async function commitChatDocs(
   conversationId: string,
   docs: ChatDocument[],
+  projectId: string | null = null,
 ): Promise<{ committed: ChatDocument[]; failed: string[] }> {
   const committed: ChatDocument[] = [];
   const failed: string[] = [];
@@ -174,6 +173,7 @@ export async function commitChatDocs(
         });
       }
       committed.push(doc);
+      if (projectId) await linkProjectDoc(projectId, conversationId, doc);
     } catch (error) {
       console.warn(`documents: ${doc.name} was not attached`, error);
       failed.push(doc.name);
@@ -182,7 +182,11 @@ export async function commitChatDocs(
   return { committed, failed };
 }
 
-export async function releaseChatDoc(doc: ChatDocument): Promise<void> {
+export async function releaseChatDoc(
+  doc: ChatDocument,
+  remaining: ChatDocument[] = [],
+): Promise<void> {
+  if (remaining.some((other) => other.sha256 === doc.sha256)) return;
   try {
     await documentsWipeUnreferenced([doc.sha256]);
   } catch (error) {

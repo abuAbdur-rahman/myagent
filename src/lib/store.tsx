@@ -1730,7 +1730,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       let documents: ChatDocument[] = [];
       if ((docs?.length ?? 0) > 0) {
-        const committed = await commitChatDocs(conversationId, docs ?? []);
+        const committed = await commitChatDocs(
+          conversationId,
+          docs ?? [],
+          projectRef.current?.id ?? null,
+        );
         documents = committed.committed;
         if (committed.failed.length > 0) {
           toast(`Could not attach: ${committed.failed.join(", ")}`);

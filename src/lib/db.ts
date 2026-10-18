@@ -932,9 +932,13 @@ export async function deleteKnowledgeDoc(
   await db.execute("DELETE FROM knowledge_docs WHERE id = $1", [id]);
   try {
     await knowledgeSidecarDelete(projectId, sha256);
+  } catch (error) {
+    console.warn("documents: legacy sidecar delete failed", error);
+  }
+  try {
     await documentsWipeUnreferenced([sha256]);
   } catch (error) {
-    console.warn("documents: project doc cleanup failed", error);
+    console.warn("documents: shared-store cleanup failed", error);
   }
 }
 

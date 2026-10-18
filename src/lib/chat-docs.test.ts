@@ -115,7 +115,6 @@ describe("documentFailureMessage", () => {
 describe("ingestChatDoc", () => {
   const input = {
     conversationId: "c1",
-    projectId: null,
     name: "report.pdf",
     mime: "application/pdf",
     bytes: bytesOf("%PDF-1.4"),
@@ -163,24 +162,6 @@ describe("ingestChatDoc", () => {
     expect(insertProjectDoc).not.toHaveBeenCalled();
   });
 
-  it("adds a project reference only when the project does not have the hash", async () => {
-    await ingestChatDoc({ ...input, projectId: "p1" });
-    expect(insertProjectDoc).toHaveBeenCalledWith(
-      expect.objectContaining({ project_id: "p1", chat_id: "c1", sha256: SHA, path: doc.path }),
-    );
-
-    insertProjectDoc.mockClear();
-    shaInProject.mockResolvedValue(true);
-    await ingestChatDoc({ ...input, projectId: "p1" });
-    expect(insertProjectDoc).not.toHaveBeenCalled();
-  });
-
-  it("keeps the document when the project reference fails", async () => {
-    insertProjectDoc.mockRejectedValue(new Error("db down"));
-    const result = await ingestChatDoc({ ...input, projectId: "p1" });
-    expect(result).toEqual({ status: "added", doc });
-  });
-
   it("reports what the extractor said when it fails", async () => {
     ingest.mockRejectedValue({ code: "too_large", message: "the file is larger than 10 MB" });
     const result = await ingestChatDoc(input);
@@ -195,6 +176,29 @@ describe("commitChatDocs", () => {
     expect(insertChatDoc).toHaveBeenCalledWith(
       expect.objectContaining({ conversation_id: "c1", sha256: SHA, chars: doc.chars }),
     );
+  });
+
+  it("adds a project reference only when the project does not have the hash", async () => {
+    await commitChatDocs("c1", [doc], "p1");
+    expect(insertProjectDoc).toHaveBeenCalledWith(
+      expect.objectContaining({ project_id: "p1", chat_id: "c1", sha256: SHA, path: doc.path }),
+    );
+
+    insertProjectDoc.mockClear();
+    shaInProject.mockResolvedValue(true);
+    await commitChatDocs("c1", [doc], "p1");
+    expect(insertProjectDoc).not.toHaveBeenCalled();
+  });
+
+  it("keeps the document when the project reference fails", async () => {
+    insertProjectDoc.mockRejectedValue(new Error("db down"));
+    const result = await commitChatDocs("c1", [doc], "p1");
+    expect(result).toEqual({ committed: [doc], failed: [] });
+  });
+
+  it("leaves project knowledge alone outside a project", async () => {
+    await commitChatDocs("c1", [doc]);
+    expect(insertProjectDoc).not.toHaveBeenCalled();
   });
 
   it("skips a document the chat already has", async () => {
@@ -350,6 +354,12 @@ describe("chat document lifecycle", () => {
   it("frees bytes when a pending chip is dropped", async () => {
     await releaseChatDoc(doc);
     expect(wipeUnreferenced).toHaveBeenCalledWith([SHA]);
+  });
+
+  it("keeps the file while another chip still points at it", async () => {
+    const second = { ...doc, name: "copy.pdf" };
+    await releaseChatDoc(doc, [second]);
+    expect(wipeUnreferenced).not.toHaveBeenCalled();
   });
 
   it("does not throw when the wipe fails", async () => {

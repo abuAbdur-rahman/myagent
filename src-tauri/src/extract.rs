@@ -446,7 +446,10 @@ fn sheet_cell(cell: &Data) -> String {
         Data::Float(number) => number.to_string(),
         Data::Int(number) => number.to_string(),
         Data::Bool(flag) => flag.to_string(),
-        Data::DateTime(stamp) => stamp.as_f64().to_string(),
+        Data::DateTime(stamp) => stamp
+            .as_datetime()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| stamp.as_f64().to_string()),
         Data::DateTimeIso(text) => text.clone(),
         Data::DurationIso(text) => text.clone(),
         Data::Error(error) => format!("{error:?}"),
@@ -650,6 +653,13 @@ mod tests {
         assert!(out.starts_with("## Sheet1\n"), "{out}");
         assert!(out.contains("name, count\n"), "{out}");
         assert!(out.contains("widgets, 2.5\n"), "{out}");
+    }
+
+    #[test]
+    fn renders_excel_dates_as_dates() {
+        let stamp =
+            calamine::ExcelDateTime::new(45488.0, calamine::ExcelDateTimeType::DateTime, false);
+        assert_eq!(sheet_cell(&Data::DateTime(stamp)), "2024-07-15 00:00:00");
     }
 
     #[test]

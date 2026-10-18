@@ -44,7 +44,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "improved",
-        text: "A damaged or unsupported file cannot take the app down: extraction runs behind a guard and reports a short message instead, and written-out text removed with the chat, the project doc, or Delete everything.",
+        text: "Written-out document text is deleted as soon as no chat or project points at it, so removing a chat, clearing it, removing a project file or Delete everything frees the space. A damaged or unsupported file cannot take the app down either: extraction runs behind a guard and reports a short message instead.",
       },
     ],
   },

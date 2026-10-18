@@ -91,11 +91,6 @@ interface ImageChip {
 
 type AttachChip = DocChip | ImageChip;
 
-interface AttachTarget {
-  conversationId: string | null;
-  projectId: string | null;
-}
-
 function isDocChip(chip: AttachChip): chip is DocChip {
   return chip.kind === "doc";
 }
@@ -153,7 +148,7 @@ async function buildImageChip(file: File, index: number): Promise<ImageChip | nu
 async function buildDocChip(
   file: File,
   index: number,
-  target: AttachTarget,
+  conversationId: string | null,
 ): Promise<DocChip | null> {
   if (file.size > MAX_DOC_BYTES) {
     toast(`"${file.name}": over ${formatBytes(MAX_DOC_BYTES)}, skipped.`);
@@ -163,8 +158,7 @@ async function buildDocChip(
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const result = await ingestChatDoc({
-      conversationId: target.conversationId,
-      projectId: target.projectId,
+      conversationId,
       name: file.name,
       mime,
       bytes,
@@ -193,23 +187,23 @@ async function buildDocChip(
 async function pickChip(
   file: File,
   index: number,
-  target: AttachTarget,
+  conversationId: string | null,
   docsLeft: number,
 ): Promise<AttachChip | null> {
   if (isSupportedImage(file.type)) return buildImageChip(file, index);
   if (docsLeft <= 0) return null;
-  return buildDocChip(file, index, target);
+  return buildDocChip(file, index, conversationId);
 }
 
 async function collectChips(
   files: File[],
-  target: AttachTarget,
+  conversationId: string | null,
   room: number,
 ): Promise<AttachChip[]> {
   const chips: AttachChip[] = [];
   let left = room;
   for (const [index, file] of files.entries()) {
-    const chip = await pickChip(file, index, target, left);
+    const chip = await pickChip(file, index, conversationId, left);
     if (chip) {
       chips.push(chip);
       if (isDocChip(chip)) left -= 1;
@@ -290,7 +284,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     streaming,
     sendWith,
     activeConnection,
-    activeProject,
     model,
     models,
     setModel,
@@ -339,8 +332,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setAttaching(true);
     try {
       const room = MAX_DOCS_PER_TURN - docChipsIn(chipsRef.current);
-      const target = { conversationId: activeConversationId, projectId: activeProject?.id ?? null };
-      const added = await collectChips(files, target, room);
+      const added = await collectChips(files, activeConversationId, room);
       setChips((prev) => [...prev, ...added]);
       if (files.filter(isDocFile).length > room) {
         toast(`Up to ${MAX_DOCS_PER_TURN} documents per message.`);
@@ -352,8 +344,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const removeChip = (key: string) => {
     const chip = chipsRef.current.find((item) => item.key === key);
-    if (chip && isDocChip(chip)) void releaseChatDoc(chip.doc);
-    setChips((prev) => prev.filter((item) => item.key !== key));
+    const rest = chipsRef.current.filter((item) => item.key !== key);
+    setChips(rest);
+    if (chip && isDocChip(chip)) void releaseChatDoc(chip.doc, docsOf(rest));
   };
 
   const historyEntries = useMemo(() => {
