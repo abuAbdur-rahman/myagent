@@ -214,7 +214,7 @@ export function MessageDocuments({ message }: { message: Message }) {
         <span
           key={`${message.id}-doc-${index}`}
           title={`${doc.mime || "document"} · the model can read more with read_document`}
-          className="flex max-w-[280px] items-center gap-1.5 rounded-control border border-border bg-surface px-2 py-1 text-xs"
+          className="flex max-w-70 items-center gap-1.5 rounded-control border border-border bg-surface px-2 py-1 text-xs"
         >
           <FileText size={13} className="flex-none text-muted" />
           <span className="truncate">{doc.name}</span>

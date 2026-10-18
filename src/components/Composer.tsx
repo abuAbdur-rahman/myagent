@@ -73,13 +73,35 @@ function mimeForFile(name: string, declared: string): string {
   return EXTENSION_MIMES[ext] ?? "";
 }
 
-interface AttachChip {
+interface DocChip {
   key: string;
-  kind: "doc" | "image";
+  kind: "doc";
   name: string;
   detail: string;
-  dataUrl?: string;
-  doc?: ChatDocument;
+  doc: ChatDocument;
+}
+
+interface ImageChip {
+  key: string;
+  kind: "image";
+  name: string;
+  detail: string;
+  dataUrl: string;
+}
+
+type AttachChip = DocChip | ImageChip;
+
+interface AttachTarget {
+  conversationId: string | null;
+  projectId: string | null;
+}
+
+function isDocChip(chip: AttachChip): chip is DocChip {
+  return chip.kind === "doc";
+}
+
+function isDocFile(file: File): boolean {
+  return !isSupportedImage(file.type);
 }
 
 function estimateTokens(text: string): number {
@@ -108,7 +130,7 @@ function expandCommandText(
   return expanded.text;
 }
 
-async function buildImageChip(file: File, index: number): Promise<AttachChip | null> {
+async function buildImageChip(file: File, index: number): Promise<ImageChip | null> {
   if (file.size > MAX_IMAGE_BYTES) {
     toast(`"${file.name}": over ${formatBytes(MAX_IMAGE_BYTES)}, skipped.`);
     return null;
@@ -130,10 +152,9 @@ async function buildImageChip(file: File, index: number): Promise<AttachChip | n
 
 async function buildDocChip(
   file: File,
-  conversationId: string | null,
-  projectId: string | null,
   index: number,
-): Promise<AttachChip | null> {
+  target: AttachTarget,
+): Promise<DocChip | null> {
   if (file.size > MAX_DOC_BYTES) {
     toast(`"${file.name}": over ${formatBytes(MAX_DOC_BYTES)}, skipped.`);
     return null;
@@ -142,8 +163,8 @@ async function buildDocChip(
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const result = await ingestChatDoc({
-      conversationId,
-      projectId,
+      conversationId: target.conversationId,
+      projectId: target.projectId,
       name: file.name,
       mime,
       bytes,
@@ -167,6 +188,63 @@ async function buildDocChip(
     toast(`"${file.name}": couldn't attach.`);
     return null;
   }
+}
+
+async function pickChip(
+  file: File,
+  index: number,
+  target: AttachTarget,
+  docsLeft: number,
+): Promise<AttachChip | null> {
+  if (isSupportedImage(file.type)) return buildImageChip(file, index);
+  if (docsLeft <= 0) return null;
+  return buildDocChip(file, index, target);
+}
+
+async function collectChips(
+  files: File[],
+  target: AttachTarget,
+  room: number,
+): Promise<AttachChip[]> {
+  const chips: AttachChip[] = [];
+  let left = room;
+  for (const [index, file] of files.entries()) {
+    const chip = await pickChip(file, index, target, left);
+    if (chip) {
+      chips.push(chip);
+      if (isDocChip(chip)) left -= 1;
+    }
+  }
+  return chips;
+}
+
+function docChipsIn(chips: AttachChip[]): number {
+  return chips.filter(isDocChip).length;
+}
+
+function docsOf(chips: AttachChip[]): ChatDocument[] {
+  return chips.filter(isDocChip).map((chip) => chip.doc);
+}
+
+function imagesOf(chips: AttachChip[]): { dataUrl: string }[] {
+  return chips.filter((chip) => !isDocChip(chip)).map((chip) => ({ dataUrl: chip.dataUrl }));
+}
+
+function readyToSend(streaming: boolean, connected: boolean, model: string): boolean {
+  if (streaming) return false;
+  if (!connected) return false;
+  return model.length > 0;
+}
+
+function hasContent(text: string, chips: number): boolean {
+  return text.length > 0 || chips > 0;
+}
+
+function outgoingText(text: string, imageCount: number, docCount: number): string {
+  if (text.trim().length > 0) return text;
+  if (imageCount > 0) return "See the attached image.";
+  if (docCount > 0) return "See the attached document.";
+  return "";
 }
 
 function SlashMenu({
@@ -260,25 +338,12 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     if (files.length === 0) return;
     setAttaching(true);
     try {
-      let room = MAX_DOCS_PER_TURN - chipsRef.current.filter((chip) => chip.kind === "doc").length;
-      let limitHit = false;
-      for (const [index, file] of files.entries()) {
-        let chip: AttachChip | null = null;
-        if (isSupportedImage(file.type)) {
-          chip = await buildImageChip(file, index);
-        } else if (room > 0) {
-          chip = await buildDocChip(
-            file,
-            activeConversationId,
-            activeProject?.id ?? null,
-            index,
-          );
-          if (chip) room -= 1;
-        } else if (!limitHit) {
-          limitHit = true;
-          toast(`Up to ${MAX_DOCS_PER_TURN} documents per message.`);
-        }
-        if (chip) setChips((prev) => [...prev, chip]);
+      const room = MAX_DOCS_PER_TURN - docChipsIn(chipsRef.current);
+      const target = { conversationId: activeConversationId, projectId: activeProject?.id ?? null };
+      const added = await collectChips(files, target, room);
+      setChips((prev) => [...prev, ...added]);
+      if (files.filter(isDocFile).length > room) {
+        toast(`Up to ${MAX_DOCS_PER_TURN} documents per message.`);
       }
     } finally {
       setAttaching(false);
@@ -287,7 +352,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const removeChip = (key: string) => {
     const chip = chipsRef.current.find((item) => item.key === key);
-    if (chip?.doc) void releaseChatDoc(chip.doc);
+    if (chip && isDocChip(chip)) void releaseChatDoc(chip.doc);
     setChips((prev) => prev.filter((item) => item.key !== key));
   };
 
@@ -361,7 +426,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     const handle = editorRef.current;
     const text = (handle?.getMarkdown() ?? composerDraft).trim();
     const pending = chipsRef.current;
-    if ((!text && pending.length === 0) || streaming || !activeConnection || !model) return;
+    if (!readyToSend(streaming, activeConnection !== null, model)) return;
+    if (!hasContent(text, pending.length)) return;
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
@@ -370,21 +436,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     const parsed = parseSlash(text);
     warnIfShadowed(parsed, mergedCommands);
     if (dispatchSlash(text, slashHandlers)) return;
+    const docs = docsOf(pending);
+    const images = imagesOf(pending);
     const sendText = expandCommandText(text, parsed, fileCommands);
-    const docs = pending
-      .filter((chip) => chip.kind === "doc" && chip.doc)
-      .map((chip) => chip.doc as ChatDocument);
-    const imagePayloads = pending
-      .filter((chip) => chip.kind === "image" && chip.dataUrl)
-      .map((chip) => ({ dataUrl: chip.dataUrl as string }));
-    const fallbackText =
-      imagePayloads.length > 0
-        ? "See the attached image."
-        : docs.length > 0
-          ? "See the attached document."
-          : "";
-    const outgoing = sendText.trim() || fallbackText;
-    void sendMessage(outgoing, imagePayloads, docs).then((accepted) => {
+    const outgoing = outgoingText(sendText, images.length, docs.length);
+    void sendMessage(outgoing, images, docs).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
         setComposerDraft(text);
