@@ -12,6 +12,15 @@ import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
+import {
+  buildDocumentBlock,
+  commitChatDocs,
+  copyChatDocs,
+  prependDocumentBlock,
+  toAttachment,
+  withDocumentBlock,
+  type ChatDocument,
+} from "./chat-docs";
 import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
 import { fitImageBudget } from "./image";
 import {
@@ -284,7 +293,11 @@ interface AppContextValue {
   streaming: boolean;
   streamingId: string | null;
   toolLog: ToolEntry[];
-  sendMessage: (text: string, attachmentBlock?: string, images?: { dataUrl: string }[]) => Promise<boolean>;
+  sendMessage: (
+    text: string,
+    images?: { dataUrl: string }[],
+    docs?: ChatDocument[],
+  ) => Promise<boolean>;
   fileCommands: FileCommand[];
   loadFileCommands: () => Promise<void>;
   regenerate: () => Promise<void>;
@@ -1587,8 +1600,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (
       text: string,
-      attachmentBlock?: string,
       images?: { dataUrl: string }[],
+      docs?: ChatDocument[],
     ): Promise<boolean> => {
       if (streaming) return false;
       const connection = connRef.current;
@@ -1678,9 +1691,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } catch {
         knowledge = "";
       }
-      knowledge = [knowledge, attachmentBlock?.trim() ?? ""]
-        .filter((part) => part.length > 0)
-        .join("\n\n");
       const vision = canSeeImages(connRef.current?.id ?? null, modelRef.current);
       const toolsOn = resolveTools();
       const fallback = knownVisionFallback(visionFallbackRef.current, connections);
@@ -1718,20 +1728,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
       }
-      if (imagesForPayload.length > 0) {
+      let documents: ChatDocument[] = [];
+      if ((docs?.length ?? 0) > 0) {
+        const committed = await commitChatDocs(
+          conversationId,
+          docs ?? [],
+          projectRef.current?.id ?? null,
+        );
+        documents = committed.committed;
+        if (committed.failed.length > 0) {
+          toast(`Could not attach: ${committed.failed.join(", ")}`);
+        }
+      }
+      const attachments = [...documents.map(toAttachment), ...imagesForPayload];
+      if (attachments.length > 0) {
         try {
-          await db.updateMessageAttachments(userMsg.id, imagesForPayload);
-          const attachments = JSON.stringify(imagesForPayload);
+          await db.updateMessageAttachments(userMsg.id, attachments);
+          const stored = JSON.stringify(attachments);
           setMessages((prev) =>
-            prev.map((m) => (m.id === userMsg.id ? { ...m, attachments } : m)),
+            prev.map((m) => (m.id === userMsg.id ? { ...m, attachments: stored } : m)),
           );
         } catch (e) {
           reportError(e);
         }
-        outgoing.push({ role: "user", content: buildUserContent(sendText, imagesForPayload) });
-      } else {
-        outgoing.push({ role: "user", content: sendText });
       }
+      const documentBlock = await buildDocumentBlock(
+        documents,
+        projectRef.current?.id ?? null,
+      );
+      const userContent = prependDocumentBlock(
+        imagesForPayload.length > 0 ? buildUserContent(sendText, imagesForPayload) : sendText,
+        documentBlock,
+      );
+      outgoing.push({ role: "user", content: userContent });
       const payload = buildPayload(conversationId, outgoing);
 
       await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
@@ -1783,7 +1812,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       conversationId,
       connection,
       modelRef.current,
-      buildPayload(conversationId, kept),
+      buildPayload(conversationId, await withDocumentBlock(kept, projectRef.current?.id ?? null)),
       assistantMsg,
     );
   }, [streaming, streamTurn, buildPayload]);
@@ -1796,7 +1825,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
     if (partial.finish_reason !== "length" && partial.finish_reason !== "interrupted") return;
-    const payload = lastPayloadRef.current ?? buildPayload(conversationId, turns);
+    const payload =
+      lastPayloadRef.current ??
+      buildPayload(conversationId, await withDocumentBlock(turns, projectRef.current?.id ?? null));
     await streamTurn(
       conversationId,
       connection,
@@ -1880,7 +1911,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         conversationId,
         connection,
         modelRef.current,
-        buildPayload(conversationId, kept),
+        buildPayload(
+          conversationId,
+          await withDocumentBlock(kept, projectRef.current?.id ?? null),
+        ),
         assistantMsg,
       );
       return true;
@@ -1902,6 +1936,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
         setConversations((prev) => [branched, ...prev]);
         setActiveConversationId(branched.id);
+        await copyChatDocs(conversationId, branched.id);
         const rows = await db.listMessages(branched.id);
         setMessages(rows);
         const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");

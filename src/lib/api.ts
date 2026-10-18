@@ -317,14 +317,6 @@ export function listCommands(projectId: string | null) {
   return invoke<FileCommand[]>("list_commands_cmd", { projectId });
 }
 
-export function knowledgeSidecarWrite(projectId: string, sha256: string, text: string) {
-  return invoke<string>("knowledge_sidecar_write", { projectId, sha256, text });
-}
-
-export function knowledgeSidecarRead(projectId: string, sha256: string) {
-  return invoke<string>("knowledge_sidecar_read", { projectId, sha256 });
-}
-
 export function knowledgeSidecarWipe(projectId: string) {
   return invoke<void>("knowledge_sidecar_wipe", { projectId });
 }
@@ -335,6 +327,28 @@ export function knowledgeSidecarDelete(projectId: string, sha256: string) {
 
 export function knowledgeSidecarWipeAll() {
   return invoke<void>("knowledge_sidecar_wipe_all");
+}
+
+interface IngestedDocument {
+  sha256: string;
+  path: string;
+  chars: number;
+}
+
+export function attachmentIngest(name: string, mime: string, data: string, sha256: string) {
+  return invoke<IngestedDocument>("attachment_ingest", { name, mime, data, sha256 });
+}
+
+export function documentRead(sha256: string, projectId: string | null) {
+  return invoke<string>("document_read", { sha256, projectId });
+}
+
+export function documentsWipeUnreferenced(shas: string[]) {
+  return invoke<number>("documents_wipe_unreferenced", { shas });
+}
+
+export function documentsWipeAll() {
+  return invoke<void>("documents_wipe_all");
 }
 
 export function summarize(

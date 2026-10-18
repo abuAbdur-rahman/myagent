@@ -2,8 +2,6 @@ use tauri::{AppHandle, Manager};
 
 use crate::tools::safe_segment;
 
-const MAX_SIDECAR_BYTES: u64 = 2 * 1024 * 1024;
-
 fn sidecar_path(
     app: &AppHandle,
     project_id: &str,
@@ -21,42 +19,6 @@ fn sidecar_path(
         .join("knowledge")
         .join(project);
     Ok(dir.join(format!("{sha}.txt")))
-}
-
-#[tauri::command]
-pub async fn knowledge_sidecar_write(
-    app: AppHandle,
-    project_id: String,
-    sha256: String,
-    text: String,
-) -> Result<String, String> {
-    if text.len() as u64 > MAX_SIDECAR_BYTES {
-        return Err(format!("sidecar exceeds {MAX_SIDECAR_BYTES} bytes"));
-    }
-    let path = sidecar_path(&app, &project_id, &sha256)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
-#[tauri::command]
-pub async fn knowledge_sidecar_read(
-    app: AppHandle,
-    project_id: String,
-    sha256: String,
-) -> Result<String, String> {
-    let path = sidecar_path(&app, &project_id, &sha256)?;
-    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if meta.len() > MAX_SIDECAR_BYTES {
-        return Err(format!(
-            "{}: sidecar exceeds {} bytes",
-            path.display(),
-            MAX_SIDECAR_BYTES
-        ));
-    }
-    std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[tauri::command]

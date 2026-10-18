@@ -175,7 +175,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Round trip with B9 passes.
 
 ## B11. Delete data
-- **Status:** Partial (0.1.6: delete-everything added, needs filesystem test)
+- **Status:** Partial (0.1.6: delete-everything added, needs filesystem test. 0.3.5: chat and project documents are released as soon as no chat or project row points at them)
 - **Ref:** † OpenWebUI lets you delete one chat or clear all history from settings.
 - **Build:** Delete chat (including spill files and attachments for it). "Delete everything" removes DB, attachments, spill files, caches, then confirms. Memory included, with a warning.
 - **Done:** A test against the real filesystem finds no leftover files.
@@ -453,10 +453,10 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A test artifact that calls `parent`, `localStorage` and `invoke` fails on all three.
 
 ## F3. Attachments and project knowledge
-- **Status:** Have (0.3.0: composer chips + project Docs tab, sha256 dedupe, sidecar store, capped excerpts)
+- **Status:** Have (0.3.0: project Docs tab with sha256 dedupe and capped excerpts. 0.3.5: any chat can attach documents — text, markdown, code, HTML, PDF, DOCX, XLSX/XLS/ODS — extracted in Rust, injected into the user turn, and reachable later through the `read_document` tool; docs in a project also leave a reference in the project bucket; stored text is freed when nothing points at it)
 - **Ref:** Claude app Projects hold knowledge files every chat inherits; OpenWebUI accepts files in the composer.
-- **Build:** Two paths, one storage: composer attachments plus a project knowledge panel (text notes plus stored docs such as PDF). Files copied into the project docs folder, deduped by hash, shown as chips. Capped text excerpts injected into context; full file re-read waits for the file tools in v2. Size limit. No code execution.
-- **Not:** OCR, full binary parsing.
+- **Build:** Two paths, one content-addressed store under `documents/<sha256>.txt`: composer attachments (chat-scoped, up to 3 per turn, 10 MB per file) plus a project knowledge panel whose docs are searched on every send. Extraction classifies by mime then extension and caps text at 2 MB; the turn carries 40k chars per file. Full re-read through `read_document`. No code execution.
+- **Not:** OCR, embedded media, charts, legacy `.doc`/`.ppt` binaries, audio/video.
 - **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)

@@ -1,129 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { knowledgeSidecarDelete, knowledgeSidecarRead, knowledgeSidecarWrite } from "./api";
-import { addKnowledgeDoc, knowledgeShaExists, listKnowledgeDocs } from "./db";
-import { ingestDoc, buildAttachmentSend, resolveImageSend, searchKnowledge } from "./knowledge";
+import { documentRead } from "./api";
+import { listKnowledgeDocs } from "./db";
+import { resolveImageSend, searchKnowledge } from "./knowledge";
 
 vi.mock("./api", () => ({
-  knowledgeSidecarWrite: vi.fn(),
-  knowledgeSidecarRead: vi.fn(),
-  knowledgeSidecarDelete: vi.fn(async () => undefined),
+  documentRead: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
-  addKnowledgeDoc: vi.fn(),
-  knowledgeShaExists: vi.fn(),
   listKnowledgeDocs: vi.fn(),
 }));
 
-vi.mock("./utils", () => ({
-  newId: () => "id-1",
-}));
-
-const write = vi.mocked(knowledgeSidecarWrite);
-const read = vi.mocked(knowledgeSidecarRead);
-const removeSidecar = vi.mocked(knowledgeSidecarDelete);
-const shaExists = vi.mocked(knowledgeShaExists);
+const read = vi.mocked(documentRead);
 const list = vi.mocked(listKnowledgeDocs);
-const add = vi.mocked(addKnowledgeDoc);
 
-const bytesOf = (text: string) => new TextEncoder().encode(text);
-
-describe("ingestDoc", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("rejects binary types without touching sidecar or db", async () => {
-    const result = await ingestDoc({
-      projectId: "p1",
-      name: "doc.pdf",
-      mime: "application/pdf",
-      bytes: bytesOf("%PDF"),
-    });
-    expect(result).toEqual({ status: "unsupported" });
-    expect(write).not.toHaveBeenCalled();
-    expect(add).not.toHaveBeenCalled();
-  });
-
-  it("skips bytes already ingested", async () => {
-    shaExists.mockResolvedValue(true);
-    const result = await ingestDoc({
-      projectId: "p1",
-      name: "notes.md",
-      mime: "text/markdown",
-      bytes: bytesOf("hello"),
-    });
-    expect(result).toEqual({ status: "duplicate" });
-    expect(write).not.toHaveBeenCalled();
-  });
-
-  it("writes sidecar then row for new text", async () => {
-    shaExists.mockResolvedValue(false);
-    write.mockResolvedValue("knowledge/p1/sha.txt");
-    const result = await ingestDoc({
-      projectId: "p1",
-      chatId: null,
-      name: "notes.md",
-      mime: "text/markdown",
-      bytes: bytesOf("hello"),
-    });
-    expect(result).toEqual({ status: "added", id: "id-1" });
-    expect(write).toHaveBeenCalledOnce();
-    expect(add).toHaveBeenCalledWith(
-      expect.objectContaining({ project_id: "p1", name: "notes.md", size: 5 }),
-    );
-  });
-
-  it("removes the sidecar when the row insert fails", async () => {
-    shaExists.mockResolvedValue(false);
-    write.mockResolvedValue("knowledge/p1/sha.txt");
-    add.mockRejectedValue(new Error("db down"));
-    await expect(
-      ingestDoc({
-        projectId: "p1",
-        name: "notes.md",
-        mime: "text/markdown",
-        bytes: bytesOf("hello"),
-      }),
-    ).rejects.toThrow("db down");
-    expect(removeSidecar).toHaveBeenCalledWith("p1", expect.any(String));
-  });
-
-  it("rejects oversized text before hashing", async () => {
-    const result = await ingestDoc({
-      projectId: "p1",
-      name: "huge.txt",
-      mime: "text/plain",
-      bytes: new Uint8Array(1024 * 1024 + 1),
-    });
-    expect(result).toEqual({ status: "unsupported" });
-    expect(write).not.toHaveBeenCalled();
-  });
-});
-
-describe("buildAttachmentSend", () => {
-  const chips = [
-    { name: "a.md", excerpt: "alpha" },
-    { name: "b.md", excerpt: "beta" },
-  ];
-
-  it("falls back to chip names when text is empty", () => {
-    const send = buildAttachmentSend("  ", chips);
-    expect(send.outgoing).toBe("a.md, b.md");
-    expect(send.block).toContain('<source name="a.md">alpha</source>');
-  });
-
-  it("keeps user text and appends chip excerpts", () => {
-    const send = buildAttachmentSend("summarize", chips);
-    expect(send.outgoing).toBe("summarize");
-    expect(send.block).toContain("beta");
-  });
-
-  it("returns an empty block with no chips", () => {
-    expect(buildAttachmentSend("hi", []).block).toBe("");
-  });
-});
+function row(sha256: string, name: string) {
+  return {
+    id: `k-${sha256}`,
+    project_id: "p1",
+    chat_id: null,
+    name,
+    mime: "text/markdown",
+    sha256,
+    path: `documents/${sha256}.txt`,
+    size: 30,
+    created_at: 1,
+  };
+}
 
 describe("resolveImageSend", () => {
   const images = [{ dataUrl: "data:image/jpeg;base64,AAA" }];
@@ -155,36 +59,31 @@ describe("searchKnowledge", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("returns empty when the project has no docs", async () => {
+    list.mockResolvedValue([]);
+    expect(await searchKnowledge("p1", "async")).toBe("");
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("ranks excerpts and wraps them in source tags", async () => {
-    list.mockResolvedValue([
-      {
-        id: "k1",
-        project_id: "p1",
-        chat_id: null,
-        name: "other.md",
-        mime: "text/markdown",
-        sha256: "s1",
-        path: "knowledge/p1/s1.txt",
-        size: 30,
-        created_at: 1,
-      },
-      {
-        id: "k2",
-        project_id: "p1",
-        chat_id: null,
-        name: "async-guide.md",
-        mime: "text/markdown",
-        sha256: "s2",
-        path: "knowledge/p1/s2.txt",
-        size: 20,
-        created_at: 2,
-      },
-    ]);
-    read.mockImplementation(async (_project: string, sha: string) =>
+    list.mockResolvedValue([row("s1", "other.md"), row("s2", "async-guide.md")]);
+    read.mockImplementation(async (sha: string) =>
       sha === "s1" ? "async runtimes power the app" : "unrelated body",
     );
     const block = await searchKnowledge("p1", "async");
     expect(block).toContain('<source name="async-guide.md">');
     expect(block).toContain("unrelated body");
+    expect(read).toHaveBeenCalledWith("s2", "p1");
+  });
+
+  it("skips docs whose text cannot be read", async () => {
+    list.mockResolvedValue([row("s1", "broken.md"), row("s2", "async-guide.md")]);
+    read.mockImplementation(async (sha: string) => {
+      if (sha === "s1") throw new Error("missing");
+      return "async runtimes power the app";
+    });
+    const block = await searchKnowledge("p1", "async");
+    expect(block).toContain("async-guide.md");
+    expect(block).not.toContain("broken.md");
   });
 });

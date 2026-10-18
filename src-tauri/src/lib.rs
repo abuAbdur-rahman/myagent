@@ -1,6 +1,8 @@
 mod commands;
 mod connections;
+mod documents;
 mod error;
+mod extract;
 mod knowledge;
 mod llm;
 mod mcp;
@@ -292,6 +294,27 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN attachments TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            description: "add_chat_docs",
+            sql: "
+                CREATE TABLE IF NOT EXISTS chat_docs (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    mime TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    chars INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE (conversation_id, sha256)
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_docs_conversation ON chat_docs(conversation_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -328,11 +351,13 @@ pub fn run() {
             llm::summarize,
             delete_spill,
             tools::spill_image_write,
-            knowledge::knowledge_sidecar_write,
-            knowledge::knowledge_sidecar_read,
             knowledge::knowledge_sidecar_wipe,
             knowledge::knowledge_sidecar_delete,
             knowledge::knowledge_sidecar_wipe_all,
+            documents::attachment_ingest,
+            documents::document_read,
+            documents::documents_wipe_unreferenced,
+            documents::documents_wipe_all,
             websearch::search_key_count,
             websearch::search_key_add,
             websearch::search_key_remove,
@@ -440,6 +465,44 @@ mod migration_tests {
             .execute(&pool)
             .await
             .expect("same sha allowed in another project");
+    }
+
+    #[tokio::test]
+    async fn chat_docs_reject_duplicate_sha_and_cascade_with_the_chat() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        sqlx::query("INSERT INTO conversations (id, title, connection_id, model, created_at, updated_at) VALUES ('c1', 'Docs', NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("conversation row");
+        sqlx::query("INSERT INTO chat_docs (id, conversation_id, name, mime, sha256, path, size, chars, created_at) VALUES ('d1', 'c1', 'report.pdf', 'application/pdf', 'abc123', 'documents/abc123.txt', 4096, 1200, 1)")
+            .execute(&pool)
+            .await
+            .expect("first attachment");
+        let dup = sqlx::query("INSERT INTO chat_docs (id, conversation_id, name, mime, sha256, path, size, chars, created_at) VALUES ('d2', 'c1', 'report-copy.pdf', 'application/pdf', 'abc123', 'documents/abc123.txt', 4096, 1200, 2)")
+            .execute(&pool)
+            .await;
+        assert!(dup.is_err(), "duplicate sha256 in the same chat rejected");
+
+        sqlx::query("INSERT INTO conversations (id, title, connection_id, model, created_at, updated_at) VALUES ('c2', 'Other', NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("second conversation");
+        sqlx::query("INSERT INTO chat_docs (id, conversation_id, name, mime, sha256, path, size, chars, created_at) VALUES ('d3', 'c2', 'report.pdf', 'application/pdf', 'abc123', 'documents/abc123.txt', 4096, 1200, 3)")
+            .execute(&pool)
+            .await
+            .expect("same bytes allowed in another chat");
+
+        sqlx::query("DELETE FROM conversations WHERE id = 'c1'")
+            .execute(&pool)
+            .await
+            .expect("delete conversation");
+        let remaining: i64 = sqlx::query("SELECT COUNT(*) AS c FROM chat_docs")
+            .fetch_one(&pool)
+            .await
+            .expect("chat_docs readable")
+            .get("c");
+        assert_eq!(remaining, 1, "cascade removed only the deleted chat's rows");
     }
 
     #[tokio::test]

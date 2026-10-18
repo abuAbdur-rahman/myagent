@@ -108,8 +108,11 @@ running log under the pending reply and opens artifact events in the panel.
 
 - **Memory** — global and per-project, user-managed.
 - **Projects** — group chats with shared instructions and memory.
+- **Documents** — files attached to a chat, or to a project as shared context.
+  Text is extracted in Rust and stored once under `documents/<sha256>.txt`; both
+  a chat and a project row point at that file, and it is deleted when nothing
+  points at it any more.
 
 ## Not yet built
 
 - Automatic memory extraction from conversations.
-- Attaching files or images to a project as shared context.

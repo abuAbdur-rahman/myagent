@@ -121,6 +121,26 @@ chose to defer.
 | Frontend tests not in CI | `.github/workflows/ci.yml` | `npm test` (vitest) is green locally but CI runs only the Rust suite. Add the step with the next CI change. |
 | `mcp_add` accepts any stdio command | Settings | Intentional: the user types it themselves behind the approval gate. Recorded so it is not re-flagged. |
 
+### Dependency advisories
+
+| Item | Where | Note |
+|---|---|---|
+| `zip 8.6.0` — RUSTSEC-2026-0367 / GHSA-vv5m-jxxh-4627 | transitive through `calamine 0.36.1` and `docx-rs 0.4.22` (`Cargo.lock`) | Flagged by the SafeDep scan on PR #21. Fixed only in `zip 9.0.0`, and both crates still pin `zip = "8"`, so no upgrade path exists. Every advisory covers the extraction APIs (`ZipArchive::extract`, stream extraction) that write entries to disk with attacker-controlled paths, permissions or symlinks; myagent calls none of them — the two crates only open `ZipArchive::new` and read entries in memory with `by_index`. Revisit when calamine or docx-rs allow `zip 9`. |
+
+### Hardening debt (v0.3.5 review)
+
+Raised by the review and security passes on PR #21. None blocks the release; the
+first two are the abort class the extraction guard cannot catch.
+
+| Item | Where | Note |
+|---|---|---|
+| Unbounded decompression of a document | `extract.rs` via `docx-rs` and `pdf-extract` | Neither caps `read_to_end`, so a zip bomb inside a 10 MB docx or pdf inflates to gigabytes; an allocation failure aborts the process and `catch_unwind` cannot catch an abort. Fix by extracting in a helper process or under a job-object memory limit. |
+| Deep nesting in HTML | `extract.rs` `html_body` | A pre-scan refuses more than 512 nested tags, which covers the measured recursion bomb, but the check is a heuristic (void-element list) and `htmd`'s recursive drop is still bounded by the stack. |
+| Extractor version in the store address | `documents.rs` `attachment_ingest` | The address is the caller's hash and the write is skipped when the file exists, so a later extractor improvement never refreshes an existing file. |
+| Caller-supplied digest | `documents.rs` `attachment_ingest` | The digest is never recomputed Rust-side, so a buggy renderer could point a row at another document's text (path traversal is closed). |
+| A chip pending while its file is wiped | `chat-docs.ts` `releaseChatDoc` / `documents_wipe_unreferenced` | Clearing or deleting a chat, or Delete everything, while a chip is still in the composer removes text the later send needs; the send then shows a card whose text cannot be read. Needs a pending reference in the DB or a startup sweep of `documents/*.txt` against both tables. |
+| `too_large` cannot fire | `documents.rs` | `extract::cap` already truncates to exactly the store limit, so the code is unreachable as written. |
+
 ### Phase 7: Usage and context
 Exit: compaction runs once at the threshold and the model still recalls an early decision.
 

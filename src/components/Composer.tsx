@@ -18,14 +18,21 @@ import {
 } from "../lib/slash";
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
-import { buildAttachmentSend, ingestDoc, isSupportedMime } from "../lib/knowledge";
+import {
+  formatBytes,
+  ingestChatDoc,
+  releaseChatDoc,
+  releaseChatDocs,
+  MAX_DOCS_PER_TURN,
+  MAX_DOC_BYTES,
+  type ChatDocument,
+} from "../lib/chat-docs";
 import { downscaleImage, isSupportedImage } from "../lib/image";
 import type { FileCommand } from "../lib/types";
 
-const MAX_ATTACH_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-const TEXT_EXTENSIONS: Record<string, string> = {
+const EXTENSION_MIMES: Record<string, string> = {
   md: "text/markdown",
   markdown: "text/markdown",
   txt: "text/plain",
@@ -52,6 +59,11 @@ const TEXT_EXTENSIONS: Record<string, string> = {
   c: "text/plain",
   cpp: "text/plain",
   h: "text/plain",
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
 };
 
 function mimeForFile(name: string, declared: string): string {
@@ -59,15 +71,33 @@ function mimeForFile(name: string, declared: string): string {
   const dot = name.lastIndexOf(".");
   if (dot < 0) return "";
   const ext = name.slice(dot + 1).toLowerCase();
-  return TEXT_EXTENSIONS[ext] ?? "";
+  return EXTENSION_MIMES[ext] ?? "";
 }
 
-interface AttachChip {
+interface DocChip {
   key: string;
-  kind: "file" | "image";
+  kind: "doc";
   name: string;
-  excerpt: string;
-  dataUrl?: string;
+  detail: string;
+  doc: ChatDocument;
+}
+
+interface ImageChip {
+  key: string;
+  kind: "image";
+  name: string;
+  detail: string;
+  dataUrl: string;
+}
+
+type AttachChip = DocChip | ImageChip;
+
+function isDocChip(chip: AttachChip): chip is DocChip {
+  return chip.kind === "doc";
+}
+
+function isDocFile(file: File): boolean {
+  return !isSupportedImage(file.type);
 }
 
 function estimateTokens(text: string): number {
@@ -96,9 +126,9 @@ function expandCommandText(
   return expanded.text;
 }
 
-async function buildImageChip(file: File, index: number): Promise<AttachChip | null> {
+async function buildImageChip(file: File, index: number): Promise<ImageChip | null> {
   if (file.size > MAX_IMAGE_BYTES) {
-    toast(`"${file.name}": over 10 MB, skipped.`);
+    toast(`"${file.name}": over ${formatBytes(MAX_IMAGE_BYTES)}, skipped.`);
     return null;
   }
   try {
@@ -107,7 +137,7 @@ async function buildImageChip(file: File, index: number): Promise<AttachChip | n
       key: `img-${index}-${Date.now()}`,
       kind: "image",
       name: file.name,
-      excerpt: "",
+      detail: formatBytes(file.size),
       dataUrl: downscaled.dataUrl,
     };
   } catch {
@@ -116,41 +146,100 @@ async function buildImageChip(file: File, index: number): Promise<AttachChip | n
   }
 }
 
-async function buildFileChip(
+async function buildDocChip(
   file: File,
-  projectId: string,
   index: number,
-): Promise<AttachChip | null> {
+  conversationId: string | null,
+): Promise<DocChip | null> {
+  if (file.size > MAX_DOC_BYTES) {
+    toast(`"${file.name}": over ${formatBytes(MAX_DOC_BYTES)}, skipped.`);
+    return null;
+  }
   const mime = mimeForFile(file.name, file.type);
-  if (!isSupportedMime(mime)) {
-    toast(`"${file.name}": type not supported in v1 (text/code/images only).`);
-    return null;
-  }
-  if (file.size > MAX_ATTACH_BYTES) {
-    toast(`"${file.name}": over 1 MB, skipped.`);
-    return null;
-  }
   try {
-    const text = await file.text();
-    const bytes = new TextEncoder().encode(text);
-    const result = await ingestDoc({ projectId, name: file.name, mime, bytes });
-    if (result.status === "unsupported") {
-      toast(`"${file.name}": type not supported.`);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const result = await ingestChatDoc({
+      conversationId,
+      name: file.name,
+      mime,
+      bytes,
+    });
+    if (result.status === "refused") {
+      toast(`"${file.name}": ${result.message}.`);
       return null;
     }
     if (result.status === "duplicate") {
-      toast(`"${file.name}": already in project knowledge, attached anyway.`);
+      toast(`"${file.name}": already attached here, reusing the stored copy.`);
     }
     return {
-      key: result.id ?? `${file.name}-${index}`,
-      kind: "file",
+      key: `${result.doc.sha256}-${Date.now()}-${index}`,
+      kind: "doc",
       name: file.name,
-      excerpt: text,
+      detail: `${formatBytes(result.doc.size)} · ${result.doc.chars.toLocaleString()} chars`,
+      doc: result.doc,
     };
-  } catch {
+  } catch (error) {
+    console.warn(`attachment: ${file.name} could not be read`, error);
     toast(`"${file.name}": couldn't attach.`);
     return null;
   }
+}
+
+async function pickChip(
+  file: File,
+  index: number,
+  conversationId: string | null,
+  docsLeft: number,
+): Promise<AttachChip | null> {
+  if (isSupportedImage(file.type)) return buildImageChip(file, index);
+  if (docsLeft <= 0) return null;
+  return buildDocChip(file, index, conversationId);
+}
+
+async function collectChips(
+  files: File[],
+  conversationId: string | null,
+  room: number,
+): Promise<AttachChip[]> {
+  const chips: AttachChip[] = [];
+  let left = room;
+  for (const [index, file] of files.entries()) {
+    const chip = await pickChip(file, index, conversationId, left);
+    if (chip) {
+      chips.push(chip);
+      if (isDocChip(chip)) left -= 1;
+    }
+  }
+  return chips;
+}
+
+function docChipsIn(chips: AttachChip[]): number {
+  return chips.filter(isDocChip).length;
+}
+
+function docsOf(chips: AttachChip[]): ChatDocument[] {
+  return chips.filter(isDocChip).map((chip) => chip.doc);
+}
+
+function imagesOf(chips: AttachChip[]): { dataUrl: string }[] {
+  return chips.filter((chip) => !isDocChip(chip)).map((chip) => ({ dataUrl: chip.dataUrl }));
+}
+
+function readyToSend(streaming: boolean, connected: boolean, model: string): boolean {
+  if (streaming) return false;
+  if (!connected) return false;
+  return model.length > 0;
+}
+
+function hasContent(text: string, chips: number): boolean {
+  return text.length > 0 || chips > 0;
+}
+
+function outgoingText(text: string, imageCount: number, docCount: number): string {
+  if (text.trim().length > 0) return text;
+  if (imageCount > 0) return "See the attached image.";
+  if (docCount > 0) return "See the attached document.";
+  return "";
 }
 
 function SlashMenu({
@@ -196,7 +285,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     streaming,
     sendWith,
     activeConnection,
-    activeProject,
     model,
     models,
     setModel,
@@ -244,24 +332,23 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     if (files.length === 0) return;
     setAttaching(true);
     try {
-      for (const [index, file] of files.entries()) {
-        let chip: AttachChip | null = null;
-        if (isSupportedImage(file.type)) {
-          chip = await buildImageChip(file, index);
-        } else if (activeProject) {
-          chip = await buildFileChip(file, activeProject.id, index);
-        } else {
-          toast("Select a project first to attach files.");
-        }
-        if (chip) setChips((prev) => [...prev, chip]);
+      const room = MAX_DOCS_PER_TURN - docChipsIn(chipsRef.current);
+      const added = await collectChips(files, activeConversationId, room);
+      setChips((prev) => [...prev, ...added]);
+      if (files.filter(isDocFile).length > room) {
+        toast(`Up to ${MAX_DOCS_PER_TURN} documents per message.`);
       }
     } finally {
       setAttaching(false);
     }
   };
 
-  const removeChip = (key: string) =>
-    setChips((prev) => prev.filter((chip) => chip.key !== key));
+  const removeChip = (key: string) => {
+    const chip = chipsRef.current.find((item) => item.key === key);
+    const rest = chipsRef.current.filter((item) => item.key !== key);
+    setChips(rest);
+    if (chip && isDocChip(chip)) void releaseChatDoc(chip.doc, docsOf(rest));
+  };
 
   const historyEntries = useMemo(() => {
     const users = messages
@@ -333,7 +420,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     const handle = editorRef.current;
     const text = (handle?.getMarkdown() ?? composerDraft).trim();
     const pending = chipsRef.current;
-    if ((!text && pending.length === 0) || streaming || !activeConnection || !model) return;
+    if (!readyToSend(streaming, activeConnection !== null, model)) return;
+    if (!hasContent(text, pending.length)) return;
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
@@ -341,16 +429,15 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     handle?.focus();
     const parsed = parseSlash(text);
     warnIfShadowed(parsed, mergedCommands);
-    if (dispatchSlash(text, slashHandlers)) return;
+    if (dispatchSlash(text, slashHandlers)) {
+      void releaseChatDocs(docsOf(pending));
+      return;
+    }
+    const docs = docsOf(pending);
+    const images = imagesOf(pending);
     const sendText = expandCommandText(text, parsed, fileCommands);
-    const fileChips = pending.filter((chip) => chip.kind === "file");
-    const imagePayloads = pending
-      .filter((chip) => chip.kind === "image" && chip.dataUrl)
-      .map((chip) => ({ dataUrl: chip.dataUrl as string }));
-    const send = buildAttachmentSend(sendText, fileChips);
-    const outgoing =
-      send.outgoing.trim() || (imagePayloads.length > 0 ? "See the attached image." : "");
-    void sendMessage(outgoing, send.block, imagePayloads).then((accepted) => {
+    const outgoing = outgoingText(sendText, images.length, docs.length);
+    void sendMessage(outgoing, images, docs).then((accepted) => {
       if (!accepted) {
         handle?.setMarkdown(text);
         setComposerDraft(text);
@@ -461,6 +548,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
                 title={chip.name}
               >
                 <span className="truncate">{chip.name}</span>
+                {chip.detail && (
+                  <span className="flex-none text-muted">{chip.detail}</span>
+                )}
                 <button
                   type="button"
                   onClick={() => removeChip(chip.key)}
@@ -500,7 +590,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             aria-label="Attach files"
-            title="Attach text files (project knowledge)"
+            title="Attach documents (pdf, docx, xlsx, md, txt…) or images"
             disabled={attaching || streaming}
             className="grid h-7 w-7 flex-none place-items-center rounded-control border border-border bg-surface text-muted hover:bg-hover disabled:text-faint"
           >

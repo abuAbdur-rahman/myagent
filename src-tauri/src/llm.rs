@@ -940,6 +940,11 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             return vec![format!("image#{index}")];
         }
     }
+    if name == "read_document" {
+        if let Some(document) = args.get("name").and_then(|v| v.as_str()) {
+            return vec![document.trim().to_string()];
+        }
+    }
     vec![name.to_string()]
 }
 
@@ -1596,6 +1601,18 @@ async fn run_agentic(
         .vision_fallback_model
         .as_deref()
         .is_some_and(|model| !model.trim().is_empty());
+    let has_documents = match req.conversation_id.as_deref() {
+        Some(conversation) => {
+            match crate::documents::conversation_documents(app, conversation).await {
+                Ok(documents) => !documents.is_empty(),
+                Err(error) => {
+                    eprintln!("read_document gating: {error}");
+                    false
+                }
+            }
+        }
+        None => false,
+    };
     let mut model = RealModel {
         client,
         url,
@@ -1604,7 +1621,7 @@ async fn run_agentic(
         cancel,
         state: state.inner(),
         on_event,
-        tool_specs: tools::tool_specs(blind_model),
+        tool_specs: tools::tool_specs(blind_model, has_documents),
     };
     let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
         .await
@@ -1852,7 +1869,7 @@ mod tests {
 
     #[test]
     fn describe_image_tool_is_listed_and_gated() {
-        let specs = tools::tool_specs(true);
+        let specs = tools::tool_specs(true, true);
         let names: Vec<&str> = specs
             .as_array()
             .expect("array")
@@ -1860,7 +1877,7 @@ mod tests {
             .filter_map(|s| s["function"]["name"].as_str())
             .collect();
         assert!(names.contains(&"describe_image"), "spec listed: {names:?}");
-        let seeing = tools::tool_specs(false);
+        let seeing = tools::tool_specs(false, true);
         let seeing_names: Vec<&str> = seeing
             .as_array()
             .expect("array")
@@ -1890,6 +1907,39 @@ mod tests {
             approval_resources("mcp__fs__read_file", &serde_json::json!({})),
             vec!["mcp__fs__read_file".to_string()],
             "mcp tools scope to the server/tool alias so Always persists"
+        );
+    }
+
+    #[test]
+    fn read_document_tool_is_listed_only_with_documents() {
+        let specs = tools::tool_specs(false, true);
+        let names: Vec<&str> = specs
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|s| s["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&"read_document"), "spec listed: {names:?}");
+
+        let without = tools::tool_specs(true, false);
+        let without_names: Vec<&str> = without
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|s| s["function"]["name"].as_str())
+            .collect();
+        assert!(
+            !without_names.contains(&"read_document"),
+            "hidden without documents: {without_names:?}"
+        );
+        assert!(
+            without_names.contains(&"describe_image"),
+            "image path unaffected: {without_names:?}"
+        );
+        assert_eq!(
+            approval_resources("read_document", &serde_json::json!({"name": "report.pdf"})),
+            vec!["report.pdf".to_string()],
+            "scoped to the document"
         );
     }
     use std::cell::{Cell, RefCell};
