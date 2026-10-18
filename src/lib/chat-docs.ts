@@ -126,11 +126,12 @@ export async function ingestChatDoc(input: DocIngestInput): Promise<DocIngestRes
     const existing = await findChatDoc(input.conversationId, sha256);
     if (existing) return { status: "duplicate", doc: fromRow(existing) };
   }
+  const name = documentName(input.name);
   let chars: number;
   let path: string;
   try {
     const ingested = await attachmentIngest(
-      input.name,
+      name,
       input.mime,
       base64FromBytes(input.bytes),
       sha256,
@@ -141,7 +142,7 @@ export async function ingestChatDoc(input: DocIngestInput): Promise<DocIngestRes
     return { status: "refused", message: documentFailureMessage(error) };
   }
   const doc: ChatDocument = {
-    name: input.name,
+    name,
     mime: input.mime,
     sha256,
     size: input.bytes.byteLength,
@@ -187,8 +188,13 @@ export async function releaseChatDoc(
   remaining: ChatDocument[] = [],
 ): Promise<void> {
   if (remaining.some((other) => other.sha256 === doc.sha256)) return;
+  await releaseChatDocs([doc]);
+}
+
+export async function releaseChatDocs(docs: ChatDocument[]): Promise<void> {
+  if (docs.length === 0) return;
   try {
-    await documentsWipeUnreferenced([doc.sha256]);
+    await documentsWipeUnreferenced(docs.map((doc) => doc.sha256));
   } catch (error) {
     console.warn("documents: release failed", error);
   }
@@ -225,8 +231,27 @@ function safeSourceName(name: string): string {
   return name.replace(/["<>]/g, "").slice(0, 120);
 }
 
+function safeSourceType(mime: string): string {
+  const cleaned = mime.trim().replace(/[^A-Za-z0-9/.+-]/g, "");
+  return (cleaned.length > 0 ? cleaned : "document").slice(0, 120);
+}
+
+function documentName(name: string): string {
+  const trimmed = name.trim();
+  return (trimmed.length > 0 ? trimmed : "document").slice(0, 200);
+}
+
+function stripSourceTags(text: string): string {
+  let body = text;
+  for (;;) {
+    const next = body.replace(/<\/source\s*>/gi, "").replace(/<source\b[^>]*>/gi, "");
+    if (next === body) return body;
+    body = next;
+  }
+}
+
 function clampDocument(text: string, limit: number): string {
-  const body = text.replace(/<\/source>/gi, "");
+  const body = stripSourceTags(text);
   if (body.length <= limit) return body;
   return `${body.slice(0, limit)}\n[truncated: ${limit} of ${body.length} chars included, call read_document for more]`;
 }
@@ -248,11 +273,12 @@ export async function buildDocumentBlock(
       console.warn(`documents: ${doc.name} could not be read`, error);
       continue;
     }
-    const body = clampDocument(text, Math.min(DOC_CHARS_PER_FILE, budget));
-    budget -= Math.min(body.length, DOC_CHARS_PER_FILE);
+    const limit = Math.min(DOC_CHARS_PER_FILE, budget);
+    const body = clampDocument(text, limit);
+    budget -= Math.min(body.length, limit);
     if (body.trim().length === 0) continue;
     parts.push(
-      `<source name="${safeSourceName(doc.name)}" type="${doc.mime || "document"}">\n${body}\n</source>`,
+      `<source name="${safeSourceName(doc.name)}" type="${safeSourceType(doc.mime)}">\n${body}\n</source>`,
     );
   }
   if (parts.length === 0) return "";

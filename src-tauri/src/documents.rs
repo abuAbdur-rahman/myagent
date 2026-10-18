@@ -217,13 +217,25 @@ pub async fn conversation_documents(
 }
 
 pub async fn conversation_project(app: &AppHandle, conversation: &str) -> Option<String> {
-    let pool = crate::tools::memory_pool(app).await.ok()?;
+    let pool = match crate::tools::memory_pool(app).await {
+        Ok(pool) => pool,
+        Err(error) => {
+            eprintln!("documents: project lookup failed: {error}");
+            return None;
+        }
+    };
     let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT project_id FROM conversations WHERE id = ?1")
+        match sqlx::query_as("SELECT project_id FROM conversations WHERE id = ?1")
             .bind(conversation)
             .fetch_optional(&pool)
             .await
-            .ok()?;
+        {
+            Ok(row) => row,
+            Err(error) => {
+                eprintln!("documents: project lookup failed: {error}");
+                return None;
+            }
+        };
     row.and_then(|value| value.0)
 }
 

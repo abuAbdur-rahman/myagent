@@ -71,12 +71,11 @@ const docAttachmentSchema = z.object({
   chars: z.number().int().nonnegative().optional(),
 });
 
-const messageAttachmentSchema = z.union([imageAttachmentSchema, docAttachmentSchema]);
 export type MessageImageAttachment = z.infer<typeof imageAttachmentSchema>;
 export type MessageDocAttachment = z.infer<typeof docAttachmentSchema>;
 export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
 export type MessageAttachmentInput = z.input<typeof messageAttachmentSchema>;
-export const messageAttachmentsSchema = z.array(messageAttachmentSchema).max(12);
+export const messageAttachmentSchema = z.union([imageAttachmentSchema, docAttachmentSchema]);
 
 const messageSchema = z.object({
   id: z.string(),

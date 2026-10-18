@@ -1,5 +1,5 @@
 import {
-  messageAttachmentsSchema,
+  messageAttachmentSchema,
   type MessageAttachment,
   type MessageDocAttachment,
   type MessageImageAttachment,
@@ -14,12 +14,17 @@ export function parseMessageAttachments(raw: unknown): MessageAttachment[] {
     console.warn("parseMessageAttachments: invalid JSON, dropping attachments");
     return [];
   }
-  const parsed = messageAttachmentsSchema.safeParse(value);
-  if (!parsed.success) {
-    console.warn("parseMessageAttachments: invalid attachments, dropping");
+  if (!Array.isArray(value)) {
+    console.warn("parseMessageAttachments: attachments are not a list, dropping");
     return [];
   }
-  return parsed.data;
+  const attachments: MessageAttachment[] = [];
+  for (const entry of value) {
+    const parsed = messageAttachmentSchema.safeParse(entry);
+    if (parsed.success) attachments.push(parsed.data);
+    else console.warn("parseMessageAttachments: dropped an unreadable attachment");
+  }
+  return attachments;
 }
 
 export function parseImageAttachments(raw: unknown): MessageImageAttachment[] {

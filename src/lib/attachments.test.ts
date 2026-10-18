@@ -57,6 +57,18 @@ describe("parseMessageAttachments", () => {
     ).toEqual([]);
   });
 
+  it("keeps the readable entries when one is broken", () => {
+    const stored = JSON.stringify([DOC, { kind: "doc", name: "" }, IMAGE]);
+    expect(parseMessageAttachments(stored)).toEqual([DOC, IMAGE]);
+  });
+
+  it("keeps every entry of a long list", () => {
+    const many = Array.from({ length: 20 }, (_, index) => ({
+      dataUrl: `data:image/png;base64,AAAA${index}`,
+    }));
+    expect(parseMessageAttachments(JSON.stringify(many))).toHaveLength(20);
+  });
+
   it("splits images from documents", () => {
     const stored = JSON.stringify([DOC, { dataUrl: "data:image/png;base64,AAA" }]);
     expect(parseDocAttachments(stored)).toEqual([DOC]);

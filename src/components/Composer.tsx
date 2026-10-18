@@ -22,6 +22,7 @@ import {
   formatBytes,
   ingestChatDoc,
   releaseChatDoc,
+  releaseChatDocs,
   MAX_DOCS_PER_TURN,
   MAX_DOC_BYTES,
   type ChatDocument,
@@ -428,7 +429,10 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     handle?.focus();
     const parsed = parseSlash(text);
     warnIfShadowed(parsed, mergedCommands);
-    if (dispatchSlash(text, slashHandlers)) return;
+    if (dispatchSlash(text, slashHandlers)) {
+      void releaseChatDocs(docsOf(pending));
+      return;
+    }
     const docs = docsOf(pending);
     const images = imagesOf(pending);
     const sendText = expandCommandText(text, parsed, fileCommands);

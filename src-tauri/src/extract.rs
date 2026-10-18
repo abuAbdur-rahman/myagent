@@ -7,6 +7,12 @@ const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SHEETS: usize = 20;
 const MAX_SHEET_ROWS: usize = 5000;
 const MAX_SHEET_COLS: usize = 64;
+const MAX_HTML_DEPTH: usize = 512;
+
+const VOID_TAGS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
 
 #[derive(Debug, Serialize)]
 pub struct ExtractFailure {
@@ -301,8 +307,45 @@ fn decode_utf8(bytes: &[u8]) -> ExtractResult<String> {
 
 fn html_body(bytes: &[u8]) -> ExtractResult<String> {
     let source = decode_utf8(bytes)?;
+    if tag_depth(&source) > MAX_HTML_DEPTH {
+        return Err(ExtractError::Unsupported(
+            "this page nests tags too deeply to read".to_string(),
+        ));
+    }
     htmd::convert(&source)
         .map_err(|error| ExtractError::Failed(format!("html could not be converted: {error}")))
+}
+
+fn tag_depth(source: &str) -> usize {
+    let mut depth = 0usize;
+    let mut deepest = 0usize;
+    let mut rest = source;
+    while let Some(start) = rest.find('<') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('>') else {
+            break;
+        };
+        let tag = rest[..end].trim();
+        rest = &rest[end + 1..];
+        if tag.starts_with('/') {
+            depth = depth.saturating_sub(1);
+        } else if !tag.starts_with('!') && !tag.starts_with('?') && !is_void_tag(tag) {
+            depth += 1;
+            deepest = deepest.max(depth);
+        }
+    }
+    deepest
+}
+
+fn is_void_tag(tag: &str) -> bool {
+    if tag.ends_with('/') {
+        return true;
+    }
+    let name = tag
+        .split(|character: char| character.is_whitespace() || character == '/')
+        .next()
+        .unwrap_or_default();
+    VOID_TAGS.iter().any(|void| name.eq_ignore_ascii_case(void))
 }
 
 fn pdf_body(bytes: &[u8]) -> ExtractResult<String> {
@@ -378,12 +421,97 @@ fn paragraph_text(paragraph: &docx_rs::Paragraph) -> String {
 }
 
 fn spreadsheet_body(kind: SheetKind, bytes: &[u8]) -> ExtractResult<String> {
-    let cursor = std::io::Cursor::new(bytes);
     match kind {
-        SheetKind::Xlsx => read_sheets(calamine::Xlsx::new(cursor)),
-        SheetKind::Xls => read_sheets(calamine::Xls::new(cursor)),
-        SheetKind::Ods => read_sheets(calamine::Ods::new(cursor)),
+        SheetKind::Xlsx => read_xlsx(bytes),
+        SheetKind::Xls => read_sheets(calamine::Xls::new(std::io::Cursor::new(bytes))),
+        SheetKind::Ods => read_sheets(calamine::Ods::new(std::io::Cursor::new(bytes))),
     }
+}
+
+fn read_xlsx(bytes: &[u8]) -> ExtractResult<String> {
+    let mut workbook = calamine::Xlsx::new(std::io::Cursor::new(bytes))
+        .map_err(|error| ExtractError::Failed(format!("spreadsheet could not be read: {error}")))?;
+    let names = workbook.sheet_names().to_owned();
+    if names.is_empty() {
+        return Err(ExtractError::Empty);
+    }
+    let mut out = String::new();
+    for (index, name) in names.iter().enumerate() {
+        if index >= MAX_SHEETS {
+            out.push_str(&format!(
+                "\n[{} more sheets omitted]\n",
+                names.len() - index
+            ));
+            break;
+        }
+        let Ok(mut cells) = workbook.worksheet_cells_reader(name) else {
+            continue;
+        };
+        render_cells(name, &mut cells, &mut out);
+    }
+    Ok(out)
+}
+
+fn render_cells<R: std::io::Read + std::io::Seek>(
+    name: &str,
+    cells: &mut calamine::XlsxCellReader<'_, R>,
+    out: &mut String,
+) {
+    out.push_str(&format!("## {name}\n"));
+    let mut current: Option<u32> = None;
+    let mut row: Vec<String> = Vec::new();
+    let mut columns_omitted = false;
+    let mut written = 0usize;
+    let mut rows_omitted = false;
+    loop {
+        let cell = match cells.next_cell() {
+            Ok(Some(cell)) => cell,
+            Ok(None) => break,
+            Err(_) => {
+                rows_omitted = true;
+                break;
+            }
+        };
+        let (row_index, column_index) = cell.get_position();
+        if current != Some(row_index) {
+            if current.is_some() {
+                if written >= MAX_SHEET_ROWS {
+                    rows_omitted = true;
+                    break;
+                }
+                flush_row(&mut row, columns_omitted, out);
+                written += 1;
+            }
+            current = Some(row_index);
+            row.clear();
+            columns_omitted = false;
+        }
+        let column = column_index as usize;
+        if column < MAX_SHEET_COLS {
+            if row.len() <= column {
+                row.resize(column + 1, String::new());
+            }
+            row[column] = sheet_cell(&owned_cell(cell.get_value()));
+        } else {
+            columns_omitted = true;
+        }
+    }
+    if !rows_omitted && current.is_some() {
+        flush_row(&mut row, columns_omitted, out);
+    }
+    if rows_omitted {
+        out.push_str("[more rows omitted]\n");
+    }
+    out.push('\n');
+}
+
+fn flush_row(cells: &mut Vec<String>, omitted: bool, out: &mut String) {
+    if omitted {
+        cells.push("[more columns omitted]".to_string());
+    }
+    out.push_str(cells.join(", ").trim_end());
+    out.push('\n');
+    cells.clear();
 }
 
 fn read_sheets<R, W, E>(workbook: Result<W, E>) -> ExtractResult<String>
@@ -446,15 +574,48 @@ fn sheet_cell(cell: &Data) -> String {
         Data::Float(number) => number.to_string(),
         Data::Int(number) => number.to_string(),
         Data::Bool(flag) => flag.to_string(),
-        Data::DateTime(stamp) => stamp
-            .as_datetime()
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| stamp.as_f64().to_string()),
+        Data::DateTime(stamp) => sheet_date(stamp),
         Data::DateTimeIso(text) => text.clone(),
         Data::DurationIso(text) => text.clone(),
         Data::Error(error) => format!("{error:?}"),
     };
     value.replace(['\n', '\r'], " ")
+}
+
+fn sheet_date(stamp: &calamine::ExcelDateTime) -> String {
+    if stamp.is_duration() {
+        return duration_text(stamp.as_f64());
+    }
+    let (year, month, day, hour, minute, second, _) = stamp.to_ymd_hms_milli();
+    if stamp.as_f64() < 1.0 {
+        return format!("{hour:02}:{minute:02}:{second:02}");
+    }
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+}
+
+fn duration_text(days: f64) -> String {
+    let total = (days * 86_400.0).round() as i64;
+    format!(
+        "{:02}:{:02}:{:02}",
+        total / 3600,
+        (total / 60).rem_euclid(60),
+        total.rem_euclid(60)
+    )
+}
+
+fn owned_cell(cell: &calamine::DataRef<'_>) -> Data {
+    match cell {
+        calamine::DataRef::Int(value) => Data::Int(*value),
+        calamine::DataRef::Float(value) => Data::Float(*value),
+        calamine::DataRef::String(value) => Data::String(value.clone()),
+        calamine::DataRef::SharedString(value) => Data::String((*value).to_string()),
+        calamine::DataRef::Bool(value) => Data::Bool(*value),
+        calamine::DataRef::DateTime(value) => Data::DateTime(*value),
+        calamine::DataRef::DateTimeIso(value) => Data::DateTimeIso(value.clone()),
+        calamine::DataRef::DurationIso(value) => Data::DurationIso(value.clone()),
+        calamine::DataRef::Error(value) => Data::Error(value.clone()),
+        calamine::DataRef::Empty => Data::Empty,
+    }
 }
 
 fn normalize(text: &str) -> String {
@@ -660,6 +821,38 @@ mod tests {
         let stamp =
             calamine::ExcelDateTime::new(45488.0, calamine::ExcelDateTimeType::DateTime, false);
         assert_eq!(sheet_cell(&Data::DateTime(stamp)), "2024-07-15 00:00:00");
+    }
+
+    #[test]
+    fn renders_excel_times_and_durations() {
+        let time =
+            calamine::ExcelDateTime::new(8.5 / 24.0, calamine::ExcelDateTimeType::DateTime, false);
+        assert_eq!(sheet_cell(&Data::DateTime(time)), "08:30:00");
+
+        let duration =
+            calamine::ExcelDateTime::new(1.5, calamine::ExcelDateTimeType::TimeDelta, false);
+        assert_eq!(sheet_cell(&Data::DateTime(duration)), "36:00:00");
+    }
+
+    #[test]
+    fn refuses_deeply_nested_html() {
+        let page = format!("{}{}", "<div>".repeat(600), "</div>".repeat(600));
+        let error = extract("page.html", "text/html", page.as_bytes()).unwrap_err();
+        assert!(matches!(error, ExtractError::Unsupported(_)), "{error:?}");
+    }
+
+    #[test]
+    fn reads_a_sheet_with_a_huge_bounding_box() {
+        let text = extract(
+            "huge.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            include_bytes!("../tests/fixtures/huge.xlsx"),
+        )
+        .unwrap();
+        assert!(text.contains("## Sheet1"), "{text}");
+        assert!(text.contains("first"), "{text}");
+        assert!(text.contains("[more columns omitted]"), "{text}");
+        assert!(!text.contains("last"), "{text}");
     }
 
     #[test]
