@@ -52,11 +52,24 @@ fn matches(pattern: &str, value: &str) -> bool {
 
 pub fn split_segments(command: &str) -> Vec<String> {
     let mut segments: Vec<String> = Vec::new();
+    scan_segments(command, &mut segments);
+    segments
+}
+
+fn scan_segments(source: &str, segments: &mut Vec<String>) {
     let mut current = String::new();
     let mut quote: Option<char> = None;
-    let mut chars = command.chars().peekable();
+    let mut chars = source.chars().peekable();
     while let Some(ch) = chars.next() {
         if let Some(open) = quote {
+            if open == '"' && ch == '$' && chars.peek() == Some(&'(') {
+                chars.next();
+                current.push_str("$(");
+                let inner = take_balanced(&mut chars);
+                scan_segments(&inner, segments);
+                current.push(')');
+                continue;
+            }
             current.push(ch);
             if ch == open {
                 quote = None;
@@ -74,21 +87,61 @@ pub fn split_segments(command: &str) -> Vec<String> {
                     current.push(escaped);
                 }
             }
-            ';' | '|' => {
+            ';' | '|' | '\n' | '\r' => {
                 if ch == '|' && chars.peek() == Some(&'|') {
                     chars.next();
                 }
-                push_segment(&mut segments, &mut current);
+                push_segment(segments, &mut current);
             }
             '&' if chars.peek() == Some(&'&') => {
                 chars.next();
-                push_segment(&mut segments, &mut current);
+                push_segment(segments, &mut current);
             }
             _ => current.push(ch),
         }
     }
-    push_segment(&mut segments, &mut current);
-    segments
+    push_segment(segments, &mut current);
+}
+
+fn take_balanced(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let mut inner = String::new();
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        if quote.is_none() && ch == '`' {
+            inner.push(ch);
+            if let Some(escaped) = chars.next() {
+                inner.push(escaped);
+            }
+            continue;
+        }
+        if let Some(open) = quote {
+            inner.push(ch);
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                inner.push(ch);
+            }
+            '(' => {
+                depth += 1;
+                inner.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return inner;
+                }
+                inner.push(ch);
+            }
+            _ => inner.push(ch),
+        }
+    }
+    inner
 }
 
 fn push_segment(segments: &mut Vec<String>, current: &mut String) {
@@ -453,6 +506,30 @@ mod tests {
         assert_eq!(
             split_segments("Get-Date & Get-Item x"),
             vec!["Get-Date & Get-Item x"]
+        );
+    }
+
+    #[test]
+    fn segments_split_quoted_subexpressions() {
+        assert_eq!(
+            split_segments("Write-Output \"$(Get-Date; Remove-Item C:\\x)\""),
+            vec!["Get-Date", "Remove-Item C:\\x", "Write-Output \"$()\""]
+        );
+        assert_eq!(
+            split_segments("Remove-Item '$(a; b)'"),
+            vec!["Remove-Item '$(a; b)'"]
+        );
+    }
+
+    #[test]
+    fn segments_split_statements_on_newlines() {
+        assert_eq!(
+            split_segments("Get-ChildItem\r\nRemove-Item C:\\x"),
+            vec!["Get-ChildItem", "Remove-Item C:\\x"]
+        );
+        assert_eq!(
+            split_segments("Get-Date \"a\nb\"\nRemove-Item C:\\x"),
+            vec!["Get-Date \"a\nb\"", "Remove-Item C:\\x"]
         );
     }
 

@@ -76,21 +76,21 @@ pub fn markdown_to_text(source: &str) -> String {
     collapse_blank_lines(&plain)
 }
 
-pub fn grep_lines(source: &str, pattern: &str) -> Result<String, String> {
-    let regex = RegexBuilder::new(pattern)
+pub fn compile_grep(pattern: &str) -> Result<Regex, String> {
+    RegexBuilder::new(pattern)
         .case_insensitive(true)
         .build()
-        .map_err(|error| format!("INVALID_GREP: {error}"))?;
+        .map_err(|error| format!("INVALID_GREP: {error}"))
+}
+
+pub fn grep_lines(source: &str, regex: &Regex) -> String {
     let mut out: Vec<&str> = Vec::new();
     for line in source.lines() {
         if regex.is_match(line) {
             out.push(line);
         }
     }
-    if out.is_empty() {
-        return Err(format!("grep found no line matching \"{pattern}\""));
-    }
-    Ok(out.join("\n"))
+    out.join("\n")
 }
 
 pub fn take_lines(source: &str, head: Option<usize>, tail: Option<usize>) -> String {
@@ -193,12 +193,11 @@ mod tests {
     #[test]
     fn greps_lines_case_insensitively() {
         let text = "Alpha\nbeta\nALPHA two";
-        assert_eq!(
-            grep_lines(text, "^alpha").expect("grep"),
-            "Alpha\nALPHA two"
-        );
-        assert!(grep_lines(text, "missing").is_err());
-        assert!(grep_lines(text, "([").is_err());
+        let alpha = compile_grep("^alpha").expect("pattern");
+        assert_eq!(grep_lines(text, &alpha), "Alpha\nALPHA two");
+        let missing = compile_grep("missing").expect("pattern");
+        assert_eq!(grep_lines(text, &missing), "");
+        assert!(compile_grep("([").is_err());
     }
 
     #[test]

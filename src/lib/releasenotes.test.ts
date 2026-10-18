@@ -6,6 +6,7 @@ import {
   changeCountLabel,
   filterReleases,
   matchesKinds,
+  openVersions,
   releaseHasKind,
   type Release,
 } from "./releasenotes";
@@ -86,6 +87,24 @@ describe("matchesKinds", () => {
 
   it("misses when no selected kind is present", () => {
     expect(matchesKinds(release("1.0.0", ["improved"]), ["new", "fixed"])).toBe(false);
+  });
+});
+
+describe("openVersions", () => {
+  const releases = [release("2.0.0", ["new"]), release("1.0.0", ["fixed"]), release("0.9.0", ["new", "fixed"])];
+
+  it("opens only the newest release when nothing is selected", () => {
+    expect(openVersions(releases, [])).toEqual(["2.0.0"]);
+  });
+
+  it("opens every matching release once a kind is selected", () => {
+    expect(openVersions(releases, ["fixed"])).toEqual(["1.0.0", "0.9.0"]);
+    expect(openVersions(releases, ["new", "fixed"])).toEqual(["2.0.0", "1.0.0", "0.9.0"]);
+  });
+
+  it("falls back to the newest release when the filter matches nothing", () => {
+    expect(openVersions(releases, ["improved"])).toEqual([]);
+    expect(openVersions([], [])).toEqual([]);
   });
 });
 

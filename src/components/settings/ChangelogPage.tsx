@@ -9,6 +9,7 @@ import {
   RELEASES,
   changeCountLabel,
   filterReleases,
+  openVersions,
   type ChangeKind,
   type Release,
   type ReleaseChange,
@@ -19,8 +20,6 @@ const KIND_TONE: Record<ChangeKind, PillTone> = {
   improved: "neutral",
   fixed: "success",
 };
-
-const NEWEST = RELEASES[0]?.version ?? null;
 
 function InstallButton({ app }: { app: AppUpdate }) {
   const busy = app.progress !== null;
@@ -180,12 +179,20 @@ function ReleaseCard({
 export function ChangelogPage() {
   const app = useAppUpdate();
   const [kinds, setKinds] = useState<ChangeKind[]>([]);
-  const [open, setOpen] = useState<string | null>(NEWEST);
+  const [open, setOpen] = useState<string[]>(() => openVersions(RELEASES, []));
   const shown = useMemo(() => filterReleases(RELEASES, kinds), [kinds]);
 
-  const toggleKind = (kind: ChangeKind) =>
-    setKinds((prev) =>
-      prev.includes(kind) ? prev.filter((item) => item !== kind) : [...prev, kind],
+  const toggleKind = (kind: ChangeKind) => {
+    const next = kinds.includes(kind)
+      ? kinds.filter((item) => item !== kind)
+      : [...kinds, kind];
+    setKinds(next);
+    setOpen(openVersions(RELEASES, next));
+  };
+
+  const toggleOpen = (version: string) =>
+    setOpen((prev) =>
+      prev.includes(version) ? prev.filter((item) => item !== version) : [...prev, version],
     );
 
   return (
@@ -203,8 +210,8 @@ export function ChangelogPage() {
               key={release.version}
               release={release}
               installed={release.version === app.version}
-              open={open === release.version}
-              onToggle={() => setOpen(open === release.version ? null : release.version)}
+              open={open.includes(release.version)}
+              onToggle={() => toggleOpen(release.version)}
             />
           ))}
         </div>

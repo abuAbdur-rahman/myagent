@@ -270,3 +270,15 @@ export function filterReleases(
 ): Release[] {
   return releases.filter((release) => matchesKinds(release, kinds));
 }
+
+export function openVersions(
+  releases: readonly Release[],
+  kinds: readonly ChangeKind[],
+): string[] {
+  const shown = filterReleases(releases, kinds);
+  if (kinds.length === 0) {
+    const newest = shown[0];
+    return newest ? [newest.version] : [];
+  }
+  return shown.map((release) => release.version);
+}

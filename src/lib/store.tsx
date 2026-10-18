@@ -1431,13 +1431,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
         : applyCompactWindow(turns, resolveCompact(conversationId, turns));
-      const slim = withFinalTurnImages(windowed).map((turn) => ({
+      const canSeeImages =
+        lookupSupportsVision(catalogRef.current, modelRef.current) ||
+        (visionFallbackModelRef.current.trim().length > 0 && resolveTools());
+      const shaped = canSeeImages ? withFinalTurnImages(windowed) : windowed;
+      const slim = shaped.map((turn) => ({
         role: turn.role,
         content: turn.content,
       }));
       return withSystem(slim, summary);
     },
-    [resolveCompact, summaryFor, withSystem],
+    [resolveCompact, resolveTools, summaryFor, withSystem],
   );
 
   const sendMessage = useCallback(

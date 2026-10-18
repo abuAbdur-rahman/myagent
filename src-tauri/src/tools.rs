@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use regex::Regex;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -22,6 +23,7 @@ const MIN_CHARS_CAP: usize = 200;
 const WEB_SEARCH_CAP: usize = 5;
 const WEB_SEARCH_PROBE: usize = 3;
 const SEARCH_RESULTS_MAX: usize = 20;
+const GREP_CAP: usize = 512;
 
 pub struct ArtifactPayload {
     pub title: String,
@@ -45,17 +47,18 @@ fn arg_usize(args: &Value, key: &str) -> Option<usize> {
     args.get(key).and_then(Value::as_u64).map(|v| v as usize)
 }
 
-fn grep_pattern(args: &Value) -> Result<Option<String>, String> {
-    match args.get("grep").and_then(|v| v.as_str()) {
-        None => Ok(None),
-        Some(pattern) => {
-            let trimmed = pattern.trim();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(trimmed.to_string()))
-        }
+fn grep_for(args: &Value) -> Result<Option<Regex>, String> {
+    let Some(raw) = args.get("grep").and_then(|v| v.as_str()) else {
+        return Ok(None);
+    };
+    let pattern = raw.trim();
+    if pattern.is_empty() {
+        return Ok(None);
     }
+    if pattern.chars().count() > GREP_CAP {
+        return Err(format!("grep too long (max {GREP_CAP} chars)"));
+    }
+    tooltext::compile_grep(pattern).map(Some)
 }
 
 fn capped_chars(args: &Value, key: &str, default: usize) -> usize {
@@ -420,7 +423,7 @@ pub fn tool_specs() -> Value {
                     "properties": {
                         "command": { "type": "string" },
                         "timeout_secs": { "type": "integer", "minimum": 5, "maximum": 300 },
-                        "grep": { "type": "string", "description": "Case-insensitive regular expression; keeps only matching lines." },
+                        "grep": { "type": "string", "maxLength": 512, "description": "Case-insensitive regular expression; keeps only matching lines." },
                         "head": { "type": "integer", "minimum": 1, "maximum": 2000, "description": "Keep the first N lines." },
                         "tail": { "type": "integer", "minimum": 1, "maximum": 2000, "description": "Keep the last N lines." },
                         "max_chars": { "type": "integer", "minimum": 200, "maximum": 32768, "description": "Cap the returned characters (default 6000)." },
@@ -456,7 +459,7 @@ pub fn tool_specs() -> Value {
                     "type": "object",
                     "properties": {
                         "url": { "type": "string", "description": "The public https url to fetch." },
-                        "grep": { "type": "string", "description": "Case-insensitive regular expression; keeps only matching lines." },
+                        "grep": { "type": "string", "maxLength": 512, "description": "Case-insensitive regular expression; keeps only matching lines." },
                         "start": { "type": "integer", "minimum": 0, "description": "Character offset to continue from; a truncated result reports the value to pass next." },
                         "max_chars": { "type": "integer", "minimum": 200, "maximum": 32768, "description": "Cap the returned characters (default 8000)." },
                         "format": { "type": "string", "enum": ["markdown", "text"], "description": "markdown (default) keeps links and emphasis; text returns plain text." },
@@ -878,6 +881,7 @@ pub async fn execute(
             if command.chars().count() > COMMAND_CAP {
                 return Err("command too long (max 8000 chars)".to_string());
             }
+            let grep = grep_for(&args)?;
             let timeout_secs = args
                 .get("timeout_secs")
                 .and_then(|v| v.as_u64())
@@ -911,26 +915,38 @@ pub async fn execute(
             };
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let mut text = format!("exit code: {}\n", output.status.code().unwrap_or(-1));
+            let mut text = String::new();
             if !stdout.trim().is_empty() {
                 text.push_str(&format!("stdout:\n{stdout}\n"));
             }
             if !stderr.trim().is_empty() {
                 text.push_str(&format!("stderr:\n{stderr}\n"));
             }
-            let full = tooltext::strip_noise(text.trim_end());
-            let mut body = match grep_pattern(&args)? {
-                Some(pattern) => tooltext::grep_lines(&full, &pattern)?,
-                None => full.clone(),
+            let output_text = tooltext::strip_noise(text.trim_end());
+            let mut body = match &grep {
+                Some(regex) => {
+                    let kept = tooltext::grep_lines(&output_text, regex);
+                    if kept.is_empty() {
+                        format!("no line matched {}", regex.as_str())
+                    } else {
+                        kept
+                    }
+                }
+                None => output_text.clone(),
             };
             body = tooltext::take_lines(&body, arg_usize(&args, "head"), arg_usize(&args, "tail"));
             let max_chars = capped_chars(&args, "max_chars", SHELL_CAP);
-            let spill = if full.len() > OUTPUT_CAP {
-                conversation_id.and_then(|cid| write_spill(app, cid, call_id, &full))
+            let spill = if output_text.len() > OUTPUT_CAP {
+                conversation_id.and_then(|cid| write_spill(app, cid, call_id, &output_text))
             } else {
                 None
             };
-            let mut shaped = tooltext::report_body(&body, 0, max_chars, |_| {
+            let mut report = format!("exit code: {}", output.status.code().unwrap_or(-1));
+            if !body.trim().is_empty() {
+                report.push('\n');
+                report.push_str(body.trim_end());
+            }
+            let mut shaped = tooltext::report_body(&report, 0, max_chars, |_| {
                 "Call run_powershell again with grep, tail or a larger max_chars to read more."
                     .to_string()
             });
@@ -1073,6 +1089,11 @@ pub async fn execute(
             if url.len() > 2048 {
                 return Err("INVALID_URL: url too long (max 2048 chars)".to_string());
             }
+            let format = arg_str(&args, "format").unwrap_or_else(|| "markdown".to_string());
+            if format != "markdown" && format != "text" {
+                return Err("format must be markdown or text".to_string());
+            }
+            let grep = grep_for(&args)?;
             let page = webfetch::fetch_page(&url, cancel).await?;
             eprintln!(
                 "webfetch: {} via {} hop(s): {}",
@@ -1081,17 +1102,20 @@ pub async fn execute(
                 page.chain.join(" -> ")
             );
             let full = tooltext::strip_noise(&page.markdown);
-            let format = arg_str(&args, "format").unwrap_or_else(|| "markdown".to_string());
-            if format != "markdown" && format != "text" {
-                return Err("format must be markdown or text".to_string());
-            }
             let body = if format == "text" {
                 tooltext::markdown_to_text(&full)
             } else {
                 full.clone()
             };
-            let body = match grep_pattern(&args)? {
-                Some(pattern) => tooltext::grep_lines(&body, &pattern)?,
+            let body = match &grep {
+                Some(regex) => {
+                    let kept = tooltext::grep_lines(&body, regex);
+                    if kept.is_empty() {
+                        format!("no line matched {} in the page", regex.as_str())
+                    } else {
+                        kept
+                    }
+                }
                 None => body,
             };
             let start = arg_usize(&args, "start").unwrap_or(0);

@@ -544,8 +544,12 @@ pub async fn mcp_update(
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
-    forget_probe(&app.state::<McpState>(), &id);
-    server_row(&pool, &id).await
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let row = server_row(&pool, &id).await?;
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    Ok(row)
 }
 
 #[tauri::command]
@@ -1234,7 +1238,7 @@ async fn collect_catalog(
             continue;
         };
         let session = handle.lock().await;
-        for def in filter_tools(&session.config, session.tools.clone()) {
+        for def in filter_tools(config, session.tools.clone()) {
             let alias = mcp_name(&def.server, &def.tool);
             if !seen.insert(alias.clone()) {
                 eprintln!("mcp: duplicate tool alias {alias} ignored");
@@ -1245,7 +1249,7 @@ async fn collect_catalog(
                 alias,
                 key: key.clone(),
                 tool: def.tool.clone(),
-                project: session.config.project_id.clone(),
+                project: config.project_id.clone(),
             });
         }
     }
