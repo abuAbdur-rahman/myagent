@@ -286,14 +286,14 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ## D6. Permission modes
 - **Status:** Missing
 - **Ref:** † Claude Code cycles default, acceptEdits and plan with Shift+Tab; plan mode is read-only exploration before changes.
-- **Build:** Three modes in one setting: Ask (default), Accept edits (auto-allow file edits only, shell still asks), Plan (only read tools exposed). A mode badge near the composer.
-- **Not:** Fully-automatic "yolo" mode.
-- **Done:** In Plan mode, write and shell tools are not even sent to the model.
+- **Build:** Modes in one setting: Ask (default), Accept edits (auto-allow file edits only, shell still asks), Plan (only read tools exposed), Sandbox (D22: `sandbox_run` and the jailed project file tools auto-allow after the M1 screen; host calls outside the project still ask, and `run_powershell` becomes inspection only). A mode badge near the composer.
+- **Not:** Fully-automatic "yolo" mode. Sandbox mode is a UX shortcut; the container carries the boundary (D22).
+- **Done:** In Plan mode, write and shell tools are not even sent to the model; in Sandbox mode a host call outside the project still asks and an explicit Deny rule beats auto-allow.
 
 ## D7. Shell tool
 - **Status:** Partial (0.1.3: approval + per-segment rules + kill-on-stop; cwd still home, not project)
 - **Ref:** † OpenCode parses bash with tree-sitter to apply per-command rules. Claude Code asks per command pattern.
-- **Build:** `run_powershell` goes through D4 and D5. Timeout (default 60s), working directory fixed to the project, output captured and capped (D13), kill process tree on stop. Parse the command into segments (`;`, `&&`, `|`) and evaluate each, so `ls; rm x` cannot hide behind an allowed `ls`.
+- **Build:** `run_powershell` goes through D4 and D5. Timeout (default 60s), working directory fixed to the project, output captured and capped (D13), kill process tree on stop. Parse the command into segments (`;`, `&&`, `|`) and evaluate each, so `ls; rm x` cannot hide behind an allowed `ls`. In Sandbox mode (D6) the host shell is inspection only: reading state (time, disk, largest files, process and network state) is allowed, and anything that creates, updates or deletes files, or runs project code, is refused with a reason that points at the sandbox (D22).
 - **Not:** Persistent shell sessions, PTY.
 - **Done:** Compound commands are checked per segment; timeout kills the child.
 
@@ -326,7 +326,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Status:** Missing
 - **Ref:** † Claude Code `/rewind` restores code, conversation, or both, but only tracks files edited through its own tools in the current session (not shell changes).
 - **Build:** Before each edit/write, copy the original into a per-chat snapshot folder. "Undo this change" restores it. Rewinding the conversation just moves the branch leaf (B2).
-- **Not:** Git integration, tracking shell-made changes.
+- **Not:** Git integration as the undo mechanism (S1 stores one git snapshot per sandbox exec as recovery data, with no UI — see D22), tracking shell-made changes.
 - **Done:** Undo restores bytes exactly.
 
 ## D13. Output cap and spill files
@@ -383,6 +383,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Build:** One `execute_js(code)` tool running plain ES2020 in `rquickjs` on a blocking thread, a fresh runtime per snippet: 32 MB memory, 20 s wall clock, 50 tool calls, 200 KB returned. A global `tools` object exposes only the tools enabled for the chat; each call goes over a channel to Rust and runs the real tool through the same approval and cap path, never inside the script. No `fetch`, `require`, filesystem or process access, and no recursive `execute_js`. Errors return `{ error, tool, line, message }`. The system prompt says when to use it (loops, joins, filtering) and when not to
 - **Not:** Running untrusted third-party code (in-process QuickJS is enough for the model's own code)
 - **Done:** Windows `rquickjs` spike builds and enforces the limits; a fake-model loop test asserts 2 model requests; hostile scripts (infinite loop, memory bomb, huge output, recursive call, `fetch` or filesystem attempt) fail structurally
+
+## D22. Container sandbox
+- **Status:** Missing (plan: `docs/plan/v0.4.0-sandbox.md` rev 2, v0.4.0 S1)
+- **Ref:** † Claude Code and OpenCode run tools on the host behind permission rules; this moves code execution into a container instead, and keeps only file operations on the jailed host.
+- **Build:** One `sandbox_run(cmd, cwd, timeout)` tool. Each call is one ephemeral `docker run --rm` with `--network none`, `--read-only`, a writable 256MB `/tmp` used as `HOME`, `--user 1000:1000`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit 256`, `--memory-swap` equal to `--memory`, a single project-dir bind (`.git`, `.vscode`, `.husky`, `.github` and the agent-config files overlaid read-only) and a `timeout` wrapper inside. Cancel and timeout call `docker kill`. A pinned Debian slim base is pulled on Enable, then one local derived image is built and referenced by digest. Output streams as `SandboxEvent { stdout, stderr, exit }` over a Channel and goes through D13. Before each exec a git snapshot is written to `refs/myagent/pre-exec/<id>` (temporary index, so untracked files are included); after exit a receipt lists changed config, hook and agent-config files. No secret env reaches the container. Host file tools stay jailed (D8-D10) and refuse the overlaid paths.
+- **Not:** Untrusted third-party code, per-exec undo or diff UI (v2), background or long-lived execs, host-exec fallback when Docker is absent.
+- **Done:** A `python3` socket connect and a ping fail inside; a host path under `/run/desktop/mnt/host/...` and a `..` escape fail; a `.git/hooks` or `AGENTS.md` write fails from the container and from host tools; a fork bomb and an output flood are contained with a spill path; after `rm -rf .` the checkpoint restores the tree including a previously untracked file; a killed app leaves no labelled container behind; the daemon being down refuses the exec with no host fallback.
 
 ---
 
@@ -617,4 +624,4 @@ Each is real work with large overhead. Revisit only after phases in `later.md` a
 | I5 | MCP servers | Moved to J12, after D4 is proven |
 | I6 | Hooks, plugins | Skills moved to J12; hooks and plugins stay skipped |
 | I7 | Sharing, multi-user | Single-user desktop app |
-| I8 | Code execution sandbox | Shell tool (D7) covers it |
+| I8 | Code execution sandbox | Moved to D22, v0.4.0 S1 |

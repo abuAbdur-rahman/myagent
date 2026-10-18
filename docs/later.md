@@ -226,9 +226,9 @@ Trigger: measured intermediate tokens over ~10K per turn on a regular basis. Spi
 
 ---
 
-## v2: Developer workspace (deferred)
+## Sandbox and developer workspace (v0.4.0 S1; remainder in v2)
 
-v1 is an office harness (Claude app / ChatGPT / OpenWebUI alt), not developer-first. File workspace and folder-as-sandbox move here. Projects (E3) stay in v1 as grouping plus docs storage (pdfs, docs); sandbox enforcement waits for v2.
+v1 is an office harness (Claude app / ChatGPT / OpenWebUI alt), not developer-first. The file-tools and sandbox set below is scheduled as v0.4.0 S1 (`docs/releases/v0.4.0.md`, plan `docs/plan/v0.4.0-sandbox.md` rev 2), not v2, as `docs/releases/v1.0.0.md` already records. Projects (E3) stay in v1 as grouping plus docs storage (pdfs, docs). The undo and diff UI, and the rest of the developer workspace, stay in v2.
 
 Exit: the agent can read, search, edit and undo inside a project and nothing escapes it.
 
