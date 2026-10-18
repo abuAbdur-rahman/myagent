@@ -10,11 +10,13 @@ import {
   Plug,
   Search,
   Settings as SettingsIcon,
+  Sparkles,
   X,
   Blocks,
 } from "lucide-react";
 import { useApp } from "../../lib/store";
 import { ProvidersPage } from "./ProvidersPage";
+import { ChangelogPage } from "./ChangelogPage";
 import {
   AboutPage,
   AppearancePage,
@@ -40,6 +42,7 @@ const PAGES = [
   { id: "memory", label: "Memory", icon: <Brain size={16} /> },
   { id: "data", label: "Data", icon: <Database size={16} /> },
   { id: "shortcuts", label: "Shortcuts", icon: <Keyboard size={16} /> },
+  { id: "changelog", label: "Changelog", icon: <Sparkles size={16} /> },
   { id: "about", label: "About", icon: <Info size={16} /> },
 ];
 
@@ -132,6 +135,7 @@ export function SettingsDialog() {
           {page === "memory" && <MemoryPage />}
           {page === "data" && <DataPage />}
           {page === "shortcuts" && <ShortcutsPage />}
+          {page === "changelog" && <ChangelogPage />}
           {page === "about" && <AboutPage />}
         </section>
       </div>

@@ -365,6 +365,25 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Build:** Skip. Revisit only after D1-D17 are solid.
 - **Done:** n/a.
 
+## D19. Tool output controls
+- **Status:** Have (0.3.2: `src-tauri/src/tooltext.rs` shaping + per-tool caps + `{shown,total,truncated}` reports)
+- **Ref:** Give the model the same levers a shell user has, so it asks for less instead of reading everything. Extends D13
+- **Build:** Optional `max_chars` (plus `start`, `grep`, `format`) on `web_fetch`; `max_results` and `fields` on `web_search`; `head`, `tail`, `grep`, `max_chars` on `run_powershell`; `limit` on `recall_memory`. Safe default cap per tool; old prompts keep working. Strip ANSI and repeated blank lines in Rust before counting. Every result carries `{ shown, total, truncated }`, never truncates silently, and says how to get the rest. One line in each tool description tells the model to use the filters
+- **Done:** Median `web_fetch` and `run_powershell` result is under 2,000 tokens and no tool exceeds its cap unless the model asks. Unit tests for truncation, `grep` and ANSI stripping
+
+## D20. Result handles and on-demand tool definitions
+- **Status:** Missing (plan: Phase 1)
+- **Ref:** Anthropic code execution with MCP: the model sees a summary and a handle, not the payload
+- **Build:** Results over the cap are written to `results/<turn-id>/<n>.txt` and returned as `{ handle, bytes, lines, preview }`. One tool `read_result(handle, grep?, head?, tail?, start?, max_chars?)` reads slices and rejects any path outside `results/`. Handles live for the chat, are deleted with it, and are swept after 7 days. Send a small core tool set each turn and load the rest with `search_tools(query)` once external MCP tools exist
+- **Done:** A 200 KB page fetch adds under 1,000 tokens and a `read_result` `grep` still answers a detail question. Cleanup tested on chat delete
+
+## D21. Code mode
+- **Status:** Missing (plan: Phase 2; off by default)
+- **Ref:** Anthropic code execution, Cloudflare Code Mode and StackOne: tools as async bindings inside a sandbox, bindings the only way out
+- **Build:** One `execute_js(code)` tool running plain ES2020 in `rquickjs` on a blocking thread, a fresh runtime per snippet: 32 MB memory, 20 s wall clock, 50 tool calls, 200 KB returned. A global `tools` object exposes only the tools enabled for the chat; each call goes over a channel to Rust and runs the real tool through the same approval and cap path, never inside the script. No `fetch`, `require`, filesystem or process access, and no recursive `execute_js`. Errors return `{ error, tool, line, message }`. The system prompt says when to use it (loops, joins, filtering) and when not to
+- **Not:** Running untrusted third-party code (in-process QuickJS is enough for the model's own code)
+- **Done:** Windows `rquickjs` spike builds and enforces the limits; a fake-model loop test asserts 2 model requests; hostile scripts (infinite loop, memory bomb, huge output, recursive call, `fetch` or filesystem attempt) fail structurally
+
 ---
 
 # E. Memory and instructions
@@ -434,7 +453,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)
-- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts)
+- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts. 0.3.2: sent images are stored on the message, survive regenerate and edit-resubmit, and render after reload)
 - **Ref:** Claude and OpenWebUI accept pasted images for vision models.
 - **Build:** Paste or attach, downscale to a max edge, send as a content part only if the model supports it (C3).
 - **Done:** A non-vision model never receives an image part.
@@ -488,6 +507,12 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Status:** Missing
 - **Build:** Later; use the platform updater with signed releases. Not before the app is stable.
 - **Done:** n/a for now.
+
+## G8. Changelog page
+- **Status:** Have (0.3.2: settings page between Shortcuts and About, releases from `src/lib/releasenotes.ts`)
+- **Ref:** Desktop apps ship a "What's new" surface; `docs/releases/` already holds the notes
+- **Build:** A settings page placed before About in the nav. An installed-version card with **Check for updates** (spinner, then a confirmation), then releases newest first. Each release header shows version, a Current pill, date and change count, and expands to a one-line summary and its changes; each change carries a New / Improved / Fixed label. The latest release is open, older ones collapsed. A type filter opens every release that matches and hides the rest. Reachable from Settings, About, the profile menu ("What's new") and the command palette
+- **Done:** The page lists the installed version and every stored release note; the filter hides non-matching releases; it opens from all four entry points
 
 ---
 
@@ -574,7 +599,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** A scheduled run produces a stored result.
 
 ## J12. MCP and skills
-- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated, streamableHTTP unsupported)
+- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated, streamableHTTP unsupported. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page)
 - **Ref:** † OpenCode and Claude Code both support MCP servers and skills (`SKILL.md`).
 - **Build:** Not before D4 and D5 are proven. Skills first (read a markdown file into context on demand), MCP second, every MCP tool going through the permission engine.
 - **Done:** An MCP tool cannot run without passing D4.

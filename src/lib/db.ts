@@ -12,6 +12,7 @@ import type {
   MemoryKind,
   MemoryScope,
   Message,
+  MessageAttachment,
   Project,
   ProjectInput,
   Role,
@@ -163,7 +164,6 @@ export async function deleteConversation(id: string): Promise<void> {
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [id]);
   await db.execute("DELETE FROM chat_tags WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [id]);
-  await db.execute("DELETE FROM knowledge_docs WHERE chat_id = $1", [id]);
   await db.execute("DELETE FROM conversations WHERE id = $1", [id]);
 }
 
@@ -412,6 +412,17 @@ export async function updateMessage(id: string, content: string): Promise<void> 
   ]);
 }
 
+export async function updateMessageAttachments(
+  id: string,
+  attachments: MessageAttachment[],
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE messages SET attachments = $1 WHERE id = $2", [
+    attachments.length > 0 ? JSON.stringify(attachments) : null,
+    id,
+  ]);
+}
+
 export interface FullMessageInput {
   role: Role;
   content: string;
@@ -603,7 +614,7 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
       [
         newId(),
         branched.id,
@@ -617,6 +628,7 @@ export async function branchConversation(
         sqlNull(m.finish_reason),
         sqlNull(m.tool_log),
         sqlNull(m.artifacts),
+        sqlNull(m.attachments),
         sqlNull(m.model),
         m.created_at,
       ],

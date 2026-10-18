@@ -8,6 +8,7 @@ import {
   knowledgeShaExists,
   listKnowledgeDocs,
 } from "./db";
+import { parseMessageAttachments } from "./attachments";
 import { newId } from "./utils";
 
 export const MAX_FILES_PER_QUERY = 3;
@@ -162,6 +163,25 @@ export function buildUserContent(text: string, images: ImageAttachment[]): strin
     parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
   }
   return parts;
+}
+
+export function turnContent(turn: {
+  content: string | MessagePart[];
+  attachments?: string | null;
+}): string | MessagePart[] {
+  if (typeof turn.content !== "string") return turn.content;
+  const images = parseMessageAttachments(turn.attachments);
+  return images.length > 0 ? buildUserContent(turn.content, images) : turn.content;
+}
+
+export function withFinalTurnImages<
+  T extends { role: string; content: string | MessagePart[]; attachments?: string | null },
+>(turns: T[]): T[] {
+  const index = turns.map((turn) => turn.role).lastIndexOf("user");
+  if (index < 0) return turns;
+  return turns.map((turn, position) =>
+    position === index ? { ...turn, content: turnContent(turn) } : turn,
+  );
 }
 
 export async function searchKnowledge(projectId: string, query: string): Promise<string> {

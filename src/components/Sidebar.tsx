@@ -418,6 +418,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
       onSelect: () => setSettingsPage("general"),
     },
     { id: "memory", label: "Global memory", onSelect: () => setSettingsPage("memory") },
+    { id: "changelog", label: "What's new", onSelect: () => setSettingsPage("changelog") },
   ];
 
   if (sidebarCollapsed) {

@@ -1,16 +1,25 @@
 import { skillRead, type SkillInfo } from "./api";
 
 const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?=[\s\u0085/>])[^>]*>/gi;
+const BOUNDARY_PREFIX = /<\/?(?:skill_content|skill_files|file)(?=[\s\u0085/]|$)/gi;
 const MAX_STRIP_PASSES = 8;
+
+function stripBoundaryPass(text: string): string {
+  return text
+    .replace(BOUNDARY_TAG, "")
+    .replace(BOUNDARY_PREFIX, (match) => `&lt;${match.slice(1)}`);
+}
 
 function stripBoundaryTags(text: string): string {
   let current = text;
   for (let pass = 0; pass < MAX_STRIP_PASSES; pass++) {
-    const next = current.replace(BOUNDARY_TAG, "");
+    const next = stripBoundaryPass(current);
     if (next === current) return current;
     current = next;
   }
-  return current.replace(BOUNDARY_TAG, (match) => match.replace(/</g, "&lt;"));
+  return current
+    .replace(BOUNDARY_TAG, (match) => match.replace(/</g, "&lt;"))
+    .replace(BOUNDARY_PREFIX, (match) => `&lt;${match.slice(1)}`);
 }
 
 export function parseSkillMentions(text: string): string[] {
@@ -26,7 +35,9 @@ export function parseSkillMentions(text: string): string[] {
 
 export function buildSkillIndexBlock(skills: SkillInfo[]): string {
   if (skills.length === 0) return "";
-  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
+  const lines = skills.map(
+    (skill) => `- ${skill.name}: ${stripBoundaryTags(skill.description.trim())}`,
+  );
   return `## Available skills\nCall the skill tool with the ID to load its instructions.\n${lines.join("\n")}`;
 }
 
