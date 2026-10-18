@@ -22,6 +22,29 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.3.3",
+    date: "2026-10-18",
+    summary: "A verification release: retry and mid-stream stop are covered by tests, the step cap and repeat guard are recorded as done, and the roadmap now matches the code.",
+    changes: [
+      {
+        kind: "improved",
+        text: "Retrying is covered by tests on the stream path: a 429 retries with growing backoff, a 400 does not, and an error that arrives mid-stream never does. Retries keep the existing Retrying (n/10) toast.",
+      },
+      {
+        kind: "improved",
+        text: "Stopping a reply mid-stream now has a test: the turn ends at once and the text already shown is kept. A tool entry still open when the stream ends shows as interrupted.",
+      },
+      {
+        kind: "improved",
+        text: "The step cap (25, clamped to 1 to 32, with a no-tools fallback at the cap) and the Keep going / Stop here guard against a repeating tool call are recorded as done; the cap and the guard's counting are tested.",
+      },
+      {
+        kind: "fixed",
+        text: "The roadmap was checked against the code: stop/cancel, retry, the step cap and tool spill files now read Have, and markdown, code blocks, the composer, key storage and the test harness were corrected to Partial where their acceptance tests are still missing.",
+      },
+    ],
+  },
+  {
     version: "0.3.2",
     date: "2026-10-17",
     summary: "A design-system pass, a rebuilt MCP page with per-tool approvals, a Changelog page, and smaller tool output.",

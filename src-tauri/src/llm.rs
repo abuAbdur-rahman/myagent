@@ -1878,6 +1878,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn serve_script(script: Vec<(&'static str, &'static str, &'static str)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -1923,6 +1925,94 @@ mod tests {
 
     fn body() -> serde_json::Value {
         serde_json::json!({ "model": "test", "messages": [] })
+    }
+
+    fn collect_events() -> (Channel<StreamEvent>, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let channel = Channel::new(move |body: tauri::ipc::InvokeResponseBody| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if let Ok(mut guard) = sink.lock() {
+                        guard.push(value);
+                    }
+                }
+            }
+            Ok(())
+        });
+        (channel, seen)
+    }
+
+    fn delta_texts(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
+        seen.lock()
+            .map(|guard| {
+                guard
+                    .iter()
+                    .filter(|event| event["type"] == "delta")
+                    .filter_map(|event| event["text"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn stream_request(url: &str) -> ChatRequest {
+        let mut req: ChatRequest = serde_json::from_str(
+            r#"{"request_id":"r1","connection_id":"c1","model":"test","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .expect("chat request parses");
+        req.base_url = url.to_string();
+        req
+    }
+
+    fn serve_sse(
+        first: &'static str,
+        rest: Vec<&'static str>,
+        gate: std::sync::mpsc::Receiver<()>,
+        connections: Arc<AtomicUsize>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        std::thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            connections.fetch_add(1, AtomicOrdering::SeqCst);
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let trimmed = line.trim_end();
+                if trimmed.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = trimmed.split_once(':') {
+                    if name.eq_ignore_ascii_case("Content-Length") {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            let mut request_body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut request_body);
+            let mut stream = reader.into_inner();
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+            let _ = stream.write_all(first.as_bytes());
+            let _ = stream.flush();
+            let _ = gate.recv();
+            for chunk in rest {
+                if stream.write_all(chunk.as_bytes()).is_err() {
+                    return;
+                }
+                let _ = stream.flush();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        format!("http://{addr}")
     }
 
     #[test]
@@ -1989,6 +2079,88 @@ mod tests {
             .expect_err("content-blocked 400 must not retry");
         assert!(
             matches!(error, AppError::Upstream(message) if message.contains("content-blocked"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_error_mid_flight_is_not_retried() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
+        gate_tx.send(()).expect("pre-release the gate");
+        let url = serve_sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
+            vec!["data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n"],
+            gate_rx,
+            connections.clone(),
+        );
+        let req = stream_request(&url);
+        let (channel, seen) = collect_events();
+        let cancel = Notify::new();
+        let error = stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![serde_json::json!({"role": "user", "content": "hi"})],
+            &channel,
+            &cancel,
+        )
+        .await
+        .expect_err("a mid-stream error is not retried");
+        assert!(
+            matches!(error, AppError::Upstream(message) if message.contains("upstream exploded"))
+        );
+        assert_eq!(delta_texts(&seen), vec!["one"]);
+        assert_eq!(connections.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_mid_stream_keeps_the_text_already_sent() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
+        let url = serve_sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
+            vec![
+                "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
+                "data: [DONE]\n\n",
+            ],
+            gate_rx,
+            connections.clone(),
+        );
+        let req = stream_request(&url);
+        let (channel, seen) = collect_events();
+        let cancel = Arc::new(Notify::new());
+        let client = test_client();
+        let turn = {
+            let cancel = cancel.clone();
+            let channel = channel.clone();
+            tokio::spawn(async move {
+                stream_completion(&client, &req, "key".to_string(), vec![], &channel, &cancel).await
+            })
+        };
+        for _ in 0..500 {
+            let empty = seen.lock().map(|guard| guard.is_empty()).unwrap_or(true);
+            if !empty {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            delta_texts(&seen),
+            vec!["one"],
+            "the first delta must arrive before the cancel"
+        );
+        cancel.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(5), turn).await;
+        gate_tx.send(()).expect("release the rest of the stream");
+        let result = result
+            .expect("the turn must resolve after a cancel")
+            .expect("stream task");
+        assert!(result.is_ok(), "cancel resolves the turn without an error");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            delta_texts(&seen),
+            vec!["one"],
+            "later chunks never arrive after a cancel"
         );
     }
 

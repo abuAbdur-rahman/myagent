@@ -28,12 +28,28 @@ Exit: the Changelog page ships; MCP upgrades from 0.3.1 with no data loss; #10, 
 
 Detail: `docs/releases/v0.3.2.md`. Code-mode Phases 1 and 2 stay in Later.
 
+### v0.3.3: verified stream reliability and agent-loop safety
+
+Exit: the Done lines of A2, A4 and D3 are covered by tests, and the statuses
+match the code.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [x] | A2 | Stop / cancel mid-stream | Have (0.3.3 verified) | S | A3 |
+| [x] | A4 | Retry with backoff | Have (0.3.3 verified) | S | A3, A7 |
+| [x] | D3 | Step cap and doom-loop guard | Have (0.3.3 verified) | S | D1 |
+| [x] | — | Roadmap truth pass (`features.md` statuses) | Done (0.3.3) | S | none |
+
+Detail: `docs/releases/v0.3.3.md`. The three items were already in the build;
+this release adds the tests their Done lines asked for and corrects the record.
+The deferred review debt under Later stays open.
+
 ### Phase 1: Foundation
 Exit: one command runs green tests on a clean checkout.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | H1 | Test harness | Missing | S | none |
+| [x] | H1 | Test harness | Partial (CI runs the Rust suite only) | S | none |
 | [x] | H2 | Recorded fixtures | Missing | S | H1 |
 | [x] | A11 | Composer fixes (in progress) | Partial | S | none |
 
@@ -45,9 +61,9 @@ Exit: every fixture (plain, reasoning, `length`, mid-stream error, 429) ends in 
 | [x] | A3 | SSE parser | Have (0.1.3) | M | H2 |
 | [x] | A5 | Truncation and finish reasons | Have (0.1.3) | S | A3 |
 | [x] | A7 | Error UI | Have (0.1.3) | S | A5 |
-| [x] | A4 | Retry with backoff | Missing | S | A3, A7 |
+| [x] | A4 | Retry with backoff | Have (0.3.3) | S | A3, A7 |
 | [x] | A6 | Reasoning display | Have (0.1.3) | S | A3 |
-| [x] | A2 | Stop / cancel (mid-stream) | Partial | S | A3 |
+| [x] | A2 | Stop / cancel (mid-stream) | Have (0.3.3) | S | A3 |
 
 ### Phase 3: Rendering
 Exit: the same markdown renders identically for user and assistant messages.
@@ -88,6 +104,23 @@ Exit: memory writes only bio, preferences, or explicit asks; thread summary stay
 
 ## Later
 
+### Review debt (deferred from the 0.3.2 gate)
+
+No IDs; these stay here until one is taken into a release. None is a known
+exploit on its own — they are the hardening items the 0.3.2 review raised and we
+chose to defer.
+
+| Item | Where | Note |
+|---|---|---|
+| MCP alias collision | `src-tauri/src/mcp.rs` namespace encoding | Two servers can expose the same tool name and the model sees one of them. Needs a namespacing scheme that survives reconnects. |
+| Untrusted framing | MCP tool descriptions and results, `web_fetch` bodies, `web_search` hits | Tool output is delimited but not neutralised, so a hostile page can forge the delimiter or a trailer. Phase 1 framing work. |
+| Deny-table ordering | `mcp.rs` `filter_tools` / `blocked` | Deny-only today; revisit when allow-lists land. |
+| Bidi and C1 controls | raw tool output preview | Not stripped; they can reorder or hide text in the preview. |
+| `SKILL.md` size cap | skills loader | A skill's text reaches context with no cap. |
+| Attachment parse cache | `src/lib/attachments.ts` `parseMessageAttachments` | Re-parses on every read; memoise when transcripts grow. |
+| Frontend tests not in CI | `.github/workflows/ci.yml` | `npm test` (vitest) is green locally but CI runs only the Rust suite. Add the step with the next CI change. |
+| `mcp_add` accepts any stdio command | Settings | Intentional: the user types it themselves behind the approval gate. Recorded so it is not re-flagged. |
+
 ### Phase 7: Usage and context
 Exit: compaction runs once at the threshold and the model still recalls an early decision.
 
@@ -106,8 +139,8 @@ Exit: the agent runs gated tools with capped output and a loop guard. No file wo
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | D13 | Output cap and spill files | Partial | S | D7 |
-| [ ] | D3 | Step cap and doom-loop guard | Missing | S | D1 |
+| [ ] | D13 | Output cap and spill files | Have (0.1.4) | S | D7 |
+| [ ] | D3 | Step cap and doom-loop guard | Have (0.3.3) | S | D1 |
 | [ ] | D2 | Streaming tool loop | Missing | L | A3, D1 |
 
 ### Phase 9: Conversation management
