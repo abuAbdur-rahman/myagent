@@ -28,7 +28,7 @@ export const RELEASES: readonly Release[] = [
     changes: [
       {
         kind: "improved",
-        text: "Retrying is covered by tests: a 429 retries with growing backoff, a 400 does not, and an error that arrives mid-stream never does. The status line still shows Retrying (n/10).",
+        text: "Retrying is covered by tests on the stream path: a 429 retries with growing backoff, a 400 does not, and an error that arrives mid-stream never does. Retries keep the existing Retrying (n/10) toast.",
       },
       {
         kind: "improved",
@@ -40,7 +40,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "The roadmap was checked against the code: stop/cancel, retry, the step cap, the message tree, the test harness, markdown and code blocks, key storage and tool spill files no longer read Missing or Unknown.",
+        text: "The roadmap was checked against the code: stop/cancel, retry, the step cap and tool spill files now read Have, and markdown, code blocks, the composer, key storage and the test harness were corrected to Partial where their acceptance tests are still missing.",
       },
     ],
   },

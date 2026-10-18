@@ -139,7 +139,7 @@ Exit: the agent runs gated tools with capped output and a loop guard. No file wo
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | D13 | Output cap and spill files | Have (0.3.2) | S | D7 |
+| [ ] | D13 | Output cap and spill files | Have (0.1.4) | S | D7 |
 | [ ] | D3 | Step cap and doom-loop guard | Have (0.3.3) | S | D1 |
 | [ ] | D2 | Streaming tool loop | Missing | L | A3, D1 |
 

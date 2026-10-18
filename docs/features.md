@@ -34,7 +34,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Fixtures give identical events however the bytes are chopped (1 byte, random, whole).
 
 ## A4. Retry with backoff
-- **Status:** Have (0.3.3 verified: 429, 5xx and network errors retry up to 10 times with jittered backoff and Retry-After, but only before the first token; the status line shows Retrying (n/10); a mid-stream error does not retry, tested)
+- **Status:** Have (0.3.3 verified on the plain stream path: 429, 5xx and network errors retry inside 10 attempts, counting the first, with jittered backoff and Retry-After, and only before the first token; a 400 never retries and a mid-stream error does not. Retries show a transient Retrying (n/10) toast. The agentic path can still re-issue one no-tools fallback request on a tools error)
 - **Ref:** † OpenRouter: pre-stream errors are normal HTTP errors; mid-stream errors arrive as SSE with HTTP 200. Claude Code and OpenCode retry transient failures.
 - **Build:** Retry only on 429, 5xx and network errors, and only if no token was received. Exponential backoff with jitter, max 10 attempts, honor `Retry-After`. Show "Retrying (2/10)" in the UI.
 - **Not:** Provider fallbacks, circuit breakers.
@@ -66,20 +66,20 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Two quick sends produce two ordered turns.
 
 ## A9. Markdown rendering (assistant and user)
-- **Status:** Partial (one Markdown component for both roles, marked + DOMPurify, no raw HTML, links open externally; the identical-render acceptance test is missing)
+- **Status:** Partial (one Markdown component for both roles; marked renders markdown and HTML, DOMPurify sanitizes it, links open externally; the identical-render acceptance test is missing)
 - **Ref:** All three render markdown for both sides. OpenWebUI and Claude store raw text and render on display.
 - **Build:** Store raw markdown only. One renderer for both roles (`react-markdown`, `remark-gfm`, `remark-breaks`). No raw HTML. Links get `rel="noopener noreferrer"` and open externally. Throttle re-render during streaming.
 - **Done:** The same markdown string renders identically for user and assistant bubbles.
 
 ## A10. Code blocks in messages
-- **Status:** Partial (shiki highlighting after the stream settles, language label and Copy ship; the Copy-equals-fenced-source acceptance test is missing)
+- **Status:** Partial (shiki highlighting, language label and Copy ship; highlighting runs on every content change, so the Build line's lazy highlight after streaming is unimplemented; the Copy-equals-fenced-source acceptance test is missing)
 - **Ref:** Claude and OpenWebUI: language label, copy button, syntax highlighting; OpenWebUI also allows editable code blocks.
 - **Build:** Header with language and Copy; monospace; horizontal scroll; highlight lazily after streaming finishes. Copy copies raw text only.
 - **Not:** Editable code blocks, run buttons.
 - **Done:** Copy output equals the fenced source exactly.
 
 ## A11. Composer (input)
-- **Status:** Partial (0.3.2: TipTap rich text with Shift-Enter code blocks, Enter sends and ArrowUp history; the composer acceptance list is still unverified)
+- **Status:** Partial (0.1.3: TipTap rich text with Shift-Enter code blocks, Enter sends and ArrowUp history; the composer acceptance list is still unverified)
 - **Ref:** Claude Code: multiline input, history with Up arrow, Esc Esc for rewind. Claude app: rich input with shortcuts.
 - **Build:** Rich-text editor serializing to markdown. Single focus ring on the container. Clear immediately on send. History on ArrowUp at doc start, ArrowDown at doc end. Lists continue with Shift+Enter. "```lang" plus Space or Shift+Enter makes a code block. Enter sends outside code blocks.
 - **Done:** The acceptance list from the composer spec passes.
@@ -108,7 +108,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** A migration test upgrades an old DB without data loss.
 
 ## B2. Message tree (branches)
-- **Status:** Partial (branch rows, edit and regenerate siblings and version switching shipped; a path/edit/regenerate/switch test suite is outstanding)
+- **Status:** Missing (what exists is a chat fork: `branchFrom` copies the whole conversation and regenerate/edit-resubmit replace the tail in place; there is no `parent_id` tree and no version switcher)
 - **Ref:** † OpenWebUI stores messages as a tree with `parentId` and `childrenIds`; `history.currentId` points at the leaf of the active branch. Claude has version switchers. OpenCode can fork sessions.
 - **Build:** Rows with `id`, `parent_id`, `role`, `content`, `created_at`; chat holds `current_leaf_id`. The visible thread is the path from root to leaf. Edit or regenerate inserts a sibling; switching a sibling selects its deepest last descendant.
 - **Not:** Merge, diff between branches, full event log.
@@ -330,7 +330,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Undo restores bytes exactly.
 
 ## D13. Output cap and spill files
-- **Status:** Have (0.3.2: capped at 32KB with the full output in `spill/<chat>/<id>.txt` and the path in the truncation notice)
+- **Status:** Have (0.1.4: capped at 32KB with the full output in `spill/<chat>/<id>.txt` and the path in the truncation notice)
 - **Ref:** † Tools cap output sent to the model; OpenCode and Claude Code let the model re-read slices.
 - **Build:** Cap at about 32KB. Write the full output to `spill/<chat>/<id>.txt` and append "[truncated, full output at path]". The model reads it with D8. Delete with the chat (B11).
 - **Done:** Large output is capped in context but fully recoverable.
