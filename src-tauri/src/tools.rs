@@ -671,6 +671,7 @@ fn like_pattern(query: &str) -> String {
 }
 
 pub(crate) fn canonical_memory_id(id: &str) -> Option<String> {
+    let id = id.trim();
     if id.is_empty() || id.chars().count() > 64 {
         return None;
     }
@@ -680,7 +681,7 @@ pub(crate) fn canonical_memory_id(id: &str) -> Option<String> {
 }
 
 fn memory_id_arg(args: &Value) -> Result<String, String> {
-    canonical_memory_id(arg_str(args, "id").unwrap_or_default().trim())
+    canonical_memory_id(&arg_str(args, "id").unwrap_or_default())
         .ok_or_else(|| "missing id: pass the id recall_memory printed".to_string())
 }
 
@@ -801,13 +802,14 @@ pub async fn memory_approval_text(
     if name == "delete_memory" {
         return format!("Delete memory: {}", memory_preview(&current));
     }
-    match arg_str(args, "content") {
-        Some(updated) => format!(
-            "Update memory\nfrom: {}\nto:   {}",
-            memory_preview(&current),
+    let preview = memory_preview(&current);
+    match (arg_str(args, "content"), arg_str(args, "kind")) {
+        (Some(updated), _) => format!(
+            "Update memory\nfrom: {preview}\nto:   {}",
             memory_preview(&updated)
         ),
-        None => format!("Update memory: {}", memory_preview(&current)),
+        (None, Some(kind)) => format!("Update memory ({kind}): {preview}"),
+        (None, None) => format!("Update memory: {preview}"),
     }
 }
 
@@ -1737,7 +1739,10 @@ mod tests {
 
     #[test]
     fn memory_ids_must_be_uuids_and_previews_stay_short() {
-        assert!(canonical_memory_id(GLOBAL_ID).is_some());
+        assert_eq!(
+            canonical_memory_id(&format!("  {GLOBAL_ID}  ")).expect("trimmed"),
+            GLOBAL_ID
+        );
         assert!(canonical_memory_id("").is_none());
         assert!(canonical_memory_id("drop table memories").is_none());
         assert_eq!(

@@ -152,6 +152,8 @@ onto the message. None blocks the release.
 | E2 gates no memory write | `tools.rs` `remember` / `update_memory` | Secret refusal is still Missing, and `update_memory` reuses the same validation so it inherits the gap rather than adding a second unchecked path. Land E2 once, in the shared helper. |
 | Approval copy for non-shell tools | `TurnCards.tsx` `ApprovalCard` | The card says "Always allows these `delete_memory` commands" and prints a working directory; for a memory row it shows `saved memory` and a per-id rule that can never fire again. Generalise the line when the next non-shell approval tool lands. |
 | Stored log folds again on a chat switch | `MessageList.tsx` `ToolLogView` | `resetKey` is the conversation id, so a list the user expanded is folded after leaving and returning. Persist the open/closed flag per message if that annoys. |
+| Escape closes the dialog behind a confirm | `ConfirmDialog.tsx`, `components/ui.tsx` `Dialog` | Both listen for Escape on the window, so pressing it over the new memory or project confirm also closes the host dialog and discards unsaved text. Pre-dates v0.3.6 at the other `Dialog` + `confirmDialog` call sites; fix once by letting `Dialog` skip Escape while a confirm is pending. |
+| Nothing drives `streamTurn` end to end | `src/lib/store.test.ts` | The pure helpers (`settleToolLog`, `toolLogPatch`, `seedToolLog`) are covered, but the seed → `tool_start` → `finalize` round trip is not, which is where the last two tool-log bugs lived. Needs a fake `api.streamChat` channel plus a `db` double. |
 
 ### Phase 7: Usage and context
 Exit: compaction runs once at the threshold and the model still recalls an early decision.

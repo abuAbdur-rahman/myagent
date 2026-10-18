@@ -158,6 +158,12 @@ export type ThemeMode = "system" | "light" | "dark";
 
 type ToolEntry = ToolLogEntry;
 
+const MEMORY_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  "remember",
+  "update_memory",
+  "delete_memory",
+]);
+
 export function settleToolLog(entries: ToolEntry[]): ToolEntry[] {
   return entries.map((entry) =>
     entry.status === "running"
@@ -172,6 +178,10 @@ export function settleToolLog(entries: ToolEntry[]): ToolEntry[] {
 
 export function toolLogPatch(entries: ToolEntry[]): { tool_log: string | null } {
   return { tool_log: entries.length > 0 ? JSON.stringify(entries) : null };
+}
+
+export function seedToolLog(entries: ToolEntry[], seedId: string): ToolEntry[] {
+  return entries.map((entry, index) => ({ ...entry, id: `${seedId}#${index}` }));
 }
 
 type View = "chat" | "projects" | "project";
@@ -1211,7 +1221,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
       setStreaming(true);
-      toolLogRef.current = keepSeed ? db.parseToolLog(seed?.tool_log) : [];
+      toolLogRef.current = keepSeed
+        ? seedToolLog(db.parseToolLog(seed?.tool_log), assistantMsg.id)
+        : [];
       if (!keepSeed) {
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantMsg.id ? { ...m, tool_log: null } : m)),
@@ -1375,6 +1387,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         );
         await refreshTodos(conversationId);
+        if (toolLogRef.current.some((entry) => MEMORY_WRITE_TOOLS.has(entry.name))) {
+          await refreshMemories();
+        }
       } catch (e) {
         if (requestIdRef.current === requestId) {
           reportError(e);
@@ -1405,6 +1420,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       resolveEffort,
       resolveTools,
       refreshTodos,
+      refreshMemories,
       searchBackend,
       searchEndpoint,
     ],

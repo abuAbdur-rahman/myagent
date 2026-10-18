@@ -1967,6 +1967,14 @@ mod tests {
         assert_eq!(
             approval_resources(
                 "delete_memory",
+                &serde_json::json!({"id": " 11111111-1111-4111-8111-111111111111 "})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
+            "a padded id is the row, never the tool name the rule would share with every other row"
+        );
+        assert_eq!(
+            approval_resources(
+                "delete_memory",
                 &serde_json::json!({"id": "11111111111141118111111111111111"})
             ),
             vec!["11111111-1111-4111-8111-111111111111".to_string()],
