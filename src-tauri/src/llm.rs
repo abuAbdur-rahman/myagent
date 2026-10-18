@@ -2150,9 +2150,12 @@ mod tests {
             "the first delta must arrive before the cancel"
         );
         cancel.notify_one();
-        let result = turn.await.expect("stream task");
-        assert!(result.is_ok(), "cancel resolves the turn without an error");
+        let result = tokio::time::timeout(Duration::from_secs(5), turn).await;
         gate_tx.send(()).expect("release the rest of the stream");
+        let result = result
+            .expect("the turn must resolve after a cancel")
+            .expect("stream task");
+        assert!(result.is_ok(), "cancel resolves the turn without an error");
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(
             delta_texts(&seen),

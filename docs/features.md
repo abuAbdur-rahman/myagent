@@ -34,7 +34,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Fixtures give identical events however the bytes are chopped (1 byte, random, whole).
 
 ## A4. Retry with backoff
-- **Status:** Have (0.3.3 verified on the plain stream path: 429, 5xx and network errors retry inside 10 attempts, counting the first, with jittered backoff and Retry-After, and only before the first token; a 400 never retries and a mid-stream error does not. Retries show a transient Retrying (n/10) toast. The agentic path can still re-issue one no-tools fallback request on a tools error)
+- **Status:** Have (0.3.3 verified on the plain stream path: 429, 5xx and network errors met while opening the stream retry inside 10 attempts, counting the first, with jittered backoff and Retry-After; a 400 never retries, and anything after the response begins, including a body-read failure, is surfaced without retrying. Retries show a transient Retrying (n/10) toast. The agentic path can still re-issue one no-tools fallback request on a tools error)
 - **Ref:** † OpenRouter: pre-stream errors are normal HTTP errors; mid-stream errors arrive as SSE with HTTP 200. Claude Code and OpenCode retry transient failures.
 - **Build:** Retry only on 429, 5xx and network errors, and only if no token was received. Exponential backoff with jitter, max 10 attempts, honor `Retry-After`. Show "Retrying (2/10)" in the UI.
 - **Not:** Provider fallbacks, circuit breakers.
