@@ -244,7 +244,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # D. Tools and agent loop
 
 ## D1. Tool-call loop
-- **Status:** Have (0.1.5: mid-loop text retracted, identical pure calls collapsed)
+- **Status:** Have (0.1.5: mid-loop text retracted, identical pure calls collapsed; 0.3.6 verified: each call is stored on the message and its log stays visible after the turn ends and after reopening the chat)
 - **Ref:** † OpenCode and Claude Code: call the model, run its tool calls, return results, repeat until a final answer.
 - **Build:** Loop with a step cap (D3). Each tool call is stored as a message part with input, output, status, duration.
 - **Done:** A two-tool turn completes with both results visible.
@@ -262,7 +262,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** A looping mock model is halted.
 
 ## D4. Permission engine
-- **Status:** Have (0.1.3: `permissions.rs` decide + SQLite always-rules, rules UI pending)
+- **Status:** Have (0.1.3: `permissions.rs` decide + SQLite always-rules, rules UI pending; 0.3.6: `update_memory` default allow, `delete_memory` default ask, approval scoped to the memory row id rather than the tool name)
 - **Ref:** † OpenCode: allow, ask, deny per tool with pattern rules; v2 denies if any resource denies, else asks if any asks. † A v1 bug let "Allow always" (stored as `*`) override denies. Claude Code uses the same three effects.
 - **Build:** Rust function `decide(tool, target) -> Allow | Ask | Deny`, called inside every tool handler right before execution (never only in the frontend). Deny beats ask beats allow. "Always allow" stores a rule for that exact command prefix, never `*`. Rules in a settings file.
 - **Not:** Per-agent profiles, rule-editor UI.
@@ -396,7 +396,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # E. Memory and instructions
 
 ## E1. Global memory
-- **Status:** Partial
+- **Status:** Partial (0.3.6: the model can update and delete a memory by the id `recall_memory` prints; per-turn retrieval is still a full dump)
 - **Ref:** Claude app memory; † Claude Code `/memory` edits memory files and auto-memory. † OpenWebUI injects only retrieved memories per turn (`add_memory_context`).
 - **Build:** A list of short facts the user can view, edit and delete. Per turn, retrieve by the current user text (keyword match, top-k), char-cap the block, and replace the previous turn's block — never dump all memories. Unrelated memories must not reach the model.
 - **Not:** Sending every memory every turn.
@@ -429,7 +429,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Override order is tested.
 
 ## E6. Auto memory (agent-written)
-- **Status:** Missing
+- **Status:** Missing (0.3.6: the model writes, updates and deletes memories through tools; thread roll-up and the E2 gate are still missing)
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
 - **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.

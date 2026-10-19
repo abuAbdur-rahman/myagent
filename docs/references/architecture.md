@@ -92,7 +92,9 @@ parameter, the request degrades once to a plain streaming completion.
 |---|---|---|
 | `get_time` | Current UTC time + Unix timestamp | — |
 | `remember` | Writes a memory (global or current project) | 2000 chars; project scope needs an active project |
-| `recall_memory` | Keyword search over global + project memories | 20 results max |
+| `recall_memory` | Keyword search over global + project memories, each line prefixed with the row id | 20 results max |
+| `update_memory` | Rewrites one memory by id (content, kind, or both) | id must be a UUID visible to this chat, canonicalised before the lookup; 2000 chars |
+| `delete_memory` | Deletes one memory by id, after the user approves | id must be a UUID visible to this chat, canonicalised before the lookup; asks every time |
 | `run_powershell` | Runs a non-interactive command, returns output | 60s default timeout (5–300s), 32KB output cap, home directory |
 | `save_artifact` | Opens a titled code artifact in the side panel | 120-char title, 200KB code cap |
 
@@ -101,8 +103,10 @@ timeout, alongside the `tauri-plugin-sql` pool. Both writers are local and the
 volume is tiny; a busy database surfaces as a tool error, never corruption.
 
 New channel events: `tool_start {id, name, summary}`, `tool_result
-{id, ok, preview}`, `artifact {title, lang, code}`. The frontend renders the
-running log under the pending reply and opens artifact events in the panel.
+{id, ok, preview}`, `artifact {title, lang, code}`. The frontend writes the
+running log onto the assistant message as those events arrive and renders it from
+`message.tool_log` for any reply that used tools, so the list outlives the turn
+and survives a reload. Artifact events open in the panel.
 
 ## Built
 

@@ -945,6 +945,15 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             return vec![document.trim().to_string()];
         }
     }
+    if name == "update_memory" || name == "delete_memory" {
+        if let Some(id) = args
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(tools::canonical_memory_id)
+        {
+            return vec![id];
+        }
+    }
     vec![name.to_string()]
 }
 
@@ -1397,10 +1406,17 @@ impl ToolRunner for RealTools<'_> {
             let approval_id = format!("{}:{id}", self.req.request_id);
             let command = if name == "run_powershell" {
                 resources.join("\n")
+            } else if name == "update_memory" || name == "delete_memory" {
+                tools::memory_approval_text(self.app, &name, &args, self.req.project_id.as_deref())
+                    .await
             } else {
                 tools::summarize_call(&name, &args)
             };
-            let cwd = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
+            let cwd = if name == "update_memory" || name == "delete_memory" {
+                "saved memory".to_string()
+            } else {
+                std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string())
+            };
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.state.insert_pending(
                 &approval_id,
@@ -1907,6 +1923,62 @@ mod tests {
             approval_resources("mcp__fs__read_file", &serde_json::json!({})),
             vec!["mcp__fs__read_file".to_string()],
             "mcp tools scope to the server/tool alias so Always persists"
+        );
+    }
+
+    #[test]
+    fn memory_edit_tools_are_listed_and_approve_per_row() {
+        let specs = tools::tool_specs(false, false);
+        let names: Vec<&str> = specs
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|s| s["function"]["name"].as_str())
+            .collect();
+        for name in [
+            "remember",
+            "recall_memory",
+            "update_memory",
+            "delete_memory",
+        ] {
+            assert!(names.contains(&name), "{name} listed: {names:?}");
+        }
+        assert_eq!(
+            approval_resources(
+                "delete_memory",
+                &serde_json::json!({"id": "11111111-1111-4111-8111-111111111111"})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
+            "a delete rule pins one row, never the whole tool"
+        );
+        assert_eq!(
+            approval_resources(
+                "update_memory",
+                &serde_json::json!({"id": "11111111-1111-4111-8111-111111111111", "content": "x"})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
+            "an update rule pins one row"
+        );
+        assert_eq!(
+            approval_resources("delete_memory", &serde_json::json!({"id": "1*"})),
+            vec!["delete_memory".to_string()],
+            "an id that is not a uuid stays the bare tool name, so a wildcard cannot be stored"
+        );
+        assert_eq!(
+            approval_resources(
+                "delete_memory",
+                &serde_json::json!({"id": " 11111111-1111-4111-8111-111111111111 "})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
+            "a padded id is the row, never the tool name the rule would share with every other row"
+        );
+        assert_eq!(
+            approval_resources(
+                "delete_memory",
+                &serde_json::json!({"id": "11111111111141118111111111111111"})
+            ),
+            vec!["11111111-1111-4111-8111-111111111111".to_string()],
+            "the resource is the canonical uuid, so the form the model sent does not matter"
         );
     }
 

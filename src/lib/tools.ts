@@ -2,6 +2,8 @@ const KNOWN_TOOLS = [
   "get_time",
   "remember",
   "recall_memory",
+  "update_memory",
+  "delete_memory",
   "run_powershell",
   "save_artifact",
   "web_fetch",

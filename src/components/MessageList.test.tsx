@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { MessageDocuments, MessageImages } from "./MessageList";
-import type { Message } from "../lib/types";
+import { MessageDocuments, MessageImages, ToolLogView } from "./MessageList";
+import type { Message, ToolLogEntry } from "../lib/types";
 
 const base: Message = {
   id: "m1",
@@ -47,6 +47,43 @@ describe("MessageImages", () => {
     expect(
       renderToStaticMarkup(<MessageImages message={{ ...base, attachments }} />),
     ).toBe("");
+  });
+});
+
+describe("ToolLogView", () => {
+  const entries: ToolLogEntry[] = [
+    { id: "t1", name: "web_search", summary: "Search: rust", status: "ok", preview: null },
+    {
+      id: "t2",
+      name: "delete_memory",
+      summary: "Delete memory 3f2a1b9c…",
+      status: "err",
+      preview: "no memory with that id is visible in this chat",
+    },
+  ];
+
+  it("renders the stored log of a finished turn", () => {
+    const html = renderToStaticMarkup(
+      <ToolLogView entries={entries} collapseToolCalls={false} resetKey="c1" />,
+    );
+    expect(html).toContain("2 tool calls");
+    expect(html).toContain("1 failed");
+    expect(html).toContain("Search: rust");
+    expect(html).toContain("no memory with that id is visible in this chat");
+  });
+
+  it("renders nothing when the turn ran no tools", () => {
+    expect(
+      renderToStaticMarkup(<ToolLogView entries={[]} collapseToolCalls={false} resetKey={null} />),
+    ).toBe("");
+  });
+
+  it("starts folded when the setting is on", () => {
+    const html = renderToStaticMarkup(
+      <ToolLogView entries={entries} collapseToolCalls resetKey="c1" />,
+    );
+    expect(html).toContain("Show tool calls");
+    expect(html).not.toContain("Search: rust");
   });
 });
 

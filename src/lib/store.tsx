@@ -158,6 +158,32 @@ export type ThemeMode = "system" | "light" | "dark";
 
 type ToolEntry = ToolLogEntry;
 
+const MEMORY_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  "remember",
+  "update_memory",
+  "delete_memory",
+]);
+
+export function settleToolLog(entries: ToolEntry[]): ToolEntry[] {
+  return entries.map((entry) =>
+    entry.status === "running"
+      ? {
+          ...entry,
+          status: "err" as const,
+          preview: entry.preview ? `Interrupted · ${entry.preview}` : "Interrupted",
+        }
+      : entry,
+  );
+}
+
+export function toolLogPatch(entries: ToolEntry[]): { tool_log: string | null } {
+  return { tool_log: entries.length > 0 ? JSON.stringify(entries) : null };
+}
+
+export function seedToolLog(entries: ToolEntry[], seedId: string): ToolEntry[] {
+  return entries.map((entry, index) => ({ ...entry, id: `${seedId}#${index}` }));
+}
+
 type View = "chat" | "projects" | "project";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
@@ -292,7 +318,6 @@ interface AppContextValue {
   messages: Message[];
   streaming: boolean;
   streamingId: string | null;
-  toolLog: ToolEntry[];
   sendMessage: (
     text: string,
     images?: { dataUrl: string }[],
@@ -401,7 +426,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
-  const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === "1",
   );
@@ -479,9 +503,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     messagesRef.current = messages;
   }, [messages]);
   const toolLogRef = useRef<ToolEntry[]>([]);
-  useEffect(() => {
-    toolLogRef.current = toolLog;
-  }, [toolLog]);
   const artifactsRef = useRef<DeclaredArtifact[]>([]);
   const panelOpenRef = useRef(false);
   const conversationsRef = useRef<Conversation[]>([]);
@@ -1053,7 +1074,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const selectConversation = useCallback(async (id: string | null) => {
     setActiveConversationId(id);
     setError(null);
-    setToolLog([]);
     setView("chat");
     if (!id) {
       setMessages([]);
@@ -1063,17 +1083,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const rows = await db.listMessages(id);
     if (convIdRef.current !== id) return;
     setMessages(rows);
-    setTodos(await db.listTodos(id));    const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
-    const restored = db.parseToolLog(lastAssistant?.tool_log).map((entry) =>
-      entry.status === "running"
-        ? {
-            ...entry,
-            status: "err" as const,
-            preview: entry.preview ? `Interrupted · ${entry.preview}` : "Interrupted",
-          }
-        : entry,
-    );
-    if (restored.length > 0) setToolLog(restored);
+    setTodos(await db.listTodos(id));
   }, []);
 
   const newConversation = useCallback(async () => {
@@ -1081,7 +1091,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveProjectId(null);
     setMessages([]);
     setTodos([]);
-    setToolLog([]);
     setError(null);
     setView("chat");
   }, []);
@@ -1129,23 +1138,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
-    const settledLog = toolLogRef.current.map((entry) =>
-      entry.status === "running"
-        ? {
-            ...entry,
-            status: "err" as const,
-            preview: entry.preview ? `Interrupted · ${entry.preview}` : "Interrupted",
-          }
-        : entry,
-    );
-    if (settledLog.some((e, i) => e !== toolLogRef.current[i])) {
-      setToolLog(settledLog);
-    }
+    const settledLog = settleToolLog(toolLogRef.current);
+    const changed = settledLog.some((entry, index) => entry !== toolLogRef.current[index]);
+    toolLogRef.current = settledLog;
     const toolLogJson = settledLog.length > 0 ? JSON.stringify(settledLog) : null;
     const artifactsJson =
       artifactsRef.current.length > 0 ? JSON.stringify(artifactsRef.current) : null;
     if (!content && !reasoning && !toolLogJson && !artifactsJson) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+    } else if (changed) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, ...toolLogPatch(settledLog) } : m)),
+      );
     }
     const usage = usageRef.current;
     const meta = {
@@ -1217,7 +1221,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
       setStreaming(true);
-      setToolLog([]);
+      toolLogRef.current = keepSeed
+        ? seedToolLog(db.parseToolLog(seed?.tool_log), assistantMsg.id)
+        : [];
+      if (!keepSeed) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantMsg.id ? { ...m, tool_log: null } : m)),
+        );
+      }
       setApproval(null);
       setQuestion(null);
       let lastFlush = 0;
@@ -1239,6 +1250,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : m,
           ),
         );
+      };
+
+      const applyToolLog = (entries: ToolEntry[]) => {
+        toolLogRef.current = entries;
+        const patch = toolLogPatch(entries);
+        setMessages((prev) => prev.map((m) => (m.id === assistantMsg.id ? { ...m, ...patch } : m)));
       };
 
       const hasImages = payload.some(
@@ -1314,23 +1331,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
             } else if (event.type === "retrying") {
               toast(`Retrying (${event.attempt}/${event.max})`);
             } else if (event.type === "tool_start") {
-              setToolLog((prev) => {
-                const entry = {
-                  id: event.id,
-                  name: event.name,
-                  summary: event.summary,
-                  status: "running" as const,
-                  preview: null,
-                };
-                const existing = prev.findIndex((item) => item.id === event.id);
-                if (existing === -1) return [...prev, entry];
-                const next = [...prev];
-                next[existing] = entry;
-                return next;
-              });
+              const entry: ToolEntry = {
+                id: event.id,
+                name: event.name,
+                summary: event.summary,
+                status: "running",
+                preview: null,
+              };
+              const index = toolLogRef.current.findIndex((item) => item.id === event.id);
+              const next = [...toolLogRef.current];
+              if (index === -1) next.push(entry);
+              else next[index] = entry;
+              applyToolLog(next);
             } else if (event.type === "tool_result") {
-              setToolLog((prev) =>
-                prev.map((entry) =>
+              applyToolLog(
+                toolLogRef.current.map((entry) =>
                   entry.id === event.id
                     ? { ...entry, status: event.ok ? ("ok" as const) : ("err" as const), preview: event.preview }
                     : entry,
@@ -1372,6 +1387,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         );
         await refreshTodos(conversationId);
+        if (toolLogRef.current.some((entry) => MEMORY_WRITE_TOOLS.has(entry.name))) {
+          await refreshMemories();
+        }
       } catch (e) {
         if (requestIdRef.current === requestId) {
           reportError(e);
@@ -1402,6 +1420,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       resolveEffort,
       resolveTools,
       refreshTodos,
+      refreshMemories,
       searchBackend,
       searchEndpoint,
     ],
@@ -1939,8 +1958,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await copyChatDocs(conversationId, branched.id);
         const rows = await db.listMessages(branched.id);
         setMessages(rows);
-        const lastAssistant = [...rows].reverse().find((m) => m.role === "assistant");
-        setToolLog(db.parseToolLog(lastAssistant?.tool_log));
         toast("Branched into new chat");
       } catch (e) {
         reportError(e);
@@ -2101,7 +2118,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     messages,
     streaming,
     streamingId,
-    toolLog,
     sendMessage,
     fileCommands,
     loadFileCommands,
