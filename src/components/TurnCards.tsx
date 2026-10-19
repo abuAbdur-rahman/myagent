@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ShieldQuestion, CircleQuestionMark } from "lucide-react";
 import { useApp } from "../lib/store";
+import { approvalFootnote, approvalSubtitle } from "../lib/approvals";
 import { Button, Input } from "./ui";
 
 function Kbd({ children }: { children: string }) {
@@ -42,7 +43,6 @@ function ApprovalCard() {
   }, [approval, replyApproval]);
 
   if (!approval) return null;
-  const firstSegment = approval.command.split("\n")[0] ?? approval.command;
   return (
     <div
       ref={rootRef}
@@ -58,7 +58,7 @@ function ApprovalCard() {
         </div>
       </div>
       <div className="mt-0.5 pl-6 text-xs text-muted">
-        No rule matches this command, so it asks first.
+        {approvalSubtitle(approval.tool)}
       </div>
       {approval.command && (
         <pre className="m-0 mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-vault-raised p-2 font-mono text-xs text-text">
@@ -66,11 +66,7 @@ function ApprovalCard() {
         </pre>
       )}
       <div className="mt-1 font-mono text-[11px] text-muted">
-        in {approval.cwd} ·{" "}
-        {approval.tool === "web_fetch" || approval.tool === "web_search"
-          ? `Always allows ${approval.tool} every time`
-          : `Always allows these ${approval.tool} commands`}{" "}
-        · {firstSegment.slice(0, 60)}
+        {approvalFootnote(approval.tool, approval.cwd, approval.command)}
       </div>
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
