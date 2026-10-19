@@ -4,6 +4,8 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use tokio::sync::Notify;
 
+use crate::tooltext::{ENVELOPE_END, ENVELOPE_START};
+
 const MAX_REDIRECTS: usize = 5;
 const MAX_URL_LEN: usize = 2048;
 const MAX_WIRE_BYTES: usize = 2 * 1024 * 1024;
@@ -11,9 +13,6 @@ const MAX_TEXT_CHARS: usize = 100_000;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const USER_AGENT: &str = concat!("myagent/", env!("CARGO_PKG_VERSION"));
-
-const ENVELOPE_START: &str = "--- untrusted web content from ";
-const ENVELOPE_END: &str = "--- end of fetched content ---";
 
 #[derive(Debug)]
 pub struct FetchedPage {
