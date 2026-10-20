@@ -207,6 +207,19 @@ pub fn parse_skill(name: &str, content: &str) -> Option<(String, String)> {
     Some((name.to_string(), description))
 }
 
+const MAX_SKILL_BODY_CHARS: usize = 24_000;
+
+pub fn cap_skill_body(content: &str) -> String {
+    let total = content.chars().count();
+    if total <= MAX_SKILL_BODY_CHARS {
+        return content.to_string();
+    }
+    let kept: String = content.chars().take(MAX_SKILL_BODY_CHARS).collect();
+    format!(
+        "{kept}\n\n[truncated: skill body is {total} chars; showing the first {MAX_SKILL_BODY_CHARS}. Read the file for the rest.]"
+    )
+}
+
 pub fn to_model_output(name: &str, directory: &str, content: &str, files: &[String]) -> String {
     let mut out = vec![
         format!(r#"<skill_content name="{name}">"#),
@@ -327,6 +340,7 @@ pub fn prepare_skill(app: &AppHandle, id: &str) -> Result<String, String> {
         .find(|(info, _)| info.id == id)
         .ok_or_else(|| "unknown skill".to_string())?;
     let content = std::fs::read_to_string(&found.1).map_err(|e| e.to_string())?;
+    let content = cap_skill_body(&content);
     let directory = found
         .1
         .parent()
@@ -507,5 +521,18 @@ mod tests {
         assert_eq!(out.matches("</skill_content>").count(), 1);
         assert!(out.contains("<file>a.md</file>"));
         assert!(out.ends_with("</skill_content>"));
+    }
+
+    #[test]
+    fn skill_body_is_capped_and_utf8_safe() {
+        let small = "x".repeat(100);
+        assert_eq!(cap_skill_body(&small), small);
+        let big = "é".repeat(MAX_SKILL_BODY_CHARS + 50);
+        let capped = cap_skill_body(&big);
+        assert_eq!(
+            capped.chars().filter(|c| *c == 'é').count(),
+            MAX_SKILL_BODY_CHARS
+        );
+        assert!(capped.contains("[truncated: skill body is"));
     }
 }
