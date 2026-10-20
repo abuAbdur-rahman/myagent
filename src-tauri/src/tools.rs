@@ -1099,6 +1099,14 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
                 .collect();
             format!("Ask: {short}")
         }
+        "delegate_task" => {
+            let short: String = arg_str(args, "task")
+                .unwrap_or_default()
+                .chars()
+                .take(80)
+                .collect();
+            format!("Subagent: {short}")
+        }
         "web_fetch" => {
             let url: String = arg_str(args, "url")
                 .unwrap_or_default()

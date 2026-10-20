@@ -1375,6 +1375,11 @@ impl RealTools<'_> {
                 "delegate_task is not available inside a subagent".to_string(),
             ));
         }
+        if self.children >= 3 {
+            return Err(AppError::Internal(
+                "at most 3 subagents per turn".to_string(),
+            ));
+        }
         let task = task.trim();
         if task.is_empty() {
             return Err(AppError::Internal("delegate_task needs a task".to_string()));
