@@ -1966,6 +1966,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inspection_rejects_subexpressions_and_type_acceleration() {
+        for refused in [
+            "[System.Diagnostics.Process]::Start('calc')",
+            "$(Get-Process)",
+            "& { Get-Process }",
+            "Get-ChildItem | Tee-Object out.txt",
+        ] {
+            assert!(
+                sandbox_inspection(refused).is_err(),
+                "{refused} should fail"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_arguments_keep_their_whitespace() {
+        let args = json!({ "content": "  keep\n\n", "old": "\t", "new": "" });
+        assert_eq!(arg_raw(&args, "content").as_deref(), Some("  keep\n\n"));
+        assert_eq!(arg_raw(&args, "old").as_deref(), Some("\t"));
+        assert_eq!(arg_raw(&args, "new").as_deref(), Some(""));
+        assert_eq!(arg_str(&args, "content").as_deref(), Some("keep"));
+    }
+
+    #[test]
+    fn bounded_lines_stops_at_the_cap() {
+        let long = "x".repeat(600);
+        let out = bounded_lines(vec![long], OUTPUT_CAP);
+        assert_eq!(out.chars().count(), 500);
+        let out = bounded_lines(vec!["a".repeat(400), "b".repeat(400)], 500);
+        assert!(out.contains("[truncated]"));
+    }
+
     async fn memory_db() -> SqlitePool {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
