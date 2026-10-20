@@ -60,6 +60,7 @@ import type {
   Todo,
   ToolLogEntry,
   FileCommand,
+  ScreenVerdict,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
@@ -226,7 +227,7 @@ interface AppContextValue {
     tool: string;
     command: string;
     cwd: string;
-    screen: { label: string; score: number; suggest_deny: boolean } | null;
+    screen: ScreenVerdict | null;
   } | null;
   replyApproval: (reply: "once" | "always" | "deny") => Promise<void>;
   question: { id: string; question: string; options: string[]; allowCustom: boolean } | null;
@@ -381,7 +382,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     tool: string;
     command: string;
     cwd: string;
-    screen: { label: string; score: number; suggest_deny: boolean } | null;
+    screen: ScreenVerdict | null;
   } | null>(null);
   const [question, setQuestion] = useState<{
     id: string;

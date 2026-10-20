@@ -389,6 +389,15 @@ pub struct ReplyRequest {
     pub reply: String,
 }
 
+/// A flagged call may be allowed once but must never persist an allow rule.
+pub fn effective_reply(screen_flag: bool, reply: ApprovalReply) -> ApprovalReply {
+    if screen_flag && reply == ApprovalReply::Always {
+        ApprovalReply::Once
+    } else {
+        reply
+    }
+}
+
 #[tauri::command]
 pub async fn approval_reply(
     app: AppHandle,
@@ -400,6 +409,7 @@ pub async fn approval_reply(
     let Some(pending) = state.take_pending(&req.id) else {
         return Err(AppError::Internal("approval already resolved".to_string()));
     };
+    let reply = effective_reply(pending.screen_flag, reply);
     if reply == ApprovalReply::Always {
         let tool_wide = tool_wide_allow(&pending.action);
         let result = if tool_wide {
@@ -717,6 +727,26 @@ mod tests {
         assert_eq!(
             decide("web_fetch", &["example.com".to_string()], &rules),
             Effect::Ask
+        );
+    }
+
+    #[test]
+    fn flagged_approvals_never_persist_always() {
+        assert_eq!(
+            effective_reply(true, ApprovalReply::Always),
+            ApprovalReply::Once
+        );
+        assert_eq!(
+            effective_reply(true, ApprovalReply::Once),
+            ApprovalReply::Once
+        );
+        assert_eq!(
+            effective_reply(true, ApprovalReply::Deny),
+            ApprovalReply::Deny
+        );
+        assert_eq!(
+            effective_reply(false, ApprovalReply::Always),
+            ApprovalReply::Always
         );
     }
 

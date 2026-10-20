@@ -32,10 +32,11 @@ function ApprovalCard() {
 
   useEffect(() => {
     if (!approval) return;
+    const flagged = approval.screen?.suggest_deny === true;
     const onKey = (e: KeyboardEvent) => {
       if (inEditable(e.target)) return;
       if (e.key === "1") void replyApproval("once");
-      else if (e.key === "2") void replyApproval("always");
+      else if (e.key === "2" && !flagged) void replyApproval("always");
       else if (e.key === "Escape") void replyApproval("deny");
     };
     window.addEventListener("keydown", onKey);
@@ -43,6 +44,7 @@ function ApprovalCard() {
   }, [approval, replyApproval]);
 
   if (!approval) return null;
+  const flagged = approval.screen?.suggest_deny === true;
   return (
     <div
       ref={rootRef}
@@ -62,7 +64,8 @@ function ApprovalCard() {
       </div>
       {approval.screen?.suggest_deny && (
         <div className="mt-1 pl-6 text-xs text-warn">
-          Machine check: {screenNote(approval.screen)}
+          Machine check: {screenNote(approval.screen)}. Flagged calls can only be
+          allowed once.
         </div>
       )}
       {approval.command && (
@@ -77,7 +80,12 @@ function ApprovalCard() {
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
           Allow once <Kbd>1</Kbd>
         </Button>
-        <Button size="sm" variant="default" onClick={() => void replyApproval("always")}>
+        <Button
+          size="sm"
+          variant="default"
+          disabled={flagged}
+          onClick={() => void replyApproval("always")}
+        >
           Always allow <Kbd>2</Kbd>
         </Button>
         <span className="flex-1" />

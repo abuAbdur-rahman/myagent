@@ -1,3 +1,5 @@
+import type { ScreenVerdict } from "./types";
+
 export type ApprovalKind = "command" | "web" | "call";
 
 const COMMAND_TOOLS = new Set(["run_powershell", "sandbox_run"]);
@@ -15,13 +17,7 @@ export function approvalSubtitle(tool: string): string {
     : "No rule matches this call, so it asks first.";
 }
 
-export type ScreenResult = {
-  label: string;
-  score: number;
-  suggest_deny: boolean;
-};
-
-export function screenNote(screen: ScreenResult): string {
+export function screenNote(screen: ScreenVerdict): string {
   const confidence = screen.score.toFixed(2);
   return screen.suggest_deny
     ? `${screen.label.toLowerCase()} ${confidence} · suggest deny`

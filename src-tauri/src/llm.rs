@@ -1281,7 +1281,6 @@ struct RealTools<'a> {
     state: &'a StreamState,
     cancel: &'a Notify,
     on_event: &'a Channel<StreamEvent>,
-    screen: Option<std::sync::Arc<dyn crate::screen::Screener>>,
     repeat: RepeatGuard,
     last_pure: Option<(String, String)>,
 }
@@ -1388,7 +1387,11 @@ impl ToolRunner for RealTools<'_> {
                 .await
                 .unwrap_or(permissions::Effect::Ask);
         let verdict = if decision == permissions::Effect::Ask {
-            match self.screen.clone() {
+            let screener = tauri::async_runtime::spawn_blocking(crate::screen::shared)
+                .await
+                .ok()
+                .flatten();
+            match screener {
                 Some(screener) => {
                     let text = if resources.is_empty() {
                         tools::summarize_call(&name, &args)
@@ -1400,13 +1403,20 @@ impl ToolRunner for RealTools<'_> {
                         )
                     };
                     match tokio::time::timeout(
-                        std::time::Duration::from_millis(700),
+                        std::time::Duration::from_millis(900),
                         tauri::async_runtime::spawn_blocking(move || screener.screen(&text)),
                     )
                     .await
                     {
                         Ok(Ok(verdict)) => verdict,
-                        _ => None,
+                        Ok(Err(error)) => {
+                            eprintln!("screen: inference task failed ({error})");
+                            None
+                        }
+                        Err(_) => {
+                            eprintln!("screen: inference timed out");
+                            None
+                        }
                     }
                 }
                 None => None,
@@ -1426,7 +1436,7 @@ impl ToolRunner for RealTools<'_> {
                 .await;
             }
         }
-        let decision = crate::screen::apply_screen(decision, &verdict);
+        let screen_flag = verdict.as_ref().is_some_and(|verdict| verdict.suggest_deny);
         if decision == permissions::Effect::Deny {
             tools::log_audit(
                 self.app,
@@ -1466,6 +1476,7 @@ impl ToolRunner for RealTools<'_> {
                     action: name.clone(),
                     resources: resources.clone(),
                     project_id: self.req.project_id.clone(),
+                    screen_flag,
                     tx,
                 },
             )?;
@@ -1489,13 +1500,6 @@ impl ToolRunner for RealTools<'_> {
                     .await;
                     return Ok(StepControl::StopTurn);
                 }
-            };
-            let reply = if reply == ApprovalReply::Always
-                && verdict.as_ref().is_some_and(|verdict| verdict.suggest_deny)
-            {
-                ApprovalReply::Once
-            } else {
-                reply
             };
             if reply == ApprovalReply::Deny {
                 tools::log_audit(
@@ -1699,17 +1703,12 @@ async fn run_agentic(
             }
         }
     }
-    let screen = tauri::async_runtime::spawn_blocking(crate::screen::shared)
-        .await
-        .ok()
-        .flatten();
     let mut runner = RealTools {
         app,
         req,
         state: state.inner(),
         cancel,
         on_event,
-        screen,
         repeat: RepeatGuard::new(),
         last_pure: None,
     };

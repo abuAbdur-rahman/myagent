@@ -8,10 +8,9 @@ use serde::Serialize;
 use tokenizers::Tokenizer;
 use tokenizers::TruncationParams;
 
-use crate::permissions::Effect;
-
 const MAX_CHUNKS: usize = 4;
 const CHUNK_CHARS: usize = 1_500;
+const WINDOW_CAP: usize = 512;
 const MAX_TOKENS: usize = 512;
 const DENY_THRESHOLD: f32 = 0.5;
 const INJECTION_LABEL: usize = 1;
@@ -69,9 +68,9 @@ pub struct OnnxScreener {
 
 impl OnnxScreener {
     pub fn load(model: &Path, tokenizer: &Path) -> Result<Self, String> {
-        let env = ENV
-            .as_ref()
-            .ok_or_else(|| "ONNX Runtime unavailable (needs AVX2)".to_string())?;
+        let env = ENV.as_ref().ok_or_else(|| {
+            "screening unavailable: CPU lacks AVX2 or platform is unsupported".to_string()
+        })?;
         let mut tokenizer = Tokenizer::from_file(tokenizer).map_err(|e| e.to_string())?;
         tokenizer
             .with_truncation(Some(TruncationParams {
@@ -82,11 +81,28 @@ impl OnnxScreener {
         let session = Session::builder(env)
             .and_then(|mut builder| builder.commit_from_file(model))
             .map_err(|e| e.to_string())?;
-        let input_names = session
+        let input_names: Vec<String> = session
             .inputs()
             .iter()
             .map(|input| input.name().to_string())
             .collect();
+        if let Some(unknown) = input_names.iter().find(|name| {
+            !matches!(
+                name.as_str(),
+                "input_ids" | "attention_mask" | "token_type_ids"
+            )
+        }) {
+            return Err(format!("model exposes an unexpected input: {unknown}"));
+        }
+        let output_names: Vec<String> = session
+            .outputs()
+            .iter()
+            .map(|output| output.name().to_string())
+            .collect();
+        if output_names.is_empty() {
+            return Err("model exposes no outputs".to_string());
+        }
+        eprintln!("screen: inputs {input_names:?} outputs {output_names:?}");
         Ok(Self {
             tokenizer,
             session: Mutex::new(session),
@@ -112,19 +128,24 @@ impl OnnxScreener {
             .iter()
             .map(|&v| i64::from(v))
             .collect();
-        let mut feed: Vec<(String, ort::session::SessionInputValue)> = Vec::new();
+        let mut ids = Some(Tensor::from_array((shape, ids)).ok()?);
+        let mut mask = Some(Tensor::from_array((shape, mask)).ok()?);
+        let mut types = Some(Tensor::from_array((shape, types)).ok()?);
+        let mut feed: Vec<(String, ort::session::SessionInputValue)> =
+            Vec::with_capacity(self.input_names.len());
         for name in &self.input_names {
             let tensor = match name.as_str() {
-                "input_ids" => Tensor::from_array((shape, ids.clone())).ok()?,
-                "attention_mask" => Tensor::from_array((shape, mask.clone())).ok()?,
-                "token_type_ids" => Tensor::from_array((shape, types.clone())).ok()?,
+                "input_ids" => ids.take()?,
+                "attention_mask" => mask.take()?,
+                "token_type_ids" => types.take()?,
                 _ => return None,
             };
             feed.push((name.clone(), tensor.into()));
         }
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         let outputs = session.run(feed).ok()?;
-        let (_, logits) = outputs[0].try_extract_tensor::<f32>().ok()?;
+        let (_, value) = outputs.iter().next()?;
+        let (_, logits) = value.try_extract_tensor::<f32>().ok()?;
         injection_probability(logits, INJECTION_LABEL)
     }
 }
@@ -160,11 +181,11 @@ fn injection_probability(logits: &[f32], index: usize) -> Option<f32> {
 }
 
 fn chunk_text(text: &str, max_chunks: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
+    let mut windows = Vec::new();
     let mut rest = text.trim();
-    while !rest.is_empty() && chunks.len() < max_chunks {
+    while !rest.is_empty() && windows.len() < WINDOW_CAP {
         if rest.chars().count() <= CHUNK_CHARS {
-            chunks.push(rest.to_string());
+            windows.push(rest.to_string());
             break;
         }
         let boundary = rest
@@ -176,16 +197,20 @@ fn chunk_text(text: &str, max_chunks: usize) -> Vec<String> {
             .rfind(char::is_whitespace)
             .filter(|index| *index > boundary / 2)
             .unwrap_or(boundary);
-        chunks.push(rest[..cut].trim().to_string());
+        windows.push(rest[..cut].trim().to_string());
         rest = rest[cut..].trim_start();
     }
-    chunks.retain(|chunk| !chunk.is_empty());
-    chunks
-}
-
-/// Escalate-only: the verdict may add a warning but never changes the effect.
-pub fn apply_screen(decision: Effect, _verdict: &Option<ScreenVerdict>) -> Effect {
-    decision
+    windows.retain(|chunk| !chunk.is_empty());
+    if windows.len() <= max_chunks {
+        return windows;
+    }
+    // Sample head and tail: an injection appended after several chunks of prose
+    // must still be seen, so the last window is always scored.
+    let head = max_chunks / 2;
+    let tail = max_chunks - head;
+    let mut sampled: Vec<String> = windows[..head].to_vec();
+    sampled.extend_from_slice(&windows[windows.len() - tail..]);
+    sampled
 }
 
 struct Slot {
@@ -210,19 +235,37 @@ pub fn install_paths(model: PathBuf, tokenizer: PathBuf) {
 }
 
 pub fn shared() -> Option<Arc<dyn Screener>> {
-    let mut slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
-    if slot.screener.is_none() && !slot.failed {
-        if let Some((model, tokenizer)) = &slot.paths {
-            match OnnxScreener::load(model, tokenizer) {
-                Ok(screener) => slot.screener = Some(Arc::new(screener)),
-                Err(error) => {
-                    eprintln!("screen: model unavailable ({error})");
-                    slot.failed = true;
-                }
-            }
+    {
+        let slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(screener) = &slot.screener {
+            return Some(screener.clone());
+        }
+        if slot.failed || slot.paths.is_none() {
+            return None;
         }
     }
-    slot.screener.clone()
+    let paths = {
+        let slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+        slot.paths.clone()
+    };
+    let (model, tokenizer) = paths?;
+    // Load outside the lock: parsing a 244 MB model must not block other turns.
+    match OnnxScreener::load(&model, &tokenizer) {
+        Ok(screener) => {
+            let loaded: Arc<dyn Screener> = Arc::new(screener);
+            let mut slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.screener.is_none() {
+                slot.screener = Some(loaded);
+            }
+            slot.screener.clone()
+        }
+        Err(error) => {
+            eprintln!("screen: model unavailable ({error})");
+            let mut slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+            slot.failed = true;
+            None
+        }
+    }
 }
 
 pub fn init_for_app(app: &tauri::AppHandle) {
@@ -269,6 +312,20 @@ mod tests {
     }
 
     #[test]
+    fn long_text_always_samples_the_tail() {
+        let text = format!("{}TRAILING_PAYLOAD", "word ".repeat(2_000));
+        let chunks = chunk_text(&text, MAX_CHUNKS);
+        assert_eq!(chunks.len(), MAX_CHUNKS);
+        assert!(
+            chunks
+                .last()
+                .is_some_and(|chunk| chunk.contains("TRAILING_PAYLOAD")),
+            "tail window missing: {:?}",
+            chunks.last()
+        );
+    }
+
+    #[test]
     fn keeps_short_text_as_one_chunk() {
         assert_eq!(chunk_text("hello world", MAX_CHUNKS), vec!["hello world"]);
         assert!(chunk_text("   ", MAX_CHUNKS).is_empty());
@@ -280,18 +337,6 @@ mod tests {
         assert!(probability > 0.9, "got {probability}");
         assert!(injection_probability(&[0.0, 1.0], 2).is_none());
         assert!(injection_probability(&[], 0).is_none());
-    }
-
-    #[test]
-    fn screen_never_changes_the_permission_effect() {
-        let flagged = Some(ScreenVerdict {
-            label: "INJECTION".to_string(),
-            score: 0.99,
-            suggest_deny: true,
-        });
-        assert_eq!(apply_screen(Effect::Allow, &flagged), Effect::Allow);
-        assert_eq!(apply_screen(Effect::Ask, &flagged), Effect::Ask);
-        assert_eq!(apply_screen(Effect::Deny, &flagged), Effect::Deny);
     }
 
     #[test]
