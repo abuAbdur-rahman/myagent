@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "clean:target": "node -e \"require('fs').rmSync('src-tauri/target/debug/incremental', { recursive: true, force: true })\"",
+    "model:screen": "node scripts/prepare-screen-model.mjs",
     "test": "vitest run"
   },
   "dependencies": {

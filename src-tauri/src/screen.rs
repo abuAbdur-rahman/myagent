@@ -301,16 +301,27 @@ pub fn shared() -> Option<Arc<dyn Screener>> {
 
 pub fn init_for_app(app: &tauri::AppHandle) {
     use tauri::Manager;
-    let managed = app.path().app_data_dir().ok().map(|dir| {
-        dir.join("models")
-            .join("deberta-v3-base-prompt-injection-v2")
-            .join("model_int8.onnx")
-    });
-    let model = std::env::var_os("MYAGENT_SCREEN_MODEL")
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .or_else(|| managed.filter(|path| path.is_file()));
-    let Some(model) = model else {
+    let mut candidates = Vec::new();
+    if let Some(explicit) = std::env::var_os("MYAGENT_SCREEN_MODEL").map(PathBuf::from) {
+        candidates.push(explicit);
+    }
+    if let Ok(resource) = app.path().resource_dir() {
+        candidates.push(resource.join("screen-model").join("model_int8.onnx"));
+        candidates.push(
+            resource
+                .join("resources")
+                .join("screen-model")
+                .join("model_int8.onnx"),
+        );
+    }
+    if let Ok(dir) = app.path().app_data_dir() {
+        candidates.push(
+            dir.join("models")
+                .join("deberta-v3-base-prompt-injection-v2")
+                .join("model_int8.onnx"),
+        );
+    }
+    let Some(model) = candidates.into_iter().find(|path| path.is_file()) else {
         return;
     };
     let Some(dir) = model.parent() else {
@@ -318,6 +329,7 @@ pub fn init_for_app(app: &tauri::AppHandle) {
     };
     let tokenizer = dir.join("tokenizer.json");
     if !tokenizer.is_file() {
+        eprintln!("screen: tokenizer.json is missing next to the configured model");
         return;
     }
     install_paths(model, tokenizer);
