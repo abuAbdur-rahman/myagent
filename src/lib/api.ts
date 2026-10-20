@@ -366,3 +366,37 @@ export function summarize(
     },
   });
 }
+
+export type SandboxState = "not_installed" | "daemon_stopped" | "no_image" | "ready";
+
+export type SandboxStatus = {
+  state: SandboxState;
+  enabled: boolean;
+  docker: string | null;
+  image: string | null;
+  image_size: number | null;
+  project_root: string | null;
+  cpus: number;
+  memory_mb: number;
+  detail: string | null;
+};
+
+export function sandboxStatus() {
+  return invoke<SandboxStatus>("sandbox_status");
+}
+
+export function sandboxEnable(packages: string[], projectRoot?: string | null) {
+  return invoke<SandboxStatus>("sandbox_enable", { packages, projectRoot: projectRoot ?? null });
+}
+
+export function sandboxDisable() {
+  return invoke<SandboxStatus>("sandbox_disable");
+}
+
+export function sandboxRebuild() {
+  return invoke<SandboxStatus>("sandbox_rebuild");
+}
+
+export function sandboxSetLimits(cpus: number, memoryMb: number) {
+  return invoke<SandboxStatus>("sandbox_set_limits", { cpus, memoryMb });
+}

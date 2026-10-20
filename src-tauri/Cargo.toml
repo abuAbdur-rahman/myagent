@@ -41,6 +41,9 @@ uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "derive"] }
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-31"] }
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+ignore = "0.4.30"
+globset = "0.4.19"
+tauri-plugin-dialog = "2.7.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

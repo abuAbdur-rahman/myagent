@@ -371,7 +371,11 @@ fn cap_output(text: &str, spill: Option<&str>) -> String {
     }
 }
 
-pub fn tool_specs(include_describe_image: bool, include_read_document: bool) -> Value {
+pub fn tool_specs(
+    include_describe_image: bool,
+    include_read_document: bool,
+    include_sandbox: bool,
+) -> Value {
     let mut specs = json!([
         {
             "type": "function",
@@ -462,6 +466,122 @@ pub fn tool_specs(include_describe_image: bool, include_read_document: bool) -> 
                         "max_chars": { "type": "integer", "minimum": 200, "maximum": 32768, "description": "Cap the returned characters (default 6000)." },
                     },
                     "required": ["command"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_run",
+                "description": "Run a shell command inside the local Docker sandbox: no internet, only the project folder is visible, write access is limited to that folder, and the command is killed at the timeout. Use it for project code, builds, tests, python and node. Prefer sandbox_read, sandbox_glob, sandbox_grep, sandbox_write and sandbox_edit for file work. The exit code, a checkpoint ref and a list of changed config or hook files come back with the output.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Shell command run inside the container with /bin/sh." },
+                        "cwd": { "type": "string", "description": "Working directory relative to the project folder (default: the root)." },
+                        "timeout_secs": { "type": "integer", "minimum": 1, "maximum": 900, "description": "Kill the command after this many seconds (default 120)." },
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_read",
+                "description": "Read a text file inside the project folder. Paths are relative to the project root. Binary files are refused. Use start and max_chars to page through a large file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File path relative to the project folder." },
+                        "start": { "type": "integer", "minimum": 0, "description": "Character offset to start from (default 0)." },
+                        "max_chars": { "type": "integer", "minimum": 200, "maximum": 32768, "description": "How many characters to return (default 20000)." },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_glob",
+                "description": "List files inside the project folder that match a glob pattern such as **/*.ts. Honors .gitignore and never looks inside .git. Returns project-relative paths.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Glob pattern; ** crosses folders, * stays in one segment." },
+                        "max_results": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Cap the number of paths (default 200)." },
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_grep",
+                "description": "Search file contents inside the project folder with a regular expression (case-insensitive). Honors .gitignore. Returns path:line: text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Regular expression." },
+                        "glob": { "type": "string", "description": "Optional file glob filter such as **/*.rs." },
+                        "max_results": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Cap the number of matching lines (default 200)." },
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_write",
+                "description": "Write a text file inside the project folder, creating parent folders. Protected paths such as .git, .github, AGENTS.md, .env and package.json are refused. Writes the whole file: use sandbox_edit to change part of an existing file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File path relative to the project folder." },
+                        "content": { "type": "string", "description": "Complete new contents (max 2 MB)." },
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_edit",
+                "description": "Replace exact text in a file inside the project folder. Fails when the old text is missing or appears more than once unless replace_all is true. Protected paths are refused.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File path relative to the project folder." },
+                        "old": { "type": "string", "description": "Exact text to replace." },
+                        "new": { "type": "string", "description": "Replacement text." },
+                        "replace_all": { "type": "boolean", "description": "Replace every occurrence (default false)." },
+                    },
+                    "required": ["path", "old", "new"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sandbox_delete",
+                "description": "Delete one file, or one empty folder, inside the project folder. Protected paths and links are refused. Never deletes recursively.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File or empty-folder path relative to the project folder." },
+                    },
+                    "required": ["path"],
                     "additionalProperties": false,
                 },
             },
@@ -634,6 +754,7 @@ pub fn tool_specs(include_describe_image: bool, include_read_document: bool) -> 
             let name = spec["function"]["name"].as_str().unwrap_or_default();
             (include_describe_image || name != "describe_image")
                 && (include_read_document || name != "read_document")
+                && (include_sandbox || name != "sandbox_run")
         });
     }
     specs
@@ -813,6 +934,77 @@ pub async fn memory_approval_text(
     }
 }
 
+fn sandbox_inspection(command: &str) -> Result<(), String> {
+    let lowered = command.to_lowercase();
+    for bad in [
+        ">",
+        "set-content",
+        "add-content",
+        "out-file",
+        "new-item",
+        "remove-item",
+        "copy-item",
+        "move-item",
+        "rename-item",
+        "start-process",
+        "invoke-expression",
+        "python",
+        "node ",
+        "npm ",
+        "pnpm",
+        "yarn",
+        "cargo ",
+        "git ",
+        "mkdir",
+        "del ",
+        "rm ",
+    ] {
+        if lowered.contains(bad) {
+            return Err(format!(
+                "host shell is inspection-only while the sandbox is on ({bad}); use sandbox_run"
+            ));
+        }
+    }
+    let allowed = [
+        "get-",
+        "test-path",
+        "resolve-path",
+        "select-",
+        "where-object",
+        "measure-object",
+        "format-",
+        "out-string",
+        "select-string",
+        "dir",
+        "ls",
+        "pwd",
+        "whoami",
+        "hostname",
+        "ipconfig",
+        "netstat",
+        "cat",
+        "type",
+        "head",
+        "tail",
+    ];
+    for segment in command.split(['|', ';', '&']) {
+        let first = segment
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        if first.is_empty() {
+            continue;
+        }
+        if !allowed.iter().any(|prefix| first.starts_with(prefix)) {
+            return Err(format!(
+                "'{first}' is not an inspection command; use sandbox_run for anything that changes files or runs project code"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn summarize_call(name: &str, args: &Value) -> String {
     match name {
         "remember" => arg_str(args, "content")
@@ -832,6 +1024,20 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
                 .collect();
             format!("Run: {cmd}")
         }
+        "sandbox_run" => {
+            let cmd: String = arg_str(args, "command")
+                .unwrap_or_default()
+                .chars()
+                .take(80)
+                .collect();
+            format!("Sandbox: {cmd}")
+        }
+        "sandbox_read" => format!("Read: {}", arg_str(args, "path").unwrap_or_default()),
+        "sandbox_write" => format!("Write: {}", arg_str(args, "path").unwrap_or_default()),
+        "sandbox_edit" => format!("Edit: {}", arg_str(args, "path").unwrap_or_default()),
+        "sandbox_delete" => format!("Delete: {}", arg_str(args, "path").unwrap_or_default()),
+        "sandbox_glob" => format!("Glob: {}", arg_str(args, "pattern").unwrap_or_default()),
+        "sandbox_grep" => format!("Grep: {}", arg_str(args, "pattern").unwrap_or_default()),
         "save_artifact" => format!(
             "Save artifact: {}",
             arg_str(args, "title").unwrap_or_default()
@@ -1152,6 +1358,9 @@ pub async fn execute(
             if command.chars().count() > COMMAND_CAP {
                 return Err("command too long (max 8000 chars)".to_string());
             }
+            if crate::sandbox::enabled(app) {
+                sandbox_inspection(&command)?;
+            }
             let grep = grep_for(&args)?;
             let timeout_secs = args
                 .get("timeout_secs")
@@ -1226,6 +1435,115 @@ pub async fn execute(
             }
             Ok(ExecOutput {
                 output: shaped,
+                artifact: None,
+            })
+        }
+        "sandbox_run" => {
+            let command = arg_str(&args, "command").ok_or("missing command")?;
+            if command.chars().count() > COMMAND_CAP {
+                return Err("command too long (max 8000 chars)".to_string());
+            }
+            let cwd = arg_str(&args, "cwd").unwrap_or_else(|| ".".to_string());
+            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_u64());
+            let result =
+                crate::sandbox::run(app, &command, &cwd, timeout_secs, conversation_id, cancel)
+                    .await?;
+            let output_text = tooltext::strip_noise(result.output.trim_end());
+            let spill = if output_text.len() > OUTPUT_CAP {
+                conversation_id.and_then(|cid| write_spill(app, cid, call_id, &output_text))
+            } else {
+                None
+            };
+            let mut report = format!("exit code: {}", result.exit_code);
+            if let Some(checkpoint) = &result.checkpoint {
+                report.push_str(&format!("\ncheckpoint: {checkpoint}"));
+            }
+            if !result.sensitive.is_empty() {
+                report.push_str(&format!(
+                    "\nchanged config or hook files:\n{}",
+                    result.sensitive.join("\n")
+                ));
+            }
+            if !output_text.trim().is_empty() {
+                report.push('\n');
+                report.push_str(output_text.trim_end());
+            }
+            let mut shaped = tooltext::report_body(&report, 0, SHELL_CAP, |_| {
+                "Call sandbox_run again with a narrower command to read more.".to_string()
+            });
+            if let Some(path) = spill {
+                shaped.push_str(&format!("\nFull output saved at {path}."));
+            }
+            Ok(ExecOutput {
+                output: shaped,
+                artifact: None,
+            })
+        }
+        "sandbox_read" => {
+            let path = arg_str(&args, "path").ok_or("missing path")?;
+            let start = arg_usize(&args, "start").unwrap_or(0);
+            let max_chars = capped_chars(&args, "max_chars", 20000);
+            Ok(ExecOutput {
+                output: crate::sandbox::read_file(app, &path, start, max_chars)?,
+                artifact: None,
+            })
+        }
+        "sandbox_glob" => {
+            let pattern = arg_str(&args, "pattern").ok_or("missing pattern")?;
+            let max_results = arg_usize(&args, "max_results")
+                .unwrap_or(200)
+                .clamp(1, 1000);
+            let found = crate::sandbox::glob_files(app, &pattern, max_results)?;
+            Ok(ExecOutput {
+                output: if found.is_empty() {
+                    format!("no files matched {pattern}")
+                } else {
+                    found.join("\n")
+                },
+                artifact: None,
+            })
+        }
+        "sandbox_grep" => {
+            let pattern = arg_str(&args, "pattern").ok_or("missing pattern")?;
+            let glob = arg_str(&args, "glob");
+            let max_results = arg_usize(&args, "max_results")
+                .unwrap_or(200)
+                .clamp(1, 1000);
+            let found = crate::sandbox::grep_files(app, &pattern, glob.as_deref(), max_results)?;
+            Ok(ExecOutput {
+                output: if found.is_empty() {
+                    format!("no line matched {pattern}")
+                } else {
+                    found.join("\n")
+                },
+                artifact: None,
+            })
+        }
+        "sandbox_write" => {
+            let path = arg_str(&args, "path").ok_or("missing path")?;
+            let content = arg_str(&args, "content").ok_or("missing content")?;
+            Ok(ExecOutput {
+                output: crate::sandbox::write_file(app, &path, &content)?,
+                artifact: None,
+            })
+        }
+        "sandbox_edit" => {
+            let path = arg_str(&args, "path").ok_or("missing path")?;
+            let old = arg_str(&args, "old").ok_or("missing old")?;
+            let new = arg_str(&args, "new").ok_or("missing new")?;
+            let replace_all = args
+                .get("replace_all")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            Ok(ExecOutput {
+                output: crate::sandbox::edit_file(app, &path, &old, &new, replace_all)?,
+                artifact: None,
+            })
+        }
+        "sandbox_delete" => {
+            let path = arg_str(&args, "path").ok_or("missing path")?;
+            Ok(ExecOutput {
+                output: crate::sandbox::delete_file(app, &path)?,
                 artifact: None,
             })
         }
@@ -1585,6 +1903,35 @@ pub(crate) async fn trim_audit_log(pool: &SqlitePool) -> Result<(), sqlx::Error>
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn sandbox_host_shell_is_inspection_only() {
+        for allowed in [
+            "Get-ChildItem",
+            "Get-Process | Select-Object Name",
+            "ipconfig",
+            "dir C:\\",
+            "Get-Content README.md",
+            "netstat -ano",
+        ] {
+            assert!(sandbox_inspection(allowed).is_ok(), "{allowed} should pass");
+        }
+        for refused in [
+            "Set-Content notes.txt x",
+            "echo x > out.txt",
+            "python main.py",
+            "npm test",
+            "Remove-Item -Recurse .",
+            "git status",
+            "New-Item -ItemType File x",
+            "Get-Process; Start-Process calc",
+        ] {
+            assert!(
+                sandbox_inspection(refused).is_err(),
+                "{refused} should fail"
+            );
+        }
+    }
 
     async fn memory_db() -> SqlitePool {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()

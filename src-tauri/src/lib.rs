@@ -7,6 +7,7 @@ mod knowledge;
 mod llm;
 mod mcp;
 mod permissions;
+mod sandbox;
 mod screen;
 mod skills;
 mod sse;
@@ -325,6 +326,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -333,6 +335,11 @@ pub fn run() {
         )
         .setup(|app| {
             crate::screen::init_for_app(app.handle());
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = crate::sandbox::reap_orphans().await {
+                    eprintln!("sandbox: reaping orphans failed: {error}");
+                }
+            });
             Ok(())
         })
         .manage(
@@ -382,6 +389,12 @@ pub fn run() {
             commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,
+            sandbox::sandbox_status,
+            sandbox::sandbox_enable,
+            sandbox::sandbox_disable,
+            sandbox::sandbox_rebuild,
+            sandbox::sandbox_reap,
+            sandbox::sandbox_set_limits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
