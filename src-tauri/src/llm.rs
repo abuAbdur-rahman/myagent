@@ -907,6 +907,22 @@ fn approval_audit_label(reply: ApprovalReply) -> &'static str {
 }
 
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
+    if name == "sandbox_run" {
+        if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
+            let segments = permissions::split_segments(command);
+            if !segments.is_empty() {
+                return segments;
+            }
+            return vec![command.trim().to_string()];
+        }
+    }
+    if name.starts_with("sandbox_") {
+        for key in ["path", "pattern"] {
+            if let Some(value) = args.get(key).and_then(|v| v.as_str()) {
+                return vec![value.trim().to_string()];
+            }
+        }
+    }
     if name == "run_powershell" {
         if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
             let segments = permissions::split_segments(command);
@@ -1383,11 +1399,27 @@ impl ToolRunner for RealTools<'_> {
         }
 
         let resources = approval_resources(&name, &args);
-        let decision =
-            permissions::check(self.app, &name, &resources, self.req.project_id.as_deref())
-                .await
-                .unwrap_or(permissions::Effect::Ask);
-        let (verdict, screen_failed) = if decision == permissions::Effect::Ask {
+        let checked =
+            permissions::check(self.app, &name, &resources, self.req.project_id.as_deref()).await;
+        if let Err(error) = &checked {
+            tools::log_audit(
+                self.app,
+                self.req.conversation_id.as_deref(),
+                &name,
+                "check(error)",
+                &error.to_string(),
+            )
+            .await;
+        }
+        let mut decision = checked
+            .as_ref()
+            .copied()
+            .unwrap_or(permissions::Effect::Ask);
+        let sandbox_auto = checked.is_ok()
+            && decision != permissions::Effect::Deny
+            && name.starts_with("sandbox_")
+            && crate::sandbox::enabled(self.app);
+        let (verdict, screen_failed) = if decision == permissions::Effect::Ask || sandbox_auto {
             match tauri::async_runtime::spawn_blocking(crate::screen::shared)
                 .await
                 .ok()
@@ -1452,6 +1484,20 @@ impl ToolRunner for RealTools<'_> {
             .await;
         }
         let screen_flag = screen_failed || verdict.as_ref().is_some_and(|v| v.suggest_deny);
+        let verdict_ok = matches!(&verdict, Some(v) if !v.suggest_deny);
+        if decision == permissions::Effect::Ask && sandbox_auto && verdict_ok && !screen_failed {
+            decision = permissions::Effect::Allow;
+            if name != "sandbox_run" {
+                tools::log_audit(
+                    self.app,
+                    self.req.conversation_id.as_deref(),
+                    &name,
+                    "allow(sandbox-screen)",
+                    &resources.join("\n"),
+                )
+                .await;
+            }
+        }
         if decision == permissions::Effect::Deny {
             tools::log_audit(
                 self.app,
@@ -1707,7 +1753,7 @@ async fn run_agentic(
         cancel,
         state: state.inner(),
         on_event,
-        tool_specs: tools::tool_specs(blind_model, has_documents),
+        tool_specs: tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app)),
     };
     let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
         .await
@@ -1955,7 +2001,7 @@ mod tests {
 
     #[test]
     fn describe_image_tool_is_listed_and_gated() {
-        let specs = tools::tool_specs(true, true);
+        let specs = tools::tool_specs(true, true, false);
         let names: Vec<&str> = specs
             .as_array()
             .expect("array")
@@ -1963,7 +2009,7 @@ mod tests {
             .filter_map(|s| s["function"]["name"].as_str())
             .collect();
         assert!(names.contains(&"describe_image"), "spec listed: {names:?}");
-        let seeing = tools::tool_specs(false, true);
+        let seeing = tools::tool_specs(false, true, false);
         let seeing_names: Vec<&str> = seeing
             .as_array()
             .expect("array")
@@ -1998,7 +2044,7 @@ mod tests {
 
     #[test]
     fn memory_edit_tools_are_listed_and_approve_per_row() {
-        let specs = tools::tool_specs(false, false);
+        let specs = tools::tool_specs(false, false, false);
         let names: Vec<&str> = specs
             .as_array()
             .expect("array")
@@ -2054,7 +2100,7 @@ mod tests {
 
     #[test]
     fn read_document_tool_is_listed_only_with_documents() {
-        let specs = tools::tool_specs(false, true);
+        let specs = tools::tool_specs(false, true, false);
         let names: Vec<&str> = specs
             .as_array()
             .expect("array")
@@ -2063,7 +2109,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"read_document"), "spec listed: {names:?}");
 
-        let without = tools::tool_specs(true, false);
+        let without = tools::tool_specs(true, false, false);
         let without_names: Vec<&str> = without
             .as_array()
             .expect("array")

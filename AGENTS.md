@@ -75,14 +75,21 @@ Run every check before saying "done".
 
 1. `git add .` — always stage everything; never selective staging.
 2. Commit: `type(scope): imperative summary` (see workflow.md).
-3. **Before every push:** run BOTH gates and fix what they find:
+3. **Before every push:** run the local gates and fix what they find:
    - `fallow dead-code` (and `fallow audit --base main` on a branch)
-   - `ocr review -c <sha>`
-4. **Push only when the gates are clean** or only minor/nit findings remain.
-5. **If `ocr` fails after 3 attempts** (it is allowed to fail as an override of
-   step 4): confirm `fallow audit --base main` and the impeccable audit
-   (`node <impeccable-skill>/scripts/detect.mjs <changed files>`) were run, then
-   push and open the PR. Wait for CodeRabbit; if CodeRabbit also fails (large
-   diff or rate limit), spin up the `audit` and `review` subagents on the
-   commit(s) as the review gate.
-6. Never force-push, never commit secrets, never commit `node_modules`/`target`/`dist`.
+   - `npx tsc --noEmit`, `npm test`, `npm run build`
+   - `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
+4. **The review loop is capped at two passes. Pick one path, then stop:**
+   - `ocr` clean (or only minor/nit findings) → push.
+   - `ocr` broken/unavailable → `fallow audit --base main` + local `review`/`audit`
+     subagents, once → push.
+   - CodeRabbit broken/rate-limited/silent → local `review`/`audit` subagents,
+     once → push.
+   - Any two of the above → push.
+   Never chain `ocr` → CodeRabbit → local review → `ocr` again. Review fixes do
+   not start a new loop: after the chosen second gate (or a single clean one),
+   push, merge, and stop.
+5. **One CI run per pushed commit.** Wait for the run instead of re-pushing to
+   restart it. Do not push an empty commit just to get a green check.
+6. Push only when the gates are clean or only minor/nit findings remain.
+7. Never force-push, never commit secrets, never commit `node_modules`/`target`/`dist`.

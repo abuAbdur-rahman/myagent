@@ -12,6 +12,7 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "opener:default",
+    "dialog:allow-open",
     "sql:default",
     "sql:allow-execute",
     "sql:allow-select",
