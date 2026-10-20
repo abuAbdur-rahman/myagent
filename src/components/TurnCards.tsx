@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ShieldQuestion, CircleQuestionMark } from "lucide-react";
 import { useApp } from "../lib/store";
-import { approvalFootnote, approvalSubtitle } from "../lib/approvals";
+import { approvalFootnote, approvalSubtitle, screenNote } from "../lib/approvals";
 import { Button, Input } from "./ui";
 
 function Kbd({ children }: { children: string }) {
@@ -60,6 +60,11 @@ function ApprovalCard() {
       <div className="mt-0.5 pl-6 text-xs text-muted">
         {approvalSubtitle(approval.tool)}
       </div>
+      {approval.screen?.suggest_deny && (
+        <div className="mt-1 pl-6 text-xs text-warn">
+          Machine check: {screenNote(approval.screen)}
+        </div>
+      )}
       {approval.command && (
         <pre className="m-0 mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-vault-raised p-2 font-mono text-xs text-text">
           {approval.command}

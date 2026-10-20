@@ -15,6 +15,19 @@ export function approvalSubtitle(tool: string): string {
     : "No rule matches this call, so it asks first.";
 }
 
+export type ScreenResult = {
+  label: string;
+  score: number;
+  suggest_deny: boolean;
+};
+
+export function screenNote(screen: ScreenResult): string {
+  const confidence = screen.score.toFixed(2);
+  return screen.suggest_deny
+    ? `${screen.label.toLowerCase()} ${confidence} · suggest deny`
+    : `${screen.label.toLowerCase()} ${confidence} · no strong signal`;
+}
+
 export function approvalFootnote(tool: string, cwd: string, command: string): string {
   const first = (command.split("\n")[0] ?? command).slice(0, 60);
   const kind = approvalKind(tool);

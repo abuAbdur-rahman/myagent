@@ -221,7 +221,13 @@ interface AppContextValue {
   clearError: () => void;
   canRetry: boolean;
   retryTurn: () => Promise<void>;
-  approval: { id: string; tool: string; command: string; cwd: string } | null;
+  approval: {
+    id: string;
+    tool: string;
+    command: string;
+    cwd: string;
+    screen: { label: string; score: number; suggest_deny: boolean } | null;
+  } | null;
   replyApproval: (reply: "once" | "always" | "deny") => Promise<void>;
   question: { id: string; question: string; options: string[]; allowCustom: boolean } | null;
   answerQuestion: (answer: string) => Promise<void>;
@@ -375,6 +381,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     tool: string;
     command: string;
     cwd: string;
+    screen: { label: string; score: number; suggest_deny: boolean } | null;
   } | null>(null);
   const [question, setQuestion] = useState<{
     id: string;
@@ -1375,6 +1382,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 tool: event.tool,
                 command: event.command,
                 cwd: event.cwd,
+                screen: event.screen ?? null,
               });
             } else if (event.type === "question_asked") {
               setQuestion({

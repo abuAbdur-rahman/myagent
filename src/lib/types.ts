@@ -262,6 +262,13 @@ const streamEventSchema = z.discriminatedUnion("type", [
     tool: z.string(),
     command: z.string(),
     cwd: z.string(),
+    screen: z
+      .object({
+        label: z.string(),
+        score: z.number(),
+        suggest_deny: z.boolean(),
+      })
+      .optional(),
   }),
   z.object({
     type: z.literal("question_asked"),

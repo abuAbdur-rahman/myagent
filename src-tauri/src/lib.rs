@@ -7,6 +7,7 @@ mod knowledge;
 mod llm;
 mod mcp;
 mod permissions;
+mod screen;
 mod skills;
 mod sse;
 mod state;
@@ -330,6 +331,10 @@ pub fn run() {
                 .add_migrations("sqlite:myagent.db", pending)
                 .build(),
         )
+        .setup(|app| {
+            crate::screen::init_for_app(app.handle());
+            Ok(())
+        })
         .manage(
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))

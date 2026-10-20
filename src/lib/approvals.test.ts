@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { approvalFootnote, approvalKind, approvalSubtitle } from "./approvals";
+import { approvalFootnote, approvalKind, approvalSubtitle, screenNote } from "./approvals";
 
 describe("approvalKind", () => {
   it("classifies shell tools as commands", () => {
@@ -24,6 +24,20 @@ describe("approvalSubtitle", () => {
     expect(approvalSubtitle("run_powershell")).toContain("this command");
     expect(approvalSubtitle("delete_memory")).toContain("this call");
     expect(approvalSubtitle("web_fetch")).toContain("this call");
+  });
+});
+
+describe("screenNote", () => {
+  it("suggests deny for a flagged verdict", () => {
+    expect(
+      screenNote({ label: "INJECTION", score: 0.973, suggest_deny: true }),
+    ).toBe("injection 0.97 · suggest deny");
+  });
+
+  it("stays neutral when nothing was flagged", () => {
+    expect(
+      screenNote({ label: "SAFE", score: 0.02, suggest_deny: false }),
+    ).toBe("safe 0.02 · no strong signal");
   });
 });
 
