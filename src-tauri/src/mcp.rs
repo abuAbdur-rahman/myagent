@@ -245,6 +245,12 @@ mod tests {
             Some(Effect::Ask),
             "an explicit ask survives an allow-everything server"
         );
+        let both = row(None, [None, Some("[\"read\"]"), Some("[\"read\"]")], "ask");
+        assert_eq!(
+            row_policy(&both, "mcp__fs__read"),
+            Some(Effect::Deny),
+            "deny wins when a tool is both allowed and denied"
+        );
     }
 
     #[test]

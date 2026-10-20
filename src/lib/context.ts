@@ -92,6 +92,18 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   return base.slice(0, MAX_CHARS);
 }
 
+export function buildChildSystemPrompt(
+  input: Pick<ContextInput, "userName" | "project">,
+): string | null {
+  const blocks = identityBlocks(input.userName);
+  if (input.project) {
+    const project = projectBlock(input.project, []);
+    if (project) blocks.push(project);
+  }
+  const base = blocks.join("\n\n");
+  return base ? base.slice(0, MAX_CHARS) : null;
+}
+
 export function applyCompactWindow<T extends { content: string | { type: string }[] }>(turns: T[], compacted: boolean): T[] {
   if (compacted) return turns.slice(-COMPACT_WINDOW);
   if (turns.length > MAX_TURNS_WINDOW) return turns.slice(-MAX_TURNS_WINDOW);

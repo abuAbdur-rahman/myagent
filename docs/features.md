@@ -360,10 +360,10 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** The model updates the list and the UI reflects it.
 
 ## D18. Subagents
-- **Status:** Missing
+- **Status:** Done (v0.4.0: `delegate_task`, depth 1, child events scoped to the parent tool entry)
 - **Ref:** † Claude Code and OpenCode delegate subtasks to separate agents with their own context.
-- **Build:** Skip. Revisit only after D1-D17 are solid.
-- **Done:** n/a.
+- **Build:** `delegate_task(task, model?)` runs one child agent with its own context and the same tools minus `delegate_task`, then returns a capped summary as the tool result. Child deltas, reasoning, tool starts/results and retries stream as `subagent` events into the parent tool entry's preview only; approvals and questions stay on the global card. Child inherits project, conversation, search and vision settings. Cancel reaches the child through the parent's notify plus an ancestry check on the cancelled set.
+- **Done:** The parent transcript never receives child text; the child cannot delegate further; approvals appear once; one audit row per user-facing decision.
 
 ## D19. Tool output controls
 - **Status:** Have (0.3.2: `src-tauri/src/tooltext.rs` shaping + per-tool caps + `{shown,total,truncated}` reports)
