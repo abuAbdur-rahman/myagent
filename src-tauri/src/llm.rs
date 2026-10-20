@@ -909,6 +909,10 @@ fn approval_audit_label(reply: ApprovalReply) -> &'static str {
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
     if name == "sandbox_run" {
         if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
+            let segments = permissions::split_segments(command);
+            if !segments.is_empty() {
+                return segments;
+            }
             return vec![command.trim().to_string()];
         }
     }
@@ -1395,11 +1399,24 @@ impl ToolRunner for RealTools<'_> {
         }
 
         let resources = approval_resources(&name, &args);
-        let mut decision =
-            permissions::check(self.app, &name, &resources, self.req.project_id.as_deref())
-                .await
-                .unwrap_or(permissions::Effect::Ask);
-        let sandbox_auto = decision != permissions::Effect::Deny
+        let checked =
+            permissions::check(self.app, &name, &resources, self.req.project_id.as_deref()).await;
+        if let Err(error) = &checked {
+            tools::log_audit(
+                self.app,
+                self.req.conversation_id.as_deref(),
+                &name,
+                "check(error)",
+                &error.to_string(),
+            )
+            .await;
+        }
+        let mut decision = checked
+            .as_ref()
+            .copied()
+            .unwrap_or(permissions::Effect::Ask);
+        let sandbox_auto = checked.is_ok()
+            && decision != permissions::Effect::Deny
             && name.starts_with("sandbox_")
             && crate::sandbox::enabled(self.app);
         let (verdict, screen_failed) = if decision == permissions::Effect::Ask || sandbox_auto {
@@ -1467,16 +1484,19 @@ impl ToolRunner for RealTools<'_> {
             .await;
         }
         let screen_flag = screen_failed || verdict.as_ref().is_some_and(|v| v.suggest_deny);
-        if decision == permissions::Effect::Ask && sandbox_auto && !screen_flag {
+        let verdict_ok = matches!(&verdict, Some(v) if !v.suggest_deny);
+        if decision == permissions::Effect::Ask && sandbox_auto && verdict_ok && !screen_failed {
             decision = permissions::Effect::Allow;
-            tools::log_audit(
-                self.app,
-                self.req.conversation_id.as_deref(),
-                &name,
-                "allow(sandbox-screen)",
-                &resources.join("\n"),
-            )
-            .await;
+            if name != "sandbox_run" {
+                tools::log_audit(
+                    self.app,
+                    self.req.conversation_id.as_deref(),
+                    &name,
+                    "allow(sandbox-screen)",
+                    &resources.join("\n"),
+                )
+                .await;
+            }
         }
         if decision == permissions::Effect::Deny {
             tools::log_audit(

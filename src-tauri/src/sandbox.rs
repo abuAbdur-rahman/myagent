@@ -71,6 +71,7 @@ pub struct SandboxStatus {
     pub image: Option<String>,
     pub image_size: Option<u64>,
     pub project_root: Option<String>,
+    pub packages: Vec<String>,
     pub cpus: f32,
     pub memory_mb: u32,
     pub detail: Option<String>,
@@ -166,6 +167,17 @@ async fn docker_output(
     }
 }
 
+async fn kill_container(bin: &Path, exec_id: &str) {
+    let name = format!("myagent-{exec_id}");
+    let _ = docker_output(bin, &["kill".into(), name.clone()], Duration::from_secs(10)).await;
+    let _ = docker_output(
+        bin,
+        &["rm".into(), "-f".into(), name],
+        Duration::from_secs(10),
+    )
+    .await;
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
@@ -227,6 +239,7 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
         image: cfg.image.clone(),
         image_size: None,
         project_root: cfg.project_root.clone(),
+        packages: cfg.packages.clone(),
         cpus: cfg.cpus.unwrap_or(1.0),
         memory_mb: cfg.memory_mb.unwrap_or(1024),
         detail: None,
@@ -549,14 +562,14 @@ pub fn run_args(
     ];
     for name in PROTECTED_DIRS {
         let path = root.join(name);
-        if path.is_dir() {
+        if path.exists() {
             args.push("-v".into());
             args.push(mount(&path, &format!("/work/{name}:ro")));
         }
     }
     for name in PROTECTED_FILES {
         let path = root.join(name);
-        if path.is_file() {
+        if path.exists() {
             args.push("-v".into());
             args.push(mount(&path, &format!("/work/{name}:ro")));
         }
@@ -582,6 +595,39 @@ pub fn run_args(
     script.push_str(command);
     args.push(script);
     args
+}
+
+struct Placeholders(Vec<(PathBuf, bool)>);
+
+impl Drop for Placeholders {
+    fn drop(&mut self) {
+        for (path, is_dir) in &self.0 {
+            let _ = if *is_dir {
+                std::fs::remove_dir(path)
+            } else {
+                std::fs::remove_file(path)
+            };
+        }
+    }
+}
+
+fn ensure_protected(root: &Path) -> Result<Placeholders, String> {
+    let mut created = Placeholders(Vec::new());
+    for name in PROTECTED_DIRS {
+        let path = root.join(name);
+        if !path.exists() {
+            std::fs::create_dir(&path).map_err(|e| format!("prepare {name}: {e}"))?;
+            created.0.push((path, true));
+        }
+    }
+    for name in PROTECTED_FILES {
+        let path = root.join(name);
+        if !path.exists() {
+            std::fs::write(&path, []).map_err(|e| format!("prepare {name}: {e}"))?;
+            created.0.push((path, false));
+        }
+    }
+    Ok(created)
 }
 
 fn preflight_for(root: &Path) -> Option<&'static str> {
@@ -691,6 +737,19 @@ fn checkpoint(data: &Path, root: &Path, exec_id: &str) -> Result<Option<Checkpoi
     }
     prune_checkpoints(root);
     Ok(Some(Checkpoint { reference, tree }))
+}
+
+fn best_effort_checkpoint(app: &tauri::AppHandle, root: &Path) -> Option<String> {
+    let data = app.path().app_data_dir().ok()?;
+    let exec_id = format!("host-{}", &uuid::Uuid::new_v4().to_string()[..12]);
+    match checkpoint(&data, root, &exec_id) {
+        Ok(Some(cp)) => Some(cp.reference),
+        Ok(None) => None,
+        Err(error) => {
+            eprintln!("host checkpoint: {error}");
+            None
+        }
+    }
 }
 
 fn prune_checkpoints(root: &Path) {
@@ -856,6 +915,8 @@ pub fn is_sensitive(path: &str) -> bool {
     if normalized == "AGENTS.md"
         || normalized == "CLAUDE.md"
         || normalized == ".mcp.json"
+        || normalized.starts_with(".git/")
+        || normalized.starts_with(".vscode/")
         || normalized.starts_with(".github/")
         || normalized.starts_with(".husky/")
         || normalized.starts_with(".claude/")
@@ -867,17 +928,48 @@ pub fn is_sensitive(path: &str) -> bool {
     false
 }
 
+fn recent_config_changes(root: &Path, since: std::time::SystemTime) -> Vec<String> {
+    let threshold = since.checked_sub(Duration::from_secs(2)).unwrap_or(since);
+    let mut found = Vec::new();
+    for entry in walk_project(root).flatten() {
+        if found.len() >= 200 {
+            break;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if modified < threshold {
+            continue;
+        }
+        let rel = display_rel(root, entry.path());
+        if is_sensitive(&rel) {
+            found.push(rel);
+        }
+    }
+    found
+}
+
 fn receipt(
     data: &Path,
     root: &Path,
     exec_id: &str,
     checkpoint: Option<&Checkpoint>,
+    since: Option<std::time::SystemTime>,
 ) -> Vec<String> {
     let paths = match checkpoint {
         Some(checkpoint) => tree_after(data, root, exec_id)
             .map(|after| changed_between(root, &checkpoint.tree, &after))
             .unwrap_or_else(|| changed_unstaged(root)),
-        None => changed_unstaged(root),
+        None => match since {
+            Some(since) => recent_config_changes(root, since),
+            None => changed_unstaged(root),
+        },
     };
     let mut sensitive: Vec<String> = paths.into_iter().filter(|p| is_sensitive(p)).collect();
     sensitive.sort();
@@ -905,6 +997,7 @@ pub async fn run(
         .map_err(|e| format!("app data directory: {e}"))?;
     let result = run_inner(&cfg, &root, &data, command, cwd, timeout_secs, cancel).await?;
     let detail = serde_json::json!({
+        "command": command,
         "exit": result.exit_code,
         "ms": result.duration_ms,
         "cwd": cwd,
@@ -936,6 +1029,7 @@ pub(crate) async fn run_inner(
         .unwrap_or(DEFAULT_TIMEOUT_SECS)
         .clamp(1, MAX_TIMEOUT_SECS);
     let started = std::time::Instant::now();
+    let started_at = std::time::SystemTime::now();
     let checkpoint = {
         let data = data.to_path_buf();
         let root = root.to_path_buf();
@@ -944,6 +1038,7 @@ pub(crate) async fn run_inner(
             .await
             .map_err(|e| e.to_string())??
     };
+    let placeholders = ensure_protected(root)?;
     let preflight = preflight_for(root);
     let args = run_args(
         cfg,
@@ -963,30 +1058,40 @@ pub(crate) async fn run_inner(
         .map_err(|e| format!("docker run: {e}"))?;
     let wait = child.wait_with_output();
     tokio::pin!(wait);
-    let outcome = tokio::select! {
-        result = &mut wait => Some(result),
-        _ = cancel.notified() => None,
-        _ = tokio::time::sleep(Duration::from_secs(timeout_secs + 5)) => None,
+    enum Stop {
+        Done(std::io::Result<std::process::Output>),
+        Cancelled,
+        TimedOut,
+    }
+    let stop = tokio::select! {
+        result = &mut wait => Stop::Done(result),
+        _ = cancel.notified() => Stop::Cancelled,
+        _ = tokio::time::sleep(Duration::from_secs(timeout_secs + 5)) => Stop::TimedOut,
     };
-    let Some(outcome) = outcome else {
-        let name = format!("myagent-{exec_id}");
-        let _ = docker_output(
-            &bin,
-            &["kill".into(), name.clone()],
-            Duration::from_secs(10),
-        )
-        .await;
-        let _ = docker_output(
-            &bin,
-            &["rm".into(), "-f".into(), name],
-            Duration::from_secs(10),
-        )
-        .await;
-        return Err(format!("sandbox command stopped after {timeout_secs}s"));
+    let (stdout_bytes, stderr_bytes, exit_code) = match stop {
+        Stop::Cancelled => {
+            kill_container(&bin, &exec_id).await;
+            return Err("sandbox command cancelled".to_string());
+        }
+        Stop::TimedOut => {
+            kill_container(&bin, &exec_id).await;
+            (
+                Vec::new(),
+                format!("sandbox command stopped after {timeout_secs}s").into_bytes(),
+                124,
+            )
+        }
+        Stop::Done(result) => {
+            let output = result.map_err(|e| format!("docker run: {e}"))?;
+            (
+                output.stdout,
+                output.stderr,
+                output.status.code().unwrap_or(-1),
+            )
+        }
     };
-    let output = outcome.map_err(|e| format!("docker run: {e}"))?;
-    let exit_code = output.status.code().unwrap_or(-1);
-    if exit_code == 97 && text(&output.stdout).contains("project folder not visible") {
+    drop(placeholders);
+    if exit_code == 97 && text(&stdout_bytes).contains("project folder not visible") {
         return Err("project folder not visible inside the container".to_string());
     }
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -1001,14 +1106,20 @@ pub(crate) async fn run_inner(
                 reference: String::new(),
                 tree,
             });
-            receipt(&data, &root, &exec_id, checkpoint.as_ref())
+            receipt(
+                &data,
+                &root,
+                &exec_id,
+                checkpoint.as_ref(),
+                Some(started_at),
+            )
         })
         .await
         .map_err(|e| e.to_string())?
     };
     let mut text_out = String::new();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
     if !stdout.trim().is_empty() {
         text_out.push_str(&format!("stdout:\n{stdout}\n"));
     }
@@ -1042,7 +1153,13 @@ fn relative_path(rel: &str) -> Result<PathBuf, String> {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
-            std::path::Component::Normal(part) => out.push(part),
+            std::path::Component::Normal(part) => {
+                let name = part.to_string_lossy();
+                if name.contains(':') || name.ends_with('.') || name.ends_with(' ') {
+                    return Err("invalid path component".to_string());
+                }
+                out.push(part);
+            }
             std::path::Component::CurDir => {}
             _ => return Err("path must stay inside the project folder".to_string()),
         }
@@ -1148,6 +1265,9 @@ fn write_at(root: &Path, rel: &str) -> Result<PathBuf, String> {
     if !final_path.starts_with(root) {
         return Err("path escapes the project folder".to_string());
     }
+    if final_path.strip_prefix(root).is_ok_and(protected_write) {
+        return Err(format!("{} is protected and read-only", rel.display()));
+    }
     Ok(final_path)
 }
 
@@ -1180,6 +1300,9 @@ pub fn write_file(app: &tauri::AppHandle, rel: &str, content: &str) -> Result<St
     if content.len() > 2_000_000 {
         return Err("content too large (max 2 MB)".to_string());
     }
+    if path.exists() {
+        best_effort_checkpoint(app, &project_root(app)?);
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create folder: {e}"))?;
     }
@@ -1199,6 +1322,7 @@ pub fn edit_file(
     }
     let path = resolve_write(app, rel)?;
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))?;
+    best_effort_checkpoint(app, &project_root(app)?);
     let count = text.matches(old).count();
     if count == 0 {
         return Err("old text was not found".to_string());
@@ -1222,6 +1346,7 @@ pub fn delete_file(app: &tauri::AppHandle, rel: &str) -> Result<String, String> 
     if is_reparse(&meta) {
         return Err("refusing to delete a link".to_string());
     }
+    best_effort_checkpoint(app, &project_root(app)?);
     if meta.is_dir() {
         let empty = std::fs::read_dir(&path)
             .map_err(|e| format!("delete: {e}"))?
@@ -1441,6 +1566,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::create_dir_all(root.join(".github")).unwrap();
         std::fs::write(root.join("AGENTS.md"), "x").unwrap();
+        let placeholders = ensure_protected(&root).unwrap();
         let args = run_args(&cfg(), &root, ".", "true", 30, "exec2", None);
         let joined = args.join(" ");
         assert!(joined.contains(&format!("{}:/work:rw", root.display())));
@@ -1449,8 +1575,33 @@ mod tests {
             "{}:/work/AGENTS.md:ro",
             root.join("AGENTS.md").display()
         )));
-        assert!(!joined.contains("/work/skills:ro"));
+        assert!(joined.contains(&format!(
+            "{}:/work/skills:ro",
+            root.join("skills").display()
+        )));
+        assert!(joined.contains(&format!(
+            "{}:/work/.vscode:ro",
+            root.join(".vscode").display()
+        )));
+        assert!(joined.contains(&format!(
+            "{}:/work/.mcp.json:ro",
+            root.join(".mcp.json").display()
+        )));
+        drop(placeholders);
+        assert!(!root.join("skills").exists());
+        assert!(!root.join(".vscode").exists());
+        assert!(!root.join(".mcp.json").exists());
+        assert!(root.join(".git").exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn windows_path_aliases_are_rejected() {
+        assert!(relative_path("AGENTS.md ").is_err());
+        assert!(relative_path("src./main.rs").is_err());
+        assert!(relative_path("a:b").is_err());
+        assert!(relative_path(r"..\x").is_err());
+        assert!(relative_path("src/main.rs").is_ok());
     }
 
     #[test]

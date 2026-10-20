@@ -376,6 +376,7 @@ export type SandboxStatus = {
   image: string | null;
   image_size: number | null;
   project_root: string | null;
+  packages: string[];
   cpus: number;
   memory_mb: number;
   detail: string | null;

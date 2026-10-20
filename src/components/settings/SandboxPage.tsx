@@ -33,6 +33,7 @@ function useSandbox() {
   const apply = (next: SandboxStatus) => {
     setStatus(next);
     setRoot(next.project_root ?? "");
+    setExtras(next.packages);
     setCpus(String(next.cpus));
     setMemory(String(next.memory_mb));
   };

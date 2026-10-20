@@ -43,7 +43,7 @@ ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 ignore = "0.4.30"
 globset = "0.4.19"
-tauri-plugin-dialog = "2.7.3"
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

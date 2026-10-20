@@ -45,6 +45,29 @@ fn arg_str(args: &Value, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn arg_raw(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn bounded_lines(lines: Vec<String>, cap: usize) -> String {
+    let mut out = String::new();
+    for line in lines {
+        let line: String = line.chars().take(500).collect();
+        let extra = line.len() + usize::from(!out.is_empty());
+        if out.len() + extra > cap {
+            out.push_str("\n[truncated]");
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&line);
+    }
+    out
+}
+
 fn arg_usize(args: &Value, key: &str) -> Option<usize> {
     args.get(key).and_then(Value::as_u64).map(|v| v as usize)
 }
@@ -541,7 +564,7 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "sandbox_write",
-                "description": "Write a text file inside the project folder, creating parent folders. Protected paths such as .git, .github, AGENTS.md, .env and package.json are refused. Writes the whole file: use sandbox_edit to change part of an existing file.",
+                "description": "Write a text file inside the project folder, creating parent folders. Protected paths (.git, .vscode, .husky, .github, .claude, skills, commands, AGENTS.md, CLAUDE.md, .mcp.json) are refused; changes elsewhere are reported in the exec receipt. Writes the whole file: use sandbox_edit to change part of an existing file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -754,7 +777,7 @@ pub fn tool_specs(
             let name = spec["function"]["name"].as_str().unwrap_or_default();
             (include_describe_image || name != "describe_image")
                 && (include_read_document || name != "read_document")
-                && (include_sandbox || name != "sandbox_run")
+                && (include_sandbox || !name.starts_with("sandbox_"))
         });
     }
     specs
@@ -947,7 +970,12 @@ fn sandbox_inspection(command: &str) -> Result<(), String> {
         "move-item",
         "rename-item",
         "start-process",
+        "start-job",
         "invoke-expression",
+        "invoke-command",
+        "clear-content",
+        "tee-object",
+        "export-csv",
         "python",
         "node ",
         "npm ",
@@ -964,6 +992,11 @@ fn sandbox_inspection(command: &str) -> Result<(), String> {
                 "host shell is inspection-only while the sandbox is on ({bad}); use sandbox_run"
             ));
         }
+    }
+    if command.contains(['[', ']', '`', '$', '{', '}', '(', ')']) {
+        return Err(
+            "host shell is inspection-only while the sandbox is on; use sandbox_run".to_string(),
+        );
     }
     let allowed = [
         "get-",
@@ -1498,7 +1531,7 @@ pub async fn execute(
                 output: if found.is_empty() {
                     format!("no files matched {pattern}")
                 } else {
-                    found.join("\n")
+                    bounded_lines(found, OUTPUT_CAP)
                 },
                 artifact: None,
             })
@@ -1514,14 +1547,14 @@ pub async fn execute(
                 output: if found.is_empty() {
                     format!("no line matched {pattern}")
                 } else {
-                    found.join("\n")
+                    bounded_lines(found, OUTPUT_CAP)
                 },
                 artifact: None,
             })
         }
         "sandbox_write" => {
             let path = arg_str(&args, "path").ok_or("missing path")?;
-            let content = arg_str(&args, "content").ok_or("missing content")?;
+            let content = arg_raw(&args, "content").ok_or("missing content")?;
             Ok(ExecOutput {
                 output: crate::sandbox::write_file(app, &path, &content)?,
                 artifact: None,
@@ -1529,8 +1562,8 @@ pub async fn execute(
         }
         "sandbox_edit" => {
             let path = arg_str(&args, "path").ok_or("missing path")?;
-            let old = arg_str(&args, "old").ok_or("missing old")?;
-            let new = arg_str(&args, "new").ok_or("missing new")?;
+            let old = arg_raw(&args, "old").ok_or("missing old")?;
+            let new = arg_raw(&args, "new").ok_or("missing new")?;
             let replace_all = args
                 .get("replace_all")
                 .and_then(|value| value.as_bool())
