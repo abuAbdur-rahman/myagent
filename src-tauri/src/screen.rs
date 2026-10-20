@@ -103,9 +103,6 @@ impl OnnxScreener {
     }
 
     fn score(&self, text: &str) -> Option<f32> {
-        // Never queue behind an inference that is already running: the caller has
-        // a deadline and a queued call would just time out holding a thread.
-        let mut session = self.session.try_lock().ok()?;
         let encoding = self.tokenizer.encode(text, true).ok()?;
         let mut ids = encoding.get_ids().to_vec();
         let mut mask = encoding.get_attention_mask().to_vec();
@@ -146,6 +143,10 @@ impl OnnxScreener {
             };
             feed.push((name.clone(), tensor.into()));
         }
+        // Never queue behind an inference that is already running: the caller has
+        // a deadline and a queued call would just time out holding a thread. The
+        // lock covers inference only, not tokenization.
+        let mut session = self.session.try_lock().ok()?;
         let outputs = session.run(feed).ok()?;
         let (_, value) = outputs.iter().next()?;
         let (_, logits) = value.try_extract_tensor::<f32>().ok()?;
@@ -157,9 +158,10 @@ impl Screener for OnnxScreener {
     fn screen(&self, text: &str) -> Option<ScreenVerdict> {
         let mut best: Option<f32> = None;
         for chunk in chunk_text(text, MAX_CHUNKS) {
-            if let Some(score) = self.score(&chunk) {
-                best = Some(best.map_or(score, |current| current.max(score)));
-            }
+            // A chunk that could not be scored means the whole check is
+            // incomplete: reporting the other chunks as SAFE would hide it.
+            let score = self.score(&chunk)?;
+            best = Some(best.map_or(score, |current| current.max(score)));
         }
         let score = best?;
         let suggest_deny = score >= DENY_THRESHOLD;
@@ -280,8 +282,12 @@ pub fn shared() -> Option<Arc<dyn Screener>> {
             let loaded: Arc<dyn Screener> = Arc::new(screener);
             let mut slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
             slot.loading = false;
-            slot.screener = Some(loaded.clone());
-            Some(loaded)
+            // Only publish the result if the configured paths did not change
+            // while this load was running.
+            if slot.paths.as_ref() == Some(&(model, tokenizer)) {
+                slot.screener = Some(loaded);
+            }
+            slot.screener.clone()
         }
         Err(error) => {
             eprintln!("screen: model unavailable ({error})");
