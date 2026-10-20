@@ -31,9 +31,11 @@ function useSandbox() {
   const [memory, setMemory] = useState("1024");
 
   const apply = (next: SandboxStatus) => {
+    const known = new Set(EXTRAS.map((extra) => extra.name));
     setStatus(next);
     setRoot(next.project_root ?? "");
-    setExtras(next.packages);
+    setExtras(next.packages.filter((name) => known.has(name)));
+    setAdvanced(next.packages.filter((name) => !known.has(name)).join(" "));
     setCpus(String(next.cpus));
     setMemory(String(next.memory_mb));
   };
