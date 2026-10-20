@@ -270,6 +270,7 @@ const streamEventSchema = z.discriminatedUnion("type", [
     command: z.string(),
     cwd: z.string(),
     screen: screenVerdictSchema.nullish(),
+    screen_failed: z.boolean(),
   }),
   z.object({
     type: z.literal("question_asked"),

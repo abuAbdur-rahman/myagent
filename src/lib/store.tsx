@@ -228,6 +228,7 @@ interface AppContextValue {
     command: string;
     cwd: string;
     screen: ScreenVerdict | null;
+    screenFailed: boolean;
   } | null;
   replyApproval: (reply: "once" | "always" | "deny") => Promise<void>;
   question: { id: string; question: string; options: string[]; allowCustom: boolean } | null;
@@ -383,6 +384,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     command: string;
     cwd: string;
     screen: ScreenVerdict | null;
+    screenFailed: boolean;
   } | null>(null);
   const [question, setQuestion] = useState<{
     id: string;
@@ -1384,6 +1386,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 command: event.command,
                 cwd: event.cwd,
                 screen: event.screen ?? null,
+                screenFailed: event.screen_failed,
               });
             } else if (event.type === "question_asked") {
               setQuestion({

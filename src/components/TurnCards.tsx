@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ShieldQuestion, CircleQuestionMark } from "lucide-react";
 import { useApp } from "../lib/store";
 import { approvalFootnote, approvalSubtitle, screenNote } from "../lib/approvals";
+import type { ScreenVerdict } from "../lib/types";
 import { Button, Input } from "./ui";
 
 function Kbd({ children }: { children: string }) {
@@ -26,18 +27,62 @@ function inEditable(target: EventTarget | null): boolean {
   );
 }
 
+function approvalKey(
+  key: string,
+  blocked: boolean,
+  reply: (reply: "once" | "always" | "deny") => Promise<void>,
+) {
+  if (key === "1") void reply("once");
+  else if (key === "2" && !blocked) void reply("always");
+  else if (key === "Escape") void reply("deny");
+}
+
+function ScreenNotice({
+  screen,
+  failed,
+}: {
+  screen: ScreenVerdict | null;
+  failed: boolean;
+}) {
+  const flagged = screen?.suggest_deny === true;
+  if (flagged && screen) {
+    return (
+      <div className="mt-1 pl-6 text-xs text-warn">
+        Machine check: {screenNote(screen)}. Flagged calls can only be allowed
+        once.
+      </div>
+    );
+  }
+  if (failed) {
+    return (
+      <div className="mt-1 pl-6 text-xs text-warn">
+        Machine check unavailable, so this call can only be allowed once.
+      </div>
+    );
+  }
+  return null;
+}
+
+function footnoteFor(
+  tool: string,
+  cwd: string,
+  command: string,
+  blocked: boolean,
+): string {
+  return blocked
+    ? "Allows this call once; no rule is saved."
+    : approvalFootnote(tool, cwd, command);
+}
+
 function ApprovalCard() {
   const { approval, replyApproval } = useApp();
   const rootRef = useFocusOnShow(approval?.id ?? null);
 
   useEffect(() => {
     if (!approval) return;
-    const flagged = approval.screen?.suggest_deny === true;
+    const blocked = approval.screen?.suggest_deny === true || approval.screenFailed;
     const onKey = (e: KeyboardEvent) => {
-      if (inEditable(e.target)) return;
-      if (e.key === "1") void replyApproval("once");
-      else if (e.key === "2" && !flagged) void replyApproval("always");
-      else if (e.key === "Escape") void replyApproval("deny");
+      if (!inEditable(e.target)) approvalKey(e.key, blocked, replyApproval);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -45,6 +90,13 @@ function ApprovalCard() {
 
   if (!approval) return null;
   const flagged = approval.screen?.suggest_deny === true;
+  const blocked = flagged || approval.screenFailed;
+  const footnote = footnoteFor(
+    approval.tool,
+    approval.cwd,
+    approval.command,
+    blocked,
+  );
   return (
     <div
       ref={rootRef}
@@ -62,20 +114,13 @@ function ApprovalCard() {
       <div className="mt-0.5 pl-6 text-xs text-muted">
         {approvalSubtitle(approval.tool)}
       </div>
-      {approval.screen?.suggest_deny && (
-        <div className="mt-1 pl-6 text-xs text-warn">
-          Machine check: {screenNote(approval.screen)}. Flagged calls can only be
-          allowed once.
-        </div>
-      )}
+      <ScreenNotice screen={approval.screen} failed={approval.screenFailed} />
       {approval.command && (
         <pre className="m-0 mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-vault-raised p-2 font-mono text-xs text-text">
           {approval.command}
         </pre>
       )}
-      <div className="mt-1 font-mono text-[11px] text-muted">
-        {approvalFootnote(approval.tool, approval.cwd, approval.command)}
-      </div>
+      <div className="mt-1 font-mono text-[11px] text-muted">{footnote}</div>
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
           Allow once <Kbd>1</Kbd>
@@ -83,7 +128,7 @@ function ApprovalCard() {
         <Button
           size="sm"
           variant="default"
-          disabled={flagged}
+          disabled={blocked}
           onClick={() => void replyApproval("always")}
         >
           Always allow <Kbd>2</Kbd>

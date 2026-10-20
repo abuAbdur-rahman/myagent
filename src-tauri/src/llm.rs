@@ -56,6 +56,7 @@ pub enum StreamEvent {
         command: String,
         cwd: String,
         screen: Option<crate::screen::ScreenVerdict>,
+        screen_failed: bool,
     },
     QuestionAsked {
         id: String,
@@ -1386,12 +1387,12 @@ impl ToolRunner for RealTools<'_> {
             permissions::check(self.app, &name, &resources, self.req.project_id.as_deref())
                 .await
                 .unwrap_or(permissions::Effect::Ask);
-        let verdict = if decision == permissions::Effect::Ask {
-            let screener = tauri::async_runtime::spawn_blocking(crate::screen::shared)
+        let (verdict, screen_failed) = if decision == permissions::Effect::Ask {
+            match tauri::async_runtime::spawn_blocking(crate::screen::shared)
                 .await
                 .ok()
-                .flatten();
-            match screener {
+                .flatten()
+            {
                 Some(screener) => {
                     let text = if resources.is_empty() {
                         tools::summarize_call(&name, &args)
@@ -1408,21 +1409,25 @@ impl ToolRunner for RealTools<'_> {
                     )
                     .await
                     {
-                        Ok(Ok(verdict)) => verdict,
+                        Ok(Ok(Some(verdict))) => (Some(verdict), false),
+                        Ok(Ok(None)) => {
+                            eprintln!("screen: no verdict for this call");
+                            (None, true)
+                        }
                         Ok(Err(error)) => {
                             eprintln!("screen: inference task failed ({error})");
-                            None
+                            (None, true)
                         }
                         Err(_) => {
                             eprintln!("screen: inference timed out");
-                            None
+                            (None, true)
                         }
                     }
                 }
-                None => None,
+                None => (None, crate::screen::installed()),
             }
         } else {
-            None
+            (None, false)
         };
         if let Some(verdict) = &verdict {
             if verdict.suggest_deny {
@@ -1436,7 +1441,17 @@ impl ToolRunner for RealTools<'_> {
                 .await;
             }
         }
-        let screen_flag = verdict.as_ref().is_some_and(|verdict| verdict.suggest_deny);
+        if screen_failed {
+            tools::log_audit(
+                self.app,
+                self.req.conversation_id.as_deref(),
+                &name,
+                "screen(unavailable)",
+                &resources.join("\n"),
+            )
+            .await;
+        }
+        let screen_flag = screen_failed || verdict.as_ref().is_some_and(|v| v.suggest_deny);
         if decision == permissions::Effect::Deny {
             tools::log_audit(
                 self.app,
@@ -1486,6 +1501,7 @@ impl ToolRunner for RealTools<'_> {
                 command,
                 cwd,
                 screen: verdict.clone(),
+                screen_failed,
             });
             let reply = tokio::select! {
                 reply = rx => reply.unwrap_or(ApprovalReply::Deny),
