@@ -283,7 +283,12 @@ const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("tool_result"), id: z.string(), ok: z.boolean(), preview: z.string() }),
   z.object({ type: z.literal("artifact"), title: z.string(), lang: z.string(), code: z.string() }),
 ]);
-export type StreamEvent = z.infer<typeof streamEventSchema>;
+
+type DirectStreamEvent = z.infer<typeof streamEventSchema>;
+
+export type StreamEvent =
+  | DirectStreamEvent
+  | { type: "subagent"; parent: string; event: StreamEvent };
 
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
   openrouter: "https://openrouter.ai/api/v1",

@@ -110,6 +110,14 @@ const events: StreamEvent[] = [
   { type: "delta", text: "Hello" },
   { type: "tool_start", id: "t1", name: "web_search", summary: "Search: rust" },
   { type: "tool_result", id: "t1", ok: true, preview: "3 results" },
+  { type: "tool_start", id: "d1", name: "delegate_task", summary: "Research rust" },
+  { type: "subagent", parent: "d1", event: { type: "delta", text: "child says hi" } },
+  {
+    type: "subagent",
+    parent: "d1",
+    event: { type: "tool_start", id: "c1", name: "web_search", summary: "child search" },
+  },
+  { type: "tool_result", id: "d1", ok: true, preview: "child summary" },
   { type: "delta", text: " world" },
   { type: "usage", prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
   { type: "finish", reason: "stop" },
@@ -160,6 +168,14 @@ describe("streamTurn", () => {
     }[];
     expect(log).toEqual([
       { id: "t1", name: "web_search", summary: "Search: rust", status: "ok", preview: "3 results" },
+      {
+        id: "d1",
+        name: "delegate_task",
+        summary: "Research rust",
+        status: "ok",
+        preview:
+          "child says hi\n-> web_search: child search\n\n--- summary ---\nchild summary",
+      },
     ]);
   });
 

@@ -60,11 +60,13 @@ impl StreamState {
         self.fail_questions_for_request(request_id);
     }
 
-    pub fn take_cancelled(&self, request_id: &str) -> bool {
-        let Ok(mut cancelled) = self.cancelled.lock() else {
+    pub fn is_cancelled(&self, request_id: &str) -> bool {
+        let Ok(cancelled) = self.cancelled.lock() else {
             return false;
         };
-        cancelled.remove(request_id)
+        cancelled
+            .iter()
+            .any(|root| request_id == root || request_id.starts_with(&format!("{root}:d")))
     }
 
     pub fn insert_pending(&self, key: &str, pending: PendingApproval) -> AppResult<()> {
@@ -121,5 +123,20 @@ impl StreamState {
         for key in keys {
             questions.remove(&key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_covers_child_request_ids() {
+        let state = StreamState::default();
+        state.cancel("r1").expect("cancel");
+        assert!(state.is_cancelled("r1"));
+        assert!(state.is_cancelled("r1:d1"));
+        assert!(!state.is_cancelled("r1x"));
+        assert!(!state.is_cancelled("r10:d1"));
     }
 }

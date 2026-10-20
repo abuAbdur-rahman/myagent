@@ -69,6 +69,45 @@ pub enum StreamEvent {
         lang: String,
         code: String,
     },
+    Subagent {
+        parent: String,
+        event: Box<StreamEvent>,
+    },
+}
+
+pub trait EventSink: Send + Sync {
+    fn send(&self, event: StreamEvent);
+}
+
+impl EventSink for Channel<StreamEvent> {
+    fn send(&self, event: StreamEvent) {
+        let _ = Channel::send(self, event);
+    }
+}
+
+pub struct ScopedSink<'a> {
+    inner: &'a dyn EventSink,
+    parent: String,
+}
+
+impl<'a> ScopedSink<'a> {
+    pub fn new(inner: &'a dyn EventSink, parent: String) -> Self {
+        Self { inner, parent }
+    }
+}
+
+impl EventSink for ScopedSink<'_> {
+    fn send(&self, event: StreamEvent) {
+        match event {
+            StreamEvent::ApprovalAsked { .. } | StreamEvent::QuestionAsked { .. } => {
+                self.inner.send(event);
+            }
+            other => self.inner.send(StreamEvent::Subagent {
+                parent: self.parent.clone(),
+                event: Box::new(other),
+            }),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -127,6 +166,10 @@ pub struct ChatRequest {
     pub vision_fallback_model: Option<String>,
     #[serde(default)]
     pub vision_fallback_connection: Option<String>,
+    #[serde(default)]
+    pub child_system: Option<String>,
+    #[serde(skip)]
+    pub subagent: bool,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +242,19 @@ fn truncate_chars(text: &str, max: usize) -> String {
 
 fn truncate_preview(text: &str) -> String {
     truncate_chars(text.trim(), 500)
+}
+
+const CHILD_SYSTEM: &str = "You are a focused subagent. Complete the task with the tools available, then reply with a concise summary of what you found or changed. You cannot see the parent conversation and you cannot delegate further. Do not ask the user questions unless the task is impossible without one.";
+
+fn strip_tool_spec(specs: &mut serde_json::Value, name: &str) {
+    if let Some(list) = specs.as_array_mut() {
+        list.retain(|spec| {
+            spec.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(|value| value.as_str())
+                != Some(name)
+        });
+    }
 }
 
 fn message_text(content: &serde_json::Value) -> String {
@@ -786,7 +842,9 @@ pub async fn chat_stream(
     let cancel = state.register(&req.request_id)?;
 
     let result = if req.enable_tools {
-        run_agentic(&client, &app, &req, key, &on_event, &cancel, &state).await
+        run_agentic(&client, &app, &req, key, &on_event, &cancel, state.inner())
+            .await
+            .map(|_| ())
     } else {
         let url = endpoint(&req.base_url, "chat/completions");
         let history: Vec<serde_json::Value> = req
@@ -840,7 +898,7 @@ async fn post_with_retry(
     key: &str,
     body: &serde_json::Value,
     cancel: &Notify,
-    on_event: Option<&Channel<StreamEvent>>,
+    on_event: Option<&dyn EventSink>,
     kind: Option<&str>,
 ) -> AppResult<reqwest::Response> {
     if pace_agentrouter(url, cancel).await {
@@ -866,7 +924,7 @@ async fn post_with_retry(
                     let wait = backoff_delay(attempt, retry_after_secs(&resp));
                     drop(resp);
                     if let Some(ch) = on_event {
-                        let _ = ch.send(StreamEvent::Retrying {
+                        ch.send(StreamEvent::Retrying {
                             attempt: attempt + 2,
                             max: MAX_ATTEMPTS,
                         });
@@ -882,7 +940,7 @@ async fn post_with_retry(
                 last_error = Some(AppError::from(error));
                 if attempt + 1 < MAX_ATTEMPTS {
                     if let Some(ch) = on_event {
-                        let _ = ch.send(StreamEvent::Retrying {
+                        ch.send(StreamEvent::Retrying {
                             attempt: attempt + 2,
                             max: MAX_ATTEMPTS,
                         });
@@ -1073,7 +1131,7 @@ fn finish_iteration(
     text: String,
     reasoning: String,
     accumulator: &mut sse::ToolCallAccumulator,
-    on_event: &Channel<StreamEvent>,
+    on_event: &dyn EventSink,
 ) -> AppResult<Iteration> {
     accumulator.flush_unannounced();
     let calls = accumulator.calls();
@@ -1083,7 +1141,7 @@ fn finish_iteration(
         ));
     }
     if should_retract(&text, &calls) {
-        let _ = on_event.send(StreamEvent::Retract {
+        on_event.send(StreamEvent::Retract {
             chars: text.chars().count(),
         });
     }
@@ -1100,7 +1158,7 @@ async fn stream_agentic_iteration(
     key: &str,
     body: &serde_json::Value,
     cancel: &Notify,
-    on_event: &Channel<StreamEvent>,
+    on_event: &dyn EventSink,
     kind: Option<&str>,
 ) -> AppResult<Option<Iteration>> {
     let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event), kind).await {
@@ -1127,7 +1185,7 @@ async fn stream_agentic_iteration(
         for item in parser.feed(&chunk?) {
             match item {
                 sse::SseItem::Done => {
-                    let _ = on_event.send(StreamEvent::Done);
+                    on_event.send(StreamEvent::Done);
                     return finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some);
                 }
                 sse::SseItem::Payload(payload) => {
@@ -1140,24 +1198,24 @@ async fn stream_agentic_iteration(
                     }
                     if !mapped.text.is_empty() {
                         text.push_str(&mapped.text);
-                        let _ = on_event.send(StreamEvent::Delta { text: mapped.text });
+                        on_event.send(StreamEvent::Delta { text: mapped.text });
                     }
                     if !mapped.reasoning.is_empty() {
                         reasoning.push_str(&mapped.reasoning);
-                        let _ = on_event.send(StreamEvent::Reasoning {
+                        on_event.send(StreamEvent::Reasoning {
                             text: mapped.reasoning,
                         });
                     }
                     accumulator.apply(mapped.tool_deltas);
                     if let Some(usage) = mapped.usage {
-                        let _ = on_event.send(StreamEvent::Usage {
+                        on_event.send(StreamEvent::Usage {
                             prompt_tokens: usage.prompt,
                             completion_tokens: usage.completion,
                             total_tokens: usage.total,
                         });
                     }
                     if mapped.finish_reason.is_some() {
-                        let _ = on_event.send(StreamEvent::Finish {
+                        on_event.send(StreamEvent::Finish {
                             reason: mapped.finish_reason,
                         });
                     }
@@ -1202,23 +1260,23 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
     history: &mut Vec<serde_json::Value>,
     max_iterations: usize,
     replay_reasoning: bool,
-) -> AppResult<()> {
+) -> AppResult<String> {
     for _ in 0..max_iterations {
         let step = match model.stream_step(history.as_slice(), true).await {
             Ok(Some(step)) => step,
-            Ok(None) => return Ok(()),
+            Ok(None) => return Ok(String::new()),
             Err(error)
                 if is_retryable_tools_error(&error)
                     && !is_content_blocked_error(&error)
                     && !history_has_tool_message(history) =>
             {
                 model.stream_step(history.as_slice(), false).await?;
-                return Ok(());
+                return Ok(String::new());
             }
             Err(error) => return Err(error),
         };
         if step.calls.is_empty() {
-            return Ok(());
+            return Ok(step.text);
         }
         history.push(assistant_tool_message(
             &step.text,
@@ -1229,12 +1287,12 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
         for call in &step.calls {
             match tools.run(call, history).await? {
                 StepControl::Continue => {}
-                StepControl::StopTurn => return Ok(()),
+                StepControl::StopTurn => return Ok(step.text),
             }
         }
     }
     model.stream_step(history.as_slice(), false).await?;
-    Ok(())
+    Ok(String::new())
 }
 
 struct RealModel<'a> {
@@ -1244,7 +1302,7 @@ struct RealModel<'a> {
     req: &'a ChatRequest,
     cancel: &'a Notify,
     state: &'a StreamState,
-    on_event: &'a Channel<StreamEvent>,
+    on_event: &'a dyn EventSink,
     tool_specs: serde_json::Value,
 }
 
@@ -1254,7 +1312,7 @@ impl ModelClient for RealModel<'_> {
         messages: &[serde_json::Value],
         use_tools: bool,
     ) -> AppResult<Option<Iteration>> {
-        if self.state.take_cancelled(&self.req.request_id) {
+        if self.state.is_cancelled(&self.req.request_id) {
             return Ok(None);
         }
         if !use_tools {
@@ -1293,13 +1351,90 @@ impl ModelClient for RealModel<'_> {
 }
 
 struct RealTools<'a> {
+    client: &'a reqwest::Client,
     app: &'a AppHandle,
     req: &'a ChatRequest,
     state: &'a StreamState,
     cancel: &'a Notify,
-    on_event: &'a Channel<StreamEvent>,
+    on_event: &'a dyn EventSink,
+    key: &'a str,
     repeat: RepeatGuard,
     last_pure: Option<(String, String)>,
+    children: u32,
+}
+
+impl RealTools<'_> {
+    async fn run_child(
+        &mut self,
+        call_id: &str,
+        task: &str,
+        model: Option<&str>,
+    ) -> AppResult<String> {
+        if self.req.subagent {
+            return Err(AppError::Internal(
+                "delegate_task is not available inside a subagent".to_string(),
+            ));
+        }
+        let task = task.trim();
+        if task.is_empty() {
+            return Err(AppError::Internal("delegate_task needs a task".to_string()));
+        }
+        let model = model
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(self.req.model.as_str());
+        if model.chars().count() > 128 {
+            return Err(AppError::Internal("model id is too long".to_string()));
+        }
+        self.children += 1;
+        let system = self
+            .req
+            .child_system
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(CHILD_SYSTEM);
+        let child = ChatRequest {
+            request_id: format!("{}:d{}", self.req.request_id, self.children),
+            base_url: self.req.base_url.clone(),
+            connection_id: self.req.connection_id.clone(),
+            model: model.to_string(),
+            messages: vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: MessageContent::Text(truncate_chars(system, 8000)),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: MessageContent::Text(truncate_chars(task, 8000)),
+                },
+            ],
+            temperature: None,
+            enable_tools: true,
+            max_iterations: Some(8),
+            project_id: self.req.project_id.clone(),
+            conversation_id: self.req.conversation_id.clone(),
+            reasoning_effort: self.req.reasoning_effort.clone(),
+            connection_kind: self.req.connection_kind.clone(),
+            search_backend: self.req.search_backend.clone(),
+            search_endpoint: self.req.search_endpoint.clone(),
+            vision_fallback_model: self.req.vision_fallback_model.clone(),
+            vision_fallback_connection: self.req.vision_fallback_connection.clone(),
+            child_system: None,
+            subagent: true,
+        };
+        let sink = ScopedSink::new(self.on_event, call_id.to_string());
+        Box::pin(run_agentic(
+            self.client,
+            self.app,
+            &child,
+            self.key.to_string(),
+            &sink,
+            self.cancel,
+            self.state,
+        ))
+        .await
+    }
 }
 
 impl ToolRunner for RealTools<'_> {
@@ -1308,7 +1443,7 @@ impl ToolRunner for RealTools<'_> {
         call: &serde_json::Value,
         history: &mut Vec<serde_json::Value>,
     ) -> AppResult<StepControl> {
-        if self.state.take_cancelled(&self.req.request_id) {
+        if self.state.is_cancelled(&self.req.request_id) {
             return Ok(StepControl::StopTurn);
         }
         let id = call
@@ -1329,7 +1464,7 @@ impl ToolRunner for RealTools<'_> {
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::Value::Null);
 
-        let _ = self.on_event.send(StreamEvent::ToolStart {
+        self.on_event.send(StreamEvent::ToolStart {
             id: id.clone(),
             name: name.clone(),
             summary: tools::summarize_call(&name, &args),
@@ -1363,7 +1498,7 @@ impl ToolRunner for RealTools<'_> {
             let question_id = format!("{}:{id}:repeat", self.req.request_id);
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.state.insert_question(&question_id, tx)?;
-            let _ = self.on_event.send(StreamEvent::QuestionAsked {
+            self.on_event.send(StreamEvent::QuestionAsked {
                 id: question_id.clone(),
                 question: format!(
                     "`{name}` was called 3 times in a row with identical arguments. The turn is paused."
@@ -1376,7 +1511,7 @@ impl ToolRunner for RealTools<'_> {
                 _ = self.cancel.notified() => return Ok(StepControl::StopTurn),
             };
             if answer.trim().is_empty() || answer == "Stop here" {
-                let _ = self.on_event.send(StreamEvent::ToolResult {
+                self.on_event.send(StreamEvent::ToolResult {
                     id: id.clone(),
                     ok: false,
                     preview: "Stopped: repeated tool call".to_string(),
@@ -1388,7 +1523,7 @@ impl ToolRunner for RealTools<'_> {
                 return Ok(StepControl::StopTurn);
             }
             if answer != "Keep going" {
-                let _ = self.on_event.send(StreamEvent::ToolResult {
+                self.on_event.send(StreamEvent::ToolResult {
                     id: id.clone(),
                     ok: true,
                     preview: answer.chars().take(120).collect(),
@@ -1507,7 +1642,7 @@ impl ToolRunner for RealTools<'_> {
                 &resources.join("\n"),
             )
             .await;
-            let _ = self.on_event.send(StreamEvent::ToolResult {
+            self.on_event.send(StreamEvent::ToolResult {
                 id: id.clone(),
                 ok: false,
                 preview: "Denied by rule".to_string(),
@@ -1541,7 +1676,7 @@ impl ToolRunner for RealTools<'_> {
                     tx,
                 },
             )?;
-            let _ = self.on_event.send(StreamEvent::ApprovalAsked {
+            self.on_event.send(StreamEvent::ApprovalAsked {
                 id: approval_id.clone(),
                 tool: name.clone(),
                 command,
@@ -1572,7 +1707,7 @@ impl ToolRunner for RealTools<'_> {
                     &resources.join("\n"),
                 )
                 .await;
-                let _ = self.on_event.send(StreamEvent::ToolResult {
+                self.on_event.send(StreamEvent::ToolResult {
                     id: id.clone(),
                     ok: false,
                     preview: "Denied by user".to_string(),
@@ -1593,7 +1728,7 @@ impl ToolRunner for RealTools<'_> {
         if name == "ask_user" {
             match tools::parse_question(&args) {
                 Err(message) => {
-                    let _ = self.on_event.send(StreamEvent::ToolResult {
+                    self.on_event.send(StreamEvent::ToolResult {
                         id: id.clone(),
                         ok: false,
                         preview: message.clone(),
@@ -1604,7 +1739,7 @@ impl ToolRunner for RealTools<'_> {
                     let question_id = format!("{}:{id}", self.req.request_id);
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     self.state.insert_question(&question_id, tx)?;
-                    let _ = self.on_event.send(StreamEvent::QuestionAsked {
+                    self.on_event.send(StreamEvent::QuestionAsked {
                         id: question_id.clone(),
                         question: asked.question,
                         options: asked.options,
@@ -1619,12 +1754,42 @@ impl ToolRunner for RealTools<'_> {
                     } else {
                         answer
                     };
-                    let _ = self.on_event.send(StreamEvent::ToolResult {
+                    self.on_event.send(StreamEvent::ToolResult {
                         id: id.clone(),
                         ok: true,
                         preview: truncate_preview(&content),
                     });
                     history.push(tool_text_message(&id, &content));
+                }
+            }
+            return Ok(StepControl::Continue);
+        }
+
+        if name == "delegate_task" {
+            let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            let model = args.get("model").and_then(|v| v.as_str());
+            match self.run_child(&id, task, model).await {
+                Ok(summary) => {
+                    let output = if summary.trim().is_empty() {
+                        "Subagent finished with no summary.".to_string()
+                    } else {
+                        truncate_chars(summary.trim(), 6000)
+                    };
+                    self.on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: true,
+                        preview: truncate_preview(&output),
+                    });
+                    history.push(tool_text_message(&id, &output));
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    self.on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: false,
+                        preview: truncate_preview(&message),
+                    });
+                    history.push(tool_text_message(&id, &format!("Error: {message}")));
                 }
             }
             return Ok(StepControl::Continue);
@@ -1666,13 +1831,13 @@ impl ToolRunner for RealTools<'_> {
                     self.last_pure = Some((repeat_key.clone(), done.output.clone()));
                 }
                 if let Some(artifact) = done.artifact {
-                    let _ = self.on_event.send(StreamEvent::Artifact {
+                    self.on_event.send(StreamEvent::Artifact {
                         title: artifact.title,
                         lang: artifact.lang,
                         code: artifact.code,
                     });
                 }
-                let _ = self.on_event.send(StreamEvent::ToolResult {
+                self.on_event.send(StreamEvent::ToolResult {
                     id: id.clone(),
                     ok: true,
                     preview: truncate_preview(&done.output),
@@ -1684,7 +1849,7 @@ impl ToolRunner for RealTools<'_> {
                 }));
             }
             Err(message) => {
-                let _ = self.on_event.send(StreamEvent::ToolResult {
+                self.on_event.send(StreamEvent::ToolResult {
                     id: id.clone(),
                     ok: false,
                     preview: truncate_preview(&message),
@@ -1705,10 +1870,10 @@ async fn run_agentic(
     app: &AppHandle,
     req: &ChatRequest,
     key: String,
-    on_event: &Channel<StreamEvent>,
+    on_event: &dyn EventSink,
     cancel: &Notify,
-    state: &State<'_, StreamState>,
-) -> AppResult<()> {
+    state: &StreamState,
+) -> AppResult<String> {
     let url = endpoint(&req.base_url, "chat/completions");
     let mut history: Vec<serde_json::Value> = req
         .messages
@@ -1748,12 +1913,19 @@ async fn run_agentic(
     let mut model = RealModel {
         client,
         url,
-        key,
+        key: key.clone(),
         req,
         cancel,
-        state: state.inner(),
+        state,
         on_event,
-        tool_specs: tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app)),
+        tool_specs: {
+            let mut specs =
+                tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app));
+            if req.subagent {
+                strip_tool_spec(&mut specs, "delegate_task");
+            }
+            specs
+        },
     };
     let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
         .await
@@ -1766,13 +1938,16 @@ async fn run_agentic(
         }
     }
     let mut runner = RealTools {
+        client,
         app,
         req,
-        state: state.inner(),
+        state,
         cancel,
         on_event,
+        key: &key,
         repeat: RepeatGuard::new(),
         last_pure: None,
+        children: 0,
     };
     agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await
 }
@@ -1782,7 +1957,7 @@ async fn stream_completion(
     req: &ChatRequest,
     key: String,
     history: Vec<serde_json::Value>,
-    on_event: &Channel<StreamEvent>,
+    on_event: &dyn EventSink,
     cancel: &Notify,
 ) -> AppResult<()> {
     let url = endpoint(&req.base_url, "chat/completions");
@@ -1828,7 +2003,7 @@ async fn stream_completion(
         for item in parser.feed(&chunk?) {
             match item {
                 sse::SseItem::Done => {
-                    let _ = on_event.send(StreamEvent::Done);
+                    on_event.send(StreamEvent::Done);
                     return if received == 0 {
                         Err(AppError::Upstream(
                             "empty response from provider".to_string(),
@@ -1847,23 +2022,23 @@ async fn stream_completion(
                     }
                     if !mapped.text.is_empty() {
                         received += 1;
-                        let _ = on_event.send(StreamEvent::Delta { text: mapped.text });
+                        on_event.send(StreamEvent::Delta { text: mapped.text });
                     }
                     if !mapped.reasoning.is_empty() {
                         received += 1;
-                        let _ = on_event.send(StreamEvent::Reasoning {
+                        on_event.send(StreamEvent::Reasoning {
                             text: mapped.reasoning,
                         });
                     }
                     if let Some(usage) = mapped.usage {
-                        let _ = on_event.send(StreamEvent::Usage {
+                        on_event.send(StreamEvent::Usage {
                             prompt_tokens: usage.prompt,
                             completion_tokens: usage.completion,
                             total_tokens: usage.total,
                         });
                     }
                     if mapped.finish_reason.is_some() {
-                        let _ = on_event.send(StreamEvent::Finish {
+                        on_event.send(StreamEvent::Finish {
                             reason: mapped.finish_reason,
                         });
                     }
@@ -1872,7 +2047,7 @@ async fn stream_completion(
         }
     }
 
-    let _ = on_event.send(StreamEvent::Done);
+    on_event.send(StreamEvent::Done);
     if received == 0 {
         return Err(AppError::Upstream(
             "empty response from provider".to_string(),
@@ -1884,6 +2059,76 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RecordingSink(Mutex<Vec<StreamEvent>>);
+
+    impl EventSink for RecordingSink {
+        fn send(&self, event: StreamEvent) {
+            if let Ok(mut events) = self.0.lock() {
+                events.push(event);
+            }
+        }
+    }
+
+    fn spec_names(specs: &serde_json::Value) -> Vec<String> {
+        specs
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|spec| {
+                        spec.get("function")
+                            .and_then(|function| function.get("name"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn scoped_sink_wraps_child_events() {
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let scoped = ScopedSink::new(&sink, "call-1".to_string());
+        scoped.send(StreamEvent::Delta {
+            text: "hi".to_string(),
+        });
+        let events = sink.0.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        let value = serde_json::to_value(&events[0]).expect("json");
+        assert_eq!(value["type"], "subagent");
+        assert_eq!(value["parent"], "call-1");
+        assert_eq!(value["event"]["type"], "delta");
+        assert_eq!(value["event"]["text"], "hi");
+    }
+
+    #[test]
+    fn scoped_sink_keeps_approvals_on_the_parent_stream() {
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let scoped = ScopedSink::new(&sink, "call-1".to_string());
+        scoped.send(StreamEvent::ApprovalAsked {
+            id: "a1".to_string(),
+            tool: "run_powershell".to_string(),
+            command: "ls".to_string(),
+            cwd: "C:\\".to_string(),
+            screen: None,
+            screen_failed: false,
+        });
+        let events = sink.0.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        let value = serde_json::to_value(&events[0]).expect("json");
+        assert_eq!(value["type"], "approval_asked");
+        assert!(value.get("parent").is_none());
+    }
+
+    #[test]
+    fn delegate_task_is_offered_at_depth_zero_only() {
+        let mut specs = tools::tool_specs(false, false, false);
+        assert!(spec_names(&specs).contains(&"delegate_task".to_string()));
+        strip_tool_spec(&mut specs, "delegate_task");
+        assert!(!spec_names(&specs).contains(&"delegate_task".to_string()));
+        assert!(spec_names(&specs).contains(&"ask_user".to_string()));
+    }
 
     #[test]
     fn renderer_cannot_supply_base_url() {

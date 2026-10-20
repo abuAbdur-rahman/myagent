@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { applyCompactWindow, applySummaryWindow, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
+import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
 import {
   buildDocumentBlock,
@@ -61,6 +61,7 @@ import type {
   ToolLogEntry,
   FileCommand,
   ScreenVerdict,
+  StreamEvent,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
@@ -183,6 +184,33 @@ export function toolLogPatch(entries: ToolEntry[]): { tool_log: string | null } 
 
 export function seedToolLog(entries: ToolEntry[], seedId: string): ToolEntry[] {
   return entries.map((entry, index) => ({ ...entry, id: `${seedId}#${index}` }));
+}
+
+const SUBAGENT_PREVIEW_LIMIT = 2000;
+
+function subagentPreview(current: string | null, event: StreamEvent): string | null {
+  const base = current ?? "";
+  const line = base.length > 0 && !base.endsWith("\n") ? "\n" : "";
+  let next: string;
+  switch (event.type) {
+    case "delta":
+      next = base + event.text;
+      break;
+    case "tool_start":
+      next = `${base}${line}-> ${event.name}: ${event.summary}`;
+      break;
+    case "tool_result":
+      next = `${base}${line}${event.ok ? "ok" : "fail"}: ${event.preview}`;
+      break;
+    case "retrying":
+      next = `${base}${line}retrying (${event.attempt}/${event.max})`;
+      break;
+    default:
+      return current;
+  }
+  return next.length > SUBAGENT_PREVIEW_LIMIT
+    ? `${next.slice(0, SUBAGENT_PREVIEW_LIMIT)}...`
+    : next;
 }
 
 type View = "chat" | "projects" | "project";
@@ -1297,6 +1325,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             connectionKind: connection.kind,
             searchBackend,
             searchEndpoint,
+            childSystem: buildChildSystemPrompt({
+              userName: displayNameRef.current || undefined,
+              project: projectRef.current,
+            }),
             ...fallbackFields(pendingVisionFallbackRef.current),
           },
           (event) => {
@@ -1357,8 +1389,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
               applyToolLog(
                 toolLogRef.current.map((entry) =>
                   entry.id === event.id
-                    ? { ...entry, status: event.ok ? ("ok" as const) : ("err" as const), preview: event.preview }
+                    ? {
+                        ...entry,
+                        status: event.ok ? ("ok" as const) : ("err" as const),
+                        preview:
+                          entry.name === "delegate_task" && entry.preview
+                            ? `${entry.preview}\n\n--- summary ---\n${event.preview}`.slice(
+                                0,
+                                SUBAGENT_PREVIEW_LIMIT,
+                              )
+                            : event.preview,
+                      }
                     : entry,
+                ),
+              );
+            } else if (event.type === "subagent") {
+              const next = subagentPreview(
+                toolLogRef.current.find((entry) => entry.id === event.parent)?.preview ?? null,
+                event.event,
+              );
+              applyToolLog(
+                toolLogRef.current.map((entry) =>
+                  entry.id === event.parent ? { ...entry, preview: next } : entry,
                 ),
               );
             } else if (event.type === "artifact") {

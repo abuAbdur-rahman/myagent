@@ -725,6 +725,22 @@ pub fn tool_specs(
         {
             "type": "function",
             "function": {
+                "name": "delegate_task",
+                "description": "Hand a self-contained task to a focused subagent that runs with its own context and the same tools, then returns a short summary. Use it to keep broad research or multi-file inspection out of this conversation. The subagent cannot delegate further.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": { "type": "string", "description": "What the subagent should do, including every fact it needs. It cannot see this conversation." },
+                        "model": { "type": "string", "description": "Optional model id for the subagent. Defaults to the current model." },
+                    },
+                    "required": ["task"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "skill",
                 "description": "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description. The skill ID must match an available skill or a skill explicitly referenced by the user.",
                 "parameters": {
