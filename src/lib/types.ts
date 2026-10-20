@@ -243,6 +243,13 @@ export const memoryDraftSchema = z.object({
 });
 export type MemoryDraft = z.infer<typeof memoryDraftSchema>;
 
+const screenVerdictSchema = z.object({
+  label: z.string(),
+  score: z.number(),
+  suggest_deny: z.boolean(),
+});
+export type ScreenVerdict = z.infer<typeof screenVerdictSchema>;
+
 const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delta"), text: z.string() }),
   z.object({ type: z.literal("done") }),
@@ -262,6 +269,8 @@ const streamEventSchema = z.discriminatedUnion("type", [
     tool: z.string(),
     command: z.string(),
     cwd: z.string(),
+    screen: screenVerdictSchema.nullish(),
+    screen_failed: z.boolean(),
   }),
   z.object({
     type: z.literal("question_asked"),

@@ -10,6 +10,7 @@ pub struct PendingApproval {
     pub action: String,
     pub resources: Vec<String>,
     pub project_id: Option<String>,
+    pub screen_flag: bool,
     pub tx: oneshot::Sender<ApprovalReply>,
 }
 

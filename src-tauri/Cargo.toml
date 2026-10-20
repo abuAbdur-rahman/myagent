@@ -39,6 +39,8 @@ docx-rs = { version = "0.4", default-features = false }
 calamine = "0.36"
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "derive"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-31"] }
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

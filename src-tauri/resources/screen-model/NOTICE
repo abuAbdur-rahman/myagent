@@ -1,0 +1,20 @@
+Prompt-injection classifier bundled with myagent
+================================================
+
+Model:    deberta-v3-base-prompt-injection-v2
+Source:   https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
+Revision: 90c9989b1a342275dd0d1a95aad283c04e075671
+Author:   Protect AI
+License:  Apache License 2.0 (see LICENSE in this directory)
+
+Base model: microsoft/deberta-v3-base (MIT).
+
+Modifications: the published ONNX weights were dynamically quantized to
+QUInt8 with per-channel weight quantization and the classifier head excluded
+("/classifier/"). Validation against the fp32 export is recorded in
+MANIFEST.json; the quantized file is byte-identical in its predictions on the
+eight probe samples used for verification.
+
+The model is loaded read-only by myagent to score text for prompt-injection
+signals before a tool approval is shown. It runs locally; no text leaves the
+machine.

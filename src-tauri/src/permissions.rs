@@ -389,6 +389,45 @@ pub struct ReplyRequest {
     pub reply: String,
 }
 
+/// A flagged call may be allowed once but must never persist an allow rule.
+pub fn effective_reply(screen_flag: bool, reply: ApprovalReply) -> ApprovalReply {
+    if screen_flag && reply == ApprovalReply::Always {
+        ApprovalReply::Once
+    } else {
+        reply
+    }
+}
+
+/// What (if anything) may be persisted for a reply. A flagged call resolves to
+/// `Once`, so it can never produce a plan that writes a rule.
+#[derive(Debug, PartialEq)]
+pub enum PersistPlan {
+    None,
+    ToolWide,
+    Resources,
+}
+
+pub fn resolve_reply(
+    screen_flag: bool,
+    reply: ApprovalReply,
+    action: &str,
+    resources: &[String],
+) -> (ApprovalReply, PersistPlan) {
+    let reply = effective_reply(screen_flag, reply);
+    let plan = if reply == ApprovalReply::Always {
+        if tool_wide_allow(action) {
+            PersistPlan::ToolWide
+        } else if resources.is_empty() {
+            PersistPlan::None
+        } else {
+            PersistPlan::Resources
+        }
+    } else {
+        PersistPlan::None
+    };
+    (reply, plan)
+}
+
 #[tauri::command]
 pub async fn approval_reply(
     app: AppHandle,
@@ -400,26 +439,34 @@ pub async fn approval_reply(
     let Some(pending) = state.take_pending(&req.id) else {
         return Err(AppError::Internal("approval already resolved".to_string()));
     };
-    if reply == ApprovalReply::Always {
-        let tool_wide = tool_wide_allow(&pending.action);
-        let result = if tool_wide {
-            allow_tool(&app, &pending.action, pending.project_id.as_deref()).await
-        } else {
-            let mut outcome = Ok(());
-            for resource in &pending.resources {
-                if let Err(error) = allow_always(
-                    &app,
-                    &pending.action,
-                    resource,
-                    pending.project_id.as_deref(),
-                )
-                .await
-                {
-                    outcome = Err(error);
-                    break;
-                }
+    let (reply, plan) = resolve_reply(
+        pending.screen_flag,
+        reply,
+        &pending.action,
+        &pending.resources,
+    );
+    if plan != PersistPlan::None {
+        let result = match plan {
+            PersistPlan::ToolWide => {
+                allow_tool(&app, &pending.action, pending.project_id.as_deref()).await
             }
-            outcome
+            _ => {
+                let mut outcome = Ok(());
+                for resource in &pending.resources {
+                    if let Err(error) = allow_always(
+                        &app,
+                        &pending.action,
+                        resource,
+                        pending.project_id.as_deref(),
+                    )
+                    .await
+                    {
+                        outcome = Err(error);
+                        break;
+                    }
+                }
+                outcome
+            }
         };
         if let Err(error) = result {
             let _ = pending.tx.send(ApprovalReply::Once);
@@ -717,6 +764,52 @@ mod tests {
         assert_eq!(
             decide("web_fetch", &["example.com".to_string()], &rules),
             Effect::Ask
+        );
+    }
+
+    #[test]
+    fn flagged_approvals_never_produce_a_persist_plan() {
+        let resource = vec!["C:\\tmp".to_string()];
+        let host = vec!["example.com".to_string()];
+        assert_eq!(
+            resolve_reply(true, ApprovalReply::Always, "run_powershell", &resource),
+            (ApprovalReply::Once, PersistPlan::None)
+        );
+        assert_eq!(
+            resolve_reply(true, ApprovalReply::Always, "web_fetch", &host),
+            (ApprovalReply::Once, PersistPlan::None)
+        );
+        assert_eq!(
+            resolve_reply(false, ApprovalReply::Always, "run_powershell", &resource),
+            (ApprovalReply::Always, PersistPlan::Resources)
+        );
+        assert_eq!(
+            resolve_reply(false, ApprovalReply::Always, "web_fetch", &host),
+            (ApprovalReply::Always, PersistPlan::ToolWide)
+        );
+        assert_eq!(
+            resolve_reply(false, ApprovalReply::Deny, "run_powershell", &resource),
+            (ApprovalReply::Deny, PersistPlan::None)
+        );
+    }
+
+    #[test]
+    fn flagged_approvals_never_persist_always() {
+        assert_eq!(
+            effective_reply(true, ApprovalReply::Always),
+            ApprovalReply::Once
+        );
+        assert_eq!(
+            effective_reply(true, ApprovalReply::Once),
+            ApprovalReply::Once
+        );
+        assert_eq!(
+            effective_reply(true, ApprovalReply::Deny),
+            ApprovalReply::Deny
+        );
+        assert_eq!(
+            effective_reply(false, ApprovalReply::Always),
+            ApprovalReply::Always
         );
     }
 

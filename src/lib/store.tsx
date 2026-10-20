@@ -60,6 +60,7 @@ import type {
   Todo,
   ToolLogEntry,
   FileCommand,
+  ScreenVerdict,
 } from "./types";
 
 const ACTIVE_CONNECTION_KEY = "activeConnectionId";
@@ -221,7 +222,14 @@ interface AppContextValue {
   clearError: () => void;
   canRetry: boolean;
   retryTurn: () => Promise<void>;
-  approval: { id: string; tool: string; command: string; cwd: string } | null;
+  approval: {
+    id: string;
+    tool: string;
+    command: string;
+    cwd: string;
+    screen: ScreenVerdict | null;
+    screenFailed: boolean;
+  } | null;
   replyApproval: (reply: "once" | "always" | "deny") => Promise<void>;
   question: { id: string; question: string; options: string[]; allowCustom: boolean } | null;
   answerQuestion: (answer: string) => Promise<void>;
@@ -375,6 +383,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     tool: string;
     command: string;
     cwd: string;
+    screen: ScreenVerdict | null;
+    screenFailed: boolean;
   } | null>(null);
   const [question, setQuestion] = useState<{
     id: string;
@@ -1375,6 +1385,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 tool: event.tool,
                 command: event.command,
                 cwd: event.cwd,
+                screen: event.screen ?? null,
+                screenFailed: event.screen_failed,
               });
             } else if (event.type === "question_asked") {
               setQuestion({
