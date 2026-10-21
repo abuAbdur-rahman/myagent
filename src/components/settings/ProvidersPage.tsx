@@ -411,6 +411,7 @@ export function ProvidersPage() {
           <div
             key={connection.id}
             className="rounded-card border border-border bg-surface p-3"
+            data-setting-term={connection.name}
           >
             <div className="flex items-center gap-2.5">
             <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-xs font-semibold text-accent-contrast">

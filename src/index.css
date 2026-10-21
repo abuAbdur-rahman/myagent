@@ -170,6 +170,29 @@ kbd {
   transition: grid-template-columns 0.15s ease-out;
 }
 
+.settings-hit {
+  animation: settings-hit 1.6s ease-out;
+  border-radius: 6px;
+}
+
+@keyframes settings-hit {
+  0%,
+  45% {
+    background-color: color-mix(in oklab, var(--accent) 18%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-hit {
+    animation: none;
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
 .dots i {
   display: inline-block;
   width: 6px;

@@ -138,7 +138,7 @@ function LocalCard({
   onToggle: () => void;
 }) {
   return (
-    <div className="rounded-card border border-border bg-surface-2 p-3">
+    <div className="rounded-card border border-border bg-surface-2 p-3" data-setting-term="Microphone">
       <LocalHeader status={status} busy={busy} download={download} onToggle={onToggle} />
       <DownloadProgress busy={busy} progress={progress} />
       <div className="mt-3 flex items-center justify-between text-xs text-muted">
@@ -210,7 +210,7 @@ function ProviderCard({
     .map((connection) => ({ value: connection.id, label: connection.name }));
   const empty = remote !== "" && options.length === 0;
   return (
-    <div className="rounded-card border border-border bg-surface-2 p-3">
+    <div className="rounded-card border border-border bg-surface-2 p-3" data-setting-term="Transcription provider">
       <div className="font-medium">Transcription provider</div>
       <p className="mt-1 text-xs text-muted">
         Local is the default and needs no key. Remote uses an OpenAI-compatible
