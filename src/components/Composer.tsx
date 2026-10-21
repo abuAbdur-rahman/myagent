@@ -101,10 +101,6 @@ function isDocFile(file: File): boolean {
   return !isSupportedImage(file.type);
 }
 
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
 type ParsedSlash = { name: string; args: string };
 
 function warnIfShadowed(parsed: ParsedSlash | null, commands: SlashCommand[]): void {
@@ -667,7 +663,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             <Mic size={14} />
           </button>
           <span className="flex-1" />
-          <span className="text-xs text-muted">{estimateTokens(composerDraft)} tokens</span>
           {streaming ? (
             <button
               type="button"

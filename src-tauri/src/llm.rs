@@ -1187,6 +1187,44 @@ fn should_retract(text: &str, calls: &[serde_json::Value]) -> bool {
     !text.is_empty() && !calls.is_empty()
 }
 
+fn collect_inband(
+    events: Vec<crate::inband::InbandEvent>,
+    healed: &mut Vec<(String, String)>,
+    text: &mut String,
+    on_event: &dyn EventSink,
+) {
+    for event in events {
+        match event {
+            crate::inband::InbandEvent::Text(visible) => {
+                if visible.is_empty() {
+                    continue;
+                }
+                text.push_str(&visible);
+                on_event.send(StreamEvent::Delta { text: visible });
+            }
+            crate::inband::InbandEvent::Call { name, arguments } => healed.push((name, arguments)),
+        }
+    }
+}
+
+/// Structured calls win. Healed ones are only used when the gateway sent none.
+fn absorb_healed(accumulator: &mut sse::ToolCallAccumulator, healed: Vec<(String, String)>) {
+    if healed.is_empty() || !accumulator.calls().is_empty() {
+        return;
+    }
+    let deltas = healed
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, arguments))| sse::ToolCallDelta {
+            index,
+            id: format!("dsml-{index}"),
+            name,
+            arguments,
+        })
+        .collect();
+    accumulator.apply(deltas);
+}
+
 fn finish_iteration(
     text: String,
     reasoning: String,
@@ -1232,6 +1270,8 @@ async fn stream_agentic_iteration(
     let mut accumulator = sse::ToolCallAccumulator::new();
     let mut text = String::new();
     let mut reasoning = String::new();
+    let mut scanner = crate::inband::DsmlScanner::new();
+    let mut healed: Vec<(String, String)> = Vec::new();
     let notified = cancel.notified();
     tokio::pin!(notified);
 
@@ -1245,6 +1285,8 @@ async fn stream_agentic_iteration(
         for item in parser.feed(&chunk?) {
             match item {
                 sse::SseItem::Done => {
+                    collect_inband(scanner.finish(), &mut healed, &mut text, on_event);
+                    absorb_healed(&mut accumulator, std::mem::take(&mut healed));
                     on_event.send(StreamEvent::Done);
                     return finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some);
                 }
@@ -1257,8 +1299,12 @@ async fn stream_agentic_iteration(
                         return Err(AppError::Upstream(message));
                     }
                     if !mapped.text.is_empty() {
-                        text.push_str(&mapped.text);
-                        on_event.send(StreamEvent::Delta { text: mapped.text });
+                        collect_inband(
+                            scanner.push(&mapped.text),
+                            &mut healed,
+                            &mut text,
+                            on_event,
+                        );
                     }
                     if !mapped.reasoning.is_empty() {
                         reasoning.push_str(&mapped.reasoning);
@@ -1284,6 +1330,8 @@ async fn stream_agentic_iteration(
         }
     }
 
+    collect_inband(scanner.finish(), &mut healed, &mut text, on_event);
+    absorb_healed(&mut accumulator, std::mem::take(&mut healed));
     finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some)
 }
 
@@ -2229,6 +2277,63 @@ mod tests {
         assert_eq!(value["parent"], "call-1");
         assert_eq!(value["event"]["type"], "delta");
         assert_eq!(value["event"]["text"], "hi");
+    }
+
+    #[test]
+    fn collect_inband_forwards_text_and_holds_calls() {
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let mut healed = Vec::new();
+        let mut text = String::new();
+        collect_inband(
+            vec![
+                crate::inband::InbandEvent::Text("hello".to_string()),
+                crate::inband::InbandEvent::Call {
+                    name: "get_time".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            ],
+            &mut healed,
+            &mut text,
+            &sink,
+        );
+        assert_eq!(text, "hello");
+        assert_eq!(healed, vec![("get_time".to_string(), "{}".to_string())]);
+        let events = sink.0.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&events[0]).expect("json")["text"],
+            serde_json::json!("hello")
+        );
+    }
+
+    #[test]
+    fn healed_calls_fill_an_empty_accumulator_only() {
+        let mut accumulator = sse::ToolCallAccumulator::new();
+        absorb_healed(
+            &mut accumulator,
+            vec![(
+                "run_powershell".to_string(),
+                "{\"command\":\"x\"}".to_string(),
+            )],
+        );
+        let calls = accumulator.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], serde_json::json!("dsml-0"));
+
+        let mut accumulator = sse::ToolCallAccumulator::new();
+        accumulator.apply(vec![sse::ToolCallDelta {
+            index: 0,
+            id: "call-1".to_string(),
+            name: "get_time".to_string(),
+            arguments: "{}".to_string(),
+        }]);
+        absorb_healed(
+            &mut accumulator,
+            vec![("run_powershell".to_string(), "{}".to_string())],
+        );
+        let calls = accumulator.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["name"], serde_json::json!("get_time"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ import { toolListSentence } from "./tools";
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const IMAGE_PART_CHARS = 1500;
-const DEFAULT_MODEL_CONTEXT = 128_000;
+export const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
 const MAX_TURNS_WINDOW = 60;
 

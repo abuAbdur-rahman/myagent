@@ -3,6 +3,7 @@ mod connections;
 mod documents;
 mod error;
 mod extract;
+mod inband;
 mod knowledge;
 mod llm;
 mod mcp;

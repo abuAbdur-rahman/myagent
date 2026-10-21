@@ -38,30 +38,64 @@ export function ContextBar() {
     );
   }
 
-  const { tokens, limit, pct, real, limitEstimated, lastIn, lastOut } = contextInfo;
+  const { tokens, limit, pct, real, lastIn, lastOut } = contextInfo;
 
   let labelClass = "";
-  if (pct > 90) {
+  if (pct !== null && pct > 90) {
     labelClass = "text-danger";
-  } else if (pct >= 80) {
+  } else if (pct !== null && pct >= 80) {
     labelClass = "text-warn";
   }
 
   let fillClass = "bg-accent";
-  if (pct > 90) {
+  if (pct !== null && pct > 90) {
     fillClass = "bg-danger";
-  } else if (pct >= 80) {
+  } else if (pct !== null && pct >= 80) {
     fillClass = "bg-warn";
   }
-
-  const title = real
-    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported${limitEstimated ? ", limit estimated" : ""})`
-    : `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
 
   const usageDetail =
     real && lastIn !== null && lastOut !== null
       ? ` · ↑${formatTokens(lastIn)} ↓${formatTokens(lastOut)}`
       : "";
+
+  const usageAria =
+    real && lastIn !== null && lastOut !== null
+      ? ` · last turn input ${formatTokens(lastIn)}, output ${formatTokens(lastOut)}`
+      : "";
+
+  if (pct === null) {
+    return (
+      <div
+        className="mb-1.5 flex items-center gap-2.5 px-1 text-xs text-muted"
+        title="This model did not report a context window, so usage cannot be shown as a percentage."
+      >
+        <span>
+          Context unknown · {real ? "" : "≈ "}
+          {formatTokens(tokens)} tokens used
+          {usageDetail && (
+            <>
+              <span aria-hidden="true">{usageDetail}</span>
+              <span className="sr-only">{usageAria}</span>
+            </>
+          )}
+        </span>
+        <span className="flex-1" />
+        <Button
+          size="sm"
+          variant="default"
+          disabled={streaming || messages.length <= 4}
+          onClick={() => void compactActive()}
+        >
+          Compact
+        </Button>
+      </div>
+    );
+  }
+
+  const title = real
+    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`
+    : `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
 
   return (
     <div
@@ -73,9 +107,7 @@ export function ContextBar() {
         {usageDetail && (
           <>
             <span aria-hidden="true">{usageDetail}</span>
-            <span className="sr-only">
-              {` · last turn input ${formatTokens(lastIn ?? 0)}, output ${formatTokens(lastOut ?? 0)}`}
-            </span>
+            <span className="sr-only">{usageAria}</span>
           </>
         )}
       </span>

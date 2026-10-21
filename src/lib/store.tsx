@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
+import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
 import {
   buildDocumentBlock,
@@ -300,9 +300,9 @@ interface AppContextValue {
   contextInfo: {
     tokens: number;
     limit: number;
-    pct: number;
+    pct: number | null;
     real: boolean;
-    limitEstimated: boolean;
+    limitKnown: boolean;
     lastIn: number | null;
     lastOut: number | null;
   };
@@ -973,9 +973,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (model ? (lookupContextLength(catalog, model) ?? null) : null),
     [catalog, model],
   );
-  const contextLimitRef = useRef(128_000);
+  const contextLimitRef = useRef(DEFAULT_MODEL_CONTEXT);
   useEffect(() => {
-    contextLimitRef.current = modelContextLimit ?? 128_000;
+    contextLimitRef.current = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
   }, [modelContextLimit]);
 
   const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
@@ -992,7 +992,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
     });
-    const limit = modelContextLimit ?? 128_000;
+    const limitKnown = modelContextLimit != null;
+    const limit = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
     const lastUsage = [...messages]
       .reverse()
       .find((m) => m.role === "assistant" && m.total_tokens != null);
@@ -1001,21 +1002,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return {
         tokens,
         limit,
-        pct: Math.min(100, Math.round((tokens / limit) * 100)),
+        pct: limitKnown ? Math.min(100, Math.round((tokens / limit) * 100)) : null,
         real: true,
-        limitEstimated: modelContextLimit == null,
+        limitKnown,
         lastIn: lastUsage.prompt_tokens ?? null,
         lastOut: lastUsage.completion_tokens ?? null,
       };
     }
+    const estimated = estimateContext(
+      messages.filter((m) => m.content.length > 0),
+      system,
+      limit,
+    );
     return {
-      ...estimateContext(
-        messages.filter((m) => m.content.length > 0),
-        system,
-        limit,
-      ),
+      ...estimated,
+      pct: limitKnown ? estimated.pct : null,
       real: false,
-      limitEstimated: modelContextLimit == null,
+      limitKnown,
       lastIn: null,
       lastOut: null,
     };
