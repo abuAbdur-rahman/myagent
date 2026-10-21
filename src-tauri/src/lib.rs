@@ -7,6 +7,7 @@ mod knowledge;
 mod llm;
 mod mcp;
 mod permissions;
+mod research;
 mod sandbox;
 mod screen;
 mod skills;

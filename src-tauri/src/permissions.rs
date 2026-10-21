@@ -342,7 +342,7 @@ pub(crate) async fn allow_tool_from(
 }
 
 pub fn tool_wide_allow(action: &str) -> bool {
-    matches!(action, "web_fetch" | "web_search")
+    matches!(action, "web_fetch" | "web_search" | "research_run")
 }
 
 #[derive(Deserialize)]
@@ -817,6 +817,7 @@ mod tests {
     fn tool_wide_allow_only_for_network_tools() {
         assert!(tool_wide_allow("web_fetch"));
         assert!(tool_wide_allow("web_search"));
+        assert!(tool_wide_allow("research_run"));
         assert!(!tool_wide_allow("run_powershell"));
         assert!(!tool_wide_allow("save_artifact"));
     }

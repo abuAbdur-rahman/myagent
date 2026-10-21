@@ -391,6 +391,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Not:** Untrusted third-party code, per-exec undo or diff UI (v2), background or long-lived execs, host-exec fallback when Docker is absent.
 - **Done:** A `python3` socket connect and a ping fail inside; a host path under `/run/desktop/mnt/host/...` and a `..` escape fail; a `.git/hooks` or `AGENTS.md` write fails from the container and from host tools; a fork bomb and an output flood are contained with a spill path; after `rm -rf .` the checkpoint restores the tree including a previously untracked file; a killed app leaves no labelled container behind; the daemon being down refuses the exec with no host fallback.
 
+## D23. Research job
+- **Status:** Done (v0.4.0: `research_run`, planner queries, one approval card, cited markdown memo artifact)
+- **Ref:** † Claude Code and OpenCode delegate multi-source lookups; cited research memos are the expected output shape.
+- **Build:** One in-turn tool `research_run(query)` in `src-tauri/src/research.rs`: a planner call turns the question into up to 3 search queries, `websearch::search` gathers up to 10 unique hits, up to 4 pages are fetched with `webfetch::fetch_page`, a 60K-character notes digest feeds a main-model synthesis call, and the memo returns as the tool result plus a `StreamEvent::Artifact` markdown artifact. Budgets: 25s per search, 20s per fetch, 90s for search and fetch, 60s for synthesis, 6K chars per page, 12K chars memo. Progress re-sends `ToolStart` with the same id so the tool entry updates in place. Cancel propagates from the parent turn; a failed synthesis still returns a source list.
+- **Not:** Background jobs, more than one concurrent job, a research-only task model, per-host pre-grants (the single `research_run` card covers the whole job).
+- **Done:** One approval covers search and fetches; the memo cites its sources and opens as a markdown artifact; cancel stops the job; tests cover query parsing, dedupe, notes and memo caps.
+
 ---
 
 # E. Memory and instructions

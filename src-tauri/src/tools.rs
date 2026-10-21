@@ -666,6 +666,21 @@ pub fn tool_specs(
         {
             "type": "function",
             "function": {
+                "name": "research_run",
+                "description": "Run a bounded web research job: search, fetch the top pages, and return a cited markdown memo as a saved artifact. Use it when an answer needs several sources; for a single lookup use web_search or web_fetch. One approval covers the whole job.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "The research question, with any scope or constraints the memo must respect." },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "todo_write",
                 "description": "Replace the current chat's visible task checklist. Use for multi-step work so the user can see progress. Pass the full list each time; statuses are pending, in_progress, completed, cancelled.",
                 "parameters": {
@@ -1122,6 +1137,14 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
                 .take(120)
                 .collect();
             format!("Search: {query}")
+        }
+        "research_run" => {
+            let query: String = arg_str(args, "query")
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            format!("Research: {query}")
         }
         "todo_write" => {
             let count = args
