@@ -2,10 +2,12 @@
   // The accessible select/combobox primitives under src/components/ui/select are
   // vendored, self-contained, and keyboard-heavy by nature. They carry no test
   // harness yet, so raw CRAP scoring flags them. Exclude them from health and
-  // complexity findings only — dead-code still checks them.
+  // complexity findings only - dead-code still checks them. public/ holds runtime
+  // assets loaded by URL (the PCM worklet), so it has no module graph either.
   "health": {
-    "ignore": ["src/components/ui/select/**"]
+    "ignore": ["src/components/ui/select/**", "public/**"]
   },
+  "ignoreFindings": ["public/pcm-worklet.js"],
   // Pin the complexity gate to the v0.3.0 baseline so `fallow audit` fails only
   // on regressions introduced after it, not on the inherited hot functions
   // (AppProvider, sendMessage, …) that predate this release.

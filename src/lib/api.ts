@@ -403,3 +403,51 @@ export function sandboxRebuild() {
 export function sandboxSetLimits(cpus: number, memoryMb: number) {
   return invoke<SandboxStatus>("sandbox_set_limits", { cpus, memoryMb });
 }
+
+export type VoiceFile = {
+  name: string;
+  bytes: number;
+  expected: number;
+};
+
+export type VoiceStatus = {
+  enabled: boolean;
+  ready: boolean;
+  model_dir: string;
+  bytes: number;
+  expected: number;
+  provider: string | null;
+  model: string | null;
+  files: VoiceFile[];
+};
+
+export type VoiceProgress = {
+  file: string;
+  done: number;
+  total: number;
+};
+
+type Transcript = {
+  text: string;
+  ms: number;
+};
+
+export function voiceStatus() {
+  return invoke<VoiceStatus>("voice_status");
+}
+
+export function voiceEnable() {
+  return invoke<VoiceStatus>("voice_enable");
+}
+
+export function voiceDisable() {
+  return invoke<VoiceStatus>("voice_disable");
+}
+
+export function voiceSetProvider(provider: string | null, model: string | null) {
+  return invoke<VoiceStatus>("voice_set_provider", { provider, model });
+}
+
+export function audioTranscribe(pcm: number[], sampleRate: number) {
+  return invoke<Transcript>("audio_transcribe", { pcm, sampleRate });
+}
