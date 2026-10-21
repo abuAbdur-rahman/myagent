@@ -85,6 +85,8 @@ function ToolIcon({ name }: { name: string }) {
       return <Globe {...props} />;
     case "web_search":
       return <Search {...props} />;
+    case "research_run":
+      return <Globe {...props} />;
     case "todo_write":
     case "todo_set":
       return <ListChecks {...props} />;

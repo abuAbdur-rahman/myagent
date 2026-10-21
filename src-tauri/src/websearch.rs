@@ -14,7 +14,7 @@ pub const SEARCH_KEY_ACCOUNT: &str = "search:tavily";
 pub const DEFAULT_SEARXNG_ENDPOINT: &str = "http://127.0.0.1:8888";
 const MAX_SEARCH_KEYS: usize = 5;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SearchHit {
     pub title: String,
     pub url: String,

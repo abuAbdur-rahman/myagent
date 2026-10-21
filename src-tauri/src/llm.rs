@@ -231,7 +231,7 @@ async fn apply_optional_params(
     }
 }
 
-fn truncate_chars(text: &str, max: usize) -> String {
+pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
     let truncated: String = text.chars().take(max).collect();
     if text.chars().count() > max {
         format!("{truncated}…")
@@ -255,6 +255,61 @@ fn strip_tool_spec(specs: &mut serde_json::Value, name: &str) {
                 != Some(name)
         });
     }
+}
+
+pub(crate) struct TextCompletion<'a> {
+    pub client: &'a reqwest::Client,
+    pub base_url: &'a str,
+    pub key: &'a str,
+    pub model: &'a str,
+    pub system: &'a str,
+    pub user: &'a str,
+    pub cancel: &'a Notify,
+    pub connection_kind: Option<&'a str>,
+}
+
+pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<String> {
+    let TextCompletion {
+        client,
+        base_url,
+        key,
+        model,
+        system,
+        user,
+        cancel,
+        connection_kind,
+    } = request;
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+        "stream": false,
+    });
+    let url = endpoint(base_url, "chat/completions");
+    let resp = tokio::select! {
+        resp = post_with_retry(
+            client,
+            &url,
+            key,
+            &body,
+            cancel,
+            None,
+            connection_kind,
+        ) => resp?,
+        _ = cancel.notified() => return Err(AppError::Cancelled),
+    };
+    let value: serde_json::Value = resp.json().await.map_err(AppError::from)?;
+    let text = value["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return Err(AppError::Upstream("empty completion".to_string()));
+    }
+    Ok(text)
 }
 
 fn message_text(content: &serde_json::Value) -> String {
@@ -1002,6 +1057,11 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
         }
     }
     if name == "web_search" {
+        if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
+            return vec![query.trim().to_string()];
+        }
+    }
+    if name == "research_run" {
         if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
             return vec![query.trim().to_string()];
         }
@@ -1787,6 +1847,70 @@ impl ToolRunner for RealTools<'_> {
                     });
                     history.push(tool_text_message(&id, &output));
                 }
+                Err(error) => {
+                    let message = error.to_string();
+                    self.on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: false,
+                        preview: truncate_preview(&message),
+                    });
+                    history.push(tool_text_message(&id, &format!("Error: {message}")));
+                }
+            }
+            return Ok(StepControl::Continue);
+        }
+
+        if name == "research_run" {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let progress = |summary: &str| {
+                self.on_event.send(StreamEvent::ToolStart {
+                    id: id.clone(),
+                    name: "research_run".to_string(),
+                    summary: summary.to_string(),
+                });
+            };
+            let result = crate::research::run(
+                crate::research::ResearchRequest {
+                    app: self.app,
+                    client: self.client,
+                    base_url: &self.req.base_url,
+                    key: self.key,
+                    model: &self.req.model,
+                    connection_kind: self.req.connection_kind.as_deref(),
+                    backend: self.req.search_backend.as_deref(),
+                    endpoint: self.req.search_endpoint.as_deref(),
+                    query,
+                    cancel: self.cancel,
+                },
+                progress,
+            )
+            .await;
+            match result {
+                Ok(outcome) => {
+                    self.on_event.send(StreamEvent::Artifact {
+                        title: format!("Research: {}", truncate_chars(query.trim(), 80)),
+                        lang: "markdown".to_string(),
+                        code: outcome.memo.clone(),
+                    });
+                    tools::log_audit(
+                        self.app,
+                        self.req.conversation_id.as_deref(),
+                        "research_run",
+                        "done",
+                        &format!(
+                            "{} sources, {} pages, {} failed",
+                            outcome.sources, outcome.fetched, outcome.failed
+                        ),
+                    )
+                    .await;
+                    self.on_event.send(StreamEvent::ToolResult {
+                        id: id.clone(),
+                        ok: true,
+                        preview: truncate_preview(&outcome.memo),
+                    });
+                    history.push(tool_text_message(&id, &outcome.memo));
+                }
+                Err(AppError::Cancelled) => return Ok(StepControl::StopTurn),
                 Err(error) => {
                     let message = error.to_string();
                     self.on_event.send(StreamEvent::ToolResult {
