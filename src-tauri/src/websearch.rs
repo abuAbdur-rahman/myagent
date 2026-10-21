@@ -227,11 +227,6 @@ fn store_tavily_keys(keys: &[String]) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn search_key_count() -> Result<usize, String> {
-    Ok(read_tavily_keys().unwrap_or_default().len())
-}
-
-#[tauri::command]
 pub fn search_key_add(key: String) -> Result<usize, String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -260,6 +255,65 @@ pub fn search_key_remove(index: usize) -> Result<usize, String> {
     keys.remove(index);
     store_tavily_keys(&keys)?;
     Ok(keys.len())
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SearchKeyInfo {
+    pub index: usize,
+    pub hint: String,
+}
+
+fn mask_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 4 {
+        return "••••".to_string();
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("••••{tail}")
+}
+
+#[tauri::command]
+pub fn search_key_list() -> Result<Vec<SearchKeyInfo>, String> {
+    Ok(read_tavily_keys()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(index, key)| SearchKeyInfo {
+            index,
+            hint: mask_key(key),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn search_key_test(index: usize) -> Result<String, String> {
+    let keys = read_tavily_keys()?;
+    let key = keys
+        .get(index)
+        .ok_or_else(|| fail("BAD_KEY", "no search key at that position"))?;
+    let client = build_client()?;
+    let body = serde_json::json!({
+        "query": "ping",
+        "search_depth": "basic",
+        "max_results": 1,
+        "include_answer": false,
+    });
+    let response = client
+        .post(TAVILY_URL)
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| fail("NETWORK", error))?;
+    let status = response.status();
+    let payload = response
+        .text()
+        .await
+        .map_err(|error| fail("NETWORK", error))?;
+    if status.is_success() {
+        return Ok("Key works".to_string());
+    }
+    Err(map_status_error(status, &payload, "tavily"))
 }
 
 async fn tavily_search_at(
@@ -533,6 +587,14 @@ mod tests {
             parse_tavily_keys("not json ["),
             Some(vec!["not json [".to_string()])
         );
+    }
+
+    #[test]
+    fn mask_key_keeps_only_the_tail() {
+        assert_eq!(mask_key("tvly-1234abcd"), "••••abcd");
+        assert_eq!(mask_key("abc"), "••••");
+        assert_eq!(mask_key("abcd"), "••••");
+        assert!(!mask_key("tvly-supersecret").contains("supersecret"));
     }
 
     #[test]

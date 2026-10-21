@@ -1096,14 +1096,26 @@ export function AuditPage() {
   );
 }
 
-export function SearchPage() {  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
+export function SearchPage() {
+  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
   const [key, setKey] = useState("");
-  const [keyCount, setKeyCount] = useState(0);
+  const [keys, setKeys] = useState<api.SearchKeyInfo[]>([]);
   const [status, setStatus] = useState<string | null>(null);
+  const [testing, setTesting] = useState<number | null>(null);
+  const [probes, setProbes] = useState<Record<number, { ok: boolean; text: string }>>({});
+
+  const reload = useCallback(async () => {
+    try {
+      setKeys(await api.searchKeyList());
+      setProbes({});
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, []);
 
   useEffect(() => {
-    api.searchKeyCount().then(setKeyCount).catch(() => undefined);
-  }, []);
+    void reload();
+  }, [reload]);
 
   const save = async () => {
     if (!key.trim()) {
@@ -1111,10 +1123,10 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
       return;
     }
     try {
-      const count = await api.addSearchKey(key.trim());
-      setKeyCount(count);
+      await api.addSearchKey(key.trim());
       setKey("");
-      setStatus(count > 1 ? `Search key added (${count} stored, rotates on quota).` : "Search key saved.");
+      await reload();
+      setStatus("Search key saved.");
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -1122,9 +1134,9 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
 
   const removeOne = async (index: number) => {
     try {
-      const count = await api.removeSearchKey(index);
-      setKeyCount(count);
-      setStatus(count === 0 ? "Search keys removed." : `Key removed (${count} left).`);
+      await api.removeSearchKey(index);
+      await reload();
+      setStatus("Key removed.");
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -1133,10 +1145,22 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
   const clear = async () => {
     try {
       await api.deleteApiKey(SEARCH_KEY_ACCOUNT);
-      setKeyCount(0);
+      await reload();
       setStatus("Search keys removed.");
     } catch (e) {
       setStatus(errorText(e));
+    }
+  };
+
+  const probe = async (index: number) => {
+    setTesting(index);
+    try {
+      const message = await api.searchKeyTest(index);
+      setProbes((prev) => ({ ...prev, [index]: { ok: true, text: message } }));
+    } catch (e) {
+      setProbes((prev) => ({ ...prev, [index]: { ok: false, text: errorText(e) } }));
+    } finally {
+      setTesting(null);
     }
   };
 
@@ -1158,8 +1182,8 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
         <SettingRow
           label="Tavily API keys"
           description={
-            keyCount > 0
-              ? `${keyCount} key${keyCount === 1 ? "" : "s"} stored — rotates on quota`
+            keys.length > 0
+              ? `${keys.length} key${keys.length === 1 ? "" : "s"} stored — rotates on quota`
               : "Stored in Windows Credential Manager"
           }
         >
@@ -1174,29 +1198,49 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
           <Button variant="primary" onClick={() => void save()}>
             Add key
           </Button>
-          {keyCount > 0 && (
+          {keys.length > 0 && (
             <Button variant="danger" onClick={() => void clear()}>
               Remove all
             </Button>
           )}
         </SettingRow>
       )}
-      {searchBackend === "tavily" && keyCount > 0 && (
-        <SettingRow label="Stored keys" description="First key is tried first">
-          <div className="flex flex-wrap gap-2">
-            {Array.from({ length: keyCount }, (_, index) => (
-              <span
-                key={index}
-                className="inline-flex items-center gap-2 rounded-control border border-border px-2 py-1 text-xs"
+      {searchBackend === "tavily" && keys.length > 0 && (
+        <div className="mt-1" data-setting-term="Stored keys">
+          <p className="px-2 py-2 text-xs text-muted">First key is tried first.</p>
+          {keys.map((entry) => {
+            const result = probes[entry.index];
+            return (
+              <div
+                key={entry.index}
+                className="flex items-center gap-2 border-b border-border px-2 py-2 text-xs"
               >
-                Key {index + 1}
-                <Button variant="ghost" size="sm" onClick={() => void removeOne(index)}>
+                <span className="font-medium">Key {entry.index + 1}</span>
+                <span className="font-mono text-muted">{entry.hint}</span>
+                <span className="flex-1" />
+                {result && (
+                  <span className={cn(result.ok ? "text-muted" : "text-warn")}>{result.text}</span>
+                )}
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={testing !== null}
+                  onClick={() => void probe(entry.index)}
+                >
+                  {testing === entry.index ? <Spinner label="Testing" /> : "Test"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={testing !== null}
+                  onClick={() => void removeOne(entry.index)}
+                >
                   Remove
                 </Button>
-              </span>
-            ))}
-          </div>
-        </SettingRow>
+              </div>
+            );
+          })}
+        </div>
       )}
       {searchBackend === "searxng" && (
         <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">

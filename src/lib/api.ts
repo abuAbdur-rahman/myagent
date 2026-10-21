@@ -16,8 +16,17 @@ export function deleteApiKey(connectionId: string) {
   return invoke<void>("delete_api_key", { connectionId });
 }
 
-export function searchKeyCount() {
-  return invoke<number>("search_key_count");
+export interface SearchKeyInfo {
+  index: number;
+  hint: string;
+}
+
+export function searchKeyList() {
+  return invoke<SearchKeyInfo[]>("search_key_list");
+}
+
+export function searchKeyTest(index: number) {
+  return invoke<string>("search_key_test", { index });
 }
 
 export function addSearchKey(apiKey: string) {
