@@ -34,13 +34,25 @@ import {
 } from "../ui";
 import { DropdownMenu, Select, type MenuEntry } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
-import { downloadText, errorText } from "../../lib/utils";
+import { downloadText, errorText, copyText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Connection, Memory } from "../../lib/types";
 import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
+import {
+  auditCounts,
+  auditCsv,
+  auditJson,
+  auditSummary,
+  auditTime,
+  auditTools,
+  decisionClass,
+  filterAudit,
+  groupAuditByDay,
+  type AuditDecisionFilter,
+} from "../../lib/audit";
 
 function SettingRow({
   label,
@@ -935,15 +947,45 @@ function useMcpServers(projectId: string | null) {
   return { servers, probes, probing, status, run, reconnect };
 }
 
-function AuditRow({ row }: { row: AuditLog }) {
-  const detail = row.detail ? ` · ${row.detail}` : "";
+function AuditEntry({ row }: { row: AuditLog }) {
+  const [open, setOpen] = useState(false);
+  const kind = decisionClass(row.decision);
+  const tone: PillTone =
+    kind === "allow" ? "success" : kind === "deny" ? "danger" : kind === "ask" ? "warn" : "neutral";
   return (
-    <SettingRow
-      label={row.tool}
-      description={`${row.decision} · ${new Date(row.ts).toLocaleString()}${detail}`}
-    >
-      <span className="text-xs text-muted">{row.conversation_id ?? "global"}</span>
-    </SettingRow>
+    <div className="border-b border-border px-2 py-2">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <Pill tone={tone}>{row.decision}</Pill>
+        <span className="truncate font-mono text-xs">{row.tool}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted">{row.detail}</span>
+        <span className="flex-none text-xs tabular-nums text-muted">{auditTime(row.ts)}</span>
+        <ChevronDown
+          size={14}
+          className={cn("flex-none text-muted transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open && (
+        <dl className="mt-2 grid grid-cols-[88px_1fr] gap-x-2 gap-y-1 text-xs">
+          <dt className="text-muted">Time</dt>
+          <dd>{new Date(row.ts).toLocaleString()}</dd>
+          <dt className="text-muted">Chat</dt>
+          <dd className="break-all font-mono">{row.conversation_id ?? "global"}</dd>
+          <dt className="text-muted">Decision</dt>
+          <dd>{row.decision}</dd>
+          {row.detail && (
+            <>
+              <dt className="text-muted">Detail</dt>
+              <dd className="whitespace-pre-wrap break-words">{row.detail}</dd>
+            </>
+          )}
+        </dl>
+      )}
+    </div>
   );
 }
 
@@ -1119,6 +1161,8 @@ export function AuditPage() {
   const [rows, setRows] = useState<AuditLog[]>([]);
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [decision, setDecision] = useState<AuditDecisionFilter>("all");
+  const [tool, setTool] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -1159,6 +1203,37 @@ export function AuditPage() {
     }
   };
 
+  const copy = async (text: string, message: string) => {
+    const ok = await copyText(text);
+    if (ok) toast(message);
+    else setStatus("Clipboard is not available.");
+  };
+
+  const exportItems = (rows: AuditLog[]): MenuEntry[] => [
+    { id: "copy-csv", label: "Copy as CSV", onSelect: () => void copy(auditCsv(rows), "CSV copied") },
+    {
+      id: "copy-json",
+      label: "Copy as JSON",
+      onSelect: () => void copy(auditJson(rows), "JSON copied"),
+    },
+    { id: "separator", type: "separator" },
+    {
+      id: "download-csv",
+      label: "Download CSV",
+      onSelect: () => downloadText("audit-log.csv", auditCsv(rows), "text/csv"),
+    },
+    {
+      id: "download-json",
+      label: "Download JSON",
+      onSelect: () => downloadText("audit-log.json", auditJson(rows), "application/json"),
+    },
+  ];
+
+  const tools = auditTools(rows);
+  const visible = filterAudit(rows, decision, tool);
+  const counts = auditCounts(visible);
+  const groups = groupAuditByDay(visible, new Date());
+
   return (
     <div>
       <SettingRow label="Search" description="Filter by tool, decision or detail">
@@ -1170,11 +1245,54 @@ export function AuditPage() {
           autoComplete="off"
         />
       </SettingRow>
-      {loaded && rows.length === 0 && (
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-2">
+        <Segmented<AuditDecisionFilter>
+          value={decision}
+          onChange={setDecision}
+          label="Filter by decision"
+          options={[
+            { value: "all", label: "All" },
+            { value: "allow", label: "Allowed" },
+            { value: "ask", label: "Asked" },
+            { value: "deny", label: "Denied" },
+            { value: "other", label: "Other" },
+          ]}
+        />
+        <Select
+          size="sm"
+          value={tool ?? ""}
+          onChange={(value) => setTool(value === "" ? null : value)}
+          aria-label="Filter by tool"
+          options={[
+            { value: "", label: "All tools" },
+            ...tools.map((entry) => ({
+              value: entry.name,
+              label: `${entry.name} (${entry.count})`,
+            })),
+          ]}
+        />
+        <span className="ml-auto text-xs text-muted">{auditSummary(counts)}</span>
+        <DropdownMenu
+          align="end"
+          aria-label="Export audit log"
+          items={exportItems(visible)}
+          trigger={
+            <Button size="sm" variant="default" disabled={visible.length === 0}>
+              Export
+            </Button>
+          }
+        />
+      </div>
+      {loaded && groups.length === 0 && (
         <p className="px-2 py-3 text-xs text-muted">{auditEmptyText(search)}</p>
       )}
-      {rows.map((row) => (
-        <AuditRow key={row.id} row={row} />
+      {groups.map((group) => (
+        <section key={group.key}>
+          <h4 className="px-2 pb-1 pt-3 text-xs font-medium text-muted">{group.label}</h4>
+          {group.rows.map((row) => (
+            <AuditEntry key={row.id} row={row} />
+          ))}
+        </section>
       ))}
       <SettingRow label="Clear log" description="Remove every recorded decision">
         <Button variant="danger" size="sm" onClick={() => void clear()}>
