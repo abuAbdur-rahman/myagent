@@ -329,6 +329,10 @@ export function mcpProbe(id: string) {
   return invoke<McpProbe>("mcp_probe", { id });
 }
 
+export function mcpTest(transport: string, cmd: string | null, url: string | null) {
+  return invoke<McpProbe>("mcp_test", { transport, cmd, url });
+}
+
 export function mcpRemove(id: string) {
   return invoke<void>("mcp_remove", { id });
 }

@@ -40,6 +40,7 @@ import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Connection, Memory } from "../../lib/types";
+import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 
 function SettingRow({
   label,
@@ -329,11 +330,15 @@ function Callout({ children }: { children: React.ReactNode }) {
 
 function McpPageHeader({
   scope,
-  count,
+  summary,
+  reconnecting,
+  onReconnectAll,
   onAdd,
 }: {
   scope: string;
-  count: number;
+  summary: McpSummary;
+  reconnecting: boolean;
+  onReconnectAll: () => void;
   onAdd: () => void;
 }) {
   return (
@@ -341,13 +346,24 @@ function McpPageHeader({
       <div className="min-w-0">
         <h3 className="text-sm font-medium">MCP servers</h3>
         <p className="text-xs text-muted">
-          {scope} · {count} {count === 1 ? "server" : "servers"}
+          {scope} · {mcpSummaryText(summary)}
         </p>
       </div>
-      <Button variant="primary" size="sm" onClick={onAdd}>
-        <Plus size={14} />
-        Add server
-      </Button>
+      <div className="flex flex-none items-center gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={summary.enabled === 0 || reconnecting}
+          onClick={onReconnectAll}
+        >
+          <RefreshCw size={14} />
+          Reconnect all
+        </Button>
+        <Button variant="primary" size="sm" onClick={onAdd}>
+          <Plus size={14} />
+          Add server
+        </Button>
+      </div>
     </div>
   );
 }
@@ -434,10 +450,12 @@ function McpFailure({
   id,
   error,
   onReconnect,
+  onEdit,
 }: {
   id: string;
   error: string;
   onReconnect: (id: string) => void;
+  onEdit: () => void;
 }) {
   return (
     <div className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
@@ -450,6 +468,9 @@ function McpFailure({
       >
         Try again
       </button>
+      <button type="button" className="flex-none underline hover:no-underline" onClick={onEdit}>
+        Edit
+      </button>
     </div>
   );
 }
@@ -459,11 +480,13 @@ function McpIdentity({
   probe,
   state,
   onReconnect,
+  onEdit,
 }: {
   server: api.McpServerRow;
   probe: api.McpProbe | undefined;
   state: McpState;
   onReconnect: (id: string) => void;
+  onEdit: () => void;
 }) {
   const { text, title } = mcpTargetText(server);
   const failed = state.label === "Failed";
@@ -478,7 +501,12 @@ function McpIdentity({
         {text}
       </div>
       {failed && (
-        <McpFailure id={server.id} error={mcpProbeError(probe)} onReconnect={onReconnect} />
+        <McpFailure
+          id={server.id}
+          error={mcpProbeError(probe)}
+          onReconnect={onReconnect}
+          onEdit={onEdit}
+        />
       )}
     </div>
   );
@@ -592,7 +620,13 @@ function McpServerCard({
         <span className="mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-control border border-border text-xs tabular-nums text-muted">
           {index + 1}
         </span>
-        <McpIdentity server={server} probe={probe} state={state} onReconnect={onReconnect} />
+        <McpIdentity
+          server={server}
+          probe={probe}
+          state={state}
+          onReconnect={onReconnect}
+          onEdit={() => onEdit(server)}
+        />
         <Toggle
           checked={server.enabled}
           onChange={(next) => onToggle(server.id, next)}
@@ -759,6 +793,8 @@ function McpServerDialog({
 }) {
   const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP_DRAFT);
   const [errors, setErrors] = useState<McpErrors>({});
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
 
@@ -767,6 +803,40 @@ function McpServerDialog({
     setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
     setErrors({});
   }, [open, editing, seed]);
+
+  useEffect(() => {
+    setTest(null);
+  }, [draft]);
+
+  const probeDraft = async () => {
+    const target = mcpDraftTarget(draft).trim();
+    if (!target) {
+      setTest({ ok: false, text: "Add a command or URL first." });
+      return;
+    }
+    setTesting(true);
+    try {
+      const probe = await api.mcpTest(
+        draft.transport,
+        draft.transport === "stdio" ? target : null,
+        draft.transport === "sse" ? target : null,
+      );
+      setTest(
+        probe.error
+          ? { ok: false, text: probe.error }
+          : {
+              ok: true,
+              text: `Connected · ${probe.tools.length} ${
+                probe.tools.length === 1 ? "tool" : "tools"
+              }`,
+            },
+      );
+    } catch (e) {
+      setTest({ ok: false, text: errorText(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const submit = () => {
     const found = mcpErrors(draft, servers, editing);
@@ -791,6 +861,21 @@ function McpServerDialog({
         nameRef={nameRef}
         targetRef={targetRef}
       />
+      <div className="mt-3 flex items-start gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={testing}
+          onClick={() => void probeDraft()}
+        >
+          {testing ? <Spinner label="Testing" /> : "Test connection"}
+        </Button>
+        {test && (
+          <p className={cn("pt-1.5 text-xs", test.ok ? "text-muted" : "text-danger")} role="status">
+            {test.text}
+          </p>
+        )}
+      </div>
       <McpDialogFooter
         editing={editing !== null}
         onClose={onClose}
@@ -965,11 +1050,20 @@ export function McpPage() {
 
   const close = () => setDialog(CLOSED_MCP_DIALOG);
 
+  const summary = mcpSummary(servers, probes);
+  const reconnecting = Object.values(probing).some(Boolean);
+
   return (
     <div className="flex flex-col gap-3 pb-2">
       <McpPageHeader
         scope={mcpScope(activeProject)}
-        count={servers.length}
+        summary={summary}
+        reconnecting={reconnecting}
+        onReconnectAll={() => {
+          for (const server of servers) {
+            if (server.enabled) reconnect(server.id);
+          }
+        }}
         onAdd={() => setDialog({ open: true, editing: null, seed: null })}
       />
       <Callout>

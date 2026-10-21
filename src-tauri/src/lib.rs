@@ -402,6 +402,7 @@ pub fn run() {
             mcp::mcp_set_approval,
             mcp::mcp_status,
             mcp::mcp_probe,
+            mcp::mcp_test,
             commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,
