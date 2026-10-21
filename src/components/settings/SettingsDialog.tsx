@@ -6,6 +6,7 @@ import {
   Info,
   Keyboard,
   History,
+  Mic,
   Palette,
   Plug,
   Search,
@@ -19,6 +20,7 @@ import { useApp } from "../../lib/store";
 import { ProvidersPage } from "./ProvidersPage";
 import { ChangelogPage } from "./ChangelogPage";
 import { SandboxPage } from "./SandboxPage";
+import { VoicePage } from "./VoicePage";
 import {
   AboutPage,
   AppearancePage,
@@ -41,6 +43,7 @@ const PAGES = [
   { id: "search", label: "Search", icon: <Search size={16} /> },
   { id: "mcp", label: "MCP", icon: <Blocks size={16} /> },
   { id: "sandbox", label: "Sandbox", icon: <Shield size={16} /> },
+  { id: "voice", label: "Voice", icon: <Mic size={16} /> },
   { id: "audit", label: "Audit", icon: <History size={16} /> },
   { id: "memory", label: "Memory", icon: <Brain size={16} /> },
   { id: "data", label: "Data", icon: <Database size={16} /> },
@@ -135,6 +138,7 @@ export function SettingsDialog() {
           {page === "search" && <SearchPage />}
           {page === "mcp" && <McpPage />}
           {page === "sandbox" && <SandboxPage />}
+          {page === "voice" && <VoicePage />}
           {page === "audit" && <AuditPage />}
           {page === "memory" && <MemoryPage />}
           {page === "data" && <DataPage />}

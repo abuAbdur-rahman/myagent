@@ -398,6 +398,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Not:** Background jobs, more than one concurrent job, a research-only task model, per-host pre-grants (the single `research_run` card covers the whole job).
 - **Done:** One approval covers search and fetches; the memo cites its sources and opens as a markdown artifact; cancel stops the job; tests cover query parsing, dedupe, notes and memo caps.
 
+## D24. Voice transcription
+- **Status:** Done (v0.4.0: hold-to-talk in the composer, local Moonshine base int8, optional OpenAI-compatible remote provider)
+- **Ref:** Whisper-style dictation in chat clients; the plan's V1 spec.
+- **Build:** `public/pcm-worklet.js` captures 16 kHz mono in 1024-frame chunks; `src/lib/voice.ts` merges, converts to i16 and caps at 60 s; `useVoiceInput` owns press-and-hold, cancel and the draft append. Rust `voice.rs` exposes `voice_status`, `voice_enable`, `voice_disable`, `voice_set_provider` and `audio_transcribe`. Enable downloads `onnx-community/moonshine-base-ONNX` (encoder + merged decoder + tokenizer, ~64 MB, pinned sizes) into `app_local_data_dir/models/moonshine-base` with progress events; the model loads lazily and unloads after five idle minutes. `transcribe-rs` is vendored at `src-tauri/vendor/transcribe-rs` with the ort rc.15 environment patch. The remote path uses a custom connection's base URL and vault key to POST a WAV to `/audio/transcriptions`. Mic permission is granted through the app-level `on_permission_request` for `Microphone` only.
+- **Not:** Hands-free VAD, streaming partial transcripts, TTS, voice clone, the HAP accent notice and the Common Voice WER matrix (v0.4.x follow-up).
+- **Done:** Hold the mic, speak, release: the transcript lands in the draft. Local inference was checked against a generated 16 kHz clip; unit tests cover PCM conversion, resampling, WAV framing and the model-ready check.
+
 ---
 
 # E. Memory and instructions

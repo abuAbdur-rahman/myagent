@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, ChevronDown, Mic, Paperclip, Square, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
 import { Select } from "./ui/select";
@@ -28,6 +28,7 @@ import {
   type ChatDocument,
 } from "../lib/chat-docs";
 import { downscaleImage, isSupportedImage } from "../lib/image";
+import { useVoiceInput } from "./composer/useVoiceInput";
 import type { FileCommand } from "../lib/types";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -350,6 +351,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     if (chip && isDocChip(chip)) void releaseChatDoc(chip.doc, docsOf(rest));
   };
 
+  const voice = useVoiceInput((text) => editorRef.current?.appendMarkdown(text), streaming);
+
   const historyEntries = useMemo(() => {
     const users = messages
       .filter((m) => m.role === "user")
@@ -627,6 +630,42 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
               label: level === "none" ? "No reasoning" : level,
             }))}
           />
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              void voice.start();
+            }}
+            onPointerUp={() => void voice.stop()}
+            onPointerCancel={voice.cancel}
+            onLostPointerCapture={voice.cancel}
+            onKeyDown={(event) => {
+              if (event.repeat) return;
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                void voice.start();
+              }
+            }}
+            onKeyUp={(event) => {
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                void voice.stop();
+              }
+            }}
+            disabled={streaming || voice.transcribing}
+            aria-label={voice.recording ? "Stop recording" : "Hold to talk"}
+            title={voice.recording ? "Release to transcribe" : "Hold to talk"}
+            className={cn(
+              "grid h-7 w-7 flex-none place-items-center rounded-control border border-border disabled:text-faint",
+              voice.recording
+                ? "bg-danger text-accent-contrast"
+                : "bg-surface text-muted hover:bg-hover",
+            )}
+          >
+            <Mic size={14} />
+          </button>
           <span className="flex-1" />
           <span className="text-xs text-muted">{estimateTokens(composerDraft)} tokens</span>
           {streaming ? (

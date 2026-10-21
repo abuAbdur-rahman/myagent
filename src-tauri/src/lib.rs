@@ -16,6 +16,7 @@ mod state;
 mod tools;
 mod tooltext;
 mod vault;
+mod voice;
 mod webfetch;
 mod websearch;
 
@@ -329,6 +330,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_permission_request(|webview, kind| {
+            if matches!(kind, tauri::webview::PermissionKind::Microphone)
+                && webview.label() == "main"
+                && voice::is_enabled(webview.app_handle())
+            {
+                tauri::webview::PermissionResponse::Allow
+            } else {
+                tauri::webview::PermissionResponse::Default
+            }
+        })
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations("sqlite:myagent.db", pending)
@@ -396,6 +407,11 @@ pub fn run() {
             sandbox::sandbox_rebuild,
             sandbox::sandbox_reap,
             sandbox::sandbox_set_limits,
+            voice::voice_status,
+            voice::voice_enable,
+            voice::voice_disable,
+            voice::voice_set_provider,
+            voice::audio_transcribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

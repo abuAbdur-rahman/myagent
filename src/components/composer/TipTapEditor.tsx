@@ -9,6 +9,7 @@ export interface TipTapHandle {
   focus: (pos?: "start" | "end") => void;
   clear: () => void;
   setMarkdown: (markdown: string) => void;
+  appendMarkdown: (markdown: string) => void;
   getMarkdown: () => string;
 }
 
@@ -101,6 +102,14 @@ export function TipTapEditor({
       clear: () => editor.commands.clearContent(),
       setMarkdown: (markdown) => {
         editor.commands.setContent(markdown);
+        editor.commands.focus("end");
+      },
+      appendMarkdown: (markdown) => {
+        const text = markdown.trim();
+        if (!text) return;
+        const current = readMarkdown(editor).trimEnd();
+        const next = current.length > 0 ? `${current} ${text}` : text;
+        editor.commands.setContent(next);
         editor.commands.focus("end");
       },
       getMarkdown: () => readMarkdown(editor),
