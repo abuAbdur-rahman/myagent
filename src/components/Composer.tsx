@@ -640,6 +640,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             }}
             onPointerUp={() => void voice.stop()}
             onPointerCancel={voice.cancel}
+            onLostPointerCapture={voice.cancel}
             onKeyDown={(event) => {
               if (event.repeat) return;
               if (event.key === " " || event.key === "Enter") {

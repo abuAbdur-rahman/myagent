@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use transcribe_rs::onnx::Quantization;
 use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineParams, MoonshineVariant};
 
@@ -15,25 +17,36 @@ use crate::{connections, vault};
 
 const MODEL_DIR: &str = "models/moonshine-base";
 const HF_BASE: &str = "https://huggingface.co/onnx-community/moonshine-base-ONNX/resolve/main";
-const MODEL_FILES: [(&str, &str, u64); 3] = [
+const MODEL_FILES: [(&str, &str, u64, &str); 3] = [
     (
         "encoder_model.int8.onnx",
         "onnx/encoder_model_int8.onnx",
         20_488_801,
+        "4edb38db96b52ddee5a3b25d2211bb6394f9a9a2d95f67bce0e8c861da018a4d",
     ),
     (
         "decoder_model_merged.int8.onnx",
         "onnx/decoder_model_merged_int8.onnx",
         42_427_261,
+        "45febab0347ffbe1326459e092ae20a2cfda10ca33ab018b3c299247284de61b",
     ),
-    ("tokenizer.json", "tokenizer.json", 3_761_754),
+    (
+        "tokenizer.json",
+        "tokenizer.json",
+        3_761_754,
+        "7b913404bdd039af4756783218af4440bc07fb7d6d8258d677e34f95b3ec416f",
+    ),
 ];
 const SAMPLE_RATE: u32 = 16_000;
 const MAX_SECONDS: usize = 60;
 const MIN_SECONDS: f32 = 0.2;
 const IDLE_UNLOAD: Duration = Duration::from_secs(300);
+const PROGRESS_STEP: u64 = 256 * 1024;
+const MAX_REMOTE_BYTES: usize = 1024 * 1024;
 
 static ENABLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static MODEL: OnceLock<Mutex<Option<Loaded>>> = OnceLock::new();
+static UNLOAD_GEN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct VoiceConfig {
@@ -94,7 +107,13 @@ fn config(app: &AppHandle) -> VoiceConfig {
         return VoiceConfig::default();
     };
     match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                eprintln!("voice: cannot parse config: {error}");
+                VoiceConfig::default()
+            }
+        },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => VoiceConfig::default(),
         Err(error) => {
             eprintln!("voice: cannot read config: {error}");
@@ -112,7 +131,9 @@ fn save(app: &AppHandle, cfg: &VoiceConfig) -> AppResult<()> {
     }
     let text = serde_json::to_string_pretty(cfg)
         .map_err(|e| AppError::Internal(format!("voice config: {e}")))?;
-    std::fs::write(&path, text).map_err(|e| AppError::Internal(format!("voice config: {e}")))
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| AppError::Internal(format!("voice config: {e}")))?;
+    std::fs::rename(&tmp, &path).map_err(|e| AppError::Internal(format!("voice config: {e}")))
 }
 
 fn model_dir(app: &AppHandle) -> PathBuf {
@@ -122,11 +143,15 @@ fn model_dir(app: &AppHandle) -> PathBuf {
 }
 
 fn model_ready(dir: &Path) -> bool {
-    MODEL_FILES.iter().all(|(name, _, size)| {
+    MODEL_FILES.iter().all(|(name, _, size, _)| {
         std::fs::metadata(dir.join(name))
             .map(|meta| meta.len() == *size)
             .unwrap_or(false)
     })
+}
+
+pub fn is_enabled(app: &AppHandle) -> bool {
+    config(app).enabled
 }
 
 fn status(app: &AppHandle) -> VoiceStatus {
@@ -135,7 +160,7 @@ fn status(app: &AppHandle) -> VoiceStatus {
     let mut files = Vec::new();
     let mut bytes = 0;
     let mut expected = 0;
-    for (name, _, size) in MODEL_FILES {
+    for (name, _, size, _) in MODEL_FILES {
         let actual = std::fs::metadata(dir.join(name))
             .map(|meta| meta.len())
             .unwrap_or(0);
@@ -172,11 +197,11 @@ pub async fn voice_enable(
 ) -> AppResult<VoiceStatus> {
     let _guard = ENABLE.lock().await;
     let mut cfg = config(&app);
-    cfg.enabled = true;
-    save(&app, &cfg)?;
     if cfg.provider.is_none() {
         ensure_model(&app, client.inner()).await?;
     }
+    cfg.enabled = true;
+    save(&app, &cfg)?;
     Ok(status(&app))
 }
 
@@ -185,6 +210,7 @@ pub fn voice_disable(app: AppHandle) -> AppResult<VoiceStatus> {
     let mut cfg = config(&app);
     cfg.enabled = false;
     save(&app, &cfg)?;
+    unload_model();
     Ok(status(&app))
 }
 
@@ -197,7 +223,8 @@ pub async fn voice_set_provider(
     let mut cfg = config(&app);
     match provider {
         Some(id) => {
-            connections::base_url_for(&app, &id).await?;
+            let base_url = connections::base_url_for(&app, &id).await?;
+            endpoint_url(&base_url)?;
             let model = model
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
@@ -232,7 +259,7 @@ async fn download_model(
     tokio::fs::create_dir_all(dir)
         .await
         .map_err(|e| AppError::Internal(format!("voice model dir: {e}")))?;
-    for (name, remote, expected) in MODEL_FILES {
+    for (name, remote, expected, sha) in MODEL_FILES {
         let dest = dir.join(name);
         if std::fs::metadata(&dest)
             .map(|meta| meta.len() == expected)
@@ -240,59 +267,7 @@ async fn download_model(
         {
             continue;
         }
-        let part = dir.join(format!("{name}.part"));
-        let url = format!("{HF_BASE}/{remote}");
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| AppError::Network(format!("voice model {name}: {e}")))?;
-        if !response.status().is_success() {
-            return Err(AppError::Network(format!(
-                "voice model {name}: HTTP {}",
-                response.status()
-            )));
-        }
-        let total = response.content_length().unwrap_or(expected);
-        let mut stream = response.bytes_stream();
-        let mut file = tokio::fs::File::create(&part)
-            .await
-            .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
-        let mut done = 0u64;
-        let mut reported = 0u64;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| AppError::Network(format!("voice model {name}: {e}")))?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
-            done += chunk.len() as u64;
-            if done - reported >= 256 * 1024 {
-                reported = done;
-                on_progress(VoiceProgress {
-                    file: name.to_string(),
-                    done,
-                    total,
-                });
-            }
-        }
-        file.flush()
-            .await
-            .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
-        drop(file);
-        if done != expected {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(AppError::Network(format!(
-                "voice model {name}: expected {expected} bytes, got {done}"
-            )));
-        }
-        tokio::fs::rename(&part, &dest)
-            .await
-            .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
-        on_progress(VoiceProgress {
-            file: name.to_string(),
-            done,
-            total,
-        });
+        download_file(client, dir, name, remote, expected, sha, &on_progress).await?;
     }
     on_progress(VoiceProgress {
         file: "done".to_string(),
@@ -302,6 +277,125 @@ async fn download_model(
     Ok(())
 }
 
+async fn download_file(
+    client: &reqwest::Client,
+    dir: &Path,
+    name: &str,
+    remote: &str,
+    expected: u64,
+    sha: &str,
+    on_progress: &impl Fn(VoiceProgress),
+) -> AppResult<()> {
+    let part = dir.join(format!("{name}.part"));
+    let done = match fetch_into(client, &part, name, remote, expected, on_progress).await {
+        Ok(done) => done,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(error);
+        }
+    };
+    if done != expected {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(AppError::Network(format!(
+            "voice model {name}: expected {expected} bytes, got {done}"
+        )));
+    }
+    let actual = match sha256_file(&part).await {
+        Ok(actual) => actual,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(error);
+        }
+    };
+    if !actual.eq_ignore_ascii_case(sha) {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(AppError::Network(format!(
+            "voice model {name}: checksum mismatch"
+        )));
+    }
+    tokio::fs::rename(&part, dir.join(name))
+        .await
+        .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
+    on_progress(VoiceProgress {
+        file: name.to_string(),
+        done,
+        total: done,
+    });
+    Ok(())
+}
+
+async fn fetch_into(
+    client: &reqwest::Client,
+    part: &Path,
+    name: &str,
+    remote: &str,
+    expected: u64,
+    on_progress: &impl Fn(VoiceProgress),
+) -> AppResult<u64> {
+    let url = format!("{HF_BASE}/{remote}");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::Network(format!("voice model {name}: {e}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Network(format!(
+            "voice model {name}: HTTP {}",
+            response.status()
+        )));
+    }
+    let total = response.content_length().unwrap_or(expected);
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(part)
+        .await
+        .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
+    let mut done = 0u64;
+    let mut reported = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AppError::Network(format!("voice model {name}: {e}")))?;
+        done += chunk.len() as u64;
+        if done > expected {
+            return Err(AppError::Network(format!(
+                "voice model {name}: response larger than expected"
+            )));
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
+        if done - reported >= PROGRESS_STEP {
+            reported = done;
+            on_progress(VoiceProgress {
+                file: name.to_string(),
+                done,
+                total,
+            });
+        }
+    }
+    file.flush()
+        .await
+        .map_err(|e| AppError::Internal(format!("voice model {name}: {e}")))?;
+    Ok(done)
+}
+
+async fn sha256_file(path: &Path) -> AppResult<String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| AppError::Internal(format!("voice model checksum: {e}")))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|e| AppError::Internal(format!("voice model checksum: {e}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 #[tauri::command]
 pub async fn audio_transcribe(
     app: AppHandle,
@@ -309,8 +403,15 @@ pub async fn audio_transcribe(
     pcm: Vec<i16>,
     sample_rate: u32,
 ) -> AppResult<Transcript> {
-    if pcm.is_empty() || sample_rate == 0 {
+    if pcm.is_empty() {
         return Err(AppError::Internal("no audio captured".to_string()));
+    }
+    if !(8_000..=192_000).contains(&sample_rate) {
+        return Err(AppError::Internal("unsupported sample rate".to_string()));
+    }
+    let max_samples = sample_rate as usize * MAX_SECONDS;
+    if pcm.len() > max_samples {
+        return Err(AppError::Internal("recording is too long".to_string()));
     }
     let seconds = pcm.len() as f32 / sample_rate as f32;
     if seconds < MIN_SECONDS {
@@ -343,18 +444,50 @@ pub async fn audio_transcribe(
     let text = tauri::async_runtime::spawn_blocking(move || local_transcribe(&dir, &samples))
         .await
         .map_err(|e| AppError::Internal(format!("voice worker: {e}")))??;
+    schedule_idle_unload();
     Ok(Transcript {
         text,
         ms: started.elapsed().as_millis() as u64,
     })
 }
 
+fn unload_model() {
+    let Some(slot) = MODEL.get() else {
+        return;
+    };
+    let mut guard = slot.lock().unwrap_or_else(|error| error.into_inner());
+    *guard = None;
+}
+
+fn unload_if_idle() {
+    let Some(slot) = MODEL.get() else {
+        return;
+    };
+    let mut guard = slot.lock().unwrap_or_else(|error| error.into_inner());
+    let idle = guard
+        .as_ref()
+        .map(|loaded| loaded.used.elapsed() >= IDLE_UNLOAD)
+        .unwrap_or(false);
+    if idle {
+        *guard = None;
+    }
+}
+
+fn schedule_idle_unload() {
+    let generation = UNLOAD_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(IDLE_UNLOAD).await;
+        if UNLOAD_GEN.load(Ordering::SeqCst) == generation {
+            unload_if_idle();
+        }
+    });
+}
+
 fn local_transcribe(dir: &Path, samples: &[f32]) -> AppResult<String> {
-    static MODEL: OnceLock<Mutex<Option<Loaded>>> = OnceLock::new();
     let mut slot = MODEL
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .map_err(|_| AppError::Internal("voice model lock poisoned".to_string()))?;
+        .unwrap_or_else(|error| error.into_inner());
     let stale = slot
         .as_ref()
         .map(|loaded| loaded.used.elapsed() > IDLE_UNLOAD)
@@ -381,6 +514,22 @@ fn local_transcribe(dir: &Path, samples: &[f32]) -> AppResult<String> {
     Ok(result.text.trim().to_string())
 }
 
+fn endpoint_url(base_url: &str) -> AppResult<String> {
+    let parsed = reqwest::Url::parse(base_url.trim())
+        .map_err(|e| AppError::Internal(format!("invalid connection URL: {e}")))?;
+    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
+        return Err(AppError::Internal(
+            "transcription needs an https endpoint (http is allowed only for localhost)"
+                .to_string(),
+        ));
+    }
+    Ok(format!(
+        "{}/audio/transcriptions",
+        base_url.trim_end_matches('/')
+    ))
+}
+
 async fn remote_transcribe(
     client: &reqwest::Client,
     app: &AppHandle,
@@ -391,7 +540,7 @@ async fn remote_transcribe(
 ) -> AppResult<String> {
     let base_url = connections::base_url_for(app, provider).await?;
     let key = vault::get_api_key(provider)?;
-    let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
+    let url = endpoint_url(&base_url)?;
     let part = reqwest::multipart::Part::bytes(wav_bytes(pcm, sample_rate))
         .file_name("audio.wav")
         .mime_str("audio/wav")
@@ -403,15 +552,25 @@ async fn remote_transcribe(
         .post(url)
         .bearer_auth(key)
         .multipart(form)
+        .timeout(Duration::from_secs(120))
         .send()
         .await?;
-    if !response.status().is_success() {
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(300).collect();
         return Err(AppError::Upstream(format!(
-            "transcription HTTP {}",
-            response.status()
+            "transcription HTTP {status}: {snippet}"
         )));
     }
-    let value: serde_json::Value = response.json().await?;
+    let bytes = response.bytes().await?;
+    if bytes.len() > MAX_REMOTE_BYTES {
+        return Err(AppError::Upstream(
+            "transcription response is too large".to_string(),
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| AppError::Upstream(format!("transcription response: {e}")))?;
     let text = value["text"].as_str().unwrap_or("").trim().to_string();
     if text.is_empty() {
         return Err(AppError::Upstream("empty transcription".to_string()));
@@ -499,6 +658,21 @@ mod tests {
     fn wav_encodes_samples_little_endian() {
         let bytes = wav_bytes(&[0x0102], 16_000);
         assert_eq!(&bytes[44..46], &[0x02, 0x01]);
+    }
+
+    #[test]
+    fn endpoint_requires_https_or_loopback() {
+        assert!(endpoint_url("https://api.example.com/v1").is_ok());
+        assert!(endpoint_url("http://localhost:11434/v1").is_ok());
+        assert!(endpoint_url("http://127.0.0.1:8080/v1").is_ok());
+        assert!(endpoint_url("http://api.example.com/v1").is_err());
+        assert!(endpoint_url("ftp://api.example.com").is_err());
+    }
+
+    #[test]
+    fn model_is_not_ready_without_files() {
+        let dir = std::env::temp_dir().join("myagent-voice-missing");
+        assert!(!model_ready(&dir));
     }
 
     #[tokio::test]

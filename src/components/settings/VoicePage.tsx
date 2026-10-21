@@ -3,17 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { Mic, RefreshCw, TriangleAlert } from "lucide-react";
 import * as api from "../../lib/api";
 import type { VoiceFile, VoiceProgress, VoiceStatus } from "../../lib/api";
+import { formatInvokeError } from "../../lib/api";
+import { formatBytes } from "../../lib/chat-docs";
 import { useApp } from "../../lib/store";
 import { toast } from "../../lib/toast";
-import { errorText } from "../../lib/utils";
 import { Badge, Button, Input, Spinner } from "../ui";
 import { Select } from "../ui/select";
-
-function sizeLabel(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${bytes} B`;
-}
 
 function needsModel(status: VoiceStatus | null): boolean {
   return status !== null && status.enabled && !status.ready && status.provider === null;
@@ -85,7 +80,7 @@ function FileList({ files }: { files: VoiceFile[] }) {
         <li key={file.name} className="flex items-center justify-between gap-3">
           <span className="truncate text-muted">{file.name}</span>
           <span className={file.bytes === file.expected ? "text-accent" : "text-warn"}>
-            {file.bytes === file.expected ? "ready" : sizeLabel(file.bytes)}
+            {file.bytes === file.expected ? "ready" : formatBytes(file.bytes)}
           </span>
         </li>
       ))}
@@ -113,7 +108,7 @@ function LocalHeader({
           <Badge>{status.enabled ? "On" : "Off"}</Badge>
         </div>
         <p className="mt-1 text-xs text-muted">
-          Moonshine base, int8, {sizeLabel(status.expected)} download. Runs on the CPU and unloads
+          Moonshine base, int8, {formatBytes(status.expected)} download. Runs on the CPU and unloads
           after five idle minutes.
         </p>
       </div>
@@ -151,7 +146,7 @@ function LocalCard({
           {status.model_dir}
         </span>
         <span className="flex-none">
-          {sizeLabel(status.bytes)} / {sizeLabel(status.expected)}
+          {formatBytes(status.bytes)} / {formatBytes(status.expected)}
         </span>
       </div>
       <FileList files={status.files} />
@@ -255,34 +250,50 @@ export function VoicePage() {
   const [remoteModel, setRemoteModel] = useState("whisper-1");
   const [error, setError] = useState<string | null>(null);
 
-  const apply = (next: VoiceStatus) => {
+  const apply = (next: VoiceStatus, hydrate = false) => {
     setStatus(next);
-    setRemote(next.provider ?? "");
-    setRemoteModel(next.model ?? "whisper-1");
+    if (hydrate) {
+      setRemote(next.provider ?? "");
+      setRemoteModel(next.model ?? "whisper-1");
+    }
   };
 
   useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
     void api
       .voiceStatus()
-      .then(apply)
-      .catch((cause) => setError(errorText(cause)));
-    let unlisten: (() => void) | undefined;
+      .then((next) => {
+        if (!disposed) apply(next, true);
+      })
+      .catch((cause) => {
+        if (!disposed) setError(formatInvokeError(cause));
+      });
     void listen<VoiceProgress>("voice_progress", (event) => {
-      setProgress(event.payload);
-    }).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
+      if (!disposed) setProgress(event.payload);
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((cause) => {
+        if (!disposed) setError(formatInvokeError(cause));
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
-  const run = async (label: string, work: () => Promise<VoiceStatus>) => {
+  const run = async (label: string, work: () => Promise<VoiceStatus>, hydrate = false) => {
     setBusy(label);
     setError(null);
     try {
-      apply(await work());
+      apply(await work(), hydrate);
     } catch (cause) {
-      setError(errorText(cause));
-      toast(errorText(cause));
+      const message = formatInvokeError(cause);
+      setError(message);
+      toast(message);
     } finally {
       setBusy(null);
       setProgress(null);
@@ -314,7 +325,7 @@ export function VoicePage() {
       )}
 
       {status === null ? (
-        <Spinner label="Loading voice settings" />
+        error ? null : <Spinner label="Loading voice settings" />
       ) : (
         <>
           <LocalCard
@@ -332,8 +343,10 @@ export function VoicePage() {
             onRemote={setRemote}
             onModel={setRemoteModel}
             onSave={() =>
-              void run("provider", () =>
-                api.voiceSetProvider(remote || null, remote ? remoteModel : null),
+              void run(
+                "provider",
+                () => api.voiceSetProvider(remote || null, remote ? remoteModel : null),
+                true,
               )
             }
           />
@@ -342,3 +355,4 @@ export function VoicePage() {
     </div>
   );
 }
+

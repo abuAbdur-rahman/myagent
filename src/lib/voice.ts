@@ -57,21 +57,25 @@ export class VoiceRecorder {
   private chunks: Float32Array[] = [];
   private frames = 0;
   private rate = TARGET_RATE;
+  private starting = false;
 
   async start(): Promise<void> {
-    if (this.context) return;
+    if (this.context || this.starting) return;
+    this.starting = true;
     this.chunks = [];
     this.frames = 0;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    const context = new AudioContext({ sampleRate: TARGET_RATE });
+    let stream: MediaStream | null = null;
+    let context: AudioContext | null = null;
     try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      context = new AudioContext({ sampleRate: TARGET_RATE });
       await context.audioWorklet.addModule(WORKLET_URL);
       const source = context.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(context, "pcm-processor");
@@ -96,9 +100,11 @@ export class VoiceRecorder {
       this.node = node;
       this.rate = context.sampleRate;
     } catch (error) {
-      stream.getTracks().forEach((track) => track.stop());
-      await context.close().catch(() => undefined);
+      stream?.getTracks().forEach((track) => track.stop());
+      await context?.close().catch(() => undefined);
       throw error;
+    } finally {
+      this.starting = false;
     }
   }
 

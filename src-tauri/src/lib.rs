@@ -330,9 +330,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .on_permission_request(|_, kind| match kind {
-            tauri::webview::PermissionKind::Microphone => tauri::webview::PermissionResponse::Allow,
-            _ => tauri::webview::PermissionResponse::Default,
+        .on_permission_request(|webview, kind| {
+            if matches!(kind, tauri::webview::PermissionKind::Microphone)
+                && webview.label() == "main"
+                && voice::is_enabled(webview.app_handle())
+            {
+                tauri::webview::PermissionResponse::Allow
+            } else {
+                tauri::webview::PermissionResponse::Default
+            }
         })
         .plugin(
             tauri_plugin_sql::Builder::default()
