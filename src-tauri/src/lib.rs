@@ -387,6 +387,8 @@ pub fn run() {
             websearch::search_key_remove,
             websearch::search_key_list,
             websearch::search_key_test,
+            websearch::search_key_stats,
+            websearch::search_endpoint_test,
             permissions::permission_check,
             permissions::permission_allow,
             skills::skill_index,

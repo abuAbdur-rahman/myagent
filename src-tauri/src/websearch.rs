@@ -1,3 +1,4 @@
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -253,6 +254,11 @@ pub fn search_key_remove(index: usize) -> Result<usize, String> {
         return Err(fail("BAD_KEY", "no search key at that position"));
     }
     keys.remove(index);
+    with_stats(|list| {
+        if index < list.len() {
+            list.remove(index);
+        }
+    });
     store_tavily_keys(&keys)?;
     Ok(keys.len())
 }
@@ -261,6 +267,37 @@ pub fn search_key_remove(index: usize) -> Result<usize, String> {
 pub struct SearchKeyInfo {
     pub index: usize,
     pub hint: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct KeyStat {
+    pub requests: u32,
+    pub quota_hits: u32,
+}
+
+static KEY_STATS: OnceLock<Mutex<Vec<KeyStat>>> = OnceLock::new();
+
+fn stats() -> &'static Mutex<Vec<KeyStat>> {
+    KEY_STATS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn with_stats<T>(run: impl FnOnce(&mut Vec<KeyStat>) -> T) -> T {
+    let mut list = stats().lock().unwrap_or_else(|error| error.into_inner());
+    run(&mut list)
+}
+
+fn bump(list: &mut Vec<KeyStat>, index: usize, quota: bool) {
+    if list.len() <= index {
+        list.resize(index + 1, KeyStat::default());
+    }
+    list[index].requests += 1;
+    if quota {
+        list[index].quota_hits += 1;
+    }
+}
+
+fn note_attempt(index: usize, quota: bool) {
+    with_stats(|list| bump(list, index, quota));
 }
 
 fn mask_key(key: &str) -> String {
@@ -283,6 +320,16 @@ pub fn search_key_list() -> Result<Vec<SearchKeyInfo>, String> {
             hint: mask_key(key),
         })
         .collect())
+}
+
+#[tauri::command]
+pub fn search_key_stats() -> Result<Vec<KeyStat>, String> {
+    let len = read_tavily_keys().unwrap_or_default().len();
+    Ok(with_stats(|list| {
+        list.resize(len, KeyStat::default());
+        list.truncate(len);
+        list.clone()
+    }))
 }
 
 #[tauri::command]
@@ -310,10 +357,23 @@ pub async fn search_key_test(index: usize) -> Result<String, String> {
         .text()
         .await
         .map_err(|error| fail("NETWORK", error))?;
+    let quota = quota_exhausted(status, &payload);
+    note_attempt(index, quota);
     if status.is_success() {
         return Ok("Key works".to_string());
     }
     Err(map_status_error(status, &payload, "tavily"))
+}
+
+#[tauri::command]
+pub async fn search_endpoint_test(endpoint: String) -> Result<String, String> {
+    let cancel = Notify::new();
+    let hits = searxng_search(&endpoint, "ping", 1, &cancel).await?;
+    Ok(format!(
+        "Endpoint works · {} hit{}",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "s" }
+    ))
 }
 
 async fn tavily_search_at(
@@ -362,14 +422,21 @@ async fn tavily_search_rotating_at(
     }
     let mut last_error = String::new();
     let mut exhausted = 0usize;
-    for key in keys {
+    for (index, key) in keys.iter().enumerate() {
         match tavily_search_at(url, key, query, count, cancel).await {
-            Ok(hits) => return Ok(hits),
+            Ok(hits) => {
+                note_attempt(index, false);
+                return Ok(hits);
+            }
             Err((error, true)) => {
+                note_attempt(index, true);
                 exhausted += 1;
                 last_error = error;
             }
-            Err((error, false)) => return Err(error),
+            Err((error, false)) => {
+                note_attempt(index, false);
+                return Err(error);
+            }
         }
     }
     if exhausted == keys.len() && keys.len() > 1 {
@@ -595,6 +662,24 @@ mod tests {
         assert_eq!(mask_key("abc"), "••••");
         assert_eq!(mask_key("abcd"), "••••");
         assert!(!mask_key("tvly-supersecret").contains("supersecret"));
+    }
+
+    #[test]
+    fn counts_requests_and_quota_hits_per_key() {
+        let mut list = Vec::new();
+        bump(&mut list, 1, false);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].requests, 0);
+        assert_eq!(list[1].requests, 1);
+        assert_eq!(list[1].quota_hits, 0);
+
+        bump(&mut list, 1, true);
+        assert_eq!(list[1].requests, 2);
+        assert_eq!(list[1].quota_hits, 1);
+
+        bump(&mut list, 0, false);
+        assert_eq!(list[0].requests, 1);
+        assert_eq!(list[1].quota_hits, 1);
     }
 
     #[test]

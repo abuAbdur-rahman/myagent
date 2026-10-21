@@ -29,6 +29,19 @@ export function searchKeyTest(index: number) {
   return invoke<string>("search_key_test", { index });
 }
 
+export interface SearchKeyStat {
+  requests: number;
+  quota_hits: number;
+}
+
+export function searchKeyStats() {
+  return invoke<SearchKeyStat[]>("search_key_stats");
+}
+
+export function searchEndpointTest(endpoint: string) {
+  return invoke<string>("search_endpoint_test", { endpoint });
+}
+
 export function addSearchKey(apiKey: string) {
   return invoke<number>("search_key_add", { key: apiKey });
 }

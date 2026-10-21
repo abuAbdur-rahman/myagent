@@ -1103,10 +1103,15 @@ export function SearchPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [testing, setTesting] = useState<number | null>(null);
   const [probes, setProbes] = useState<Record<number, { ok: boolean; text: string }>>({});
+  const [stats, setStats] = useState<api.SearchKeyStat[]>([]);
+  const [endpointTest, setEndpointTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingEndpoint, setTestingEndpoint] = useState(false);
 
   const reload = useCallback(async () => {
     try {
-      setKeys(await api.searchKeyList());
+      const [list, counts] = await Promise.all([api.searchKeyList(), api.searchKeyStats()]);
+      setKeys(list);
+      setStats(counts);
       setProbes({});
     } catch (e) {
       setStatus(errorText(e));
@@ -1161,6 +1166,21 @@ export function SearchPage() {
       setProbes((prev) => ({ ...prev, [index]: { ok: false, text: errorText(e) } }));
     } finally {
       setTesting(null);
+      api
+        .searchKeyStats()
+        .then(setStats)
+        .catch((e) => setStatus(errorText(e)));
+    }
+  };
+
+  const testEndpoint = async () => {
+    setTestingEndpoint(true);
+    try {
+      setEndpointTest({ ok: true, text: await api.searchEndpointTest(searchEndpoint) });
+    } catch (e) {
+      setEndpointTest({ ok: false, text: errorText(e) });
+    } finally {
+      setTestingEndpoint(false);
     }
   };
 
@@ -1207,9 +1227,12 @@ export function SearchPage() {
       )}
       {searchBackend === "tavily" && keys.length > 0 && (
         <div className="mt-1" data-setting-term="Stored keys">
-          <p className="px-2 py-2 text-xs text-muted">First key is tried first.</p>
+          <p className="px-2 py-2 text-xs text-muted">
+            First key is tried first. Counts reset when the app restarts.
+          </p>
           {keys.map((entry) => {
             const result = probes[entry.index];
+            const stat = stats[entry.index];
             return (
               <div
                 key={entry.index}
@@ -1217,6 +1240,16 @@ export function SearchPage() {
               >
                 <span className="font-medium">Key {entry.index + 1}</span>
                 <span className="font-mono text-muted">{entry.hint}</span>
+                {stat && stat.requests > 0 && (
+                  <span className="text-muted">
+                    {stat.requests} search{stat.requests === 1 ? "" : "es"}
+                  </span>
+                )}
+                {stat && stat.quota_hits > 0 && (
+                  <span className="rounded-full border border-warn px-1.5 py-0.5 text-warn">
+                    quota hit ×{stat.quota_hits}
+                  </span>
+                )}
                 <span className="flex-1" />
                 {result && (
                   <span className={cn(result.ok ? "text-muted" : "text-warn")}>{result.text}</span>
@@ -1246,11 +1279,30 @@ export function SearchPage() {
         <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">
           <Input
             value={searchEndpoint}
-            onChange={(e) => setSearchEndpoint(e.target.value)}
+            onChange={(e) => {
+              setSearchEndpoint(e.target.value);
+              setEndpointTest(null);
+            }}
             placeholder="http://127.0.0.1:8888"
             aria-label="SearXNG endpoint"
           />
+          <Button
+            size="sm"
+            variant="default"
+            disabled={testingEndpoint}
+            onClick={() => void testEndpoint()}
+          >
+            {testingEndpoint ? <Spinner label="Testing" /> : "Test"}
+          </Button>
         </SettingRow>
+      )}
+      {searchBackend === "searxng" && endpointTest && (
+        <p
+          className={cn("px-2 py-2 text-xs", endpointTest.ok ? "text-muted" : "text-warn")}
+          role="status"
+        >
+          {endpointTest.text}
+        </p>
       )}
       {status && (
         <p className="px-2 py-2 text-xs text-muted" role="status">
