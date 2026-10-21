@@ -430,13 +430,7 @@ function AssistantMessage({
           collapseToolCalls={collapseToolCalls}
           resetKey={resetKey}
         />
-        {busy ? (
-          <span className="dots" aria-label="Waiting for response">
-            <i />
-            <i />
-            <i />
-          </span>
-        ) : (
+        {!busy && (
           <>
             {segments.map((segment, i) =>
               segment.kind === "text" ? (

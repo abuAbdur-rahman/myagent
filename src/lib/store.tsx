@@ -368,6 +368,7 @@ interface AppContextValue {
   clearActiveConversation: () => Promise<void>;
   compactActive: (quiet?: boolean) => Promise<void>;
   uncompactActive: () => Promise<void>;
+  compacting: boolean;
   stopStream: () => void;
   composerDraft: string;
   setComposerDraft: (value: string) => void;
@@ -464,6 +465,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [compacting, setCompacting] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === "1",
   );
@@ -1595,6 +1597,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...(prior ? [`Previous summary:\n${prior}`] : []),
         ...older.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`),
       ].join("\n\n");
+      setCompacting(true);
       try {
         const summary = await api.summarize(
           connection.id,
@@ -1613,6 +1616,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!quiet) toast("Context compacted");
       } catch (e) {
         reportError(e);
+      } finally {
+        setCompacting(false);
       }
     },
     [streaming],
@@ -2195,6 +2200,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearActiveConversation,
     compactActive,
     uncompactActive,
+    compacting,
     stopStream,
     composerDraft,
     setComposerDraft,

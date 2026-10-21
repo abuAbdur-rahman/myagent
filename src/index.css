@@ -193,20 +193,24 @@ kbd {
   }
 }
 
-.dots i {
+.pill-dots i {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
-  background: var(--color-muted);
-  margin-right: 4px;
-  animation: typing-blink 1s infinite;
+  background: currentColor;
+  margin-right: 3px;
+  animation: pill-dot 1.2s ease-in-out infinite;
 }
-.dots i:nth-child(2) {
+.pill-dots i:nth-child(2) {
   animation-delay: 0.15s;
 }
-.dots i:nth-child(3) {
+.pill-dots i:nth-child(3) {
   animation-delay: 0.3s;
+  margin-right: 0;
+}
+.pill-ellipsis {
+  display: none;
 }
 
 .caret {
@@ -248,13 +252,25 @@ kbd {
   color: var(--color-text);
 }
 
-@keyframes typing-blink {  0%,
-  80%,
+@keyframes pill-dot {
+  0%,
+  60%,
   100% {
-    opacity: 0.25;
+    transform: scale(0.6);
+    opacity: 0.35;
   }
-  40% {
+  30% {
+    transform: scale(1);
     opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-dots {
+    display: none;
+  }
+  .pill-ellipsis {
+    display: inline;
   }
 }
 

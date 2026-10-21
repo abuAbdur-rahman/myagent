@@ -9,6 +9,7 @@ import { ProjectsGrid } from "./components/ProjectsGrid";
 import { ProjectDetail } from "./components/ProjectDetail";
 import { Welcome } from "./components/Welcome";
 import { Composer } from "./components/Composer";
+import { ActivityPill } from "./components/ActivityPill";
 import { TurnCards } from "./components/TurnCards";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
@@ -32,6 +33,7 @@ function Shell() {
     newConversation,
     stopStream,
     streaming,
+    compacting,
     messages,
     activeConversationId,
     togglePanel,
@@ -123,14 +125,21 @@ function Shell() {
           ) : (
             <>
               <ChatHeader />
-              <div className="min-h-0 flex-1">
+              <div className="relative min-h-0 flex-1">
                 <MessageList />
+                <ActivityPill placement="center" />
               </div>
               <div className="flex-none px-4 pb-2">
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
                   <TodoChecklist />
-                  <ContextBar />
+                  {streaming || compacting ? (
+                    <div className="mb-1.5 flex h-6 items-center justify-center">
+                      <ActivityPill placement="inline" />
+                    </div>
+                  ) : (
+                    <ContextBar />
+                  )}
                   <Composer />
                 </div>
               </div>
