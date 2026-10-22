@@ -47,3 +47,11 @@ pub fn get_api_key(connection_id: &str) -> AppResult<String> {
         .get_password()
         .map_err(|e| AppError::Vault(e.to_string()))
 }
+
+pub fn read_api_key(connection_id: &str) -> AppResult<Option<String>> {
+    match entry(connection_id)?.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AppError::Vault(e.to_string())),
+    }
+}

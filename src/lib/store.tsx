@@ -51,7 +51,7 @@ import {
   type VisionFallback,
 } from "./vision";
 import { KEYLESS_KINDS, fileCommandSchema, memoryInputSchema } from "./types";
-import { newId } from "./utils";
+import { errorText, newId } from "./utils";
 import { deriveFallbackTitle } from "./title";
 import type {
   Connection,
@@ -1895,9 +1895,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setError("Select a model first.");
         return false;
       }
-      if (!KEYLESS_KINDS.has(connection.kind) && !(await api.hasApiKey(connection.id))) {
-        setError(`Add an API key for ${connection.name} in Settings → Providers before sending.`);
-        return false;
+      if (!KEYLESS_KINDS.has(connection.kind)) {
+        let hasKey = false;
+        try {
+          hasKey = await api.hasApiKey(connection.id);
+        } catch (e) {
+          setError(`Couldn't read the saved key for ${connection.name}: ${errorText(e)}`);
+          return false;
+        }
+        if (!hasKey) {
+          setError(`Add an API key for ${connection.name} in Settings → Providers before sending.`);
+          return false;
+        }
       }
 
       setError(null);

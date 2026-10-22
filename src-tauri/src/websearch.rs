@@ -300,15 +300,20 @@ fn parse_tavily_keys(raw: &str) -> Option<Vec<String>> {
     Some(vec![trimmed.to_string()])
 }
 
+fn stored_tavily_keys() -> Result<Vec<String>, String> {
+    match vault::read_api_key(SEARCH_KEY_ACCOUNT) {
+        Ok(Some(raw)) => Ok(parse_tavily_keys(&raw).unwrap_or_default()),
+        Ok(None) => Ok(Vec::new()),
+        Err(error) => Err(fail("VAULT", error)),
+    }
+}
+
 fn read_tavily_keys() -> Result<Vec<String>, String> {
-    let missing = || fail("MISSING_KEY", "add a Tavily key in Settings → Search");
-    let raw = vault::get_api_key(SEARCH_KEY_ACCOUNT).map_err(|_| missing())?;
-    parse_tavily_keys(&raw).ok_or_else(|| {
-        fail(
-            "MISSING_KEY",
-            "search key list is empty; add a Tavily key in Settings → Search",
-        )
-    })
+    let keys = stored_tavily_keys()?;
+    if keys.is_empty() {
+        return Err(fail("MISSING_KEY", "add a Tavily key in Settings → Search"));
+    }
+    Ok(keys)
 }
 
 fn store_tavily_keys(keys: &[String]) -> Result<(), String> {
@@ -326,7 +331,7 @@ pub fn search_key_add(key: String) -> Result<usize, String> {
     if trimmed.is_empty() {
         return Err(fail("BAD_KEY", "empty search key"));
     }
-    let mut keys = read_tavily_keys().unwrap_or_default();
+    let mut keys = stored_tavily_keys()?;
     if !keys.iter().any(|existing| existing == trimmed) {
         if keys.len() >= MAX_SEARCH_KEYS {
             return Err(fail(
@@ -404,8 +409,7 @@ pub(crate) fn mask_key(key: &str) -> String {
 
 #[tauri::command]
 pub fn search_key_list() -> Result<Vec<SearchKeyInfo>, String> {
-    Ok(read_tavily_keys()
-        .unwrap_or_default()
+    Ok(stored_tavily_keys()?
         .iter()
         .enumerate()
         .map(|(index, key)| SearchKeyInfo {
@@ -417,7 +421,7 @@ pub fn search_key_list() -> Result<Vec<SearchKeyInfo>, String> {
 
 #[tauri::command]
 pub fn search_key_stats() -> Result<Vec<KeyStat>, String> {
-    let len = read_tavily_keys().unwrap_or_default().len();
+    let len = stored_tavily_keys()?.len();
     Ok(with_stats(|list| {
         list.resize(len, KeyStat::default());
         list.truncate(len);

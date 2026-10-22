@@ -106,12 +106,12 @@ function ProviderDialog({
         await api.setApiKey(saved.id, key.trim());
         setKey("");
       }
-      const models = await api.listModels(saved.id, saved.kind);
-      if (models.length === 0) {
+      const found = await api.verifyProvider(saved.id, saved.kind);
+      if (found === 0) {
         throw new Error("No models found. Check the API key and base URL.");
       }
       await db.markKeyTested(saved.id);
-      setStatus(`Connected · ${models.length} models found`);
+      setStatus(`Connected · ${found} models found`);
       if (!testFirst) onClose();
     } catch (e) {
       if (isNew) await rollbackConnection(removeConnection, savedId);
@@ -391,12 +391,12 @@ export function ProvidersPage() {
   const test = async (connection: Connection) => {
     setTestingId(connection.id);
     try {
-      const models = await api.listModels(connection.id, connection.kind);
+      const found = await api.verifyProvider(connection.id, connection.kind);
       await db.markKeyTested(connection.id);
       await refreshConnections();
       setTestState((prev) => ({
         ...prev,
-        [connection.id]: { ok: true, text: `Connected · ${models.length} models found` },
+        [connection.id]: { ok: true, text: `Connected · ${found} models found` },
       }));
     } catch (e) {
       const raw = errorText(e);

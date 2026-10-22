@@ -412,6 +412,7 @@ pub fn run() {
             vault::api_key_hint,
             vault::delete_api_key,
             llm::list_models,
+            llm::verify_provider,
             llm::list_model_caps,
             llm::cancel_stream,
             llm::chat_stream,

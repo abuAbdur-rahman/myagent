@@ -75,6 +75,10 @@ export function listModels(connectionId: string, connectionKind?: string) {
   return invoke<string[]>("list_models", { connectionId, connectionKind });
 }
 
+export function verifyProvider(connectionId: string, connectionKind?: string) {
+  return invoke<number>("verify_provider", { connectionId, connectionKind });
+}
+
 export async function listModelCaps(
   connectionId: string,
   connectionKind?: string,

@@ -215,7 +215,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Usage from the fixture is stored and displayed.
 
 ## C6. Context meter
-- **Status:** Have (0.1.7: stored usage + catalogue limit, warn at 80%, limit-estimated flag)
+- **Status:** Have (0.1.7: stored usage + catalogue limit, warn at 80%, limit-estimated flag. 0.4.1: when the provider reports no window the percentage is null and the bar reads `Context unknown · N tokens used` instead of inventing a denominator)
 - **Ref:** Claude Code `/context` shows context use.
 - **Build:** Last prompt tokens divided by model context length (C3, C5). Warn at 80%.
 - **Done:** Meter matches stored usage.
@@ -244,7 +244,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # D. Tools and agent loop
 
 ## D1. Tool-call loop
-- **Status:** Have (0.1.5: mid-loop text retracted, identical pure calls collapsed; 0.3.6 verified: each call is stored on the message and its log stays visible after the turn ends and after reopening the chat)
+- **Status:** Have (0.1.5: mid-loop text retracted, identical pure calls collapsed; 0.3.6 verified: each call is stored on the message and its log stays visible after the turn ends and after reopening the chat. 0.4.1: calls the model writes as plain-text DSML markup are recovered by a chunk-safe scanner, run once even when the API also returns structured calls, and the envelope never reaches the stored text)
 - **Ref:** † OpenCode and Claude Code: call the model, run its tool calls, return results, repeat until a final answer.
 - **Build:** Loop with a step cap (D3). Each tool call is stored as a message part with input, output, status, duration.
 - **Done:** A two-tool turn completes with both results visible.
@@ -437,7 +437,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Editing the file changes the next turn.
 
 ## E5. System prompt and parameters per chat
-- **Status:** Unknown
+- **Status:** Have (0.4.1: a global default system prompt in Settings → General, a project block, and a per-chat prompt behind the chat header's ••• menu; the order identity → Standing instructions → Durable memory → project → This chat is tested. Temperature and other sampling parameters are still not exposed)
 - **Ref:** † OpenWebUI sets system prompt and parameters at chat, account or model level.
 - **Build:** Global default, per-project override, per-chat override of the system prompt. Temperature only if needed.
 - **Done:** Override order is tested.

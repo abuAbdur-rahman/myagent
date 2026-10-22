@@ -880,6 +880,38 @@ pub async fn list_model_caps(
 }
 
 #[tauri::command]
+pub async fn verify_provider(
+    app: AppHandle,
+    connection_id: String,
+    connection_kind: Option<String>,
+    client: State<'_, reqwest::Client>,
+) -> AppResult<usize> {
+    let base_url = connections::base_url_for(&app, &connection_id).await?;
+    let kind = connection_kind.as_deref();
+    let key = read_key(&connection_id, kind)?;
+    if kind == Some("ollama-cloud") {
+        let resp = client
+            .get("https://ollama.com/api/me")
+            .bearer_auth(&key)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(AppError::Upstream(format!(
+                "HTTP {} — ollama.com rejected this key",
+                resp.status().as_u16()
+            )));
+        }
+    }
+    let caps = match fetch_openai_caps(&client, &base_url, &key, kind).await {
+        Ok(caps) if !caps.is_empty() => caps,
+        Ok(_) if kind == Some("ollama-cloud") => fetch_ollama_tags(&client, &key).await?,
+        Ok(caps) => caps,
+        Err(error) => return Err(error),
+    };
+    Ok(with_model_seeds(kind, caps).len())
+}
+
+#[tauri::command]
 pub async fn list_models(
     app: AppHandle,
     connection_id: String,
@@ -1340,6 +1372,17 @@ fn collect_inband(
 }
 
 /// Structured calls win. Healed ones are only used when the gateway sent none.
+fn healed_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    format!("dsml-{nanos:x}-{seq}")
+}
+
 fn absorb_healed(accumulator: &mut sse::ToolCallAccumulator, healed: Vec<(String, String)>) {
     if healed.is_empty() || !accumulator.calls().is_empty() {
         return;
@@ -1349,7 +1392,7 @@ fn absorb_healed(accumulator: &mut sse::ToolCallAccumulator, healed: Vec<(String
         .enumerate()
         .map(|(index, (name, arguments))| sse::ToolCallDelta {
             index,
-            id: format!("dsml-{index}"),
+            id: healed_id(),
             name,
             arguments,
         })
@@ -2577,7 +2620,19 @@ mod tests {
         );
         let calls = accumulator.calls();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0]["id"], serde_json::json!("dsml-0"));
+        let first_id = calls[0]["id"].as_str().expect("id").to_string();
+        assert!(first_id.starts_with("dsml-"));
+
+        let mut second = sse::ToolCallAccumulator::new();
+        absorb_healed(
+            &mut second,
+            vec![("get_time".to_string(), "{}".to_string())],
+        );
+        assert_ne!(
+            second.calls()[0]["id"].as_str().expect("id"),
+            first_id,
+            "a second healed call in the same turn must not reuse the first id"
+        );
 
         let mut accumulator = sse::ToolCallAccumulator::new();
         accumulator.apply(vec![sse::ToolCallDelta {

@@ -2,6 +2,8 @@ import { useEffect, useRef, type RefObject } from "react";
 
 import { focusableElements, nextFocusIndex } from "./focus-trap";
 
+const traps: HTMLElement[] = [];
+
 export function useFocusTrap(
   ref: RefObject<HTMLElement | null>,
   active: boolean,
@@ -18,8 +20,10 @@ export function useFocusTrap(
     if (!root) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     (focusableElements(root)[0] ?? root).focus();
+    traps.push(root);
 
     const onKey = (event: KeyboardEvent) => {
+      if (traps[traps.length - 1] !== root) return;
       if (event.key === "Escape") {
         escapeRef.current?.();
         return;
@@ -38,6 +42,8 @@ export function useFocusTrap(
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      const index = traps.lastIndexOf(root);
+      if (index >= 0) traps.splice(index, 1);
       opener?.focus();
     };
   }, [ref, active]);

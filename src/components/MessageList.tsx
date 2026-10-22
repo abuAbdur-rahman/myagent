@@ -354,8 +354,8 @@ function ArtifactCard({
   lang: string;
   code: string;
 }) {
-  const { panelOpen, panelArtifact, openArtifact, closePanel } = useApp();
-  const isOpen = panelOpen && panelArtifact?.id === id;
+  const { panelOpen, panelArtifact, panelView, openArtifact, closePanel } = useApp();
+  const isOpen = panelOpen && panelView === "artifact" && panelArtifact?.id === id;
   return (
     <div className="my-3 flex items-center gap-3 rounded-panel border border-border bg-vault px-3 py-2.5">
       <span className="grid h-9 w-9 flex-none place-items-center rounded-control bg-active">
