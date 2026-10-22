@@ -84,8 +84,7 @@ export async function createConnection(input: ConnectionInput): Promise<Connecti
   return connection;
 }
 
-export async function updateConnection(connection: Connection): Promise<void> {
-  const db = await getDb();
+export async function updateConnection(connection: Connection): Promise<void> {  const db = await getDb();
   await db.execute(
     "UPDATE connections SET name = $1, base_url = $2, kind = $3, default_model = $4 WHERE id = $5",
     [
@@ -96,6 +95,16 @@ export async function updateConnection(connection: Connection): Promise<void> {
       connection.id,
     ],
   );
+}
+
+export async function markKeyTested(id: string, at: number = Date.now()): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE connections SET key_tested_at = $1 WHERE id = $2", [at, id]);
+}
+
+export async function clearKeyTested(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE connections SET key_tested_at = NULL WHERE id = $1", [id]);
 }
 
 export async function deleteConnection(id: string): Promise<void> {

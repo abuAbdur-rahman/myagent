@@ -300,7 +300,7 @@ fn note_attempt(index: usize, quota: bool) {
     with_stats(|list| bump(list, index, quota));
 }
 
-fn mask_key(key: &str) -> String {
+pub(crate) fn mask_key(key: &str) -> String {
     let chars: Vec<char> = key.chars().collect();
     if chars.len() <= 4 {
         return "••••".to_string();

@@ -13,6 +13,10 @@ export function hasApiKey(connectionId: string) {
   return invoke<boolean>("has_api_key", { connectionId });
 }
 
+export function apiKeyHint(connectionId: string) {
+  return invoke<string | null>("api_key_hint", { connectionId });
+}
+
 export function deleteApiKey(connectionId: string) {
   return invoke<void>("delete_api_key", { connectionId });
 }

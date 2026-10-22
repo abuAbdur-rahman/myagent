@@ -344,6 +344,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE memories ADD COLUMN source_conversation_id TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 24,
+            description: "add_connection_key_tested_at",
+            sql: "ALTER TABLE connections ADD COLUMN key_tested_at INTEGER;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -391,6 +397,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             vault::set_api_key,
             vault::has_api_key,
+            vault::api_key_hint,
             vault::delete_api_key,
             llm::list_models,
             llm::list_model_caps,

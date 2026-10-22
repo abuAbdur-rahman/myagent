@@ -82,7 +82,8 @@ export function lookupSupportsTools(
   const entry = catalog?.find((m) => m.id === modelId);
   if (entry?.supportsTools === false) return false;
   if (entry?.supportsTools === true) return true;
-  return kind === "openrouter" || kind === "agentrouter";
+  if (kind === "custom") return false;
+  return kind !== undefined;
 }
 
 export function parseBackendCaps(raw: unknown): ModelCapabilities[] {

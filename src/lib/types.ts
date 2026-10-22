@@ -1,7 +1,15 @@
 import { z } from "zod";
 
-const providerKindSchema = z.enum(["openrouter", "agentrouter", "custom"]);
+const providerKindSchema = z.enum([
+  "openrouter",
+  "agentrouter",
+  "deepseek",
+  "ollama-cloud",
+  "ollama",
+  "custom",
+]);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
+export const PROVIDER_KINDS: ProviderKind[] = [...providerKindSchema.options];
 
 const connectionSchema = z.object({
   id: z.string(),
@@ -12,6 +20,7 @@ const connectionSchema = z.object({
     .refine((url) => /^https?:\/\//i.test(url), "Only http(s) URLs are allowed"),
   kind: providerKindSchema,
   default_model: z.string().nullable(),
+  key_tested_at: z.number().nullable().optional(),
   created_at: z.number(),
 });
 export type Connection = z.infer<typeof connectionSchema>;
@@ -19,6 +28,7 @@ export type Connection = z.infer<typeof connectionSchema>;
 export const connectionInputSchema = connectionSchema.omit({
   id: true,
   created_at: true,
+  key_tested_at: true,
 });
 export type ConnectionInput = z.infer<typeof connectionInputSchema>;
 
@@ -304,5 +314,19 @@ export type StreamEvent =
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
   openrouter: "https://openrouter.ai/api/v1",
   agentrouter: "https://agentrouter.org/v1",
+  deepseek: "https://api.deepseek.com/v1",
+  "ollama-cloud": "https://ollama.com/v1",
+  ollama: "http://localhost:11434/v1",
   custom: "https://api.openai.com/v1",
 };
+
+export const PROVIDER_LABELS: Record<ProviderKind, string> = {
+  openrouter: "OpenRouter",
+  agentrouter: "Agent Router",
+  deepseek: "DeepSeek",
+  "ollama-cloud": "Ollama Cloud",
+  ollama: "Ollama (local)",
+  custom: "Custom",
+};
+
+export const KEYLESS_KINDS: ReadonlySet<ProviderKind> = new Set(["ollama"]);

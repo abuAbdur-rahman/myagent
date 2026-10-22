@@ -201,6 +201,21 @@ fn uses_unified_reasoning(kind: Option<&str>) -> bool {
     matches!(kind, Some("openrouter" | "agentrouter"))
 }
 
+fn provider_takes_effort(kind: Option<&str>) -> bool {
+    !matches!(kind, Some("deepseek" | "ollama" | "ollama-cloud"))
+}
+
+fn attach_effort(body: &mut serde_json::Value, kind: Option<&str>, effort: &str) {
+    if !provider_takes_effort(kind) {
+        return;
+    }
+    if uses_unified_reasoning(kind) {
+        body["reasoning"] = serde_json::json!({ "effort": effort });
+    } else {
+        body["reasoning_effort"] = serde_json::json!(effort);
+    }
+}
+
 async fn apply_optional_params(
     client: &reqwest::Client,
     body: &mut serde_json::Value,
@@ -224,11 +239,7 @@ async fn apply_optional_params(
     if !effort_allowed(caps.as_ref(), effort) {
         return;
     }
-    if uses_unified_reasoning(req.connection_kind.as_deref()) {
-        body["reasoning"] = serde_json::json!({ "effort": effort });
-    } else {
-        body["reasoning_effort"] = serde_json::json!(effort);
-    }
+    attach_effort(body, req.connection_kind.as_deref(), effort);
 }
 
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
@@ -394,7 +405,7 @@ fn agentrouter_headers(
 }
 
 fn wants_stream_usage(kind: Option<&str>) -> bool {
-    !matches!(kind, Some("agentrouter"))
+    !matches!(kind, Some("agentrouter" | "ollama" | "ollama-cloud"))
 }
 
 fn is_deepseek_model(model: &str) -> bool {
@@ -2236,6 +2247,41 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_providers_get_no_effort_field() {
+        for kind in ["deepseek", "ollama", "ollama-cloud"] {
+            let mut body = serde_json::json!({});
+            attach_effort(&mut body, Some(kind), "high");
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "{kind} got reasoning_effort"
+            );
+            assert!(
+                body.get("reasoning").is_none(),
+                "{kind} got a reasoning block"
+            );
+        }
+    }
+
+    #[test]
+    fn gateways_keep_their_own_effort_shape() {
+        let mut openrouter = serde_json::json!({});
+        attach_effort(&mut openrouter, Some("openrouter"), "medium");
+        assert_eq!(openrouter["reasoning"]["effort"], "medium");
+
+        let mut custom = serde_json::json!({});
+        attach_effort(&mut custom, Some("custom"), "low");
+        assert_eq!(custom["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn ollama_gets_no_stream_usage_option() {
+        assert!(!wants_stream_usage(Some("ollama")));
+        assert!(!wants_stream_usage(Some("ollama-cloud")));
+        assert!(wants_stream_usage(Some("deepseek")));
+        assert!(wants_stream_usage(Some("openrouter")));
+    }
 
     struct RecordingSink(Mutex<Vec<StreamEvent>>);
 

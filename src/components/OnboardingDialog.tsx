@@ -3,7 +3,7 @@ import { Check, KeyRound, Plug, ShieldCheck } from "lucide-react";
 import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
-import { DEFAULT_BASE_URLS, connectionInputSchema, type ProviderKind } from "../lib/types";
+import { DEFAULT_BASE_URLS, KEYLESS_KINDS, PROVIDER_LABELS, connectionInputSchema, type ProviderKind } from "../lib/types";
 import { Button, Input, Spinner } from "./ui";
 import { cn, errorText, rollbackConnection } from "../lib/utils";
 
@@ -17,14 +17,11 @@ const SUGGESTIONS = [
 const PROVIDER_TILES: { id: ProviderKind; label: string; initials: string }[] = [
   { id: "openrouter", label: "OpenRouter", initials: "OR" },
   { id: "agentrouter", label: "Agent Router", initials: "AR" },
+  { id: "deepseek", label: "DeepSeek", initials: "DS" },
+  { id: "ollama-cloud", label: "Ollama Cloud", initials: "OC" },
+  { id: "ollama", label: "Ollama", initials: "OL" },
   { id: "custom", label: "Custom", initials: "CU" },
 ];
-
-const PROVIDER_NAMES: Record<ProviderKind, string> = {
-  openrouter: "OpenRouter",
-  agentrouter: "Agent Router",
-  custom: "Custom",
-};
 
 export function OnboardingDialog() {
   const {
@@ -70,12 +67,13 @@ export function OnboardingDialog() {
   };
 
   const connect = async () => {
-    if (!key.trim()) {
+    const keyless = KEYLESS_KINDS.has(kind);
+    if (!keyless && !key.trim()) {
       setStatus("Enter an API key to continue.");
       return;
     }
     const parsed = connectionInputSchema.safeParse({
-      name: PROVIDER_NAMES[kind],
+      name: PROVIDER_LABELS[kind],
       kind,
       base_url: baseUrl.trim(),
       default_model: null,
@@ -89,7 +87,7 @@ export function OnboardingDialog() {
     try {
       const saved = await saveConnection(parsed.data);
       savedId = saved.id;
-      await api.setApiKey(saved.id, key.trim());
+      if (!keyless) await api.setApiKey(saved.id, key.trim());
       const found = await api.listModels(saved.id, saved.kind);
       if (found.length === 0) {
         throw new Error("No models found. Check the API key and base URL.");
@@ -177,14 +175,20 @@ export function OnboardingDialog() {
                 ))}
               </div>
               <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-xs text-muted">
-                API key
-                <Input
-                  type="password"
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
-                  placeholder="sk-…"
-                  autoComplete="off"
-                />
+                {KEYLESS_KINDS.has(kind) ? "No key needed" : "API key"}
+                {KEYLESS_KINDS.has(kind) ? (
+                  <span className="text-xs text-text-muted">
+                    A local Ollama server accepts requests without a key.
+                  </span>
+                ) : (
+                  <Input
+                    type="password"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder="sk-…"
+                    autoComplete="off"
+                  />
+                )}
               </label>
               <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-xs text-muted">
                 Base URL
