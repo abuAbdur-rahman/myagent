@@ -601,14 +601,14 @@ export function MessageList() {
 
         {messages.map((message) =>
           message.role === "user" ? (
-            <div key={message.id} className="mb-6">
+            <div key={message.id} className="mb-[var(--msg-gap)]">
               <UserMessage
                 message={message}
                 onEdit={(id, text) => editAndResubmit(id, text)}
               />
             </div>
           ) : (
-            <div key={message.id} className="mb-6">
+            <div key={message.id} className="mb-[var(--msg-gap)]">
               <AssistantMessage
                 message={message}
                 modelName={message.model ?? activeModel ?? "assistant"}

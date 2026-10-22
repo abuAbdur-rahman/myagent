@@ -158,7 +158,9 @@ export async function createConversation(
 
 export async function touchConversation(
   id: string,
-  patch: Partial<Pick<Conversation, "title" | "model" | "connection_id" | "project_id">>,
+  patch: Partial<
+    Pick<Conversation, "title" | "model" | "connection_id" | "project_id" | "system_prompt">
+  >,
 ): Promise<void> {
   const db = await getDb();
   const assignments: string[] = [];

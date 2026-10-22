@@ -350,6 +350,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE connections ADD COLUMN key_tested_at INTEGER;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 25,
+            description: "add_conversation_system_prompt",
+            sql: "ALTER TABLE conversations ADD COLUMN system_prompt TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

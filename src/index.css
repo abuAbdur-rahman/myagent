@@ -17,6 +17,9 @@
   --warn: #9d5d00;
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   --fs: 15px;
+  --font-scale: 1;
+  --chat-row-h: 34px;
+  --msg-gap: 24px;
   color-scheme: light;
 }
 
@@ -107,11 +110,20 @@ body,
   height: 100%;
 }
 
+html {
+  font-size: calc(16px * var(--font-scale));
+}
+
+[data-density="compact"] {
+  --chat-row-h: 28px;
+  --msg-gap: 16px;
+}
+
 body {
   overflow: hidden;
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.45;
 }
 

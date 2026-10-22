@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import * as db from "../lib/db";
-import { groupChats, projectColor } from "../lib/grouping";
+import { arrangeChats, projectColor } from "../lib/grouping";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { Avatar, Button, Dialog, Input } from "./ui";
@@ -58,7 +58,7 @@ function ChatRow({
 
   if (renaming) {
     return (
-      <div className="flex h-[34px] items-center px-2.5">
+      <div className="flex h-[var(--chat-row-h)] items-center px-2.5">
         <input
           autoFocus
           value={draft}
@@ -90,7 +90,7 @@ function ChatRow({
       onKeyDown={(e) => {
         if (e.key === "Enter") onOpen();
       }}
-      className="group flex h-[34px] cursor-pointer items-center gap-2 rounded-control px-2.5"
+      className="group flex h-[var(--chat-row-h)] cursor-pointer items-center gap-2 rounded-control px-2.5"
     >
       {dotColor && (
         <span
@@ -234,6 +234,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     selectProject,
     view,
     setView,
+    groupByDate,
   } = useApp();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -306,7 +307,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   const shown = tagFilter
     ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
     : conversations;
-  const groups = groupChats(shown);
+  const groups = arrangeChats(shown, groupByDate);
   const threadsByProject = new Map<string, Conversation[]>();
   for (const chat of shown) {
     if (!chat.project_id) continue;

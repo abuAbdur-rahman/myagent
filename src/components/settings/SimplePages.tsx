@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
+  Eye,
+  EyeOff,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -29,6 +31,7 @@ import {
   Pill,
   Segmented,
   Spinner,
+  Textarea,
   Toggle,
   type PillTone,
 } from "../ui";
@@ -55,6 +58,16 @@ import {
 } from "../../lib/audit";
 import { formatBytes } from "../../lib/chat-docs";
 import { filterMemories, memoryJson } from "../../lib/memory-export";
+import { densityLabel, fontScaleLabel } from "../../lib/appearance";
+import {
+  buildModelRow,
+  contextLabel,
+  countHidden,
+  filterModelRows,
+  visionLabel,
+  type ModelTableRow,
+} from "../../lib/model-table";
+import type { ModelCapabilities } from "../../lib/catalog";
 import {
   storageParts,
   storageShares,
@@ -1014,7 +1027,21 @@ export function GeneralPage() {
     setCollapseThinking,
     collapseToolCalls,
     setCollapseToolCalls,
+    standingPrompt,
+    setStandingPrompt,
+    showContextBar,
+    setShowContextBar,
   } = useApp();
+  const [draft, setDraft] = useState(standingPrompt);
+  const [saved, setSaved] = useState(standingPrompt);
+
+  useEffect(() => {
+    setDraft(standingPrompt);
+    setSaved(standingPrompt);
+  }, [standingPrompt]);
+
+  const dirty = draft !== saved;
+
   return (
     <div>
       <SettingRow label="Display name" description="Used in the greeting and profile">
@@ -1044,6 +1071,16 @@ export function GeneralPage() {
           label="Auto-compact context"
         />
       </SettingRow>
+      <SettingRow
+        label="Context bar"
+        description="Show the used-tokens bar above the composer"
+      >
+        <Toggle
+          checked={showContextBar}
+          onChange={setShowContextBar}
+          label="Show the context bar"
+        />
+      </SettingRow>
       <SettingRow label="Collapse thinking" description="Fold reasoning blocks once the reply is done">
         <Toggle
           checked={collapseThinking}
@@ -1058,6 +1095,50 @@ export function GeneralPage() {
           label="Collapse tool calls"
         />
       </SettingRow>
+
+      <div
+        className="mt-4 rounded-card border border-border p-3"
+        data-setting-term="Standing instructions"
+      >
+        <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+          <span className="text-xs font-medium">Standing instructions</span>
+          <span className="text-xs text-muted">
+            {draft.trim() ? `${Array.from(draft.trim()).length} characters` : "Empty"}
+          </span>
+        </div>
+        <p className="mb-2 text-xs text-muted">
+          Sent with every chat, after the app's own rules and before the project block. A chat
+          can override this from its ••• menu.
+        </p>
+        <Textarea
+          rows={5}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="e.g. Answer in TypeScript. Keep replies under 200 words."
+          aria-label="Standing instructions"
+        />
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-xs text-muted">
+            {dirty ? "Unsaved changes" : saved ? "Saved on this device" : "Nothing saved"}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!draft && !saved}
+              onClick={() => {
+                setDraft("");
+                setStandingPrompt("");
+              }}
+            >
+              Clear
+            </Button>
+            <Button size="sm" disabled={!dirty} onClick={() => setStandingPrompt(draft)}>
+              Save
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1555,7 +1636,18 @@ const THEME_TILES: { id: ThemeMode; label: string; icon: React.ReactNode; previe
 ];
 
 export function AppearancePage() {
-  const { theme, setTheme, accent, setAccent } = useApp();
+  const {
+    theme,
+    setTheme,
+    accent,
+    setAccent,
+    fontScale,
+    setFontScale,
+    density,
+    setDensity,
+    groupByDate,
+    setGroupByDate,
+  } = useApp();
   return (
     <div>
       <SettingRow label="Theme" description="Applies instantly">
@@ -1599,6 +1691,48 @@ export function AppearancePage() {
             </button>
           ))}
         </div>
+      </SettingRow>
+      <SettingRow
+        label="Text size"
+        description="Scales text and spacing together, so nothing clips"
+      >
+        <div className="flex items-center gap-2.5" data-setting-term="Text size">
+          <span className="text-xs text-muted" aria-hidden="true">
+            A
+          </span>
+          <input
+            type="range"
+            min={0.9}
+            max={1.2}
+            step={0.05}
+            value={fontScale}
+            onChange={(event) => setFontScale(Number(event.target.value))}
+            aria-label="Text size"
+            aria-valuetext={fontScaleLabel(fontScale)}
+            className="h-4 w-40 cursor-pointer accent-[var(--accent)]"
+          />
+          <span className="text-base text-muted" aria-hidden="true">
+            A
+          </span>
+          <span className="w-12 text-right text-xs tabular-nums text-muted">
+            {fontScaleLabel(fontScale)}
+          </span>
+        </div>
+      </SettingRow>
+      <SettingRow label="Density" description="Row height in the sidebar and the gap between messages">
+        <Select
+          size="sm"
+          value={density}
+          onChange={(value) => setDensity(value === "compact" ? "compact" : "comfortable")}
+          aria-label="Density"
+          options={[
+            { value: "comfortable", label: densityLabel("comfortable") },
+            { value: "compact", label: densityLabel("compact") },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow label="Group chats by date" description="Today, Yesterday, Previous 7 days, Older">
+        <Toggle checked={groupByDate} onChange={setGroupByDate} label="Group chats by date" />
       </SettingRow>
     </div>
   );
@@ -1860,19 +1994,243 @@ export function ModelsPage() {
         activeConnectionId={activeConnectionId}
         onPick={setVisionFallback}
       />
-      <SettingRow label="Refresh models" description="Re-fetch the list from every provider">
-        <Button
-          variant="default"
+      <ModelCapabilityTable
+        activeConnectionId={activeConnectionId}
+        busy={busy}
+        onRefresh={async () => {
+          await refreshModels();
+          await reload();
+        }}
+      />
+    </div>
+  );
+}
+
+function ModelCapabilityTable({
+  activeConnectionId,
+  busy,
+  onRefresh,
+}: {
+  activeConnectionId: string | null;
+  busy: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  const {
+    connections,
+    modelVisionOverride,
+    setModelVisionOverride,
+    toggleModelVisibility,
+  } = useApp();
+  const [connectionId, setConnectionId] = useState(
+    activeConnectionId ?? connections[0]?.id ?? "",
+  );
+  const [data, setData] = useState<{
+    ids: string[];
+    caps: ModelCapabilities[];
+    hidden: Set<string>;
+  } | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const connection = connections.find((item) => item.id === connectionId) ?? null;
+
+  useEffect(() => {
+    if (!connection) {
+      setData({ ids: [], caps: [], hidden: new Set() });
+      return;
+    }
+    let live = true;
+    setStatus(null);
+    setData(null);
+    Promise.all([
+      api.listModels(connection.id, connection.kind),
+      api.listModelCaps(connection.id, connection.kind),
+      db.listHiddenModels(connection.id),
+    ])
+      .then(([ids, caps, hidden]) => {
+        if (live) setData({ ids, caps, hidden: new Set(hidden) });
+      })
+      .catch((e) => {
+        if (live) {
+          setData({ ids: [], caps: [], hidden: new Set() });
+          setStatus(errorText(e));
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [connection]);
+
+  const rows = (data?.ids ?? []).map((id) =>
+    buildModelRow({
+      connectionId: connection?.id ?? "",
+      connectionName: connection?.name ?? "",
+      kind: connection?.kind ?? "custom",
+      modelId: id,
+      caps: data?.caps ?? null,
+      hidden: data?.hidden.has(id) ?? false,
+      override: modelVisionOverride(connection?.id ?? null, id),
+    }),
+  );
+  const visible = filterModelRows(rows, query);
+
+  const setOverride = (row: ModelTableRow, value: string) => {
+    const override = value === "auto" ? null : (value as VisionOverride);
+    setModelVisionOverride(row.connectionId, row.modelId, override);
+  };
+
+  const toggleHidden = async (row: ModelTableRow) => {
+    setBusyId(row.key);
+    try {
+      await toggleModelVisibility(row.connectionId, row.modelId, !row.hidden);
+      setData((prev) => {
+        if (!prev) return prev;
+        const hidden = new Set(prev.hidden);
+        if (row.hidden) hidden.delete(row.modelId);
+        else hidden.add(row.modelId);
+        return { ...prev, hidden };
+      });
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+      if (connection) {
+        const [ids, caps, hidden] = await Promise.all([
+          api.listModels(connection.id, connection.kind),
+          api.listModelCaps(connection.id, connection.kind),
+          db.listHiddenModels(connection.id),
+        ]);
+        setData({ ids, caps, hidden: new Set(hidden) });
+        setStatus(null);
+      }
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <div className="mt-4" data-setting-term="Model capabilities">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium">Model capabilities</span>
+        <span className="text-xs text-muted">
+          {data ? `${visible.length} of ${rows.length}` : "Loading…"}
+          {data && countHidden(rows) > 0 ? ` · ${countHidden(rows)} hidden` : ""}
+        </span>
+        <Select
           size="sm"
-          disabled={busy}
-          onClick={() => {
-            void refreshModels();
-            void reload();
-          }}
+          className="w-44"
+          value={connectionId}
+          onChange={setConnectionId}
+          aria-label="Provider"
+          options={connections.map((item) => ({ value: item.id, label: item.name }))}
+        />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter models"
+          aria-label="Filter models"
+          className="h-7 w-40 text-xs"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          disabled={busy || refreshing}
+          onClick={() => void refresh()}
         >
-          {busy ? "Loading…" : "Refresh"}
+          <RefreshCw size={14} /> {refreshing || busy ? "Refreshing…" : "Refresh"}
         </Button>
-      </SettingRow>
+      </div>
+
+      {status && (
+        <p className="mb-2 text-xs text-danger" role="status">
+          {status}
+        </p>
+      )}
+
+      {connections.length === 0 && (
+        <p className="text-xs text-muted">Add a provider to see what its models report.</p>
+      )}
+
+      {connections.length > 0 && data && rows.length === 0 && !status && (
+        <p className="text-xs text-muted">
+          This provider listed no models. Test it on the Providers page.
+        </p>
+      )}
+
+      {rows.length > 0 && (
+        <div className="overflow-hidden rounded-card border border-border">
+          <div className="grid grid-cols-[1fr_72px_120px_64px_36px] items-center gap-2 border-b border-border bg-surface-2/40 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <span>Model</span>
+            <span>Context</span>
+            <span>Vision</span>
+            <span>Tools</span>
+            <span className="sr-only">Visible</span>
+          </div>
+          {visible.map((row) => (
+            <div
+              key={row.key}
+              className="grid grid-cols-[1fr_72px_120px_64px_36px] items-center gap-2 border-b border-border/60 px-3 py-1.5 last:border-b-0"
+            >
+              <span
+                className={cn(
+                  "truncate font-mono text-xs",
+                  row.hidden && "text-muted line-through",
+                )}
+                title={row.modelId}
+              >
+                {row.modelId}
+              </span>
+              <span
+                className={cn("text-xs", row.context === null ? "text-muted" : "tabular-nums")}
+                title={row.context === null ? "The provider did not report a context window" : undefined}
+              >
+                {contextLabel(row.context)}
+              </span>
+              <Select
+                size="sm"
+                value={row.override ?? "auto"}
+                onChange={(value) => setOverride(row, value)}
+                aria-label={`Vision for ${row.modelId}`}
+                options={[
+                  { value: "auto", label: `Auto (${visionLabel(row.catalogVision)})` },
+                  { value: "yes", label: "Force on" },
+                  { value: "no", label: "Force off" },
+                ]}
+              />
+              <Pill tone={row.tools ? "neutral" : "danger"}>{row.tools ? "Yes" : "No"}</Pill>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={row.hidden ? `Show ${row.modelId}` : `Hide ${row.modelId}`}
+                title={row.hidden ? "Show in the picker" : "Hide from the picker"}
+                disabled={busyId === row.key}
+                onClick={() => void toggleHidden(row)}
+              >
+                {row.hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+              </Button>
+            </div>
+          ))}
+          {visible.length === 0 && (
+            <p className="px-3 py-3 text-xs text-muted">No model matches “{query.trim()}”.</p>
+          )}
+        </div>
+      )}
+      <p className="mt-2 text-xs text-muted">
+        Context and tools come from the provider. “Unknown” means it never said; it is not a
+        guess. A vision override wins over the catalog and is stored on this device.
+      </p>
     </div>
   );
 }

@@ -34,6 +34,7 @@ function Shell() {
     stopStream,
     streaming,
     compacting,
+    showContextBar,
     messages,
     activeConversationId,
     togglePanel,
@@ -137,9 +138,9 @@ function Shell() {
                     <div className="mb-1.5 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
                     </div>
-                  ) : (
+                  ) : showContextBar ? (
                     <ContextBar />
-                  )}
+                  ) : null}
                   <Composer />
                 </div>
               </div>

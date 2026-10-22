@@ -33,6 +33,13 @@ import {
 } from "./catalog";
 import { toast } from "./toast";
 import {
+  clampFontScale,
+  parseDensity,
+  parseFontScale,
+  parseGroupByDate,
+  type Density,
+} from "./appearance";
+import {
   readVisionFallback,
   readVisionOverrides,
   visionOverrideFor,
@@ -42,7 +49,7 @@ import {
   type ConnectionModelOption,
   type VisionFallback,
 } from "./vision";
-import { fileCommandSchema, memoryInputSchema } from "./types";
+import { KEYLESS_KINDS, fileCommandSchema, memoryInputSchema } from "./types";
 import { newId } from "./utils";
 import { deriveFallbackTitle } from "./title";
 import type {
@@ -72,6 +79,7 @@ const SIDEBAR_KEY = "sidebarCollapsed";
 const THEME_KEY = "theme";
 const DISPLAY_NAME_KEY = "displayName";
 const PANEL_WIDTH_KEY = "panelWidth";
+const SHOW_CONTEXT_BAR_KEY = "showContextBar";
 function canSeeFor(
   catalog: ModelCapabilities[] | null,
   overrides: Record<string, VisionOverride>,
@@ -130,7 +138,7 @@ async function collectModelOptions(
   const options: ConnectionModelOption[] = [];
   for (const connection of connections) {
     try {
-      if (!(await api.hasApiKey(connection.id))) continue;
+      if (!KEYLESS_KINDS.has(connection.kind) && !(await api.hasApiKey(connection.id))) continue;
       const [list, caps, hidden] = await Promise.all([
         api.listModels(connection.id, connection.kind),
         api.listModelCaps(connection.id, connection.kind),
@@ -346,6 +354,12 @@ interface AppContextValue {
   setTheme: (mode: ThemeMode) => void;
   accent: string;
   setAccent: (value: string) => void;
+  fontScale: number;
+  setFontScale: (value: number) => void;
+  density: Density;
+  setDensity: (value: Density) => void;
+  groupByDate: boolean;
+  setGroupByDate: (value: boolean) => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   paletteOpen: boolean;
@@ -354,6 +368,12 @@ interface AppContextValue {
   completeOnboarding: () => void;
   displayName: string;
   setDisplayName: (name: string) => void;
+  standingPrompt: string;
+  setStandingPrompt: (prompt: string) => void;
+  showContextBar: boolean;
+  setShowContextBar: (value: boolean) => void;
+  chatPrompt: string | null;
+  setChatPrompt: (id: string, prompt: string | null) => Promise<void>;
   settingsPage: string | null;
   setSettingsPage: (page: string | null) => void;
 
@@ -454,6 +474,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [displayName, setDisplayNameState] = useState(
     () => localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
   );
+  const [standingPrompt, setStandingPromptState] = useState(
+    () => localStorage.getItem("standingPrompt") ?? "",
+  );
+  const [showContextBar, setShowContextBarState] = useState(
+    () => localStorage.getItem(SHOW_CONTEXT_BAR_KEY) !== "0",
+  );
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(
@@ -480,6 +506,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem(THEME_KEY);
     return saved === "light" || saved === "dark" ? saved : "system";
   });
+  const [fontScale, setFontScaleState] = useState(() =>
+    parseFontScale(localStorage.getItem("fontScale")),
+  );
+  const [density, setDensityState] = useState<Density>(() =>
+    parseDensity(localStorage.getItem("density")),
+  );
+  const [groupByDate, setGroupByDateState] = useState(() =>
+    parseGroupByDate(localStorage.getItem("groupByDate")),
+  );
 
   const activeConnection = useMemo(
     () => connections.find((c) => c.id === activeConnectionId) ?? null,
@@ -493,6 +528,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const connRef = useRef<Connection | null>(null);
   const projectRef = useRef<Project | null>(null);
   const displayNameRef = useRef("");
+  const standingPromptRef = useRef("");
+  const chatPromptRef = useRef<string | null>(null);
   const modelRef = useRef(model);
   const convIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -537,6 +574,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     displayNameRef.current = displayName;
   }, [displayName]);
+  useEffect(() => {
+    standingPromptRef.current = standingPrompt;
+  }, [standingPrompt]);
+  useEffect(() => {
+    const chat = conversations.find((item) => item.id === activeConversationId);
+    chatPromptRef.current = chat?.system_prompt ?? null;
+  }, [conversations, activeConversationId]);
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
@@ -663,6 +707,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setTheme = useCallback((mode: ThemeMode) => setThemeState(mode), []);
 
+  const setFontScale = useCallback((value: number) => {
+    const next = clampFontScale(value);
+    setFontScaleState(next);
+    localStorage.setItem("fontScale", String(next));
+  }, []);
+
+  const setDensity = useCallback((value: Density) => {
+    setDensityState(value);
+    localStorage.setItem("density", value);
+  }, []);
+
+  const setGroupByDate = useCallback((value: boolean) => {
+    setGroupByDateState(value);
+    localStorage.setItem("groupByDate", value ? "1" : "0");
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--font-scale", String(fontScale));
+  }, [fontScale]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-density", density);
+  }, [density]);
+
   const [accent, setAccentState] = useState(() => localStorage.getItem("accent") ?? "#c96442");
   const setAccent = useCallback((value: string) => {
     setAccentState(value);
@@ -739,6 +807,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } else {
       localStorage.removeItem(DISPLAY_NAME_KEY);
     }
+  }, []);
+
+  const setStandingPrompt = useCallback((prompt: string) => {
+    setStandingPromptState(prompt);
+    if (prompt.trim()) {
+      localStorage.setItem("standingPrompt", prompt);
+    } else {
+      localStorage.removeItem("standingPrompt");
+    }
+  }, []);
+
+  const setShowContextBar = useCallback((value: boolean) => {
+    setShowContextBarState(value);
+    localStorage.setItem(SHOW_CONTEXT_BAR_KEY, value ? "1" : "0");
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -1009,6 +1091,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       project: activeProject,
       projectMemories,
       userName: displayName || undefined,
+      standingPrompt: standingPrompt || undefined,
+      chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
     });
@@ -1042,7 +1126,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       lastIn: null,
       lastOut: null,
     };
-  }, [messages, globalMemories, activeProject, projectMemories, displayName, modelContextLimit]);
+  }, [
+    messages,
+    globalMemories,
+    activeProject,
+    projectMemories,
+    displayName,
+    standingPrompt,
+    conversations,
+    activeConversationId,
+    modelContextLimit,
+  ]);
 
   const resolveEffort = useCallback((): string | null => {
     const selected = reasoningEffortRef.current;
@@ -1210,6 +1304,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c)));
   }, []);
 
+  const setChatPrompt = useCallback(async (id: string, prompt: string | null) => {
+    const trimmed = prompt?.trim() ?? "";
+    const value = trimmed ? trimmed : null;
+    await db.touchConversation(id, { system_prompt: value });
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, system_prompt: value } : c)),
+    );
+    chatPromptRef.current = value;
+  }, []);
+
   const togglePin = useCallback(async (id: string) => {
     await db.toggleConversationPin(id);
     setConversations(await db.listConversations());
@@ -1262,6 +1366,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
+        standingPrompt: standingPromptRef.current || undefined,
+        chatPrompt: chatPromptRef.current ?? undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
         skillIndexBlock: skillIndexRef.current || undefined,
       }),
@@ -2226,14 +2332,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     newConversation,
     removeConversation,
     renameConversation,
+    setChatPrompt,
     togglePin,
     moveConversation,
     displayName,
     setDisplayName,
+    standingPrompt,
+    setStandingPrompt,
+    showContextBar,
+    setShowContextBar,
+    chatPrompt:
+      conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? null,
     theme,
     setTheme,
     accent,
     setAccent,
+    fontScale,
+    setFontScale,
+    density,
+    setDensity,
+    groupByDate,
+    setGroupByDate,
     sidebarCollapsed,
     toggleSidebar,
     paletteOpen,

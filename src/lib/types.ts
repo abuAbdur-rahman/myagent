@@ -116,6 +116,7 @@ const conversationSchema = z.object({
   model: z.string().nullable(),
   summary: z.string().nullable(),
   summary_through: z.number().nullable(),
+  system_prompt: z.string().nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
 });
