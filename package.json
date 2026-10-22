@@ -4,8 +4,8 @@
   "version": "0.4.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "node api.js && vite",
+    "build": "node api.js && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "clean:target": "node -e \"require('fs').rmSync('src-tauri/target/debug/incremental', { recursive: true, force: true })\"",
