@@ -4,7 +4,7 @@ import { toolListSentence } from "./tools";
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const IMAGE_PART_CHARS = 1500;
-const DEFAULT_MODEL_CONTEXT = 128_000;
+export const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
 const MAX_TURNS_WINDOW = 60;
 
@@ -15,6 +15,8 @@ export interface ContextInput {
   userName?: string;
   knowledgeBlock?: string;
   skillIndexBlock?: string;
+  standingPrompt?: string;
+  chatPrompt?: string;
 }
 
 const IDENTITY_LINES = [
@@ -75,6 +77,9 @@ function appendWithinBudget(base: string, knowledge?: string, skills?: string): 
 export function buildSystemPrompt(input: ContextInput): string | null {
   const blocks = identityBlocks(input.userName);
 
+  const standing = input.standingPrompt?.trim();
+  if (standing) blocks.push(`## Standing instructions\n${standing}`);
+
   const global = renderMemories(input.globalMemories);
   if (global) blocks.push(`## Durable memory\n${global}`);
 
@@ -82,6 +87,9 @@ export function buildSystemPrompt(input: ContextInput): string | null {
     const project = projectBlock(input.project, input.projectMemories);
     if (project) blocks.push(project);
   }
+
+  const chat = input.chatPrompt?.trim();
+  if (chat) blocks.push(`## This chat\n${chat}`);
 
   const base = blocks.join("\n\n");
   const skills = input.skillIndexBlock?.trim();

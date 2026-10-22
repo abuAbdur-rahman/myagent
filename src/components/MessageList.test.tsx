@@ -98,6 +98,14 @@ describe("MessageDocuments", () => {
     expect(html).not.toContain("<img");
   });
 
+  it("shows the file type on the card", () => {
+    const attachments = JSON.stringify([DOC]);
+    const html = renderToStaticMarkup(
+      <MessageDocuments message={{ ...base, attachments }} />,
+    );
+    expect(html).toContain("PDF");
+  });
+
   it("renders nothing for images, empty, or missing attachments", () => {
     const images = JSON.stringify([{ dataUrl: "data:image/png;base64,AAA" }]);
     expect(

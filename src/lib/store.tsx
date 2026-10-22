@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, estimateContext, summarySystemTurn } from "./context";
+import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
 import {
   buildDocumentBlock,
@@ -32,6 +32,14 @@ import {
   type VisionOverride,
 } from "./catalog";
 import { toast } from "./toast";
+import type { VoicePhase } from "./activity";
+import {
+  clampFontScale,
+  parseDensity,
+  parseFontScale,
+  parseGroupByDate,
+  type Density,
+} from "./appearance";
 import {
   readVisionFallback,
   readVisionOverrides,
@@ -42,8 +50,8 @@ import {
   type ConnectionModelOption,
   type VisionFallback,
 } from "./vision";
-import { fileCommandSchema, memoryInputSchema } from "./types";
-import { newId } from "./utils";
+import { KEYLESS_KINDS, fileCommandSchema, memoryInputSchema } from "./types";
+import { errorText, newId } from "./utils";
 import { deriveFallbackTitle } from "./title";
 import type {
   Connection,
@@ -54,6 +62,7 @@ import type {
   MemoryDraft,
   MemoryInput,
   MemoryScope,
+  PendingMemory,
   Project,
   ProjectInput,
   Message,
@@ -71,6 +80,7 @@ const SIDEBAR_KEY = "sidebarCollapsed";
 const THEME_KEY = "theme";
 const DISPLAY_NAME_KEY = "displayName";
 const PANEL_WIDTH_KEY = "panelWidth";
+const SHOW_CONTEXT_BAR_KEY = "showContextBar";
 function canSeeFor(
   catalog: ModelCapabilities[] | null,
   overrides: Record<string, VisionOverride>,
@@ -129,7 +139,7 @@ async function collectModelOptions(
   const options: ConnectionModelOption[] = [];
   for (const connection of connections) {
     try {
-      if (!(await api.hasApiKey(connection.id))) continue;
+      if (!KEYLESS_KINDS.has(connection.kind) && !(await api.hasApiKey(connection.id))) continue;
       const [list, caps, hidden] = await Promise.all([
         api.listModels(connection.id, connection.kind),
         api.listModelCaps(connection.id, connection.kind),
@@ -213,10 +223,11 @@ function subagentPreview(current: string | null, event: StreamEvent): string | n
     : next;
 }
 
-type View = "chat" | "projects" | "project";
+type View = "chat" | "projects" | "project" | "outputs";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
 export type PanelMode = "dock" | "full" | "mini";
+type PanelView = "session" | "artifact";
 
 interface PanelArtifact {
   id: string;
@@ -300,9 +311,9 @@ interface AppContextValue {
   contextInfo: {
     tokens: number;
     limit: number;
-    pct: number;
+    pct: number | null;
     real: boolean;
-    limitEstimated: boolean;
+    limitKnown: boolean;
     lastIn: number | null;
     lastOut: number | null;
   };
@@ -320,11 +331,16 @@ interface AppContextValue {
 
   globalMemories: Memory[];
   projectMemories: Memory[];
+  pendingMemories: PendingMemory[];
   refreshMemories: () => Promise<void>;
+  refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
   editMemory: (id: string, draft: MemoryDraft) => Promise<void>;
   deleteMemory: (id: string) => Promise<void>;
+  approvePendingMemory: (id: string) => Promise<void>;
+  dismissPendingMemory: (id: string) => Promise<void>;
+  undoApprovedMemory: (id: string) => Promise<void>;
 
   conversations: Conversation[];
   activeConversationId: string | null;
@@ -340,6 +356,12 @@ interface AppContextValue {
   setTheme: (mode: ThemeMode) => void;
   accent: string;
   setAccent: (value: string) => void;
+  fontScale: number;
+  setFontScale: (value: number) => void;
+  density: Density;
+  setDensity: (value: Density) => void;
+  groupByDate: boolean;
+  setGroupByDate: (value: boolean) => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   paletteOpen: boolean;
@@ -348,6 +370,12 @@ interface AppContextValue {
   completeOnboarding: () => void;
   displayName: string;
   setDisplayName: (name: string) => void;
+  standingPrompt: string;
+  setStandingPrompt: (prompt: string) => void;
+  showContextBar: boolean;
+  setShowContextBar: (value: boolean) => void;
+  chatPrompt: string | null;
+  setChatPrompt: (id: string, prompt: string | null) => Promise<void>;
   settingsPage: string | null;
   setSettingsPage: (page: string | null) => void;
 
@@ -365,9 +393,13 @@ interface AppContextValue {
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
   branchFrom: (messageId: string) => Promise<void>;
+  rateMessage: (messageId: string, rating: number | null) => Promise<void>;
   clearActiveConversation: () => Promise<void>;
   compactActive: (quiet?: boolean) => Promise<void>;
   uncompactActive: () => Promise<void>;
+  compacting: boolean;
+  voicePhase: VoicePhase;
+  setVoicePhase: (phase: VoicePhase) => void;
   stopStream: () => void;
   composerDraft: string;
   setComposerDraft: (value: string) => void;
@@ -391,8 +423,11 @@ interface AppContextValue {
   panelArtifact: PanelArtifact | null;
   panelTab: PanelTab;
   panelMode: PanelMode;
+  panelView: PanelView;
   panelWidth: number;
   openArtifact: (artifact: PanelArtifact) => void;
+  openSessionPanel: () => void;
+  showSessionView: () => void;
   closePanel: () => void;
   togglePanel: () => void;
   setPanelTab: (tab: PanelTab) => void;
@@ -447,6 +482,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [displayName, setDisplayNameState] = useState(
     () => localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
   );
+  const [standingPrompt, setStandingPromptState] = useState(
+    () => localStorage.getItem("standingPrompt") ?? "",
+  );
+  const [showContextBar, setShowContextBarState] = useState(
+    () => localStorage.getItem(SHOW_CONTEXT_BAR_KEY) !== "0",
+  );
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(
@@ -455,6 +496,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<View>("chat");
   const [globalMemories, setGlobalMemories] = useState<Memory[]>([]);
   const [projectMemories, setProjectMemories] = useState<Memory[]>([]);
+  const [pendingMemories, setPendingMemories] = useState<PendingMemory[]>([]);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -464,6 +506,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [compacting, setCompacting] = useState(false);
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === "1",
   );
@@ -471,6 +515,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem(THEME_KEY);
     return saved === "light" || saved === "dark" ? saved : "system";
   });
+  const [fontScale, setFontScaleState] = useState(() =>
+    parseFontScale(localStorage.getItem("fontScale")),
+  );
+  const [density, setDensityState] = useState<Density>(() =>
+    parseDensity(localStorage.getItem("density")),
+  );
+  const [groupByDate, setGroupByDateState] = useState(() =>
+    parseGroupByDate(localStorage.getItem("groupByDate")),
+  );
 
   const activeConnection = useMemo(
     () => connections.find((c) => c.id === activeConnectionId) ?? null,
@@ -484,6 +537,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const connRef = useRef<Connection | null>(null);
   const projectRef = useRef<Project | null>(null);
   const displayNameRef = useRef("");
+  const standingPromptRef = useRef("");
+  const chatPromptRef = useRef<string | null>(null);
   const modelRef = useRef(model);
   const convIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -509,6 +564,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [autoCompact]);
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
+  const pendingMemoriesRef = useRef<PendingMemory[]>([]);
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
   const reasoningRef = useRef("");
@@ -527,6 +583,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     displayNameRef.current = displayName;
   }, [displayName]);
+  useEffect(() => {
+    standingPromptRef.current = standingPrompt;
+  }, [standingPrompt]);
+  useEffect(() => {
+    const chat = conversations.find((item) => item.id === activeConversationId);
+    chatPromptRef.current = chat?.system_prompt ?? null;
+  }, [conversations, activeConversationId]);
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
@@ -553,6 +616,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     projectMemoriesRef.current = projectMemories;
   }, [projectMemories]);
+  useEffect(() => {
+    pendingMemoriesRef.current = pendingMemories;
+  }, [pendingMemories]);
 
   const refreshConnections = useCallback(async () => {
     const rows = await db.listConnections();
@@ -584,12 +650,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProjectMemories(project);
   }, []);
 
+  const refreshPendingMemories = useCallback(async () => {
+    const rows = await db.listPendingMemories();
+    setPendingMemories(rows);
+    return rows;
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
         await refreshConnections();
         await refreshProjects();
         await refreshMemories();
+        await refreshPendingMemories();
         setConversations(await db.listConversations());
       } catch (e) {
         reportError(e);
@@ -597,7 +670,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setReady(true);
       }
     })();
-  }, [refreshConnections, refreshProjects, refreshMemories]);
+  }, [refreshConnections, refreshProjects, refreshMemories, refreshPendingMemories]);
 
   useEffect(() => {
     if (activeConnectionId) {
@@ -642,6 +715,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const setTheme = useCallback((mode: ThemeMode) => setThemeState(mode), []);
+
+  const setFontScale = useCallback((value: number) => {
+    const next = clampFontScale(value);
+    setFontScaleState(next);
+    localStorage.setItem("fontScale", String(next));
+  }, []);
+
+  const setDensity = useCallback((value: Density) => {
+    setDensityState(value);
+    localStorage.setItem("density", value);
+  }, []);
+
+  const setGroupByDate = useCallback((value: boolean) => {
+    setGroupByDateState(value);
+    localStorage.setItem("groupByDate", value ? "1" : "0");
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--font-scale", String(fontScale));
+  }, [fontScale]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-density", density);
+  }, [density]);
 
   const [accent, setAccentState] = useState(() => localStorage.getItem("accent") ?? "#c96442");
   const setAccent = useCallback((value: string) => {
@@ -721,6 +818,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setStandingPrompt = useCallback((prompt: string) => {
+    setStandingPromptState(prompt);
+    if (prompt.trim()) {
+      localStorage.setItem("standingPrompt", prompt);
+    } else {
+      localStorage.removeItem("standingPrompt");
+    }
+  }, []);
+
+  const setShowContextBar = useCallback((value: boolean) => {
+    setShowContextBarState(value);
+    localStorage.setItem(SHOW_CONTEXT_BAR_KEY, value ? "1" : "0");
+  }, []);
+
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => {
       localStorage.setItem(SIDEBAR_KEY, prev ? "0" : "1");
@@ -739,9 +850,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
   const [panelTab, setPanelTabState] = useState<PanelTab>("code");
   const [panelMode, setPanelModeState] = useState<PanelMode>("dock");
+  const [panelView, setPanelViewState] = useState<PanelView>("session");
   const [panelWidth, setPanelWidthState] = useState(() => {
     const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 420);
+    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 480);
   });
 
   const setPanelWidth = useCallback((width: number) => {
@@ -761,17 +873,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const openArtifact = useCallback((artifact: PanelArtifact) => {
     if (!panelOpenRef.current) setPanelModeState("dock");
     setPanelArtifact(artifact);
+    setPanelViewState("artifact");
     setPanelTabState(defaultPanelTab(artifact.lang));
     setPanelOpen(true);
   }, []);
 
+  const openSessionPanel = useCallback(() => {
+    if (!panelOpenRef.current) setPanelModeState("dock");
+    setPanelViewState("session");
+    setPanelOpen(true);
+  }, []);
+
+  const showSessionView = useCallback(() => setPanelViewState("session"), []);
+
   const closePanel = useCallback(() => setPanelOpen(false), []);
 
   const togglePanel = useCallback(() => {
-    setPanelOpen((prev) => {
-      if (prev) return false;
-      return panelArtifact !== null;
-    });
+    if (panelOpenRef.current) {
+      setPanelOpen(false);
+      return;
+    }
+    setPanelModeState("dock");
+    if (panelArtifact === null) setPanelViewState("session");
+    setPanelOpen(true);
   }, [panelArtifact]);
 
   const setPanelTab = useCallback((tab: PanelTab) => setPanelTabState(tab), []);
@@ -784,7 +908,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const has = await api.hasApiKey(connection.id);
+      const has =
+        KEYLESS_KINDS.has(connection.kind) || (await api.hasApiKey(connection.id));
       if (!has) {
         setModels([]);
         return;
@@ -957,8 +1082,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [reasoningEffort]);
 
   const supportedEfforts = useMemo(
-    () => (model ? lookupEfforts(catalog, model) : null),
-    [catalog, model],
+    () => (model ? lookupEfforts(catalog, model, activeConnection?.kind) : null),
+    [catalog, model, activeConnection],
   );
   const supportedEffortsRef = useRef<string[] | null>(null);
   useEffect(() => {
@@ -973,9 +1098,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (model ? (lookupContextLength(catalog, model) ?? null) : null),
     [catalog, model],
   );
-  const contextLimitRef = useRef(128_000);
+  const contextLimitRef = useRef(DEFAULT_MODEL_CONTEXT);
   useEffect(() => {
-    contextLimitRef.current = modelContextLimit ?? 128_000;
+    contextLimitRef.current = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
   }, [modelContextLimit]);
 
   const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
@@ -989,10 +1114,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       project: activeProject,
       projectMemories,
       userName: displayName || undefined,
+      standingPrompt: standingPrompt || undefined,
+      chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
     });
-    const limit = modelContextLimit ?? 128_000;
+    const limitKnown = modelContextLimit != null;
+    const limit = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
     const lastUsage = [...messages]
       .reverse()
       .find((m) => m.role === "assistant" && m.total_tokens != null);
@@ -1001,25 +1129,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return {
         tokens,
         limit,
-        pct: Math.min(100, Math.round((tokens / limit) * 100)),
+        pct: limitKnown ? Math.min(100, Math.round((tokens / limit) * 100)) : null,
         real: true,
-        limitEstimated: modelContextLimit == null,
+        limitKnown,
         lastIn: lastUsage.prompt_tokens ?? null,
         lastOut: lastUsage.completion_tokens ?? null,
       };
     }
+    const estimated = estimateContext(
+      messages.filter((m) => m.content.length > 0),
+      system,
+      limit,
+    );
     return {
-      ...estimateContext(
-        messages.filter((m) => m.content.length > 0),
-        system,
-        limit,
-      ),
+      ...estimated,
+      pct: limitKnown ? estimated.pct : null,
       real: false,
-      limitEstimated: modelContextLimit == null,
+      limitKnown,
       lastIn: null,
       lastOut: null,
     };
-  }, [messages, globalMemories, activeProject, projectMemories, displayName, modelContextLimit]);
+  }, [
+    messages,
+    globalMemories,
+    activeProject,
+    projectMemories,
+    displayName,
+    standingPrompt,
+    conversations,
+    activeConversationId,
+    modelContextLimit,
+  ]);
 
   const resolveEffort = useCallback((): string | null => {
     const selected = reasoningEffortRef.current;
@@ -1104,6 +1244,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [refreshMemories],
   );
 
+  const approvePendingMemory = useCallback(
+    async (id: string) => {
+      await db.approvePendingMemory(id);
+      await Promise.all([refreshMemories(), refreshPendingMemories()]);
+    },
+    [refreshMemories, refreshPendingMemories],
+  );
+
+  const dismissPendingMemory = useCallback(
+    async (id: string) => {
+      await db.dismissPendingMemory(id);
+      await refreshPendingMemories();
+    },
+    [refreshPendingMemories],
+  );
+
+  const undoApprovedMemory = useCallback(
+    async (id: string) => {
+      await db.restorePendingMemory(id);
+      await Promise.all([refreshMemories(), refreshPendingMemories()]);
+    },
+    [refreshMemories, refreshPendingMemories],
+  );
+
   const loadMemories = useCallback(
     (scope: MemoryScope, projectId: string | null) => db.listMemories(scope, projectId),
     [],
@@ -1163,6 +1327,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c)));
   }, []);
 
+  const setChatPrompt = useCallback(async (id: string, prompt: string | null) => {
+    const trimmed = prompt?.trim() ?? "";
+    const value = trimmed ? trimmed : null;
+    await db.touchConversation(id, { system_prompt: value });
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, system_prompt: value } : c)),
+    );
+    chatPromptRef.current = value;
+  }, []);
+
   const togglePin = useCallback(async (id: string) => {
     await db.toggleConversationPin(id);
     setConversations(await db.listConversations());
@@ -1215,6 +1389,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         project: projectRef.current,
         projectMemories: projectMemoriesRef.current,
         userName: displayNameRef.current || undefined,
+        standingPrompt: standingPromptRef.current || undefined,
+        chatPrompt: chatPromptRef.current ?? undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
         skillIndexBlock: skillIndexRef.current || undefined,
       }),
@@ -1403,6 +1579,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     : entry,
                 ),
               );
+            } else if (event.type === "tool_sources") {
+              applyToolLog(
+                toolLogRef.current.map((entry) =>
+                  entry.id === event.id
+                    ? {
+                        ...entry,
+                        domains: event.domains.length > 0 ? event.domains : entry.domains,
+                        files: event.files.length > 0 ? event.files : entry.files,
+                      }
+                    : entry,
+                ),
+              );
             } else if (event.type === "subagent") {
               const next = subagentPreview(
                 toolLogRef.current.find((entry) => entry.id === event.parent)?.preview ?? null,
@@ -1452,7 +1640,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
         await refreshTodos(conversationId);
         if (toolLogRef.current.some((entry) => MEMORY_WRITE_TOOLS.has(entry.name))) {
-          await refreshMemories();
+          const waiting = pendingMemoriesRef.current.length;
+          const [, rows] = await Promise.all([refreshMemories(), refreshPendingMemories()]);
+          const added = rows.length - waiting;
+          if (added > 0) {
+            toast(`${added} ${added === 1 ? "memory is" : "memories are"} waiting for review`, {
+              actions: [{ label: "Review", run: () => setSettingsPage("memory") }],
+            });
+          }
         }
       } catch (e) {
         if (requestIdRef.current === requestId) {
@@ -1485,6 +1680,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       resolveTools,
       refreshTodos,
       refreshMemories,
+      refreshPendingMemories,
       searchBackend,
       searchEndpoint,
     ],
@@ -1592,6 +1788,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...(prior ? [`Previous summary:\n${prior}`] : []),
         ...older.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`),
       ].join("\n\n");
+      setCompacting(true);
       try {
         const summary = await api.summarize(
           connection.id,
@@ -1610,6 +1807,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!quiet) toast("Context compacted");
       } catch (e) {
         reportError(e);
+      } finally {
+        setCompacting(false);
       }
     },
     [streaming],
@@ -1695,6 +1894,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!modelRef.current) {
         setError("Select a model first.");
         return false;
+      }
+      if (!KEYLESS_KINDS.has(connection.kind)) {
+        let hasKey = false;
+        try {
+          hasKey = await api.hasApiKey(connection.id);
+        } catch (e) {
+          setError(`Couldn't read the saved key for ${connection.name}: ${errorText(e)}`);
+          return false;
+        }
+        if (!hasKey) {
+          setError(`Add an API key for ${connection.name} in Settings → Providers before sending.`);
+          return false;
+        }
       }
 
       setError(null);
@@ -2030,6 +2242,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [conversations, streaming],
   );
 
+  const rateMessage = useCallback(
+    async (messageId: string, rating: number | null) => {
+      const current = messagesRef.current.find((m) => m.id === messageId)?.rating ?? null;
+      const next = current === rating ? null : rating;
+      try {
+        await db.setMessageRating(messageId, next);
+        setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, rating: next } : m)));
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [reportError],
+  );
+
   const startProjectChat = useCallback(
     async (projectId: string, text: string): Promise<boolean> => {
       const connection = connRef.current;
@@ -2151,11 +2377,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshProjects,
     globalMemories,
     projectMemories,
+    pendingMemories,
     refreshMemories,
+    refreshPendingMemories,
     loadMemories,
     addMemory: saveMemoryToScope,
     editMemory,
     deleteMemory,
+    approvePendingMemory,
+    dismissPendingMemory,
+    undoApprovedMemory,
     conversations,
     activeConversationId,
     selectConversation,
@@ -2163,14 +2394,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     newConversation,
     removeConversation,
     renameConversation,
+    setChatPrompt,
     togglePin,
     moveConversation,
     displayName,
     setDisplayName,
+    standingPrompt,
+    setStandingPrompt,
+    showContextBar,
+    setShowContextBar,
+    chatPrompt:
+      conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? null,
     theme,
     setTheme,
     accent,
     setAccent,
+    fontScale,
+    setFontScale,
+    density,
+    setDensity,
+    groupByDate,
+    setGroupByDate,
     sidebarCollapsed,
     toggleSidebar,
     paletteOpen,
@@ -2189,9 +2433,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     continueTurn,
     editAndResubmit,
     branchFrom,
+    rateMessage,
     clearActiveConversation,
     compactActive,
     uncompactActive,
+    compacting,
+    voicePhase,
+    setVoicePhase,
     stopStream,
     composerDraft,
     setComposerDraft,
@@ -2215,8 +2463,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     panelArtifact,
     panelTab,
     panelMode,
+    panelView,
     panelWidth,
     openArtifact,
+    openSessionPanel,
+    showSessionView,
     closePanel,
     togglePanel,
     setPanelTab,

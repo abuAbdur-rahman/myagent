@@ -157,7 +157,7 @@ function Header({
   onDisable: () => void;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
+    <div className="flex items-start justify-between gap-4 border-b border-border pb-3" data-setting-term="Enable sandbox">
       <div>
         <div className="flex items-center gap-2 text-sm font-medium">
           <Shield size={16} /> Run code in a sandbox
@@ -190,7 +190,7 @@ function FolderSection({
   onPick: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" data-setting-term="Project folder">
       <div className="text-xs font-medium">Project folder</div>
       <div className="flex gap-2">
         <Input
@@ -229,7 +229,7 @@ function PackagesSection({
   onEnable: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-card border border-border p-3">
+    <div className="flex flex-col gap-2 rounded-card border border-border p-3" data-setting-term="Packages">
       <div className="text-xs font-medium">Packages</div>
       <div className="grid grid-cols-2 gap-1 text-xs">
         {EXTRAS.map((extra) => (
@@ -278,7 +278,7 @@ function LimitsSection({
   onRebuild: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-card border border-border p-3">
+    <div className="flex flex-col gap-3 rounded-card border border-border p-3" data-setting-term="Limits">
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="font-medium">Limits</span>
         <div className="flex items-center gap-2">

@@ -4,11 +4,16 @@ import Database from "@tauri-apps/plugin-sql";
 import { documentsWipeUnreferenced, knowledgeSidecarWipe } from "./api";
 import {
   addChatDoc,
+  approvePendingMemory,
   clearConversation,
   deleteConversation,
   deleteProject,
+  dismissPendingMemory,
   findChatDoc,
   listChatDocs,
+  listMemories,
+  listPendingMemories,
+  restorePendingMemory,
   updateMessageAttachments,
 } from "./db";
 
@@ -166,5 +171,81 @@ describe("updateMessageAttachments", () => {
       "UPDATE messages SET attachments = $1 WHERE id = $2",
       [null, "m1"],
     );
+  });
+});
+
+describe("pending memory", () => {
+  it("copies a pending note into memory before removing it from the queue", async () => {
+    execute.mockClear();
+    await approvePendingMemory("p1");
+    const statements = execute.mock.calls.map(([sql]) => sql as string);
+    expect(statements[0]).toContain("INSERT OR IGNORE INTO memories");
+    expect(statements[1]).toBe("DELETE FROM pending_memories WHERE id = $1");
+  });
+
+  it("returns an approved note to the queue on undo", async () => {
+    execute.mockClear();
+    await restorePendingMemory("p1");
+    const statements = execute.mock.calls.map(([sql]) => sql as string);
+    expect(statements[0]).toContain("INSERT OR IGNORE INTO pending_memories");
+    expect(statements[1]).toBe("DELETE FROM memories WHERE id = $1");
+  });
+
+  it("drops a malformed pending row instead of failing the whole list", async () => {
+    select.mockResolvedValueOnce([
+      {
+        id: "p1",
+        scope: "global",
+        project_id: null,
+        kind: "fact",
+        content: "Prefers TypeScript",
+        conversation_id: null,
+        created_at: 1,
+      },
+      {
+        id: "p2",
+        scope: "global",
+        project_id: null,
+        kind: "bogus",
+        content: "",
+        conversation_id: null,
+        created_at: 1,
+      },
+    ]);
+    const rows = await listPendingMemories();
+    expect(rows.map((row) => row.id)).toEqual(["p1"]);
+  });
+
+  it("dismisses by deleting only the pending row", async () => {
+    execute.mockClear();
+    await dismissPendingMemory("p1");
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith("DELETE FROM pending_memories WHERE id = $1", ["p1"]);
+  });
+});
+
+describe("listMemories", () => {
+  it("asks for one project's notes only", async () => {
+    select.mockClear();
+    await listMemories("project", "pa");
+    expect(select).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE scope = 'project' AND project_id = $1"),
+      ["pa"],
+    );
+  });
+
+  it("never mixes project notes into global memory", async () => {
+    select.mockClear();
+    await listMemories("global", null);
+    const calls = select.mock.calls;
+    const [sql] = calls[calls.length - 1];
+    expect(sql).toContain("WHERE scope = 'global'");
+    expect(sql).not.toContain("project_id");
+  });
+
+  it("asks for nothing when no project is active", async () => {
+    select.mockClear();
+    await expect(listMemories("project", null)).resolves.toEqual([]);
+    expect(select).not.toHaveBeenCalled();
   });
 });

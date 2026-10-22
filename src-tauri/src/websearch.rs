@@ -1,3 +1,4 @@
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -11,6 +12,8 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const SEARCH_KEY_ACCOUNT: &str = "search:tavily";
+pub const EXA_KEY_ACCOUNT: &str = "search:exa";
+const EXA_URL: &str = "https://api.exa.ai/search";
 pub const DEFAULT_SEARXNG_ENDPOINT: &str = "http://127.0.0.1:8888";
 const MAX_SEARCH_KEYS: usize = 5;
 
@@ -183,6 +186,97 @@ fn quota_exhausted(status: reqwest::StatusCode, body: &str) -> bool {
         || (lower.contains("insufficient") && (lower.contains("credit") || lower.contains("quota")))
 }
 
+fn read_exa_key() -> Option<String> {
+    vault::get_api_key(EXA_KEY_ACCOUNT)
+        .ok()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
+
+fn should_fall_back_to_exa(error: &str, has_exa_key: bool) -> bool {
+    has_exa_key && error.starts_with("RATE_LIMITED:")
+}
+
+#[tauri::command]
+pub fn search_exa_key_set(key: String) -> Result<(), String> {
+    let trimmed = key.trim().to_string();
+    if trimmed.is_empty() {
+        return vault::delete_api_key(EXA_KEY_ACCOUNT.to_string())
+            .map_err(|error| fail("VAULT", error));
+    }
+    vault::set_api_key(EXA_KEY_ACCOUNT.to_string(), trimmed).map_err(|error| fail("VAULT", error))
+}
+
+#[tauri::command]
+pub fn search_exa_key_hint() -> Option<String> {
+    read_exa_key().map(|key| mask_key(&key))
+}
+
+async fn exa_search_at(
+    url: &str,
+    key: &str,
+    query: &str,
+    count: u64,
+    cancel: &Notify,
+) -> Result<Vec<SearchHit>, String> {
+    let client = build_client()?;
+    let body = serde_json::json!({
+        "query": query,
+        "numResults": count,
+        "contents": { "text": { "maxCharacters": 600 } },
+    });
+    let work = client.post(url).header("x-api-key", key).json(&body).send();
+    tokio::pin!(work);
+    let resp = tokio::select! {
+        resp = &mut work => resp.map_err(|error| fail("NETWORK", error))?,
+        _ = cancel.notified() => return Err(fail("ABORTED", "cancelled by user")),
+    };
+    let status = resp.status();
+    let text = resp.text().await.map_err(|error| fail("NETWORK", error))?;
+    if !status.is_success() {
+        return Err(map_status_error(status, &text, "exa"));
+    }
+    let value: Value = serde_json::from_str(&text).map_err(|error| fail("NETWORK", error))?;
+    Ok(parse_exa(&value))
+}
+
+#[tauri::command]
+pub async fn search_exa_test() -> Result<String, String> {
+    let key =
+        read_exa_key().ok_or_else(|| fail("MISSING_KEY", "add an Exa key in Settings → Search"))?;
+    let cancel = Notify::new();
+    let hits = exa_search_at(EXA_URL, &key, "exa api test", 3, &cancel).await?;
+    Ok(format!(
+        "{} result{}",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "s" }
+    ))
+}
+
+fn parse_exa(value: &Value) -> Vec<SearchHit> {
+    value
+        .get("results")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let url = item.get("url").and_then(|v| v.as_str())?.trim().to_string();
+                    if url.is_empty() {
+                        return None;
+                    }
+                    Some(SearchHit {
+                        title: text(item, "title"),
+                        url,
+                        snippet: text(item, "text"),
+                        score: item.get("score").and_then(|v| v.as_f64()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_tavily_keys(raw: &str) -> Option<Vec<String>> {
     let trimmed = raw.trim();
     if trimmed.starts_with('[') {
@@ -206,15 +300,20 @@ fn parse_tavily_keys(raw: &str) -> Option<Vec<String>> {
     Some(vec![trimmed.to_string()])
 }
 
+fn stored_tavily_keys() -> Result<Vec<String>, String> {
+    match vault::read_api_key(SEARCH_KEY_ACCOUNT) {
+        Ok(Some(raw)) => Ok(parse_tavily_keys(&raw).unwrap_or_default()),
+        Ok(None) => Ok(Vec::new()),
+        Err(error) => Err(fail("VAULT", error)),
+    }
+}
+
 fn read_tavily_keys() -> Result<Vec<String>, String> {
-    let missing = || fail("MISSING_KEY", "add a Tavily key in Settings → Search");
-    let raw = vault::get_api_key(SEARCH_KEY_ACCOUNT).map_err(|_| missing())?;
-    parse_tavily_keys(&raw).ok_or_else(|| {
-        fail(
-            "MISSING_KEY",
-            "search key list is empty; add a Tavily key in Settings → Search",
-        )
-    })
+    let keys = stored_tavily_keys()?;
+    if keys.is_empty() {
+        return Err(fail("MISSING_KEY", "add a Tavily key in Settings → Search"));
+    }
+    Ok(keys)
 }
 
 fn store_tavily_keys(keys: &[String]) -> Result<(), String> {
@@ -227,17 +326,12 @@ fn store_tavily_keys(keys: &[String]) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn search_key_count() -> Result<usize, String> {
-    Ok(read_tavily_keys().unwrap_or_default().len())
-}
-
-#[tauri::command]
 pub fn search_key_add(key: String) -> Result<usize, String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
         return Err(fail("BAD_KEY", "empty search key"));
     }
-    let mut keys = read_tavily_keys().unwrap_or_default();
+    let mut keys = stored_tavily_keys()?;
     if !keys.iter().any(|existing| existing == trimmed) {
         if keys.len() >= MAX_SEARCH_KEYS {
             return Err(fail(
@@ -258,8 +352,125 @@ pub fn search_key_remove(index: usize) -> Result<usize, String> {
         return Err(fail("BAD_KEY", "no search key at that position"));
     }
     keys.remove(index);
+    with_stats(|list| {
+        if index < list.len() {
+            list.remove(index);
+        }
+    });
     store_tavily_keys(&keys)?;
     Ok(keys.len())
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SearchKeyInfo {
+    pub index: usize,
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct KeyStat {
+    pub requests: u32,
+    pub quota_hits: u32,
+}
+
+static KEY_STATS: OnceLock<Mutex<Vec<KeyStat>>> = OnceLock::new();
+
+fn stats() -> &'static Mutex<Vec<KeyStat>> {
+    KEY_STATS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn with_stats<T>(run: impl FnOnce(&mut Vec<KeyStat>) -> T) -> T {
+    let mut list = stats().lock().unwrap_or_else(|error| error.into_inner());
+    run(&mut list)
+}
+
+fn bump(list: &mut Vec<KeyStat>, index: usize, quota: bool) {
+    if list.len() <= index {
+        list.resize(index + 1, KeyStat::default());
+    }
+    list[index].requests += 1;
+    if quota {
+        list[index].quota_hits += 1;
+    }
+}
+
+fn note_attempt(index: usize, quota: bool) {
+    with_stats(|list| bump(list, index, quota));
+}
+
+pub(crate) fn mask_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 4 {
+        return "••••".to_string();
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("••••{tail}")
+}
+
+#[tauri::command]
+pub fn search_key_list() -> Result<Vec<SearchKeyInfo>, String> {
+    Ok(stored_tavily_keys()?
+        .iter()
+        .enumerate()
+        .map(|(index, key)| SearchKeyInfo {
+            index,
+            hint: mask_key(key),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn search_key_stats() -> Result<Vec<KeyStat>, String> {
+    let len = stored_tavily_keys()?.len();
+    Ok(with_stats(|list| {
+        list.resize(len, KeyStat::default());
+        list.truncate(len);
+        list.clone()
+    }))
+}
+
+#[tauri::command]
+pub async fn search_key_test(index: usize) -> Result<String, String> {
+    let keys = read_tavily_keys()?;
+    let key = keys
+        .get(index)
+        .ok_or_else(|| fail("BAD_KEY", "no search key at that position"))?;
+    let client = build_client()?;
+    let body = serde_json::json!({
+        "query": "ping",
+        "search_depth": "basic",
+        "max_results": 1,
+        "include_answer": false,
+    });
+    let response = client
+        .post(TAVILY_URL)
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| fail("NETWORK", error))?;
+    let status = response.status();
+    let payload = response
+        .text()
+        .await
+        .map_err(|error| fail("NETWORK", error))?;
+    let quota = quota_exhausted(status, &payload);
+    note_attempt(index, quota);
+    if status.is_success() {
+        return Ok("Key works".to_string());
+    }
+    Err(map_status_error(status, &payload, "tavily"))
+}
+
+#[tauri::command]
+pub async fn search_endpoint_test(endpoint: String) -> Result<String, String> {
+    let cancel = Notify::new();
+    let hits = searxng_search(&endpoint, "ping", 1, &cancel).await?;
+    Ok(format!(
+        "Endpoint works · {} hit{}",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "s" }
+    ))
 }
 
 async fn tavily_search_at(
@@ -308,14 +519,21 @@ async fn tavily_search_rotating_at(
     }
     let mut last_error = String::new();
     let mut exhausted = 0usize;
-    for key in keys {
+    for (index, key) in keys.iter().enumerate() {
         match tavily_search_at(url, key, query, count, cancel).await {
-            Ok(hits) => return Ok(hits),
+            Ok(hits) => {
+                note_attempt(index, false);
+                return Ok(hits);
+            }
             Err((error, true)) => {
+                note_attempt(index, true);
                 exhausted += 1;
                 last_error = error;
             }
-            Err((error, false)) => return Err(error),
+            Err((error, false)) => {
+                note_attempt(index, false);
+                return Err(error);
+            }
         }
     }
     if exhausted == keys.len() && keys.len() > 1 {
@@ -388,8 +606,28 @@ pub async fn search(
                 .await
             }
             "tavily" => {
-                let keys = read_tavily_keys()?;
-                tavily_search_rotating(&keys, query, count, cancel).await
+                let result = match read_tavily_keys() {
+                    Ok(keys) => tavily_search_rotating(&keys, query, count, cancel).await,
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(hits) => Ok(hits),
+                    Err(error) => {
+                        let exa_key = read_exa_key();
+                        if should_fall_back_to_exa(&error, exa_key.is_some()) {
+                            exa_search_at(
+                                EXA_URL,
+                                exa_key.as_deref().unwrap_or_default(),
+                                query,
+                                count,
+                                cancel,
+                            )
+                            .await
+                        } else {
+                            Err(error)
+                        }
+                    }
+                }
             }
             other => Err(fail(
                 "BAD_BACKEND",
@@ -425,6 +663,32 @@ pub async fn search_tavily_with_key(key: &str, query: &str, count: u64) -> Resul
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parses_exa_results_with_their_text() {
+        let value = serde_json::json!({
+            "results": [
+                { "title": "Rust docs", "url": "https://docs.rs/serde", "text": "Serde docs", "score": 0.91 },
+                { "title": "no url" }
+            ]
+        });
+        let hits = parse_exa(&value);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Rust docs");
+        assert_eq!(hits[0].snippet, "Serde docs");
+        assert_eq!(hits[0].score, Some(0.91));
+    }
+
+    #[test]
+    fn falls_back_only_on_quota_and_only_with_a_key() {
+        assert!(should_fall_back_to_exa(
+            "RATE_LIMITED: search quota hit, retry later",
+            true
+        ));
+        assert!(!should_fall_back_to_exa("RATE_LIMITED: quota", false));
+        assert!(!should_fall_back_to_exa("AUTH: tavily key rejected", true));
+        assert!(!should_fall_back_to_exa("NETWORK: timeout", true));
+    }
 
     #[test]
     fn parses_tavily_results() {
@@ -533,6 +797,32 @@ mod tests {
             parse_tavily_keys("not json ["),
             Some(vec!["not json [".to_string()])
         );
+    }
+
+    #[test]
+    fn mask_key_keeps_only_the_tail() {
+        assert_eq!(mask_key("tvly-1234abcd"), "••••abcd");
+        assert_eq!(mask_key("abc"), "••••");
+        assert_eq!(mask_key("abcd"), "••••");
+        assert!(!mask_key("tvly-supersecret").contains("supersecret"));
+    }
+
+    #[test]
+    fn counts_requests_and_quota_hits_per_key() {
+        let mut list = Vec::new();
+        bump(&mut list, 1, false);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].requests, 0);
+        assert_eq!(list[1].requests, 1);
+        assert_eq!(list[1].quota_hits, 0);
+
+        bump(&mut list, 1, true);
+        assert_eq!(list[1].requests, 2);
+        assert_eq!(list[1].quota_hits, 1);
+
+        bump(&mut list, 0, false);
+        assert_eq!(list[0].requests, 1);
+        assert_eq!(list[1].quota_hits, 1);
     }
 
     #[test]

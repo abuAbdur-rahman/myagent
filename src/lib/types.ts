@@ -1,7 +1,15 @@
 import { z } from "zod";
 
-const providerKindSchema = z.enum(["openrouter", "agentrouter", "custom"]);
+const providerKindSchema = z.enum([
+  "openrouter",
+  "agentrouter",
+  "deepseek",
+  "ollama-cloud",
+  "ollama",
+  "custom",
+]);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
+export const PROVIDER_KINDS: ProviderKind[] = [...providerKindSchema.options];
 
 const connectionSchema = z.object({
   id: z.string(),
@@ -12,6 +20,7 @@ const connectionSchema = z.object({
     .refine((url) => /^https?:\/\//i.test(url), "Only http(s) URLs are allowed"),
   kind: providerKindSchema,
   default_model: z.string().nullable(),
+  key_tested_at: z.number().nullable().optional(),
   created_at: z.number(),
 });
 export type Connection = z.infer<typeof connectionSchema>;
@@ -19,6 +28,7 @@ export type Connection = z.infer<typeof connectionSchema>;
 export const connectionInputSchema = connectionSchema.omit({
   id: true,
   created_at: true,
+  key_tested_at: true,
 });
 export type ConnectionInput = z.infer<typeof connectionInputSchema>;
 
@@ -31,6 +41,8 @@ export const toolLogEntrySchema = z.object({
   summary: z.string(),
   status: z.enum(["running", "ok", "err"]),
   preview: z.string().nullable(),
+  domains: z.array(z.string()).optional(),
+  files: z.array(z.string()).optional(),
 });
 export type ToolLogEntry = z.infer<typeof toolLogEntrySchema>;
 
@@ -92,6 +104,7 @@ const messageSchema = z.object({
   artifacts: z.string().nullish(),
   attachments: z.string().nullish(),
   model: z.string().nullish(),
+  rating: z.number().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;
@@ -106,6 +119,7 @@ const conversationSchema = z.object({
   model: z.string().nullable(),
   summary: z.string().nullable(),
   summary_through: z.number().nullable(),
+  system_prompt: z.string().nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -140,11 +154,22 @@ const memorySchema = z.object({
   project_id: z.string().nullable(),
   kind: memoryKindSchema,
   content: z.string().min(1).max(2000),
+  source_conversation_id: z.string().nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
 });
 export type Memory = z.infer<typeof memorySchema>;
 
+export const pendingMemorySchema = z.object({
+  id: z.string(),
+  scope: memoryScopeSchema,
+  project_id: z.string().nullable(),
+  kind: memoryKindSchema,
+  content: z.string().min(1).max(2000),
+  conversation_id: z.string().nullable(),
+  created_at: z.number(),
+});
+export type PendingMemory = z.infer<typeof pendingMemorySchema>;
 export const memoryInputSchema = memorySchema.omit({
   id: true,
   created_at: true,
@@ -217,6 +242,7 @@ const exportMessageSchema = z.object({
   toolLog: z.array(toolLogEntrySchema),
   artifacts: z.array(declaredArtifactSchema),
   model: z.string().nullable().optional(),
+  rating: z.number().nullable().optional(),
   createdAt: z.number(),
 });
 
@@ -281,6 +307,12 @@ const streamEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("tool_start"), id: z.string(), name: z.string(), summary: z.string() }),
   z.object({ type: z.literal("tool_result"), id: z.string(), ok: z.boolean(), preview: z.string() }),
+  z.object({
+    type: z.literal("tool_sources"),
+    id: z.string(),
+    domains: z.array(z.string()),
+    files: z.array(z.string()),
+  }),
   z.object({ type: z.literal("artifact"), title: z.string(), lang: z.string(), code: z.string() }),
 ]);
 
@@ -293,5 +325,19 @@ export type StreamEvent =
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
   openrouter: "https://openrouter.ai/api/v1",
   agentrouter: "https://agentrouter.org/v1",
+  deepseek: "https://api.deepseek.com/v1",
+  "ollama-cloud": "https://ollama.com/v1",
+  ollama: "http://localhost:11434/v1",
   custom: "https://api.openai.com/v1",
 };
+
+export const PROVIDER_LABELS: Record<ProviderKind, string> = {
+  openrouter: "OpenRouter",
+  agentrouter: "Agent Router",
+  deepseek: "DeepSeek",
+  "ollama-cloud": "Ollama Cloud",
+  ollama: "Ollama (local)",
+  custom: "Custom",
+};
+
+export const KEYLESS_KINDS: ReadonlySet<ProviderKind> = new Set(["ollama"]);

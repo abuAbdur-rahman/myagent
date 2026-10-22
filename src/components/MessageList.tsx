@@ -14,6 +14,8 @@ import {
   RefreshCw,
   Search,
   Terminal,
+  ThumbsDown,
+  ThumbsUp,
   Clock,
   Trash2,
   X,
@@ -25,6 +27,7 @@ import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments } from "../lib/artifacts";
 import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
+import { DocAttachmentCard } from "./AttachmentCard";
 import { isKnownTool } from "../lib/tools";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
@@ -178,18 +181,21 @@ function ActionButton({
   title,
   onClick,
   active,
+  pressed,
   children,
 }: {
   label: string;
   title: string;
   onClick: () => void;
   active?: boolean;
+  pressed?: boolean;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={pressed}
       title={title}
       onClick={onClick}
       className={cn(
@@ -225,17 +231,7 @@ export function MessageDocuments({ message }: { message: Message }) {
   return (
     <div className="mb-1 flex max-w-[80%] flex-wrap justify-end gap-1.5">
       {docs.map((doc, index) => (
-        <span
-          key={`${message.id}-doc-${index}`}
-          title={`${doc.mime || "document"} · the model can read more with read_document`}
-          className="flex max-w-70 items-center gap-1.5 rounded-control border border-border bg-surface px-2 py-1 text-xs"
-        >
-          <FileText size={13} className="flex-none text-muted" />
-          <span className="truncate">{doc.name}</span>
-          {typeof doc.chars === "number" && doc.chars > 0 && (
-            <span className="flex-none text-muted">{doc.chars.toLocaleString()} chars</span>
-          )}
-        </span>
+        <DocAttachmentCard key={`${message.id}-doc-${index}`} doc={doc} />
       ))}
     </div>
   );
@@ -358,8 +354,8 @@ function ArtifactCard({
   lang: string;
   code: string;
 }) {
-  const { panelOpen, panelArtifact, openArtifact, closePanel } = useApp();
-  const isOpen = panelOpen && panelArtifact?.id === id;
+  const { panelOpen, panelArtifact, panelView, openArtifact, closePanel } = useApp();
+  const isOpen = panelOpen && panelView === "artifact" && panelArtifact?.id === id;
   return (
     <div className="my-3 flex items-center gap-3 rounded-panel border border-border bg-vault px-3 py-2.5">
       <span className="grid h-9 w-9 flex-none place-items-center rounded-control bg-active">
@@ -430,13 +426,7 @@ function AssistantMessage({
           collapseToolCalls={collapseToolCalls}
           resetKey={resetKey}
         />
-        {busy ? (
-          <span className="dots" aria-label="Waiting for response">
-            <i />
-            <i />
-            <i />
-          </span>
-        ) : (
+        {!busy && (
           <>
             {segments.map((segment, i) =>
               segment.kind === "text" ? (
@@ -483,6 +473,7 @@ function AssistantMessage({
             </ActionButton>
             {isLast && <RegenButton />}
             <BranchButton messageId={message.id} />
+            <RatingButtons message={message} />
             <Button variant="ghost" size="sm" onClick={() => void remember()}>
               {rememberLabel}
             </Button>
@@ -525,6 +516,32 @@ function BranchButton({ messageId }: { messageId: string }) {
     <ActionButton label="Branch" title="Branch" onClick={() => void branchFrom(messageId)}>
       <GitBranch size={14} />
     </ActionButton>
+  );
+}
+
+function RatingButtons({ message }: { message: Message }) {
+  const { rateMessage } = useApp();
+  return (
+    <>
+      <ActionButton
+        label="Good reply"
+        title="Good reply"
+        pressed={message.rating === 1}
+        active={message.rating === 1}
+        onClick={() => void rateMessage(message.id, 1)}
+      >
+        <ThumbsUp size={14} />
+      </ActionButton>
+      <ActionButton
+        label="Bad reply"
+        title="Bad reply"
+        pressed={message.rating === -1}
+        active={message.rating === -1}
+        onClick={() => void rateMessage(message.id, -1)}
+      >
+        <ThumbsDown size={14} />
+      </ActionButton>
+    </>
   );
 }
 
@@ -607,14 +624,14 @@ export function MessageList() {
 
         {messages.map((message) =>
           message.role === "user" ? (
-            <div key={message.id} className="mb-6">
+            <div key={message.id} className="mb-[var(--msg-gap)]">
               <UserMessage
                 message={message}
                 onEdit={(id, text) => editAndResubmit(id, text)}
               />
             </div>
           ) : (
-            <div key={message.id} className="mb-6">
+            <div key={message.id} className="mb-[var(--msg-gap)]">
               <AssistantMessage
                 message={message}
                 modelName={message.model ?? activeModel ?? "assistant"}

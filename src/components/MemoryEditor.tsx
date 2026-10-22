@@ -18,7 +18,7 @@ function snippet(content: string): string {
   return chars.length > SNIPPET_MAX ? `${chars.slice(0, SNIPPET_MAX).join("")}…` : flat;
 }
 
-function KindChip({ kind }: { kind: string }) {
+export function KindChip({ kind }: { kind: string }) {
   return (
     <span className="rounded-control bg-vault-raised px-1.5 py-0.5 text-xs uppercase tracking-wide text-text-muted">
       {kind}
@@ -53,12 +53,14 @@ export function MemoryEditor({
   onAdd,
   onUpdate,
   onDelete,
+  meta,
 }: {
   memories: Memory[];
   emptyHint: string;
   onAdd: (draft: MemoryDraft) => Promise<void>;
   onUpdate: (id: string, draft: MemoryDraft) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  meta?: (memory: Memory) => string;
 }) {
   const [content, setContent] = useState("");
   const [kind, setKind] = useState<MemoryDraft["kind"]>("fact");
@@ -236,7 +238,10 @@ export function MemoryEditor({
             ) : (
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <KindChip kind={memory.kind} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <KindChip kind={memory.kind} />
+                    {meta && <span className="text-xs text-text-faint">{meta(memory)}</span>}
+                  </div>
                   <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
                     {memory.content}
                   </p>

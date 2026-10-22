@@ -1,13 +1,14 @@
 import { useRef, useState } from "react";
-import { Cpu, Download, FolderInput, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
+import { Cpu, Download, FolderInput, ListChecks, MessageSquare, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectColor } from "../lib/grouping";
+import { stepLabel } from "../lib/session";
 import { buildChatExport, conversationToMarkdown, importChatExport, safeFilename } from "../lib/export";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { openModelPicker } from "./ModelPicker";
-import { IconButton } from "./ui";
-import { copyText, downloadText } from "../lib/utils";
+import { Button, Dialog, IconButton, Textarea } from "./ui";
+import { copyText, downloadText, errorText } from "../lib/utils";
 import { toast } from "../lib/toast";
 
 export function ChatHeader() {
@@ -16,6 +17,7 @@ export function ChatHeader() {
     activeConversationId,
     projects,
     renameConversation,
+    setChatPrompt,
     togglePin,
     moveConversation,
     removeConversation,
@@ -23,12 +25,17 @@ export function ChatHeader() {
     model,
     messages,
     togglePanel,
-    panelArtifact,
+    panelOpen,
+    openSessionPanel,
+    todos,
     refreshConversations,
     selectConversation,
   } = useApp();
+  const step = stepLabel(todos);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [promptDraft, setPromptDraft] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const chat = conversations.find((c) => c.id === activeConversationId) ?? null;
@@ -106,6 +113,15 @@ export function ChatHeader() {
           },
         },
         {
+          id: "chat-prompt",
+          icon: <MessageSquare size={16} />,
+          label: "Chat instructions…",
+          onSelect: () => {
+            setPromptDraft(chat.system_prompt ?? "");
+            setPromptOpen(true);
+          },
+        },
+        {
           id: "move",
           type: "submenu",
           icon: <FolderInput size={16} />,
@@ -149,6 +165,7 @@ export function ChatHeader() {
     : [];
 
   return (
+    <>
     <div className="flex h-12 flex-none items-center gap-2 border-b border-border py-0 pl-4 pr-3">
       {renaming && chat ? (
         <input
@@ -204,6 +221,19 @@ export function ChatHeader() {
 
       <span className="flex-1" />
 
+      {step && (
+        <button
+          type="button"
+          onClick={openSessionPanel}
+          aria-label={`Open progress: ${step}`}
+          title={`${step} · open progress`}
+          className="flex items-center gap-1.5 rounded-control px-2 py-1 text-xs text-muted hover:bg-hover hover:text-text"
+        >
+          <ListChecks size={14} />
+          {step}
+        </button>
+      )}
+
       {chat && (
         <DropdownMenu
           align="end"
@@ -217,10 +247,10 @@ export function ChatHeader() {
         />
       )}
       <IconButton
-        label="Toggle artifact panel"
-        title={panelArtifact ? "Artifacts (Ctrl+Shift+A)" : "No artifacts yet"}
+        label="Toggle side panel"
+        title="Progress and artifacts (Ctrl+Shift+A)"
+        aria-expanded={panelOpen}
         onClick={togglePanel}
-        disabled={!panelArtifact}
       >
         <PanelRight size={16} />
       </IconButton>
@@ -237,6 +267,59 @@ export function ChatHeader() {
         }}
       />
     </div>
+    <Dialog
+      open={promptOpen}
+      onClose={() => setPromptOpen(false)}
+      title="Instructions for this chat"
+    >
+      <div className="flex flex-col gap-2.5">
+        <p className="m-0 text-xs text-muted">
+          Added after the app's standing instructions and the project block, and only for this
+          chat. Leave it empty to inherit everything else.
+        </p>
+        <Textarea
+          rows={6}
+          value={promptDraft}
+          onChange={(event) => setPromptDraft(event.target.value)}
+          placeholder="e.g. You are reviewing a Rust codebase. Quote file paths."
+          aria-label="Chat instructions"
+        />
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="ghost"
+            disabled={!chat?.system_prompt}
+            onClick={() => {
+              if (!chat) return;
+              setChatPrompt(chat.id, null)
+                .then(() => {
+                  setPromptOpen(false);
+                  toast("Chat instructions cleared");
+                })
+                .catch((e) => toast(errorText(e)));
+            }}
+          >
+            Clear
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              if (!chat) return;
+              setChatPrompt(chat.id, promptDraft)
+                .then(() => {
+                  setPromptOpen(false);
+                  toast(
+                    promptDraft.trim() ? "Chat instructions saved" : "Chat instructions cleared",
+                  );
+                })
+                .catch((e) => toast(errorText(e)));
+            }}
+          >
+            Save
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+    </>
   );
 }
 

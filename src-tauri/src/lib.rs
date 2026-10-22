@@ -3,6 +3,7 @@ mod connections;
 mod documents;
 mod error;
 mod extract;
+mod inband;
 mod knowledge;
 mod llm;
 mod mcp;
@@ -13,6 +14,7 @@ mod screen;
 mod skills;
 mod sse;
 mod state;
+mod storage;
 mod tools;
 mod tooltext;
 mod vault;
@@ -319,6 +321,47 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 22,
+            description: "add_pending_memories",
+            sql: "
+                CREATE TABLE IF NOT EXISTS pending_memories (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    project_id TEXT,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    conversation_id TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_pending_memories_project ON pending_memories(project_id);
+            ",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 23,
+            description: "add_memory_source",
+            sql: "ALTER TABLE memories ADD COLUMN source_conversation_id TEXT;",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 24,
+            description: "add_connection_key_tested_at",
+            sql: "ALTER TABLE connections ADD COLUMN key_tested_at INTEGER;",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 25,
+            description: "add_conversation_system_prompt",
+            sql: "ALTER TABLE conversations ADD COLUMN system_prompt TEXT;",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 26,
+            description: "add_message_rating",
+            sql: "ALTER TABLE messages ADD COLUMN rating INTEGER;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -366,14 +409,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             vault::set_api_key,
             vault::has_api_key,
+            vault::api_key_hint,
             vault::delete_api_key,
             llm::list_models,
+            llm::verify_provider,
             llm::list_model_caps,
             llm::cancel_stream,
             llm::chat_stream,
             llm::suggest_title,
             llm::summarize,
             delete_spill,
+            storage::storage_usage,
             tools::spill_image_write,
             knowledge::knowledge_sidecar_wipe,
             knowledge::knowledge_sidecar_delete,
@@ -382,9 +428,15 @@ pub fn run() {
             documents::document_read,
             documents::documents_wipe_unreferenced,
             documents::documents_wipe_all,
-            websearch::search_key_count,
             websearch::search_key_add,
             websearch::search_key_remove,
+            websearch::search_key_list,
+            websearch::search_key_test,
+            websearch::search_key_stats,
+            websearch::search_endpoint_test,
+            websearch::search_exa_key_set,
+            websearch::search_exa_key_hint,
+            websearch::search_exa_test,
             permissions::permission_check,
             permissions::permission_allow,
             skills::skill_index,
@@ -398,6 +450,7 @@ pub fn run() {
             mcp::mcp_set_approval,
             mcp::mcp_status,
             mcp::mcp_probe,
+            mcp::mcp_test,
             commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,

@@ -17,6 +17,9 @@
   --warn: #9d5d00;
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   --fs: 15px;
+  --font-scale: 1;
+  --chat-row-h: 34px;
+  --msg-gap: 24px;
   color-scheme: light;
 }
 
@@ -107,11 +110,20 @@ body,
   height: 100%;
 }
 
+html {
+  font-size: calc(16px * var(--font-scale));
+}
+
+[data-density="compact"] {
+  --chat-row-h: 28px;
+  --msg-gap: 16px;
+}
+
 body {
   overflow: hidden;
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.45;
 }
 
@@ -170,20 +182,47 @@ kbd {
   transition: grid-template-columns 0.15s ease-out;
 }
 
-.dots i {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-muted);
-  margin-right: 4px;
-  animation: typing-blink 1s infinite;
+.settings-hit {
+  animation: settings-hit 1.6s ease-out;
+  border-radius: 6px;
 }
-.dots i:nth-child(2) {
+
+@keyframes settings-hit {
+  0%,
+  45% {
+    background-color: color-mix(in oklab, var(--accent) 18%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-hit {
+    animation: none;
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.pill-dots i {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 3px;
+  animation: pill-dot 1.2s ease-in-out infinite;
+}
+.pill-dots i:nth-child(2) {
   animation-delay: 0.15s;
 }
-.dots i:nth-child(3) {
+.pill-dots i:nth-child(3) {
   animation-delay: 0.3s;
+  margin-right: 0;
+}
+.pill-ellipsis {
+  display: none;
 }
 
 .caret {
@@ -225,13 +264,25 @@ kbd {
   color: var(--color-text);
 }
 
-@keyframes typing-blink {  0%,
-  80%,
+@keyframes pill-dot {
+  0%,
+  60%,
   100% {
-    opacity: 0.25;
+    transform: scale(0.6);
+    opacity: 0.35;
   }
-  40% {
+  30% {
+    transform: scale(1);
     opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-dots {
+    display: none;
+  }
+  .pill-ellipsis {
+    display: inline;
   }
 }
 

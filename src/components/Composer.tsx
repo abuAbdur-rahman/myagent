@@ -101,10 +101,6 @@ function isDocFile(file: File): boolean {
   return !isSupportedImage(file.type);
 }
 
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
 type ParsedSlash = { name: string; args: string };
 
 function warnIfShadowed(parsed: ParsedSlash | null, commands: SlashCommand[]): void {
@@ -301,6 +297,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     supportedEfforts,
     fileCommands,
     loadFileCommands,
+    setVoicePhase,
   } = useApp();
   const editorRef = useRef<TipTapHandle | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement>(null);
@@ -352,6 +349,12 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   };
 
   const voice = useVoiceInput((text) => editorRef.current?.appendMarkdown(text), streaming);
+
+  useEffect(() => {
+    const phase = voice.recording ? "recording" : voice.transcribing ? "transcribing" : "idle";
+    setVoicePhase(phase);
+    return () => setVoicePhase("idle");
+  }, [voice.recording, voice.transcribing, setVoicePhase]);
 
   const historyEntries = useMemo(() => {
     const users = messages
@@ -667,7 +670,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             <Mic size={14} />
           </button>
           <span className="flex-1" />
-          <span className="text-xs text-muted">{estimateTokens(composerDraft)} tokens</span>
           {streaming ? (
             <button
               type="button"

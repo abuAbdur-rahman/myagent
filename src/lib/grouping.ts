@@ -41,6 +41,23 @@ export function groupChats(chats: Conversation[], now = Date.now()): ChatGroup[]
     .map(([name, items]) => ({ name, items }));
 }
 
+export function arrangeChats(
+  chats: Conversation[],
+  groupByDate: boolean,
+  now = Date.now(),
+): ChatGroup[] {
+  if (groupByDate) return groupChats(chats, now);
+
+  const sorted = [...chats].sort((a, b) => b.updated_at - a.updated_at);
+  const pinned = sorted.filter((chat) => chat.pinned === 1);
+  const rest = sorted.filter((chat) => chat.pinned !== 1);
+
+  const groups: ChatGroup[] = [];
+  if (pinned.length > 0) groups.push({ name: "Pinned", items: pinned });
+  if (rest.length > 0) groups.push({ name: "Chats", items: rest });
+  return groups;
+}
+
 const PROJECT_COLORS = ["#c96442", "#0067c0", "#0f7b0f", "#7a42d6", "#c239b3"];
 
 export function projectColor(projectId: string): string {

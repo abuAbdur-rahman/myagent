@@ -22,6 +22,54 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.4.1",
+    date: "2026-10-22",
+    summary:
+      "Settings now shows what it can actually prove: each search key is masked and testable on its own, Models is a capability table instead of a list, and DeepSeek plus both Ollama kinds work — a local server asks for no key at all. The chat grew a Progress panel with steps, outputs and what the turn spent, an Outputs gallery, a chat filter, and pasted code arrives fenced. Airtable formulas and scripts highlight like any other language.",
+    changes: [
+      {
+        kind: "new",
+        text: "A Progress panel replaces the artifact-only drawer: steps in order, the chat's artifacts and written files, and what the turn used (uploads, tools, search domains). The header shows Step n of m, the old sticky checklist is gone, and the panel overlays with a focus trap when the window is narrow.",
+      },
+      {
+        kind: "new",
+        text: "Outputs in the sidebar opens a gallery of the current chat's artifacts and files. Thumbnails render in a sandbox that cannot run scripts, so a preview can never act on the app.",
+      },
+      {
+        kind: "new",
+        text: "Replies can be rated up or down. The rating is stored with the message and travels with the chat export, so it is data rather than a button with no consequence.",
+      },
+      {
+        kind: "improved",
+        text: "Settings answers its own questions: search jumps to the row on another page and highlights it, every page carries a subtitle, and the dialog traps focus and gives it back when it closes. Models became a capability table showing context, tools, vision and effort per model, with Unknown where the provider reports nothing.",
+      },
+      {
+        kind: "improved",
+        text: "Providers learned DeepSeek, Ollama Cloud and local Ollama. Local Ollama stores no key anywhere, Ollama Cloud falls back to its tags endpoint when the OpenAI-shaped list is empty, and effort controls hide themselves for providers whose request carries no reasoning field. A missing key now blocks the send and names the page that fixes it.",
+      },
+      {
+        kind: "improved",
+        text: "Search keys are listed one by one with a mask, a per-key test and session counters of hits and quota exhaustion, so a dead key is visible before it costs a turn. SearXNG gained an endpoint probe, and Exa joined as a fallback that is used only when Tavily answers quota.",
+      },
+      {
+        kind: "improved",
+        text: "Memory writes by the assistant now wait for approval: they land as pending, arrive as a Save or Dismiss toast, and Undo reverses the save. The Memory page can search notes, say where each came from, and export them.",
+      },
+      {
+        kind: "improved",
+        text: "The transcript keeps up with what the turn is doing: one pill shows Thinking, Writing, Compacting, Listening or Transcribing, centred when the chat is empty and above the composer otherwise. Attachments became cards that name the file and its type, the sidebar filters by All, Pinned or one project, and a pasted code block arrives fenced with Undo restoring the raw text.",
+      },
+      {
+        kind: "improved",
+        text: "Airtable work highlights: `airtable` and `airtable-formula` fences get field references, functions, strings and operators, while `script`, `airtable-script`, `apps-script` and `gs` render as JavaScript in both user and assistant messages.",
+      },
+      {
+        kind: "fixed",
+        text: "Tool calls written as plain text (DSML) run instead of appearing in the reply, and the context bar never claims a percentage for a model whose window the provider does not report.",
+      },
+    ],
+  },
+  {
     version: "0.3.6",
     date: "2026-10-18",
     summary:

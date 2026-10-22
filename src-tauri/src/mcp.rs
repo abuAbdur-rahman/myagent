@@ -663,6 +663,29 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
     Ok(report)
 }
 
+#[tauri::command]
+pub async fn mcp_test(
+    transport: String,
+    cmd: Option<String>,
+    url: Option<String>,
+) -> Result<McpProbe, String> {
+    let config = McpServerConfig {
+        id: "draft".to_string(),
+        project_id: None,
+        name: "draft".to_string(),
+        transport,
+        cmd,
+        url,
+        deny_tools: None,
+        timeout_ms: None,
+        _enabled: true,
+    };
+    match connect_once(&config).await {
+        Ok(session) => Ok(probe_connected("draft", &session.tools)),
+        Err(error) => Ok(probe_failed("draft", error)),
+    }
+}
+
 fn clean_tool_names(names: Vec<String>) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     for name in names {

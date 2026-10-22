@@ -1,29 +1,52 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, Eye, EyeOff, PlugZap, Plus } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, PlugZap, Plus, RotateCcw } from "lucide-react";
 import { useApp } from "../../lib/store";
 import * as api from "../../lib/api";
 import * as db from "../../lib/db";
 import {
   DEFAULT_BASE_URLS,
+  KEYLESS_KINDS,
+  PROVIDER_KINDS,
+  PROVIDER_LABELS,
   connectionInputSchema,
   type Connection,
   type ProviderKind,
 } from "../../lib/types";
-import { Button, Dialog, Input, Spinner } from "../ui";
+import { Button, Dialog, Input, Pill, Spinner, type PillTone } from "../ui";
 import { Select } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { toast } from "../../lib/toast";
 import { errorText, rollbackConnection } from "../../lib/utils";
+import { timeAgo } from "../../lib/grouping";
+import { KEY_STATUS_TEXT, keyStatus, type KeyStatus } from "../../lib/providers";
 
-function StatusPill({ stored }: { stored: boolean | null }) {
-  if (stored === null) {
-    return <span className="rounded bg-hover px-2 py-0.5 text-xs text-muted">Checking…</span>;
-  }
-  return stored ? (
-    <span className="rounded bg-success/15 px-2 py-0.5 text-xs text-success">Connected</span>
-  ) : (
-    <span className="rounded bg-hover px-2 py-0.5 text-xs text-muted">No key</span>
-  );
+type KeyState = { hint: string | null; error: string | null };
+type TestState = { ok: boolean; text: string };
+
+const STATUS_TONE: Record<KeyStatus, PillTone> = {
+  keyless: "neutral",
+  checking: "neutral",
+  unreadable: "danger",
+  missing: "danger",
+  untested: "warn",
+  connected: "success",
+};
+
+function KeyPill({
+  connection,
+  state,
+}: {
+  connection: Connection;
+  state: KeyState | undefined;
+}) {
+  const status = keyStatus({
+    keyless: KEYLESS_KINDS.has(connection.kind),
+    loaded: state !== undefined,
+    error: state?.error ?? null,
+    hint: state?.hint ?? null,
+    testedAt: connection.key_tested_at ?? null,
+  });
+  return <Pill tone={STATUS_TONE[status]}>{KEY_STATUS_TEXT[status]}</Pill>;
 }
 
 function ProviderDialog({
@@ -35,7 +58,7 @@ function ProviderDialog({
   connection: Connection | null;
   onClose: () => void;
 }) {
-  const { saveConnection, removeConnection } = useApp();
+  const { saveConnection, removeConnection, refreshConnections } = useApp();
   const [kind, setKind] = useState<ProviderKind>(connection?.kind ?? "openrouter");
   const [name, setName] = useState(connection?.name ?? "OpenRouter");
   const [baseUrl, setBaseUrl] = useState(
@@ -70,7 +93,7 @@ function ProviderDialog({
       return;
     }
     const isNew = !connection;
-    if (isNew && !key.trim()) {
+    if (isNew && !key.trim() && !KEYLESS_KINDS.has(kind)) {
       setStatus("Enter an API key to add a provider.");
       return;
     }
@@ -83,11 +106,13 @@ function ProviderDialog({
         await api.setApiKey(saved.id, key.trim());
         setKey("");
       }
-      const models = await api.listModels(saved.id, saved.kind);
-      if (models.length === 0) {
+      const found = await api.verifyProvider(saved.id, saved.kind);
+      if (found === 0) {
         throw new Error("No models found. Check the API key and base URL.");
       }
-      setStatus(`Connected · ${models.length} models found`);
+      await db.markKeyTested(saved.id);
+      await refreshConnections();
+      setStatus(`Connected · ${found} models found`);
       if (!testFirst) onClose();
     } catch (e) {
       if (isNew) await rollbackConnection(removeConnection, savedId);
@@ -109,21 +134,15 @@ function ProviderDialog({
             onChange={(next) => {
               setKind(next);
               setBaseUrl(DEFAULT_BASE_URLS[next]);
-              if (!name.trim() || name === "OpenRouter" || name === "Agent Router" || name === "Custom") {
-                setName(
-                  next === "openrouter"
-                    ? "OpenRouter"
-                    : next === "agentrouter"
-                      ? "Agent Router"
-                      : "Custom",
-                );
+              const known = PROVIDER_KINDS.map((value) => PROVIDER_LABELS[value]);
+              if (!name.trim() || known.includes(name)) {
+                setName(PROVIDER_LABELS[next]);
               }
             }}
-            options={[
-              { value: "openrouter", label: "OpenRouter" },
-              { value: "agentrouter", label: "Agent Router" },
-              { value: "custom", label: "Custom (OpenAI-compatible)" },
-            ]}
+            options={PROVIDER_KINDS.map((value) => ({
+              value,
+              label: PROVIDER_LABELS[value],
+            }))}
           />
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted">
@@ -140,23 +159,29 @@ function ProviderDialog({
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted">
           API key
-          <span className="flex gap-1">
-            <Input
-              type={showKey ? "text" : "password"}
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder={connection ? "Leave blank to keep the stored key" : "sk-…"}
-              autoComplete="off"
-            />
-            <Button
-              variant="default"
-              size="icon"
-              aria-label={showKey ? "Hide key" : "Show key"}
-              onClick={() => setShowKey((v) => !v)}
-            >
-              {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-            </Button>
-          </span>
+          {KEYLESS_KINDS.has(kind) ? (
+            <span className="text-xs text-muted">
+              {PROVIDER_LABELS[kind]} needs no key.
+            </span>
+          ) : (
+            <span className="flex gap-1">
+              <Input
+                type={showKey ? "text" : "password"}
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder={connection ? "Leave blank to keep the stored key" : "sk-…"}
+                autoComplete="off"
+              />
+              <Button
+                variant="default"
+                size="icon"
+                aria-label={showKey ? "Hide key" : "Show key"}
+                onClick={() => setShowKey((v) => !v)}
+              >
+                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </Button>
+            </span>
+          )}
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted">
           Default model <span className="text-muted">(optional)</span>
@@ -338,21 +363,22 @@ function ProviderModels({ connection }: { connection: Connection }) {
 }
 
 export function ProvidersPage() {
-  const { connections, removeConnection, refreshModels } = useApp();
+  const { connections, removeConnection, refreshConnections, refreshModels } = useApp();
   const [dialog, setDialog] = useState<{ open: boolean; connection: Connection | null }>({
     open: false,
     connection: null,
   });
-  const [keyState, setKeyState] = useState<Record<string, boolean | null>>({});
+  const [keyState, setKeyState] = useState<Record<string, KeyState>>({});
+  const [testState, setTestState] = useState<Record<string, TestState>>({});
   const [testingId, setTestingId] = useState<string | null>(null);
 
   const reloadKeys = useCallback(async () => {
     const entries = await Promise.all(
       connections.map(async (c) => {
         try {
-          return [c.id, await api.hasApiKey(c.id)] as const;
-        } catch {
-          return [c.id, null] as const;
+          return [c.id, { hint: await api.apiKeyHint(c.id), error: null }] as const;
+        } catch (e) {
+          return [c.id, { hint: null, error: errorText(e) }] as const;
         }
       }),
     );
@@ -366,12 +392,47 @@ export function ProvidersPage() {
   const test = async (connection: Connection) => {
     setTestingId(connection.id);
     try {
-      const models = await api.listModels(connection.id, connection.kind);
-      toast(`Connected · ${models.length} models found`);
+      const found = await api.verifyProvider(connection.id, connection.kind);
+      if (found === 0) {
+        throw new Error("No models found. Check the API key and base URL.");
+      }
+      await db.markKeyTested(connection.id);
+      await refreshConnections();
+      setTestState((prev) => ({
+        ...prev,
+        [connection.id]: { ok: true, text: `Connected · ${found} models found` },
+      }));
     } catch (e) {
-      toast(errorText(e));
+      const raw = errorText(e);
+      const { hint } = api.classifyStreamError(raw);
+      setTestState((prev) => ({
+        ...prev,
+        [connection.id]: {
+          ok: false,
+          text: hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300),
+        },
+      }));
     } finally {
       setTestingId(null);
+    }
+  };
+
+  const removeKey = async (connection: Connection) => {
+    const confirmed = await confirmDialog({
+      title: "Remove the stored key?",
+      body: `${connection.name} keeps its base URL and models, but sending fails until you add a key again.`,
+      danger: true,
+      ok: "Remove key",
+    });
+    if (!confirmed) return;
+    try {
+      await api.deleteApiKey(connection.id);
+      await db.clearKeyTested(connection.id);
+      await refreshConnections();
+      await reloadKeys();
+      toast("Key removed");
+    } catch (e) {
+      toast(errorText(e));
     }
   };
 
@@ -407,46 +468,84 @@ export function ProvidersPage() {
       )}
 
       <div className="flex flex-col gap-2">
-        {connections.map((connection) => (
-          <div
-            key={connection.id}
-            className="rounded-card border border-border bg-surface p-3"
-          >
-            <div className="flex items-center gap-2.5">
-            <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-xs font-semibold text-accent-contrast">
-              {connection.name.slice(0, 2).toUpperCase()}
-            </span>
-            <div className="min-w-0 flex-1">
-              <b className="block truncate text-sm">{connection.name}</b>
-              <div className="truncate font-mono text-xs text-muted">{connection.base_url}</div>
-            </div>
-            <StatusPill stored={keyState[connection.id] ?? null} />
-            <Button
-              variant="default"
-              size="sm"
-              disabled={testingId === connection.id}
-              onClick={() => void test(connection)}
+        {connections.map((connection) => {
+          const state = keyState[connection.id];
+          const tested = connection.key_tested_at;
+          return (
+            <div
+              key={connection.id}
+              className="rounded-card border border-border bg-surface p-3"
+              data-setting-term={connection.name}
             >
-              {testingId === connection.id ? <Spinner label="Testing…" /> : "Test"}
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => setDialog({ open: true, connection })}
-            >
-              Edit
-            </Button>
-            <Button variant="danger" size="sm" onClick={() => void remove(connection)}>
-              Delete
-            </Button>
+              <div className="flex items-center gap-2.5">
+                <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-xs font-semibold text-accent-contrast">
+                  {connection.name.slice(0, 2).toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <b className="block truncate text-sm">{connection.name}</b>
+                  <div className="truncate font-mono text-xs text-muted">{connection.base_url}</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                    {state?.hint && <span className="font-mono">{state.hint}</span>}
+                    {state?.error && <span className="text-danger">{state.error}</span>}
+                    {tested ? (
+                      <span>Tested {timeAgo(tested)}</span>
+                    ) : (
+                      state?.hint && <span>Never tested</span>
+                    )}
+                  </div>
+                </div>
+                <KeyPill connection={connection} state={state} />
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={testingId === connection.id}
+                  onClick={() => void test(connection)}
+                >
+                  {testingId === connection.id ? <Spinner label="Testing…" /> : "Test"}
+                </Button>
+                {state?.hint && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Remove the stored key for ${connection.name}`}
+                    title="Remove the stored key"
+                    onClick={() => void removeKey(connection)}
+                  >
+                    <RotateCcw size={14} />
+                  </Button>
+                )}
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => setDialog({ open: true, connection })}
+                >
+                  Edit
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => void remove(connection)}>
+                  Delete
+                </Button>
+              </div>
+              {testState[connection.id] && (
+                <p
+                  className={
+                    testState[connection.id].ok
+                      ? "mt-1.5 text-xs text-success"
+                      : "mt-1.5 text-xs text-danger"
+                  }
+                  role="status"
+                >
+                  {testState[connection.id].text}
+                </p>
+              )}
+              <ProviderModels connection={connection} />
             </div>
-          <ProviderModels connection={connection} />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
-        Keys are stored in the Windows Credential Manager on this device only.
+        Keys are stored in the Windows Credential Manager on this device only. The page shows the
+        last four characters, never the key.
       </p>
 
       <ProviderDialog

@@ -4,6 +4,8 @@ import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { ChatKeys, type ChatKeyCallbacks } from "./chatKeys";
+import { fenceForPaste } from "../../lib/paste";
+import { toast } from "../../lib/toast";
 
 export interface TipTapHandle {
   focus: (pos?: "start" | "end") => void;
@@ -49,6 +51,7 @@ export function TipTapEditor({
   changeRef.current = onChangeMarkdown;
   const keyDownRef = useRef(onKeyDown);
   keyDownRef.current = onKeyDown;
+  const editorRef = useRef<Editor | null>(null);
 
   const editor = useEditor(
     {
@@ -78,8 +81,44 @@ export function TipTapEditor({
           "data-placeholder": placeholder,
         },
         handleKeyDown: (_view, event) => keyDownRef.current?.(event) ?? false,
+        handlePaste: (_view, event) => {
+          const clipboard = event.clipboardData;
+          if (!clipboard || clipboard.files.length > 0) return false;
+          const text = clipboard.getData("text/plain");
+          if (!text) return false;
+          const wrap = fenceForPaste(text);
+          if (!wrap.wrapped) return false;
+          const current = editorRef.current;
+          if (!current) return false;
+          event.preventDefault();
+          const at = current.state.selection.from;
+          current
+            .chain()
+            .focus()
+            .insertContent({
+              type: "codeBlock",
+              attrs: { language: wrap.language },
+              content: [{ type: "text", text: wrap.code }],
+            })
+            .run();
+          toast(`Pasted as ${wrap.language ? `${wrap.language} code` : "a code block"}`, {
+            actions: [
+              {
+                label: "Undo",
+                run: () => {
+                  if (current.isDestroyed) return;
+                  current.commands.undo();
+                  current.commands.insertContentAt(at, { type: "text", text: wrap.code });
+                },
+              },
+            ],
+            ms: 6000,
+          });
+          return true;
+        },
       },
       onCreate: ({ editor: created }) => {
+        editorRef.current = created;
         syncEmptyClass(created);
         if (autoFocus) {
           requestAnimationFrame(() => {
@@ -96,6 +135,7 @@ export function TipTapEditor({
   );
 
   useEffect(() => {
+    editorRef.current = editor;
     if (!editor || !handleRef) return;
     handleRef.current = {
       focus: (pos) => editor.commands.focus(pos === "start" ? "start" : "end"),

@@ -50,6 +50,11 @@ pub enum StreamEvent {
         ok: bool,
         preview: String,
     },
+    ToolSources {
+        id: String,
+        domains: Vec<String>,
+        files: Vec<String>,
+    },
     ApprovalAsked {
         id: String,
         tool: String,
@@ -201,6 +206,21 @@ fn uses_unified_reasoning(kind: Option<&str>) -> bool {
     matches!(kind, Some("openrouter" | "agentrouter"))
 }
 
+fn provider_takes_effort(kind: Option<&str>) -> bool {
+    !matches!(kind, Some("deepseek" | "ollama" | "ollama-cloud"))
+}
+
+fn attach_effort(body: &mut serde_json::Value, kind: Option<&str>, effort: &str) {
+    if !provider_takes_effort(kind) {
+        return;
+    }
+    if uses_unified_reasoning(kind) {
+        body["reasoning"] = serde_json::json!({ "effort": effort });
+    } else {
+        body["reasoning_effort"] = serde_json::json!(effort);
+    }
+}
+
 async fn apply_optional_params(
     client: &reqwest::Client,
     body: &mut serde_json::Value,
@@ -224,11 +244,7 @@ async fn apply_optional_params(
     if !effort_allowed(caps.as_ref(), effort) {
         return;
     }
-    if uses_unified_reasoning(req.connection_kind.as_deref()) {
-        body["reasoning"] = serde_json::json!({ "effort": effort });
-    } else {
-        body["reasoning_effort"] = serde_json::json!(effort);
-    }
+    attach_effort(body, req.connection_kind.as_deref(), effort);
 }
 
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
@@ -242,6 +258,30 @@ pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
 
 fn truncate_preview(text: &str) -> String {
     truncate_chars(text.trim(), 500)
+}
+
+fn domains_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in text.split(|c: char| {
+        c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | ',' | '<' | '>')
+    }) {
+        let trimmed = token.trim_end_matches(['.', ')', ',', ';', ':', '}', ']']);
+        let rest = trimmed
+            .strip_prefix("https://")
+            .or_else(|| trimmed.strip_prefix("http://"));
+        let Some(rest) = rest else { continue };
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if host.is_empty() || host.contains(' ') {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == host) {
+            out.push(host.to_string());
+        }
+        if out.len() >= 12 {
+            break;
+        }
+    }
+    out
 }
 
 const CHILD_SYSTEM: &str = "You are a focused subagent. Complete the task with the tools available, then reply with a concise summary of what you found or changed. You cannot see the parent conversation and you cannot delegate further. Do not ask the user questions unless the task is impossible without one.";
@@ -394,7 +434,7 @@ fn agentrouter_headers(
 }
 
 fn wants_stream_usage(kind: Option<&str>) -> bool {
-    !matches!(kind, Some("agentrouter"))
+    !matches!(kind, Some("agentrouter" | "ollama" | "ollama-cloud"))
 }
 
 fn is_deepseek_model(model: &str) -> bool {
@@ -695,6 +735,62 @@ fn caps_cache() -> &'static Mutex<HashMap<String, CapsEntry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+async fn fetch_openai_caps(
+    client: &reqwest::Client,
+    base_url: &str,
+    key: &str,
+    kind: Option<&str>,
+) -> AppResult<Vec<ModelCaps>> {
+    let url = endpoint(base_url, "models");
+    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), kind, &url);
+    let resp = request.send().await?;
+    if !resp.status().is_success() {
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+    let value: serde_json::Value = resp.json().await?;
+    Ok(parse_models_caps(&value))
+}
+
+async fn fetch_ollama_tags(client: &reqwest::Client, key: &str) -> AppResult<Vec<ModelCaps>> {
+    let resp = client
+        .get("https://ollama.com/api/tags")
+        .bearer_auth(key)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+    let value: serde_json::Value = resp.json().await?;
+    Ok(parse_ollama_tags(&value))
+}
+
+fn parse_ollama_tags(value: &serde_json::Value) -> Vec<ModelCaps> {
+    value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    let id = model
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        .or_else(|| model.get("model").and_then(|name| name.as_str()))?;
+                    Some(ModelCaps {
+                        id: id.to_string(),
+                        context_length: None,
+                        supports_tools: None,
+                        supports_reasoning: None,
+                        supports_vision: None,
+                        efforts: None,
+                        mandatory: false,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn fetch_model_caps(
     client: &reqwest::Client,
     base_url: &str,
@@ -710,27 +806,64 @@ async fn fetch_model_caps(
     if let Some(caps) = fresh {
         return Ok(caps);
     }
-    let url = endpoint(base_url, "models");
-    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), kind, &url);
-    let resp = request.send().await?;
-    if !resp.status().is_success() {
-        if let Some((_, stale)) = caps_cache()
-            .lock()
-            .expect("caps cache lock")
-            .get(base_url)
-            .cloned()
-        {
-            return Ok(stale);
+    let cloud = kind == Some("ollama-cloud");
+    let caps = match fetch_openai_caps(client, base_url, key, kind).await {
+        Ok(caps) if !caps.is_empty() => caps,
+        Ok(_) if cloud => fetch_ollama_tags(client, key).await?,
+        Ok(caps) => caps,
+        Err(error) => {
+            if cloud {
+                fetch_ollama_tags(client, key).await?
+            } else if let Some((_, stale)) = caps_cache()
+                .lock()
+                .expect("caps cache lock")
+                .get(base_url)
+                .cloned()
+            {
+                stale
+            } else {
+                return Err(error);
+            }
         }
-        return Err(AppError::Upstream(error_body(resp).await));
-    }
-    let value: serde_json::Value = resp.json().await?;
-    let caps = parse_models_caps(&value);
+    };
     caps_cache()
         .lock()
         .expect("caps cache lock")
         .insert(base_url.to_string(), (Instant::now(), caps.clone()));
     Ok(caps)
+}
+
+fn read_key(connection_id: &str, kind: Option<&str>) -> AppResult<String> {
+    match vault::get_api_key(connection_id) {
+        Ok(key) => Ok(key),
+        Err(_) if kind == Some("ollama") => Ok(String::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn model_seeds(kind: Option<&str>) -> &'static [&'static str] {
+    match kind {
+        Some("deepseek") => &["deepseek-chat", "deepseek-reasoner"],
+        _ => &[],
+    }
+}
+
+fn with_model_seeds(kind: Option<&str>, mut caps: Vec<ModelCaps>) -> Vec<ModelCaps> {
+    for seed in model_seeds(kind) {
+        if caps.iter().any(|caps| caps.id == *seed) {
+            continue;
+        }
+        caps.push(ModelCaps {
+            id: (*seed).to_string(),
+            context_length: None,
+            supports_tools: Some(true),
+            supports_reasoning: Some(*seed == "deepseek-reasoner"),
+            supports_vision: Some(false),
+            efforts: None,
+            mandatory: false,
+        });
+    }
+    caps
 }
 
 #[tauri::command]
@@ -741,8 +874,41 @@ pub async fn list_model_caps(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<ModelCaps>> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
-    let key = vault::get_api_key(&connection_id)?;
-    fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await
+    let key = read_key(&connection_id, connection_kind.as_deref())?;
+    let caps = fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await?;
+    Ok(with_model_seeds(connection_kind.as_deref(), caps))
+}
+
+#[tauri::command]
+pub async fn verify_provider(
+    app: AppHandle,
+    connection_id: String,
+    connection_kind: Option<String>,
+    client: State<'_, reqwest::Client>,
+) -> AppResult<usize> {
+    let base_url = connections::base_url_for(&app, &connection_id).await?;
+    let kind = connection_kind.as_deref();
+    let key = read_key(&connection_id, kind)?;
+    if kind == Some("ollama-cloud") {
+        let resp = client
+            .get("https://ollama.com/api/me")
+            .bearer_auth(&key)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(AppError::Upstream(format!(
+                "HTTP {} — ollama.com rejected this key",
+                resp.status().as_u16()
+            )));
+        }
+    }
+    let caps = match fetch_openai_caps(&client, &base_url, &key, kind).await {
+        Ok(caps) if !caps.is_empty() => caps,
+        Ok(_) if kind == Some("ollama-cloud") => fetch_ollama_tags(&client, &key).await?,
+        Ok(caps) => caps,
+        Err(error) => return Err(error),
+    };
+    Ok(with_model_seeds(kind, caps).len())
 }
 
 #[tauri::command]
@@ -753,14 +919,12 @@ pub async fn list_models(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
-    let key = vault::get_api_key(&connection_id)?;
-    Ok(
-        fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref())
-            .await?
-            .into_iter()
-            .map(|caps| caps.id)
-            .collect(),
-    )
+    let key = read_key(&connection_id, connection_kind.as_deref())?;
+    let caps = fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await?;
+    Ok(with_model_seeds(connection_kind.as_deref(), caps)
+        .into_iter()
+        .map(|caps| caps.id)
+        .collect())
 }
 
 #[tauri::command]
@@ -805,7 +969,7 @@ pub async fn summarize(
     app: AppHandle,
 ) -> AppResult<String> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
-    let key = vault::get_api_key(&req.connection_id)?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let cancel = Notify::new();
     let resp = post_with_retry(
         &client,
@@ -836,7 +1000,7 @@ pub async fn suggest_title(
     app: AppHandle,
 ) -> AppResult<String> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
-    let key = vault::get_api_key(&req.connection_id)?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let url = endpoint(&req.base_url, "chat/completions");
     let body = serde_json::json!({
         "model": req.model,
@@ -893,7 +1057,7 @@ pub async fn chat_stream(
     app: AppHandle,
 ) -> AppResult<()> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
-    let key = vault::get_api_key(&req.connection_id)?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let cancel = state.register(&req.request_id)?;
 
     let result = if req.enable_tools {
@@ -1187,6 +1351,55 @@ fn should_retract(text: &str, calls: &[serde_json::Value]) -> bool {
     !text.is_empty() && !calls.is_empty()
 }
 
+fn collect_inband(
+    events: Vec<crate::inband::InbandEvent>,
+    healed: &mut Vec<(String, String)>,
+    text: &mut String,
+    on_event: &dyn EventSink,
+) {
+    for event in events {
+        match event {
+            crate::inband::InbandEvent::Text(visible) => {
+                if visible.is_empty() {
+                    continue;
+                }
+                text.push_str(&visible);
+                on_event.send(StreamEvent::Delta { text: visible });
+            }
+            crate::inband::InbandEvent::Call { name, arguments } => healed.push((name, arguments)),
+        }
+    }
+}
+
+/// Structured calls win. Healed ones are only used when the gateway sent none.
+fn healed_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    format!("dsml-{nanos:x}-{seq}")
+}
+
+fn absorb_healed(accumulator: &mut sse::ToolCallAccumulator, healed: Vec<(String, String)>) {
+    if healed.is_empty() || !accumulator.calls().is_empty() {
+        return;
+    }
+    let deltas = healed
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, arguments))| sse::ToolCallDelta {
+            index,
+            id: healed_id(),
+            name,
+            arguments,
+        })
+        .collect();
+    accumulator.apply(deltas);
+}
+
 fn finish_iteration(
     text: String,
     reasoning: String,
@@ -1232,6 +1445,8 @@ async fn stream_agentic_iteration(
     let mut accumulator = sse::ToolCallAccumulator::new();
     let mut text = String::new();
     let mut reasoning = String::new();
+    let mut scanner = crate::inband::DsmlScanner::new();
+    let mut healed: Vec<(String, String)> = Vec::new();
     let notified = cancel.notified();
     tokio::pin!(notified);
 
@@ -1245,6 +1460,8 @@ async fn stream_agentic_iteration(
         for item in parser.feed(&chunk?) {
             match item {
                 sse::SseItem::Done => {
+                    collect_inband(scanner.finish(), &mut healed, &mut text, on_event);
+                    absorb_healed(&mut accumulator, std::mem::take(&mut healed));
                     on_event.send(StreamEvent::Done);
                     return finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some);
                 }
@@ -1257,8 +1474,12 @@ async fn stream_agentic_iteration(
                         return Err(AppError::Upstream(message));
                     }
                     if !mapped.text.is_empty() {
-                        text.push_str(&mapped.text);
-                        on_event.send(StreamEvent::Delta { text: mapped.text });
+                        collect_inband(
+                            scanner.push(&mapped.text),
+                            &mut healed,
+                            &mut text,
+                            on_event,
+                        );
                     }
                     if !mapped.reasoning.is_empty() {
                         reasoning.push_str(&mapped.reasoning);
@@ -1284,6 +1505,8 @@ async fn stream_agentic_iteration(
         }
     }
 
+    collect_inband(scanner.finish(), &mut healed, &mut text, on_event);
+    absorb_healed(&mut accumulator, std::mem::take(&mut healed));
     finish_iteration(text, reasoning, &mut accumulator, on_event).map(Some)
 }
 
@@ -1924,6 +2147,14 @@ impl ToolRunner for RealTools<'_> {
             return Ok(StepControl::Continue);
         }
 
+        let touched_path = if matches!(name.as_str(), "sandbox_write" | "sandbox_edit") {
+            args.get("path")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        } else {
+            None
+        };
+
         match match crate::mcp::try_execute(
             self.app,
             self.req.project_id.as_deref(),
@@ -1964,6 +2195,19 @@ impl ToolRunner for RealTools<'_> {
                         title: artifact.title,
                         lang: artifact.lang,
                         code: artifact.code,
+                    });
+                }
+                let domains = if name == "web_search" {
+                    domains_in(&done.output)
+                } else {
+                    Vec::new()
+                };
+                let files: Vec<String> = touched_path.clone().into_iter().collect();
+                if !domains.is_empty() || !files.is_empty() {
+                    self.on_event.send(StreamEvent::ToolSources {
+                        id: id.clone(),
+                        domains,
+                        files,
                     });
                 }
                 self.on_event.send(StreamEvent::ToolResult {
@@ -2189,6 +2433,112 @@ async fn stream_completion(
 mod tests {
     use super::*;
 
+    #[test]
+    fn deepseek_seeds_fill_an_empty_catalog_without_inventing_a_window() {
+        let caps = with_model_seeds(Some("deepseek"), Vec::new());
+        let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
+        assert_eq!(ids, vec!["deepseek-chat", "deepseek-reasoner"]);
+        assert!(caps.iter().all(|caps| caps.context_length.is_none()));
+        assert!(caps.iter().all(|caps| caps.supports_vision == Some(false)));
+        assert_eq!(
+            caps.iter()
+                .find(|caps| caps.id == "deepseek-reasoner")
+                .and_then(|caps| caps.supports_reasoning),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_fetched_seed_is_not_duplicated() {
+        let fetched = vec![ModelCaps {
+            id: "deepseek-chat".to_string(),
+            context_length: Some(128_000),
+            supports_tools: Some(true),
+            supports_reasoning: Some(false),
+            supports_vision: Some(false),
+            efforts: None,
+            mandatory: false,
+        }];
+        let caps = with_model_seeds(Some("deepseek"), fetched);
+        assert_eq!(
+            caps.iter()
+                .filter(|caps| caps.id == "deepseek-chat")
+                .count(),
+            1
+        );
+        assert_eq!(
+            caps.iter()
+                .find(|caps| caps.id == "deepseek-chat")
+                .and_then(|caps| caps.context_length),
+            Some(128_000)
+        );
+    }
+
+    #[test]
+    fn other_kinds_get_no_seeds() {
+        assert!(with_model_seeds(Some("openrouter"), Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn ollama_tags_parse_into_models_with_unknown_caps() {
+        let value = serde_json::json!({
+            "models": [{ "name": "llama3.2:latest" }, { "model": "qwen3:8b" }, { "size": 1 }]
+        });
+        let caps = parse_ollama_tags(&value);
+        let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
+        assert_eq!(ids, vec!["llama3.2:latest", "qwen3:8b"]);
+        assert!(caps.iter().all(|caps| caps.context_length.is_none()));
+    }
+
+    #[test]
+    fn domains_in_keeps_each_host_once() {
+        let text = r#"{"results":[{"url":"https://docs.rs/serde/latest"},{"url":"https://docs.rs/serde/latest?x=1"},{"url":"http://example.com/a"},{"url":"mailto:x@y.z"}]}"#;
+        assert_eq!(
+            domains_in(text),
+            vec!["docs.rs".to_string(), "example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn domains_in_needs_a_scheme() {
+        assert!(domains_in("see docs.rs and example.com").is_empty());
+    }
+
+    #[test]
+    fn direct_providers_get_no_effort_field() {
+        for kind in ["deepseek", "ollama", "ollama-cloud"] {
+            let mut body = serde_json::json!({});
+            attach_effort(&mut body, Some(kind), "high");
+            assert!(
+                body.get("reasoning_effort").is_none(),
+                "{kind} got reasoning_effort"
+            );
+            assert!(
+                body.get("reasoning").is_none(),
+                "{kind} got a reasoning block"
+            );
+        }
+    }
+
+    #[test]
+    fn gateways_keep_their_own_effort_shape() {
+        let mut openrouter = serde_json::json!({});
+        attach_effort(&mut openrouter, Some("openrouter"), "medium");
+        assert_eq!(openrouter["reasoning"]["effort"], "medium");
+
+        let mut custom = serde_json::json!({});
+        attach_effort(&mut custom, Some("custom"), "low");
+        assert_eq!(custom["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn ollama_gets_no_stream_usage_option() {
+        assert!(!wants_stream_usage(Some("ollama")));
+        assert!(!wants_stream_usage(Some("ollama-cloud")));
+        assert!(wants_stream_usage(Some("deepseek")));
+        assert!(wants_stream_usage(Some("openrouter")));
+    }
+
     struct RecordingSink(Mutex<Vec<StreamEvent>>);
 
     impl EventSink for RecordingSink {
@@ -2229,6 +2579,75 @@ mod tests {
         assert_eq!(value["parent"], "call-1");
         assert_eq!(value["event"]["type"], "delta");
         assert_eq!(value["event"]["text"], "hi");
+    }
+
+    #[test]
+    fn collect_inband_forwards_text_and_holds_calls() {
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let mut healed = Vec::new();
+        let mut text = String::new();
+        collect_inband(
+            vec![
+                crate::inband::InbandEvent::Text("hello".to_string()),
+                crate::inband::InbandEvent::Call {
+                    name: "get_time".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            ],
+            &mut healed,
+            &mut text,
+            &sink,
+        );
+        assert_eq!(text, "hello");
+        assert_eq!(healed, vec![("get_time".to_string(), "{}".to_string())]);
+        let events = sink.0.lock().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&events[0]).expect("json")["text"],
+            serde_json::json!("hello")
+        );
+    }
+
+    #[test]
+    fn healed_calls_fill_an_empty_accumulator_only() {
+        let mut accumulator = sse::ToolCallAccumulator::new();
+        absorb_healed(
+            &mut accumulator,
+            vec![(
+                "run_powershell".to_string(),
+                "{\"command\":\"x\"}".to_string(),
+            )],
+        );
+        let calls = accumulator.calls();
+        assert_eq!(calls.len(), 1);
+        let first_id = calls[0]["id"].as_str().expect("id").to_string();
+        assert!(first_id.starts_with("dsml-"));
+
+        let mut second = sse::ToolCallAccumulator::new();
+        absorb_healed(
+            &mut second,
+            vec![("get_time".to_string(), "{}".to_string())],
+        );
+        assert_ne!(
+            second.calls()[0]["id"].as_str().expect("id"),
+            first_id,
+            "a second healed call in the same turn must not reuse the first id"
+        );
+
+        let mut accumulator = sse::ToolCallAccumulator::new();
+        accumulator.apply(vec![sse::ToolCallDelta {
+            index: 0,
+            id: "call-1".to_string(),
+            name: "get_time".to_string(),
+            arguments: "{}".to_string(),
+        }]);
+        absorb_healed(
+            &mut accumulator,
+            vec![("run_powershell".to_string(), "{}".to_string())],
+        );
+        let calls = accumulator.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["name"], serde_json::json!("get_time"));
     }
 
     #[test]

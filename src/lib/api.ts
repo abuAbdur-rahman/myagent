@@ -1,6 +1,7 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type { FileCommand, StreamEvent } from "./types";
 import { parseBackendCaps, type ModelCapabilities } from "./catalog";
+import type { StorageUsage } from "./storage";
 
 export const SEARCH_KEY_ACCOUNT = "search:tavily";
 
@@ -12,12 +13,54 @@ export function hasApiKey(connectionId: string) {
   return invoke<boolean>("has_api_key", { connectionId });
 }
 
+export function apiKeyHint(connectionId: string) {
+  return invoke<string | null>("api_key_hint", { connectionId });
+}
+
 export function deleteApiKey(connectionId: string) {
   return invoke<void>("delete_api_key", { connectionId });
 }
 
-export function searchKeyCount() {
-  return invoke<number>("search_key_count");
+export interface SearchKeyInfo {
+  index: number;
+  hint: string;
+}
+
+export function searchKeyList() {
+  return invoke<SearchKeyInfo[]>("search_key_list");
+}
+
+export function searchKeyTest(index: number) {
+  return invoke<string>("search_key_test", { index });
+}
+
+export interface SearchKeyStat {
+  requests: number;
+  quota_hits: number;
+}
+
+export function searchKeyStats() {
+  return invoke<SearchKeyStat[]>("search_key_stats");
+}
+
+export function searchEndpointTest(endpoint: string) {
+  return invoke<string>("search_endpoint_test", { endpoint });
+}
+
+export function exaKeyHint() {
+  return invoke<string | null>("search_exa_key_hint");
+}
+
+export function saveExaKey(key: string) {
+  return invoke<void>("search_exa_key_set", { key });
+}
+
+export function exaKeyTest() {
+  return invoke<string>("search_exa_test");
+}
+
+export function storageUsage() {
+  return invoke<StorageUsage>("storage_usage");
 }
 
 export function addSearchKey(apiKey: string) {
@@ -30,6 +73,10 @@ export function removeSearchKey(index: number) {
 
 export function listModels(connectionId: string, connectionKind?: string) {
   return invoke<string[]>("list_models", { connectionId, connectionKind });
+}
+
+export function verifyProvider(connectionId: string, connectionKind?: string) {
+  return invoke<number>("verify_provider", { connectionId, connectionKind });
 }
 
 export async function listModelCaps(
@@ -305,6 +352,10 @@ export function mcpStatus() {
 
 export function mcpProbe(id: string) {
   return invoke<McpProbe>("mcp_probe", { id });
+}
+
+export function mcpTest(transport: string, cmd: string | null, url: string | null) {
+  return invoke<McpProbe>("mcp_test", { transport, cmd, url });
 }
 
 export function mcpRemove(id: string) {

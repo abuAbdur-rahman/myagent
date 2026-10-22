@@ -20,38 +20,10 @@ import java from "shiki/langs/java.mjs";
 import c from "shiki/langs/c.mjs";
 import cpp from "shiki/langs/cpp.mjs";
 import markdownLang from "shiki/langs/markdown.mjs";
+import airtableGrammar from "../lib/grammars/airtable.tmLanguage.json";
+import { normalizeFenceLang } from "../lib/languages";
 import { copyText } from "../lib/utils";
 import { toast } from "../lib/toast";
-
-const ALIASES: Record<string, string> = {
-  ts: "typescript",
-  typescript: "typescript",
-  js: "javascript",
-  javascript: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  tsx: "tsx",
-  jsx: "jsx",
-  py: "python",
-  python: "python",
-  sh: "bash",
-  shell: "bash",
-  shellscript: "bash",
-  zsh: "bash",
-  bash: "bash",
-  md: "markdown",
-  markdown: "markdown",
-  yml: "yaml",
-  yaml: "yaml",
-  "c++": "cpp",
-  cpp: "cpp",
-  c: "c",
-  html: "html",
-  css: "css",
-  json: "json",
-  sql: "sql",
-  java: "java",
-};
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;
 
@@ -75,6 +47,7 @@ function getHighlighter(): Promise<HighlighterCore> {
         c,
         cpp,
         markdownLang,
+        airtableGrammar,
       ],
       engine: createJavaScriptRegexEngine(),
     });
@@ -99,12 +72,12 @@ function renderHtml(content: string, highlighter: HighlighterCore | null): strin
   html = html.replace(
     /<pre><code class="language-([\w+-]+)">([\s\S]*?)<\/code><\/pre>/g,
     (match, fence: string, escaped: string) => {
-      const lang = ALIASES[String(fence).toLowerCase()];
+      const lang = normalizeFenceLang(String(fence));
       if (!lang || !highlighter.getLoadedLanguages().includes(lang)) return match;
       const code = unescapeMarked(escaped).replace(/\n$/, "");
       const highlighted = highlighter.codeToHtml(code, { lang, theme: "github-dark" });
       const header =
-        `<div class="codeblock-head"><span>${lang}</span>` +
+        `<div class="codeblock-head"><span>${String(fence).trim().toLowerCase()}</span>` +
         `<button type="button" data-copy-code="1">Copy</button></div>`;
       return `<div class="codeblock">${header}${highlighted}</div>`;
     },

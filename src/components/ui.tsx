@@ -1,7 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import {
   forwardRef,
-  useEffect,
   useRef,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
@@ -9,6 +8,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "../lib/utils";
+import { useFocusTrap } from "../lib/useFocusTrap";
 
 const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-0";
 
@@ -290,16 +290,7 @@ export function Dialog({
   noBackdropClose?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    panelRef.current?.querySelector<HTMLElement>("input, button, select, textarea")?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  useFocusTrap(panelRef, open, onClose);
 
   if (!open) return null;
 

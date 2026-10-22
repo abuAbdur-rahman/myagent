@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
+  Eye,
+  EyeOff,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -19,7 +21,7 @@ import { applyVisionOverride, type ConnectionModelOption, type VisionFallback } 
 import * as api from "../../lib/api";
 import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
-import { MemoryEditor } from "../MemoryEditor";
+import { MemoryEditor, KindChip } from "../MemoryEditor";
 import {
   Badge,
   Button,
@@ -29,17 +31,50 @@ import {
   Pill,
   Segmented,
   Spinner,
+  Textarea,
   Toggle,
   type PillTone,
 } from "../ui";
 import { DropdownMenu, Select, type MenuEntry } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
-import { downloadText, errorText } from "../../lib/utils";
+import { downloadText, errorText, copyText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
+import { timeAgo } from "../../lib/grouping";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
-import type { AuditLog, Connection, Memory } from "../../lib/types";
+import type { AuditLog, Connection, Memory } from "../../lib/types";import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
+import {
+  auditCounts,
+  auditCsv,
+  auditJson,
+  auditSummary,
+  auditTime,
+  auditTools,
+  decisionClass,
+  filterAudit,
+  groupAuditByDay,
+  type AuditDecisionFilter,
+} from "../../lib/audit";
+import { formatBytes } from "../../lib/chat-docs";
+import { filterMemories, memoryJson } from "../../lib/memory-export";
+import { densityLabel, fontScaleLabel } from "../../lib/appearance";
+import {
+  buildModelRow,
+  contextLabel,
+  countHidden,
+  filterModelRows,
+  visionLabel,
+  type ModelTableRow,
+} from "../../lib/model-table";
+import type { ModelCapabilities } from "../../lib/catalog";
+import {
+  storageParts,
+  storageShares,
+  storageTotal,
+  type StoragePart,
+  type StorageUsage,
+} from "../../lib/storage";
 
 function SettingRow({
   label,
@@ -51,7 +86,7 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-border px-2 py-3">
+    <div className="flex items-center justify-between gap-4 border-b border-border px-2 py-3" data-setting-term={label}>
       <div className="min-w-0">
         <div className="text-sm font-medium">{label}</div>
         {description && <div className="text-xs text-muted">{description}</div>}
@@ -329,11 +364,15 @@ function Callout({ children }: { children: React.ReactNode }) {
 
 function McpPageHeader({
   scope,
-  count,
+  summary,
+  reconnecting,
+  onReconnectAll,
   onAdd,
 }: {
   scope: string;
-  count: number;
+  summary: McpSummary;
+  reconnecting: boolean;
+  onReconnectAll: () => void;
   onAdd: () => void;
 }) {
   return (
@@ -341,13 +380,24 @@ function McpPageHeader({
       <div className="min-w-0">
         <h3 className="text-sm font-medium">MCP servers</h3>
         <p className="text-xs text-muted">
-          {scope} · {count} {count === 1 ? "server" : "servers"}
+          {scope} · {mcpSummaryText(summary)}
         </p>
       </div>
-      <Button variant="primary" size="sm" onClick={onAdd}>
-        <Plus size={14} />
-        Add server
-      </Button>
+      <div className="flex flex-none items-center gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={summary.enabled === 0 || reconnecting}
+          onClick={onReconnectAll}
+        >
+          <RefreshCw size={14} />
+          Reconnect all
+        </Button>
+        <Button variant="primary" size="sm" onClick={onAdd}>
+          <Plus size={14} />
+          Add server
+        </Button>
+      </div>
     </div>
   );
 }
@@ -434,10 +484,12 @@ function McpFailure({
   id,
   error,
   onReconnect,
+  onEdit,
 }: {
   id: string;
   error: string;
   onReconnect: (id: string) => void;
+  onEdit: () => void;
 }) {
   return (
     <div className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
@@ -450,6 +502,9 @@ function McpFailure({
       >
         Try again
       </button>
+      <button type="button" className="flex-none underline hover:no-underline" onClick={onEdit}>
+        Edit
+      </button>
     </div>
   );
 }
@@ -459,11 +514,13 @@ function McpIdentity({
   probe,
   state,
   onReconnect,
+  onEdit,
 }: {
   server: api.McpServerRow;
   probe: api.McpProbe | undefined;
   state: McpState;
   onReconnect: (id: string) => void;
+  onEdit: () => void;
 }) {
   const { text, title } = mcpTargetText(server);
   const failed = state.label === "Failed";
@@ -478,7 +535,12 @@ function McpIdentity({
         {text}
       </div>
       {failed && (
-        <McpFailure id={server.id} error={mcpProbeError(probe)} onReconnect={onReconnect} />
+        <McpFailure
+          id={server.id}
+          error={mcpProbeError(probe)}
+          onReconnect={onReconnect}
+          onEdit={onEdit}
+        />
       )}
     </div>
   );
@@ -592,7 +654,13 @@ function McpServerCard({
         <span className="mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-control border border-border text-xs tabular-nums text-muted">
           {index + 1}
         </span>
-        <McpIdentity server={server} probe={probe} state={state} onReconnect={onReconnect} />
+        <McpIdentity
+          server={server}
+          probe={probe}
+          state={state}
+          onReconnect={onReconnect}
+          onEdit={() => onEdit(server)}
+        />
         <Toggle
           checked={server.enabled}
           onChange={(next) => onToggle(server.id, next)}
@@ -759,6 +827,8 @@ function McpServerDialog({
 }) {
   const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP_DRAFT);
   const [errors, setErrors] = useState<McpErrors>({});
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
 
@@ -767,6 +837,40 @@ function McpServerDialog({
     setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
     setErrors({});
   }, [open, editing, seed]);
+
+  useEffect(() => {
+    setTest(null);
+  }, [draft]);
+
+  const probeDraft = async () => {
+    const target = mcpDraftTarget(draft).trim();
+    if (!target) {
+      setTest({ ok: false, text: "Add a command or URL first." });
+      return;
+    }
+    setTesting(true);
+    try {
+      const probe = await api.mcpTest(
+        draft.transport,
+        draft.transport === "stdio" ? target : null,
+        draft.transport === "sse" ? target : null,
+      );
+      setTest(
+        probe.error
+          ? { ok: false, text: probe.error }
+          : {
+              ok: true,
+              text: `Connected · ${probe.tools.length} ${
+                probe.tools.length === 1 ? "tool" : "tools"
+              }`,
+            },
+      );
+    } catch (e) {
+      setTest({ ok: false, text: errorText(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const submit = () => {
     const found = mcpErrors(draft, servers, editing);
@@ -791,6 +895,21 @@ function McpServerDialog({
         nameRef={nameRef}
         targetRef={targetRef}
       />
+      <div className="mt-3 flex items-start gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={testing}
+          onClick={() => void probeDraft()}
+        >
+          {testing ? <Spinner label="Testing" /> : "Test connection"}
+        </Button>
+        {test && (
+          <p className={cn("pt-1.5 text-xs", test.ok ? "text-muted" : "text-danger")} role="status">
+            {test.text}
+          </p>
+        )}
+      </div>
       <McpDialogFooter
         editing={editing !== null}
         onClose={onClose}
@@ -850,15 +969,45 @@ function useMcpServers(projectId: string | null) {
   return { servers, probes, probing, status, run, reconnect };
 }
 
-function AuditRow({ row }: { row: AuditLog }) {
-  const detail = row.detail ? ` · ${row.detail}` : "";
+function AuditEntry({ row }: { row: AuditLog }) {
+  const [open, setOpen] = useState(false);
+  const kind = decisionClass(row.decision);
+  const tone: PillTone =
+    kind === "allow" ? "success" : kind === "deny" ? "danger" : kind === "ask" ? "warn" : "neutral";
   return (
-    <SettingRow
-      label={row.tool}
-      description={`${row.decision} · ${new Date(row.ts).toLocaleString()}${detail}`}
-    >
-      <span className="text-xs text-muted">{row.conversation_id ?? "global"}</span>
-    </SettingRow>
+    <div className="border-b border-border px-2 py-2">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <Pill tone={tone}>{row.decision}</Pill>
+        <span className="truncate font-mono text-xs">{row.tool}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted">{row.detail}</span>
+        <span className="flex-none text-xs tabular-nums text-muted">{auditTime(row.ts)}</span>
+        <ChevronDown
+          size={14}
+          className={cn("flex-none text-muted transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open && (
+        <dl className="mt-2 grid grid-cols-[88px_1fr] gap-x-2 gap-y-1 text-xs">
+          <dt className="text-muted">Time</dt>
+          <dd>{new Date(row.ts).toLocaleString()}</dd>
+          <dt className="text-muted">Chat</dt>
+          <dd className="break-all font-mono">{row.conversation_id ?? "global"}</dd>
+          <dt className="text-muted">Decision</dt>
+          <dd>{row.decision}</dd>
+          {row.detail && (
+            <>
+              <dt className="text-muted">Detail</dt>
+              <dd className="whitespace-pre-wrap break-words">{row.detail}</dd>
+            </>
+          )}
+        </dl>
+      )}
+    </div>
   );
 }
 
@@ -878,7 +1027,21 @@ export function GeneralPage() {
     setCollapseThinking,
     collapseToolCalls,
     setCollapseToolCalls,
+    standingPrompt,
+    setStandingPrompt,
+    showContextBar,
+    setShowContextBar,
   } = useApp();
+  const [draft, setDraft] = useState(standingPrompt);
+  const [saved, setSaved] = useState(standingPrompt);
+
+  useEffect(() => {
+    setDraft(standingPrompt);
+    setSaved(standingPrompt);
+  }, [standingPrompt]);
+
+  const dirty = draft !== saved;
+
   return (
     <div>
       <SettingRow label="Display name" description="Used in the greeting and profile">
@@ -908,6 +1071,16 @@ export function GeneralPage() {
           label="Auto-compact context"
         />
       </SettingRow>
+      <SettingRow
+        label="Context bar"
+        description="Show the used-tokens bar above the composer"
+      >
+        <Toggle
+          checked={showContextBar}
+          onChange={setShowContextBar}
+          label="Show the context bar"
+        />
+      </SettingRow>
       <SettingRow label="Collapse thinking" description="Fold reasoning blocks once the reply is done">
         <Toggle
           checked={collapseThinking}
@@ -922,6 +1095,50 @@ export function GeneralPage() {
           label="Collapse tool calls"
         />
       </SettingRow>
+
+      <div
+        className="mt-4 rounded-card border border-border p-3"
+        data-setting-term="Standing instructions"
+      >
+        <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+          <span className="text-xs font-medium">Standing instructions</span>
+          <span className="text-xs text-muted">
+            {draft.trim() ? `${Array.from(draft.trim()).length} characters` : "Empty"}
+          </span>
+        </div>
+        <p className="mb-2 text-xs text-muted">
+          Sent with every chat, after the app's own rules and before the project block. A chat
+          can override this from its ••• menu.
+        </p>
+        <Textarea
+          rows={5}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="e.g. Answer in TypeScript. Keep replies under 200 words."
+          aria-label="Standing instructions"
+        />
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-xs text-muted">
+            {dirty ? "Unsaved changes" : saved ? "Saved on this device" : "Nothing saved"}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!draft && !saved}
+              onClick={() => {
+                setDraft("");
+                setStandingPrompt("");
+              }}
+            >
+              Clear
+            </Button>
+            <Button size="sm" disabled={!dirty} onClick={() => setStandingPrompt(draft)}>
+              Save
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -965,11 +1182,20 @@ export function McpPage() {
 
   const close = () => setDialog(CLOSED_MCP_DIALOG);
 
+  const summary = mcpSummary(servers, probes);
+  const reconnecting = Object.values(probing).some(Boolean);
+
   return (
     <div className="flex flex-col gap-3 pb-2">
       <McpPageHeader
         scope={mcpScope(activeProject)}
-        count={servers.length}
+        summary={summary}
+        reconnecting={reconnecting}
+        onReconnectAll={() => {
+          for (const server of servers) {
+            if (server.enabled) reconnect(server.id);
+          }
+        }}
         onAdd={() => setDialog({ open: true, editing: null, seed: null })}
       />
       <Callout>
@@ -1025,6 +1251,8 @@ export function AuditPage() {
   const [rows, setRows] = useState<AuditLog[]>([]);
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [decision, setDecision] = useState<AuditDecisionFilter>("all");
+  const [tool, setTool] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -1065,6 +1293,37 @@ export function AuditPage() {
     }
   };
 
+  const copy = async (text: string, message: string) => {
+    const ok = await copyText(text);
+    if (ok) toast(message);
+    else setStatus("Clipboard is not available.");
+  };
+
+  const exportItems = (rows: AuditLog[]): MenuEntry[] => [
+    { id: "copy-csv", label: "Copy as CSV", onSelect: () => void copy(auditCsv(rows), "CSV copied") },
+    {
+      id: "copy-json",
+      label: "Copy as JSON",
+      onSelect: () => void copy(auditJson(rows), "JSON copied"),
+    },
+    { id: "separator", type: "separator" },
+    {
+      id: "download-csv",
+      label: "Download CSV",
+      onSelect: () => downloadText("audit-log.csv", auditCsv(rows), "text/csv"),
+    },
+    {
+      id: "download-json",
+      label: "Download JSON",
+      onSelect: () => downloadText("audit-log.json", auditJson(rows), "application/json"),
+    },
+  ];
+
+  const tools = auditTools(rows);
+  const visible = filterAudit(rows, decision, tool);
+  const counts = auditCounts(visible);
+  const groups = groupAuditByDay(visible, new Date());
+
   return (
     <div>
       <SettingRow label="Search" description="Filter by tool, decision or detail">
@@ -1076,11 +1335,54 @@ export function AuditPage() {
           autoComplete="off"
         />
       </SettingRow>
-      {loaded && rows.length === 0 && (
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-2">
+        <Segmented<AuditDecisionFilter>
+          value={decision}
+          onChange={setDecision}
+          label="Filter by decision"
+          options={[
+            { value: "all", label: "All" },
+            { value: "allow", label: "Allowed" },
+            { value: "ask", label: "Asked" },
+            { value: "deny", label: "Denied" },
+            { value: "other", label: "Other" },
+          ]}
+        />
+        <Select
+          size="sm"
+          value={tool ?? ""}
+          onChange={(value) => setTool(value === "" ? null : value)}
+          aria-label="Filter by tool"
+          options={[
+            { value: "", label: "All tools" },
+            ...tools.map((entry) => ({
+              value: entry.name,
+              label: `${entry.name} (${entry.count})`,
+            })),
+          ]}
+        />
+        <span className="ml-auto text-xs text-muted">{auditSummary(counts)}</span>
+        <DropdownMenu
+          align="end"
+          aria-label="Export audit log"
+          items={exportItems(visible)}
+          trigger={
+            <Button size="sm" variant="default" disabled={visible.length === 0}>
+              Export
+            </Button>
+          }
+        />
+      </div>
+      {loaded && groups.length === 0 && (
         <p className="px-2 py-3 text-xs text-muted">{auditEmptyText(search)}</p>
       )}
-      {rows.map((row) => (
-        <AuditRow key={row.id} row={row} />
+      {groups.map((group) => (
+        <section key={group.key}>
+          <h4 className="px-2 pb-1 pt-3 text-xs font-medium text-muted">{group.label}</h4>
+          {group.rows.map((row) => (
+            <AuditEntry key={row.id} row={row} />
+          ))}
+        </section>
       ))}
       <SettingRow label="Clear log" description="Remove every recorded decision">
         <Button variant="danger" size="sm" onClick={() => void clear()}>
@@ -1096,14 +1398,40 @@ export function AuditPage() {
   );
 }
 
-export function SearchPage() {  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
+export function SearchPage() {
+  const { searchBackend, setSearchBackend, searchEndpoint, setSearchEndpoint } = useApp();
   const [key, setKey] = useState("");
-  const [keyCount, setKeyCount] = useState(0);
+  const [keys, setKeys] = useState<api.SearchKeyInfo[]>([]);
   const [status, setStatus] = useState<string | null>(null);
+  const [testing, setTesting] = useState<number | null>(null);
+  const [probes, setProbes] = useState<Record<number, { ok: boolean; text: string }>>({});
+  const [stats, setStats] = useState<api.SearchKeyStat[]>([]);
+  const [endpointTest, setEndpointTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingEndpoint, setTestingEndpoint] = useState(false);
+  const [exaKey, setExaKey] = useState("");
+  const [exaHint, setExaHint] = useState<string | null>(null);
+  const [exaTest, setExaTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingExa, setTestingExa] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const [list, counts, hint] = await Promise.all([
+        api.searchKeyList(),
+        api.searchKeyStats(),
+        api.exaKeyHint(),
+      ]);
+      setKeys(list);
+      setStats(counts);
+      setExaHint(hint);
+      setProbes({});
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, []);
 
   useEffect(() => {
-    api.searchKeyCount().then(setKeyCount).catch(() => undefined);
-  }, []);
+    void reload();
+  }, [reload]);
 
   const save = async () => {
     if (!key.trim()) {
@@ -1111,10 +1439,10 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
       return;
     }
     try {
-      const count = await api.addSearchKey(key.trim());
-      setKeyCount(count);
+      await api.addSearchKey(key.trim());
       setKey("");
-      setStatus(count > 1 ? `Search key added (${count} stored, rotates on quota).` : "Search key saved.");
+      await reload();
+      setStatus("Search key saved.");
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -1122,9 +1450,9 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
 
   const removeOne = async (index: number) => {
     try {
-      const count = await api.removeSearchKey(index);
-      setKeyCount(count);
-      setStatus(count === 0 ? "Search keys removed." : `Key removed (${count} left).`);
+      await api.removeSearchKey(index);
+      await reload();
+      setStatus("Key removed.");
     } catch (e) {
       setStatus(errorText(e));
     }
@@ -1133,10 +1461,71 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
   const clear = async () => {
     try {
       await api.deleteApiKey(SEARCH_KEY_ACCOUNT);
-      setKeyCount(0);
+      await reload();
       setStatus("Search keys removed.");
     } catch (e) {
       setStatus(errorText(e));
+    }
+  };
+
+  const probe = async (index: number) => {
+    setTesting(index);
+    try {
+      const message = await api.searchKeyTest(index);
+      setProbes((prev) => ({ ...prev, [index]: { ok: true, text: message } }));
+    } catch (e) {
+      setProbes((prev) => ({ ...prev, [index]: { ok: false, text: errorText(e) } }));
+    } finally {
+      setTesting(null);
+      api
+        .searchKeyStats()
+        .then(setStats)
+        .catch((e) => setStatus(errorText(e)));
+    }
+  };
+
+  const testEndpoint = async () => {
+    setTestingEndpoint(true);
+    try {
+      setEndpointTest({ ok: true, text: await api.searchEndpointTest(searchEndpoint) });
+    } catch (e) {
+      setEndpointTest({ ok: false, text: errorText(e) });
+    } finally {
+      setTestingEndpoint(false);
+    }
+  };
+
+  const saveExa = async () => {
+    try {
+      await api.saveExaKey(exaKey.trim());
+      setExaKey("");
+      setExaTest(null);
+      await reload();
+      setStatus("Exa key saved.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const clearExa = async () => {
+    try {
+      await api.saveExaKey("");
+      setExaTest(null);
+      await reload();
+      setStatus("Exa key removed.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const testExa = async () => {
+    setTestingExa(true);
+    try {
+      setExaTest({ ok: true, text: await api.exaKeyTest() });
+    } catch (e) {
+      setExaTest({ ok: false, text: errorText(e) });
+    } finally {
+      setTestingExa(false);
     }
   };
 
@@ -1158,8 +1547,8 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
         <SettingRow
           label="Tavily API keys"
           description={
-            keyCount > 0
-              ? `${keyCount} key${keyCount === 1 ? "" : "s"} stored — rotates on quota`
+            keys.length > 0
+              ? `${keys.length} key${keys.length === 1 ? "" : "s"} stored — rotates on quota`
               : "Stored in Windows Credential Manager"
           }
         >
@@ -1174,39 +1563,130 @@ export function SearchPage() {  const { searchBackend, setSearchBackend, searchE
           <Button variant="primary" onClick={() => void save()}>
             Add key
           </Button>
-          {keyCount > 0 && (
+          {keys.length > 0 && (
             <Button variant="danger" onClick={() => void clear()}>
               Remove all
             </Button>
           )}
         </SettingRow>
       )}
-      {searchBackend === "tavily" && keyCount > 0 && (
-        <SettingRow label="Stored keys" description="First key is tried first">
-          <div className="flex flex-wrap gap-2">
-            {Array.from({ length: keyCount }, (_, index) => (
-              <span
-                key={index}
-                className="inline-flex items-center gap-2 rounded-control border border-border px-2 py-1 text-xs"
+      {searchBackend === "tavily" && keys.length > 0 && (
+        <div className="mt-1" data-setting-term="Stored keys">
+          <p className="px-2 py-2 text-xs text-muted">
+            First key is tried first. Counts reset when the app restarts.
+          </p>
+          {keys.map((entry) => {
+            const result = probes[entry.index];
+            const stat = stats[entry.index];
+            return (
+              <div
+                key={entry.index}
+                className="flex items-center gap-2 border-b border-border px-2 py-2 text-xs"
               >
-                Key {index + 1}
-                <Button variant="ghost" size="sm" onClick={() => void removeOne(index)}>
+                <span className="font-medium">Key {entry.index + 1}</span>
+                <span className="font-mono text-muted">{entry.hint}</span>
+                {stat && stat.requests > 0 && (
+                  <span className="text-muted">
+                    {stat.requests} search{stat.requests === 1 ? "" : "es"}
+                  </span>
+                )}
+                {stat && stat.quota_hits > 0 && (
+                  <span className="rounded-full border border-warn px-1.5 py-0.5 text-warn">
+                    quota hit ×{stat.quota_hits}
+                  </span>
+                )}
+                <span className="flex-1" />
+                {result && (
+                  <span className={cn(result.ok ? "text-muted" : "text-warn")}>{result.text}</span>
+                )}
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={testing !== null}
+                  onClick={() => void probe(entry.index)}
+                >
+                  {testing === entry.index ? <Spinner label="Testing" /> : "Test"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={testing !== null}
+                  onClick={() => void removeOne(entry.index)}
+                >
                   Remove
                 </Button>
-              </span>
-            ))}
-          </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {searchBackend === "tavily" && (
+        <SettingRow
+          label="Exa fallback key"
+          description={
+            exaHint
+              ? `Stored (${exaHint}) — used only when Tavily answers quota`
+              : "Optional. Used only when Tavily answers quota"
+          }
+        >
+          <Input
+            type="password"
+            value={exaKey}
+            onChange={(e) => setExaKey(e.target.value)}
+            placeholder="exa-…"
+            aria-label="Exa API key"
+            autoComplete="off"
+          />
+          <Button variant="primary" disabled={!exaKey.trim()} onClick={() => void saveExa()}>
+            Save key
+          </Button>
+          {exaHint && (
+            <Button size="sm" variant="default" disabled={testingExa} onClick={() => void testExa()}>
+              {testingExa ? <Spinner label="Testing" /> : "Test"}
+            </Button>
+          )}
+          {exaHint && (
+            <Button size="sm" variant="ghost" onClick={() => void clearExa()}>
+              Remove
+            </Button>
+          )}
         </SettingRow>
       )}
+      {searchBackend === "tavily" && exaTest && (
+        <p
+          className={cn("px-2 py-2 text-xs", exaTest.ok ? "text-muted" : "text-warn")}
+          role="status"
+        >
+          {exaTest.text}
+        </p>
+      )}
       {searchBackend === "searxng" && (
-        <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">
-          <Input
+        <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">          <Input
             value={searchEndpoint}
-            onChange={(e) => setSearchEndpoint(e.target.value)}
+            onChange={(e) => {
+              setSearchEndpoint(e.target.value);
+              setEndpointTest(null);
+            }}
             placeholder="http://127.0.0.1:8888"
             aria-label="SearXNG endpoint"
           />
+          <Button
+            size="sm"
+            variant="default"
+            disabled={testingEndpoint}
+            onClick={() => void testEndpoint()}
+          >
+            {testingEndpoint ? <Spinner label="Testing" /> : "Test"}
+          </Button>
         </SettingRow>
+      )}
+      {searchBackend === "searxng" && endpointTest && (
+        <p
+          className={cn("px-2 py-2 text-xs", endpointTest.ok ? "text-muted" : "text-warn")}
+          role="status"
+        >
+          {endpointTest.text}
+        </p>
       )}
       {status && (
         <p className="px-2 py-2 text-xs text-muted" role="status">
@@ -1238,7 +1718,18 @@ const THEME_TILES: { id: ThemeMode; label: string; icon: React.ReactNode; previe
 ];
 
 export function AppearancePage() {
-  const { theme, setTheme, accent, setAccent } = useApp();
+  const {
+    theme,
+    setTheme,
+    accent,
+    setAccent,
+    fontScale,
+    setFontScale,
+    density,
+    setDensity,
+    groupByDate,
+    setGroupByDate,
+  } = useApp();
   return (
     <div>
       <SettingRow label="Theme" description="Applies instantly">
@@ -1282,6 +1773,48 @@ export function AppearancePage() {
             </button>
           ))}
         </div>
+      </SettingRow>
+      <SettingRow
+        label="Text size"
+        description="Scales text and spacing together, so nothing clips"
+      >
+        <div className="flex items-center gap-2.5" data-setting-term="Text size">
+          <span className="text-xs text-muted" aria-hidden="true">
+            A
+          </span>
+          <input
+            type="range"
+            min={0.9}
+            max={1.2}
+            step={0.05}
+            value={fontScale}
+            onChange={(event) => setFontScale(Number(event.target.value))}
+            aria-label="Text size"
+            aria-valuetext={fontScaleLabel(fontScale)}
+            className="h-4 w-40 cursor-pointer accent-[var(--accent)]"
+          />
+          <span className="text-base text-muted" aria-hidden="true">
+            A
+          </span>
+          <span className="w-12 text-right text-xs tabular-nums text-muted">
+            {fontScaleLabel(fontScale)}
+          </span>
+        </div>
+      </SettingRow>
+      <SettingRow label="Density" description="Row height in the sidebar and the gap between messages">
+        <Select
+          size="sm"
+          value={density}
+          onChange={(value) => setDensity(value === "compact" ? "compact" : "comfortable")}
+          aria-label="Density"
+          options={[
+            { value: "comfortable", label: densityLabel("comfortable") },
+            { value: "compact", label: densityLabel("compact") },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow label="Group chats by date" description="Today, Yesterday, Previous 7 days, Older">
+        <Toggle checked={groupByDate} onChange={setGroupByDate} label="Group chats by date" />
       </SettingRow>
     </div>
   );
@@ -1543,26 +2076,263 @@ export function ModelsPage() {
         activeConnectionId={activeConnectionId}
         onPick={setVisionFallback}
       />
-      <SettingRow label="Refresh models" description="Re-fetch the list from every provider">
-        <Button
-          variant="default"
+      <ModelCapabilityTable
+        activeConnectionId={activeConnectionId}
+        busy={busy}
+        onRefresh={async () => {
+          await refreshModels();
+          await reload();
+        }}
+      />
+    </div>
+  );
+}
+
+function ModelCapabilityTable({
+  activeConnectionId,
+  busy,
+  onRefresh,
+}: {
+  activeConnectionId: string | null;
+  busy: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  const {
+    connections,
+    modelVisionOverride,
+    setModelVisionOverride,
+    toggleModelVisibility,
+  } = useApp();
+  const [connectionId, setConnectionId] = useState(
+    activeConnectionId ?? connections[0]?.id ?? "",
+  );
+  const [data, setData] = useState<{
+    ids: string[];
+    caps: ModelCapabilities[];
+    hidden: Set<string>;
+  } | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const connection = connections.find((item) => item.id === connectionId) ?? null;
+
+  useEffect(() => {
+    if (!connection) {
+      setData({ ids: [], caps: [], hidden: new Set() });
+      return;
+    }
+    let live = true;
+    setStatus(null);
+    setData(null);
+    Promise.all([
+      api.listModels(connection.id, connection.kind),
+      api.listModelCaps(connection.id, connection.kind),
+      db.listHiddenModels(connection.id),
+    ])
+      .then(([ids, caps, hidden]) => {
+        if (live) setData({ ids, caps, hidden: new Set(hidden) });
+      })
+      .catch((e) => {
+        if (live) {
+          setData({ ids: [], caps: [], hidden: new Set() });
+          setStatus(errorText(e));
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [connection]);
+
+  const rows = (data?.ids ?? []).map((id) =>
+    buildModelRow({
+      connectionId: connection?.id ?? "",
+      connectionName: connection?.name ?? "",
+      kind: connection?.kind ?? "custom",
+      modelId: id,
+      caps: data?.caps ?? null,
+      hidden: data?.hidden.has(id) ?? false,
+      override: modelVisionOverride(connection?.id ?? null, id),
+    }),
+  );
+  const visible = filterModelRows(rows, query);
+
+  const setOverride = (row: ModelTableRow, value: string) => {
+    const override = value === "auto" ? null : (value as VisionOverride);
+    setModelVisionOverride(row.connectionId, row.modelId, override);
+  };
+
+  const toggleHidden = async (row: ModelTableRow) => {
+    setBusyId(row.key);
+    try {
+      await toggleModelVisibility(row.connectionId, row.modelId, !row.hidden);
+      setData((prev) => {
+        if (!prev) return prev;
+        const hidden = new Set(prev.hidden);
+        if (row.hidden) hidden.delete(row.modelId);
+        else hidden.add(row.modelId);
+        return { ...prev, hidden };
+      });
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+      if (connection) {
+        const [ids, caps, hidden] = await Promise.all([
+          api.listModels(connection.id, connection.kind),
+          api.listModelCaps(connection.id, connection.kind),
+          db.listHiddenModels(connection.id),
+        ]);
+        setData({ ids, caps, hidden: new Set(hidden) });
+        setStatus(null);
+      }
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <div className="mt-4" data-setting-term="Model capabilities">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium">Model capabilities</span>
+        <span className="text-xs text-muted">
+          {data ? `${visible.length} of ${rows.length}` : "Loading…"}
+          {data && countHidden(rows) > 0 ? ` · ${countHidden(rows)} hidden` : ""}
+        </span>
+        <Select
           size="sm"
-          disabled={busy}
-          onClick={() => {
-            void refreshModels();
-            void reload();
-          }}
+          className="w-44"
+          value={connectionId}
+          onChange={setConnectionId}
+          aria-label="Provider"
+          options={connections.map((item) => ({ value: item.id, label: item.name }))}
+        />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter models"
+          aria-label="Filter models"
+          className="h-7 w-40 text-xs"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          disabled={busy || refreshing}
+          onClick={() => void refresh()}
         >
-          {busy ? "Loading…" : "Refresh"}
+          <RefreshCw size={14} /> {refreshing || busy ? "Refreshing…" : "Refresh"}
         </Button>
-      </SettingRow>
+      </div>
+
+      {status && (
+        <p className="mb-2 text-xs text-danger" role="status">
+          {status}
+        </p>
+      )}
+
+      {connections.length === 0 && (
+        <p className="text-xs text-muted">Add a provider to see what its models report.</p>
+      )}
+
+      {connections.length > 0 && data && rows.length === 0 && !status && (
+        <p className="text-xs text-muted">
+          This provider listed no models. Test it on the Providers page.
+        </p>
+      )}
+
+      {rows.length > 0 && (
+        <div className="overflow-hidden rounded-card border border-border">
+          <div className="grid grid-cols-[1fr_72px_120px_64px_36px] items-center gap-2 border-b border-border bg-surface-2/40 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <span>Model</span>
+            <span>Context</span>
+            <span>Vision</span>
+            <span>Tools</span>
+            <span className="sr-only">Visible</span>
+          </div>
+          {visible.map((row) => (
+            <div
+              key={row.key}
+              className="grid grid-cols-[1fr_72px_120px_64px_36px] items-center gap-2 border-b border-border/60 px-3 py-1.5 last:border-b-0"
+            >
+              <span
+                className={cn(
+                  "truncate font-mono text-xs",
+                  row.hidden && "text-muted line-through",
+                )}
+                title={row.modelId}
+              >
+                {row.modelId}
+              </span>
+              <span
+                className={cn("text-xs", row.context === null ? "text-muted" : "tabular-nums")}
+                title={row.context === null ? "The provider did not report a context window" : undefined}
+              >
+                {contextLabel(row.context)}
+              </span>
+              <Select
+                size="sm"
+                value={row.override ?? "auto"}
+                onChange={(value) => setOverride(row, value)}
+                aria-label={`Vision for ${row.modelId}`}
+                options={[
+                  { value: "auto", label: `Auto (${visionLabel(row.catalogVision)})` },
+                  { value: "yes", label: "Force on" },
+                  { value: "no", label: "Force off" },
+                ]}
+              />
+              <Pill tone={row.tools ? "neutral" : "danger"}>{row.tools ? "Yes" : "No"}</Pill>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={row.hidden ? `Show ${row.modelId}` : `Hide ${row.modelId}`}
+                title={row.hidden ? "Show in the picker" : "Hide from the picker"}
+                disabled={busyId === row.key}
+                onClick={() => void toggleHidden(row)}
+              >
+                {row.hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+              </Button>
+            </div>
+          ))}
+          {visible.length === 0 && (
+            <p className="px-3 py-3 text-xs text-muted">No model matches “{query.trim()}”.</p>
+          )}
+        </div>
+      )}
+      <p className="mt-2 text-xs text-muted">
+        Context and tools come from the provider. “Unknown” means it never said; it is not a
+        guess. A vision override wins over the catalog and is stored on this device.
+      </p>
     </div>
   );
 }
 
 export function MemoryPage() {
-  const { loadMemories, addMemory, editMemory, deleteMemory } = useApp();
+  const {
+    loadMemories,
+    addMemory,
+    editMemory,
+    deleteMemory,
+    pendingMemories,
+    approvePendingMemory,
+    dismissPendingMemory,
+    undoApprovedMemory,
+    conversations,
+  } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -1571,6 +2341,68 @@ export function MemoryPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const chatName = (conversationId: string | null) => {
+    if (!conversationId) return null;
+    return conversations.find((item) => item.id === conversationId)?.title ?? null;
+  };
+
+  const chatLabel = (conversationId: string | null) => {
+    const name = chatName(conversationId);
+    return name ? `from "${name}"` : "from a chat";
+  };
+
+  const visible = filterMemories(memories, query);
+
+  const memoryMeta = (memory: Memory) => {
+    const name = chatName(memory.source_conversation_id ?? null);
+    const source = name ? `from "${name}"` : "Added by you";
+    const scope = memory.scope === "global" ? "Every chat" : "This project";
+    return `${scope} · ${source} · ${timeAgo(memory.created_at)}`;
+  };
+
+  const exportJson = () => memoryJson(memories, pendingMemories, chatName);
+
+  const copyExport = async () => {
+    const ok = await copyText(exportJson());
+    if (ok) toast("Memory copied as JSON");
+    else setActionError("Clipboard is not available.");
+  };
+
+  const approve = async (id: string) => {
+    setBusyId(id);
+    try {
+      await approvePendingMemory(id);
+      await reload();
+      setActionError(null);
+      toast("Memory saved", {
+        actions: [
+          {
+            label: "Undo",
+            run: () => {
+              void undoApprovedMemory(id).then(reload);
+            },
+          },
+        ],
+      });
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const dismiss = async (id: string) => {
+    setBusyId(id);
+    try {
+      await dismissPendingMemory(id);
+      setActionError(null);
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const clearAll = async () => {
     const confirmed = await confirmDialog({
@@ -1588,9 +2420,106 @@ export function MemoryPage() {
 
   return (
     <div>
+      {pendingMemories.length > 0 && (
+        <div
+          className="mb-3 rounded-control border border-warn/40 p-3"
+          data-setting-term="Pending memory"
+        >
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <span className="text-xs font-medium">
+              {pendingMemories.length} {pendingMemories.length === 1 ? "memory" : "memories"}{" "}
+              waiting for review
+            </span>
+            <span className="text-xs text-text-muted">
+              Nothing is stored until you save it.
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {pendingMemories.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-control border border-vault-line px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <KindChip kind={item.kind} />
+                      <span className="text-xs text-text-faint">
+                        {item.scope === "global" ? "Every chat" : "This project"} ·{" "}
+                        {chatLabel(item.conversation_id)} · {timeAgo(item.created_at)}
+                      </span>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
+                      {item.content}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void dismiss(item.id)}
+                      disabled={busyId !== null}
+                    >
+                      Dismiss
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => void approve(item.id)}
+                      disabled={busyId !== null}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {actionError && (
+        <p className="mb-2 text-xs text-alarm" role="alert">
+          {actionError}
+        </p>
+      )}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium">Saved memory</span>
+        <span className="text-xs text-text-muted">
+          {visible.length === memories.length
+            ? `${memories.length} ${memories.length === 1 ? "note" : "notes"}`
+            : `${visible.length} of ${memories.length}`}
+        </span>
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search memory"
+          aria-label="Search memory"
+          className="ml-auto h-7 w-44 text-xs"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void copyExport()}
+          disabled={memories.length === 0 && pendingMemories.length === 0}
+        >
+          Copy JSON
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => downloadText("memory.json", exportJson(), "application/json")}
+          disabled={memories.length === 0 && pendingMemories.length === 0}
+        >
+          Download
+        </Button>
+      </div>
       <MemoryEditor
-        memories={memories}
-        emptyHint="No global memory yet. These notes are sent with every chat."
+        memories={visible}
+        emptyHint={
+          query.trim()
+            ? `Nothing matches "${query.trim()}".`
+            : "No global memory yet. These notes are sent with every chat."
+        }
+        meta={(memory) => memoryMeta(memory)}
         onAdd={async (draft) => {
           await addMemory({ scope: "global", project_id: null, ...draft });
           await reload();
@@ -1627,12 +2556,23 @@ export function DataPage() {
     stopStream,
   } = useApp();
   const [stats, setStats] = useState({ conversations: 0, messages: 0, memories: 0, projects: 0 });
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [counts, sizes] = await Promise.all([db.stats(), api.storageUsage()]);
+      setStats(counts);
+      setUsage(sizes);
+      setUsageError(null);
+    } catch (e) {
+      setUsageError(errorText(e));
+    }
+  }, []);
 
   useEffect(() => {
-    db.stats()
-      .then(setStats)
-      .catch(() => undefined);
-  }, [conversations]);
+    void refresh();
+  }, [refresh, conversations]);
 
   const exportAll = async () => {
     try {
@@ -1676,6 +2616,7 @@ export function DataPage() {
     for (const conversation of conversations) {
       await removeConversation(conversation.id);
     }
+    await refresh();
     toast("Chats cleared");
   };
 
@@ -1701,6 +2642,7 @@ export function DataPage() {
       await refreshConversations();
       await refreshProjects();
       await refreshMemories();
+      await refresh();
       toast(
         spillLeftovers.length > 0
           ? "Deleted, but some spill files remain on disk"
@@ -1731,21 +2673,61 @@ export function DataPage() {
           Delete
         </Button>
       </SettingRow>
-      <div className="mt-4 flex flex-col gap-1.5 px-2">
-        <div className="text-xs text-muted">
-          {stats.conversations} chats · {stats.messages} messages · {stats.memories} memories ·{" "}
-          {stats.projects} projects
+      <div className="mt-4 flex flex-col gap-2 px-2" data-setting-term="Storage">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+          <span className="font-medium">Storage on disk</span>
+          <span className="text-muted">
+            {stats.conversations} chats · {stats.messages} messages · {stats.memories} memories ·{" "}
+            {stats.projects} projects
+          </span>
         </div>
-        <div className="flex">
-          <div className="h-1 flex-1 overflow-hidden rounded bg-active">
-            <div
-              className="h-full bg-accent"
-              style={{ width: `${Math.min(100, stats.messages / 10)}%` }}
-            />
-          </div>
-        </div>
+        {usage && <StorageBar usage={usage} />}
+        {usageError && (
+          <p className="text-xs text-danger" role="status">
+            {usageError}
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+function StorageBar({ usage }: { usage: StorageUsage }) {
+  const parts = storageParts(usage);
+  const shares = storageShares(parts);
+  const total = storageTotal(usage);
+  const tones: Record<StoragePart["key"], string> = {
+    db: "bg-accent",
+    documents: "bg-success",
+    spill: "bg-warn",
+  };
+  return (
+    <>
+      <div
+        className="flex h-1.5 overflow-hidden rounded-full bg-active"
+        role="img"
+        aria-label={`Storage: ${parts
+          .map((part) => `${part.label} ${formatBytes(part.bytes)}`)
+          .join(", ")}`}
+      >
+        {shares.map(({ part, pct }) =>
+          pct > 0 ? (
+            <div key={part.key} className={tones[part.key]} style={{ width: `${pct}%` }} />
+          ) : null,
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+        {parts.map((part) => (
+          <span key={part.key} className="inline-flex items-center gap-1.5">
+            <span className={cn("h-2 w-2 rounded-full", tones[part.key])} aria-hidden="true" />
+            {part.label} {formatBytes(part.bytes)}
+          </span>
+        ))}
+        <span className="ml-auto tabular-nums">
+          {formatBytes(total)} in {usage.files} {usage.files === 1 ? "file" : "files"} on disk
+        </span>
+      </div>
+    </>
   );
 }
 
