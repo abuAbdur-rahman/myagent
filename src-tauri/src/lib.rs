@@ -338,6 +338,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 23,
+            description: "add_memory_source",
+            sql: "ALTER TABLE memories ADD COLUMN source_conversation_id TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

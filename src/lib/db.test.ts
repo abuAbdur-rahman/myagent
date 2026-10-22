@@ -11,6 +11,7 @@ import {
   dismissPendingMemory,
   findChatDoc,
   listChatDocs,
+  listMemories,
   listPendingMemories,
   restorePendingMemory,
   updateMessageAttachments,
@@ -220,5 +221,31 @@ describe("pending memory", () => {
     await dismissPendingMemory("p1");
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith("DELETE FROM pending_memories WHERE id = $1", ["p1"]);
+  });
+});
+
+describe("listMemories", () => {
+  it("asks for one project's notes only", async () => {
+    select.mockClear();
+    await listMemories("project", "pa");
+    expect(select).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE scope = 'project' AND project_id = $1"),
+      ["pa"],
+    );
+  });
+
+  it("never mixes project notes into global memory", async () => {
+    select.mockClear();
+    await listMemories("global", null);
+    const calls = select.mock.calls;
+    const [sql] = calls[calls.length - 1];
+    expect(sql).toContain("WHERE scope = 'global'");
+    expect(sql).not.toContain("project_id");
+  });
+
+  it("asks for nothing when no project is active", async () => {
+    select.mockClear();
+    await expect(listMemories("project", null)).resolves.toEqual([]);
+    expect(select).not.toHaveBeenCalled();
   });
 });

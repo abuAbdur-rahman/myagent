@@ -40,8 +40,7 @@ import { timeAgo } from "../../lib/grouping";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
-import type { AuditLog, Connection, Memory } from "../../lib/types";
-import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
+import type { AuditLog, Connection, Memory } from "../../lib/types";import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
   auditCounts,
   auditCsv,
@@ -55,6 +54,7 @@ import {
   type AuditDecisionFilter,
 } from "../../lib/audit";
 import { formatBytes } from "../../lib/chat-docs";
+import { filterMemories, memoryJson } from "../../lib/memory-export";
 import {
   storageParts,
   storageShares,
@@ -1892,6 +1892,7 @@ export function MemoryPage() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -1901,10 +1902,31 @@ export function MemoryPage() {
     void reload();
   }, [reload]);
 
-  const chatTitle = (conversationId: string | null) => {
-    if (!conversationId) return "from a chat";
-    const chat = conversations.find((item) => item.id === conversationId);
-    return chat?.title ? `from "${chat.title}"` : "from a chat";
+  const chatName = (conversationId: string | null) => {
+    if (!conversationId) return null;
+    return conversations.find((item) => item.id === conversationId)?.title ?? null;
+  };
+
+  const chatLabel = (conversationId: string | null) => {
+    const name = chatName(conversationId);
+    return name ? `from "${name}"` : "from a chat";
+  };
+
+  const visible = filterMemories(memories, query);
+
+  const memoryMeta = (memory: Memory) => {
+    const name = chatName(memory.source_conversation_id ?? null);
+    const source = name ? `from "${name}"` : "Added by you";
+    const scope = memory.scope === "global" ? "Every chat" : "This project";
+    return `${scope} · ${source} · ${timeAgo(memory.created_at)}`;
+  };
+
+  const exportJson = () => memoryJson(memories, pendingMemories, chatName);
+
+  const copyExport = async () => {
+    const ok = await copyText(exportJson());
+    if (ok) toast("Memory copied as JSON");
+    else setActionError("Clipboard is not available.");
   };
 
   const approve = async (id: string) => {
@@ -1984,7 +2006,7 @@ export function MemoryPage() {
                       <KindChip kind={item.kind} />
                       <span className="text-xs text-text-faint">
                         {item.scope === "global" ? "Every chat" : "This project"} ·{" "}
-                        {chatTitle(item.conversation_id)} · {timeAgo(item.created_at)}
+                        {chatLabel(item.conversation_id)} · {timeAgo(item.created_at)}
                       </span>
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
@@ -2019,15 +2041,45 @@ export function MemoryPage() {
           )}
         </div>
       )}
-      <div className="mb-2 flex items-baseline justify-between gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium">Saved memory</span>
         <span className="text-xs text-text-muted">
-          {memories.length} {memories.length === 1 ? "note" : "notes"}
+          {visible.length === memories.length
+            ? `${memories.length} ${memories.length === 1 ? "note" : "notes"}`
+            : `${visible.length} of ${memories.length}`}
         </span>
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search memory"
+          aria-label="Search memory"
+          className="ml-auto h-7 w-44 text-xs"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void copyExport()}
+          disabled={memories.length === 0 && pendingMemories.length === 0}
+        >
+          Copy JSON
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => downloadText("memory.json", exportJson(), "application/json")}
+          disabled={memories.length === 0 && pendingMemories.length === 0}
+        >
+          Download
+        </Button>
       </div>
       <MemoryEditor
-        memories={memories}
-        emptyHint="No global memory yet. These notes are sent with every chat."
+        memories={visible}
+        emptyHint={
+          query.trim()
+            ? `Nothing matches "${query.trim()}".`
+            : "No global memory yet. These notes are sent with every chat."
+        }
+        meta={(memory) => memoryMeta(memory)}
         onAdd={async (draft) => {
           await addMemory({ scope: "global", project_id: null, ...draft });
           await reload();

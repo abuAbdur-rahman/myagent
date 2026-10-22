@@ -817,7 +817,7 @@ export async function listPendingMemories(): Promise<PendingMemory[]> {
 export async function approvePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, created_at, updated_at) SELECT id, scope, project_id, kind, content, created_at, created_at FROM pending_memories WHERE id = $1",
+    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) SELECT id, scope, project_id, kind, content, conversation_id, created_at, created_at FROM pending_memories WHERE id = $1",
     [id],
   );
   await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
@@ -831,7 +831,7 @@ export async function dismissPendingMemory(id: string): Promise<void> {
 export async function restorePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) SELECT id, scope, project_id, kind, content, NULL, created_at FROM memories WHERE id = $1",
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) SELECT id, scope, project_id, kind, content, source_conversation_id, created_at FROM memories WHERE id = $1",
     [id],
   );
   await db.execute("DELETE FROM memories WHERE id = $1", [id]);

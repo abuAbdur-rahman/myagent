@@ -140,6 +140,7 @@ const memorySchema = z.object({
   project_id: z.string().nullable(),
   kind: memoryKindSchema,
   content: z.string().min(1).max(2000),
+  source_conversation_id: z.string().nullable().optional(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -155,7 +156,6 @@ export const pendingMemorySchema = z.object({
   created_at: z.number(),
 });
 export type PendingMemory = z.infer<typeof pendingMemorySchema>;
-
 export const memoryInputSchema = memorySchema.omit({
   id: true,
   created_at: true,
