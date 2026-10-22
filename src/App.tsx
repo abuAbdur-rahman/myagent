@@ -35,6 +35,7 @@ function Shell() {
     stopStream,
     streaming,
     compacting,
+    voicePhase,
     showContextBar,
     messages,
     activeConversationId,
@@ -160,7 +161,7 @@ function Shell() {
               <div className="flex-none px-4 pb-2">
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
-                  {streaming || compacting ? (
+                  {streaming || compacting || voicePhase !== "idle" ? (
                     <div className="mb-1.5 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
                     </div>

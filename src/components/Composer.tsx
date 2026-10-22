@@ -297,6 +297,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     supportedEfforts,
     fileCommands,
     loadFileCommands,
+    setVoicePhase,
   } = useApp();
   const editorRef = useRef<TipTapHandle | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement>(null);
@@ -348,6 +349,12 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   };
 
   const voice = useVoiceInput((text) => editorRef.current?.appendMarkdown(text), streaming);
+
+  useEffect(() => {
+    const phase = voice.recording ? "recording" : voice.transcribing ? "transcribing" : "idle";
+    setVoicePhase(phase);
+    return () => setVoicePhase("idle");
+  }, [voice.recording, voice.transcribing, setVoicePhase]);
 
   const historyEntries = useMemo(() => {
     const users = messages

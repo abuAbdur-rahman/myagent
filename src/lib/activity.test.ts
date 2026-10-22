@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityState } from "./activity";
+import { activityState, pillState } from "./activity";
 import type { Message } from "./types";
 
 function message(role: Message["role"], content: string): Message {
@@ -24,5 +24,27 @@ describe("activityState", () => {
 
   it("thinks again while a tool runs after the prose", () => {
     expect(activityState([message("user", "hi"), message("assistant", "")], true)).toBe("thinking");
+  });
+});
+
+describe("pillState", () => {
+  const idle = { messages: [message("user", "hi")], streaming: false, compacting: false };
+
+  it("is null when nothing runs and the mic is idle", () => {
+    expect(pillState({ ...idle, voice: "idle" })).toBeNull();
+  });
+
+  it("puts the mic ahead of the model, because the user is holding it", () => {
+    expect(pillState({ ...idle, streaming: true, voice: "recording" })).toBe("recording");
+    expect(pillState({ ...idle, streaming: true, voice: "transcribing" })).toBe("transcribing");
+  });
+
+  it("beats compaction while transcribed text is on its way", () => {
+    expect(pillState({ ...idle, compacting: true, voice: "transcribing" })).toBe("transcribing");
+  });
+
+  it("falls back to compaction and then to the model", () => {
+    expect(pillState({ ...idle, compacting: true, voice: "idle" })).toBe("compacting");
+    expect(pillState({ ...idle, streaming: true, voice: "idle" })).toBe("thinking");
   });
 });

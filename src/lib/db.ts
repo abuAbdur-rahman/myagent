@@ -531,6 +531,11 @@ export async function deleteMessage(id: string): Promise<void> {
   await db.execute("DELETE FROM messages WHERE id = $1", [id]);
 }
 
+export async function setMessageRating(id: string, rating: number | null): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE messages SET rating = $1 WHERE id = $2", [rating, id]);
+}
+
 export { parseDeclaredArtifacts, parseToolLog } from "./message-parse";
 
 export async function truncateConversation(

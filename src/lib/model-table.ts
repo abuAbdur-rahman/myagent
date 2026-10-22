@@ -66,7 +66,7 @@ export function buildModelRow(input: {
     vision: effectiveVision(input.caps, input.modelId, input.override),
     catalogVision: lookupVisionSupport(input.caps, input.modelId),
     override: input.override,
-    efforts: lookupEfforts(input.caps, input.modelId) ?? [],
+    efforts: lookupEfforts(input.caps, input.modelId, input.kind) ?? [],
     hidden: input.hidden,
   };
 }

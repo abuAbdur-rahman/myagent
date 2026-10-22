@@ -735,6 +735,62 @@ fn caps_cache() -> &'static Mutex<HashMap<String, CapsEntry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+async fn fetch_openai_caps(
+    client: &reqwest::Client,
+    base_url: &str,
+    key: &str,
+    kind: Option<&str>,
+) -> AppResult<Vec<ModelCaps>> {
+    let url = endpoint(base_url, "models");
+    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), kind, &url);
+    let resp = request.send().await?;
+    if !resp.status().is_success() {
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+    let value: serde_json::Value = resp.json().await?;
+    Ok(parse_models_caps(&value))
+}
+
+async fn fetch_ollama_tags(client: &reqwest::Client, key: &str) -> AppResult<Vec<ModelCaps>> {
+    let resp = client
+        .get("https://ollama.com/api/tags")
+        .bearer_auth(key)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(AppError::Upstream(error_body(resp).await));
+    }
+    let value: serde_json::Value = resp.json().await?;
+    Ok(parse_ollama_tags(&value))
+}
+
+fn parse_ollama_tags(value: &serde_json::Value) -> Vec<ModelCaps> {
+    value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    let id = model
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        .or_else(|| model.get("model").and_then(|name| name.as_str()))?;
+                    Some(ModelCaps {
+                        id: id.to_string(),
+                        context_length: None,
+                        supports_tools: None,
+                        supports_reasoning: None,
+                        supports_vision: None,
+                        efforts: None,
+                        mandatory: false,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn fetch_model_caps(
     client: &reqwest::Client,
     base_url: &str,
@@ -750,27 +806,64 @@ async fn fetch_model_caps(
     if let Some(caps) = fresh {
         return Ok(caps);
     }
-    let url = endpoint(base_url, "models");
-    let request = agentrouter_headers(client.get(url.as_str()).bearer_auth(key), kind, &url);
-    let resp = request.send().await?;
-    if !resp.status().is_success() {
-        if let Some((_, stale)) = caps_cache()
-            .lock()
-            .expect("caps cache lock")
-            .get(base_url)
-            .cloned()
-        {
-            return Ok(stale);
+    let cloud = kind == Some("ollama-cloud");
+    let caps = match fetch_openai_caps(client, base_url, key, kind).await {
+        Ok(caps) if !caps.is_empty() => caps,
+        Ok(_) if cloud => fetch_ollama_tags(client, key).await?,
+        Ok(caps) => caps,
+        Err(error) => {
+            if cloud {
+                fetch_ollama_tags(client, key).await?
+            } else if let Some((_, stale)) = caps_cache()
+                .lock()
+                .expect("caps cache lock")
+                .get(base_url)
+                .cloned()
+            {
+                stale
+            } else {
+                return Err(error);
+            }
         }
-        return Err(AppError::Upstream(error_body(resp).await));
-    }
-    let value: serde_json::Value = resp.json().await?;
-    let caps = parse_models_caps(&value);
+    };
     caps_cache()
         .lock()
         .expect("caps cache lock")
         .insert(base_url.to_string(), (Instant::now(), caps.clone()));
     Ok(caps)
+}
+
+fn read_key(connection_id: &str, kind: Option<&str>) -> AppResult<String> {
+    match vault::get_api_key(connection_id) {
+        Ok(key) => Ok(key),
+        Err(_) if kind == Some("ollama") => Ok(String::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn model_seeds(kind: Option<&str>) -> &'static [&'static str] {
+    match kind {
+        Some("deepseek") => &["deepseek-chat", "deepseek-reasoner"],
+        _ => &[],
+    }
+}
+
+fn with_model_seeds(kind: Option<&str>, mut caps: Vec<ModelCaps>) -> Vec<ModelCaps> {
+    for seed in model_seeds(kind) {
+        if caps.iter().any(|caps| caps.id == *seed) {
+            continue;
+        }
+        caps.push(ModelCaps {
+            id: (*seed).to_string(),
+            context_length: None,
+            supports_tools: Some(true),
+            supports_reasoning: Some(*seed == "deepseek-reasoner"),
+            supports_vision: Some(false),
+            efforts: None,
+            mandatory: false,
+        });
+    }
+    caps
 }
 
 #[tauri::command]
@@ -781,8 +874,9 @@ pub async fn list_model_caps(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<ModelCaps>> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
-    let key = vault::get_api_key(&connection_id)?;
-    fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await
+    let key = read_key(&connection_id, connection_kind.as_deref())?;
+    let caps = fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await?;
+    Ok(with_model_seeds(connection_kind.as_deref(), caps))
 }
 
 #[tauri::command]
@@ -793,14 +887,12 @@ pub async fn list_models(
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
-    let key = vault::get_api_key(&connection_id)?;
-    Ok(
-        fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref())
-            .await?
-            .into_iter()
-            .map(|caps| caps.id)
-            .collect(),
-    )
+    let key = read_key(&connection_id, connection_kind.as_deref())?;
+    let caps = fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await?;
+    Ok(with_model_seeds(connection_kind.as_deref(), caps)
+        .into_iter()
+        .map(|caps| caps.id)
+        .collect())
 }
 
 #[tauri::command]
@@ -845,7 +937,7 @@ pub async fn summarize(
     app: AppHandle,
 ) -> AppResult<String> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
-    let key = vault::get_api_key(&req.connection_id)?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let cancel = Notify::new();
     let resp = post_with_retry(
         &client,
@@ -876,7 +968,7 @@ pub async fn suggest_title(
     app: AppHandle,
 ) -> AppResult<String> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
-    let key = vault::get_api_key(&req.connection_id)?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let url = endpoint(&req.base_url, "chat/completions");
     let body = serde_json::json!({
         "model": req.model,
@@ -933,7 +1025,7 @@ pub async fn chat_stream(
     app: AppHandle,
 ) -> AppResult<()> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
-    let key = vault::get_api_key(&req.connection_id)?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let cancel = state.register(&req.request_id)?;
 
     let result = if req.enable_tools {
@@ -2297,6 +2389,63 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deepseek_seeds_fill_an_empty_catalog_without_inventing_a_window() {
+        let caps = with_model_seeds(Some("deepseek"), Vec::new());
+        let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
+        assert_eq!(ids, vec!["deepseek-chat", "deepseek-reasoner"]);
+        assert!(caps.iter().all(|caps| caps.context_length.is_none()));
+        assert!(caps.iter().all(|caps| caps.supports_vision == Some(false)));
+        assert_eq!(
+            caps.iter()
+                .find(|caps| caps.id == "deepseek-reasoner")
+                .and_then(|caps| caps.supports_reasoning),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_fetched_seed_is_not_duplicated() {
+        let fetched = vec![ModelCaps {
+            id: "deepseek-chat".to_string(),
+            context_length: Some(128_000),
+            supports_tools: Some(true),
+            supports_reasoning: Some(false),
+            supports_vision: Some(false),
+            efforts: None,
+            mandatory: false,
+        }];
+        let caps = with_model_seeds(Some("deepseek"), fetched);
+        assert_eq!(
+            caps.iter()
+                .filter(|caps| caps.id == "deepseek-chat")
+                .count(),
+            1
+        );
+        assert_eq!(
+            caps.iter()
+                .find(|caps| caps.id == "deepseek-chat")
+                .and_then(|caps| caps.context_length),
+            Some(128_000)
+        );
+    }
+
+    #[test]
+    fn other_kinds_get_no_seeds() {
+        assert!(with_model_seeds(Some("openrouter"), Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn ollama_tags_parse_into_models_with_unknown_caps() {
+        let value = serde_json::json!({
+            "models": [{ "name": "llama3.2:latest" }, { "model": "qwen3:8b" }, { "size": 1 }]
+        });
+        let caps = parse_ollama_tags(&value);
+        let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
+        assert_eq!(ids, vec!["llama3.2:latest", "qwen3:8b"]);
+        assert!(caps.iter().all(|caps| caps.context_length.is_none()));
+    }
 
     #[test]
     fn domains_in_keeps_each_host_once() {

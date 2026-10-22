@@ -32,6 +32,7 @@ import {
   type VisionOverride,
 } from "./catalog";
 import { toast } from "./toast";
+import type { VoicePhase } from "./activity";
 import {
   clampFontScale,
   parseDensity,
@@ -392,10 +393,13 @@ interface AppContextValue {
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
   branchFrom: (messageId: string) => Promise<void>;
+  rateMessage: (messageId: string, rating: number | null) => Promise<void>;
   clearActiveConversation: () => Promise<void>;
   compactActive: (quiet?: boolean) => Promise<void>;
   uncompactActive: () => Promise<void>;
   compacting: boolean;
+  voicePhase: VoicePhase;
+  setVoicePhase: (phase: VoicePhase) => void;
   stopStream: () => void;
   composerDraft: string;
   setComposerDraft: (value: string) => void;
@@ -503,6 +507,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === "1",
   );
@@ -903,7 +908,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const has = await api.hasApiKey(connection.id);
+      const has =
+        KEYLESS_KINDS.has(connection.kind) || (await api.hasApiKey(connection.id));
       if (!has) {
         setModels([]);
         return;
@@ -1076,8 +1082,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [reasoningEffort]);
 
   const supportedEfforts = useMemo(
-    () => (model ? lookupEfforts(catalog, model) : null),
-    [catalog, model],
+    () => (model ? lookupEfforts(catalog, model, activeConnection?.kind) : null),
+    [catalog, model, activeConnection],
   );
   const supportedEffortsRef = useRef<string[] | null>(null);
   useEffect(() => {
@@ -1889,6 +1895,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setError("Select a model first.");
         return false;
       }
+      if (!KEYLESS_KINDS.has(connection.kind) && !(await api.hasApiKey(connection.id))) {
+        setError(`Add an API key for ${connection.name} in Settings → Providers before sending.`);
+        return false;
+      }
 
       setError(null);
       const history = messages.filter((m) => m.content.length > 0);
@@ -2223,6 +2233,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [conversations, streaming],
   );
 
+  const rateMessage = useCallback(
+    async (messageId: string, rating: number | null) => {
+      const current = messagesRef.current.find((m) => m.id === messageId)?.rating ?? null;
+      const next = current === rating ? null : rating;
+      try {
+        await db.setMessageRating(messageId, next);
+        setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, rating: next } : m)));
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [reportError],
+  );
+
   const startProjectChat = useCallback(
     async (projectId: string, text: string): Promise<boolean> => {
       const connection = connRef.current;
@@ -2400,10 +2424,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     continueTurn,
     editAndResubmit,
     branchFrom,
+    rateMessage,
     clearActiveConversation,
     compactActive,
     uncompactActive,
     compacting,
+    voicePhase,
+    setVoicePhase,
     stopStream,
     composerDraft,
     setComposerDraft,

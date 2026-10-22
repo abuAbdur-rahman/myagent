@@ -47,6 +47,7 @@ export function buildChatExport(chat: Conversation, messages: Message[]): ChatEx
       toolLog: db.parseToolLog(message.tool_log),
       artifacts: db.parseDeclaredArtifacts(message.artifacts),
       model: db.sqlNull(message.model),
+      rating: message.rating ?? null,
       createdAt: message.created_at,
     })),
   };

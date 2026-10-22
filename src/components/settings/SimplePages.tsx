@@ -1408,12 +1408,21 @@ export function SearchPage() {
   const [stats, setStats] = useState<api.SearchKeyStat[]>([]);
   const [endpointTest, setEndpointTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [testingEndpoint, setTestingEndpoint] = useState(false);
+  const [exaKey, setExaKey] = useState("");
+  const [exaHint, setExaHint] = useState<string | null>(null);
+  const [exaTest, setExaTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingExa, setTestingExa] = useState(false);
 
   const reload = useCallback(async () => {
     try {
-      const [list, counts] = await Promise.all([api.searchKeyList(), api.searchKeyStats()]);
+      const [list, counts, hint] = await Promise.all([
+        api.searchKeyList(),
+        api.searchKeyStats(),
+        api.exaKeyHint(),
+      ]);
       setKeys(list);
       setStats(counts);
+      setExaHint(hint);
       setProbes({});
     } catch (e) {
       setStatus(errorText(e));
@@ -1483,6 +1492,40 @@ export function SearchPage() {
       setEndpointTest({ ok: false, text: errorText(e) });
     } finally {
       setTestingEndpoint(false);
+    }
+  };
+
+  const saveExa = async () => {
+    try {
+      await api.saveExaKey(exaKey.trim());
+      setExaKey("");
+      setExaTest(null);
+      await reload();
+      setStatus("Exa key saved.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const clearExa = async () => {
+    try {
+      await api.saveExaKey("");
+      setExaTest(null);
+      await reload();
+      setStatus("Exa key removed.");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  const testExa = async () => {
+    setTestingExa(true);
+    try {
+      setExaTest({ ok: true, text: await api.exaKeyTest() });
+    } catch (e) {
+      setExaTest({ ok: false, text: errorText(e) });
+    } finally {
+      setTestingExa(false);
     }
   };
 
@@ -1577,9 +1620,48 @@ export function SearchPage() {
           })}
         </div>
       )}
-      {searchBackend === "searxng" && (
-        <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">
+      {searchBackend === "tavily" && (
+        <SettingRow
+          label="Exa fallback key"
+          description={
+            exaHint
+              ? `Stored (${exaHint}) — used only when Tavily answers quota`
+              : "Optional. Used only when Tavily answers quota"
+          }
+        >
           <Input
+            type="password"
+            value={exaKey}
+            onChange={(e) => setExaKey(e.target.value)}
+            placeholder="exa-…"
+            aria-label="Exa API key"
+            autoComplete="off"
+          />
+          <Button variant="primary" disabled={!exaKey.trim()} onClick={() => void saveExa()}>
+            Save key
+          </Button>
+          {exaHint && (
+            <Button size="sm" variant="default" disabled={testingExa} onClick={() => void testExa()}>
+              {testingExa ? <Spinner label="Testing" /> : "Test"}
+            </Button>
+          )}
+          {exaHint && (
+            <Button size="sm" variant="ghost" onClick={() => void clearExa()}>
+              Remove
+            </Button>
+          )}
+        </SettingRow>
+      )}
+      {searchBackend === "tavily" && exaTest && (
+        <p
+          className={cn("px-2 py-2 text-xs", exaTest.ok ? "text-muted" : "text-warn")}
+          role="status"
+        >
+          {exaTest.text}
+        </p>
+      )}
+      {searchBackend === "searxng" && (
+        <SettingRow label="SearXNG endpoint" description="Local instance that returns format=json">          <Input
             value={searchEndpoint}
             onChange={(e) => {
               setSearchEndpoint(e.target.value);

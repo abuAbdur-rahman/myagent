@@ -1,0 +1,34 @@
+{
+  "name": "airtable",
+  "scopeName": "source.airtable",
+  "aliases": ["airtable-formula"],
+  "patterns": [
+    { "include": "#strings" },
+    { "include": "#fields" },
+    { "include": "#functions" },
+    { "include": "#numbers" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "strings": {
+      "match": "\"(?:[^\"\\\\]|\\\\.)*\"",
+      "name": "string.quoted.double.airtable"
+    },
+    "fields": {
+      "match": "\\{[^{}]*\\}",
+      "name": "variable.other.field.airtable"
+    },
+    "functions": {
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\s*(?=\\()",
+      "name": "support.function.airtable"
+    },
+    "numbers": {
+      "match": "\\b\\d+(?:\\.\\d+)?\\b",
+      "name": "constant.numeric.airtable"
+    },
+    "operators": {
+      "match": "!=|<=|>=|[+\\-*/&<>=]",
+      "name": "keyword.operator.airtable"
+    }
+  }
+}

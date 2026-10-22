@@ -14,6 +14,8 @@ import {
   RefreshCw,
   Search,
   Terminal,
+  ThumbsDown,
+  ThumbsUp,
   Clock,
   Trash2,
   X,
@@ -179,18 +181,21 @@ function ActionButton({
   title,
   onClick,
   active,
+  pressed,
   children,
 }: {
   label: string;
   title: string;
   onClick: () => void;
   active?: boolean;
+  pressed?: boolean;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={pressed}
       title={title}
       onClick={onClick}
       className={cn(
@@ -468,6 +473,7 @@ function AssistantMessage({
             </ActionButton>
             {isLast && <RegenButton />}
             <BranchButton messageId={message.id} />
+            <RatingButtons message={message} />
             <Button variant="ghost" size="sm" onClick={() => void remember()}>
               {rememberLabel}
             </Button>
@@ -510,6 +516,32 @@ function BranchButton({ messageId }: { messageId: string }) {
     <ActionButton label="Branch" title="Branch" onClick={() => void branchFrom(messageId)}>
       <GitBranch size={14} />
     </ActionButton>
+  );
+}
+
+function RatingButtons({ message }: { message: Message }) {
+  const { rateMessage } = useApp();
+  return (
+    <>
+      <ActionButton
+        label="Good reply"
+        title="Good reply"
+        pressed={message.rating === 1}
+        active={message.rating === 1}
+        onClick={() => void rateMessage(message.id, 1)}
+      >
+        <ThumbsUp size={14} />
+      </ActionButton>
+      <ActionButton
+        label="Bad reply"
+        title="Bad reply"
+        pressed={message.rating === -1}
+        active={message.rating === -1}
+        onClick={() => void rateMessage(message.id, -1)}
+      >
+        <ThumbsDown size={14} />
+      </ActionButton>
+    </>
   );
 }
 

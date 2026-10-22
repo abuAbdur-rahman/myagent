@@ -27,6 +27,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { page: "models", term: "Refresh models" },
   { page: "search", term: "Provider" },
   { page: "search", term: "Tavily API keys" },
+  { page: "search", term: "Exa fallback key" },
   { page: "search", term: "Stored keys" },
   { page: "search", term: "SearXNG endpoint" },
   { page: "mcp", term: "MCP servers" },

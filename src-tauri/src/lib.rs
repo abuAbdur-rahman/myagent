@@ -356,6 +356,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE conversations ADD COLUMN system_prompt TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 26,
+            description: "add_message_rating",
+            sql: "ALTER TABLE messages ADD COLUMN rating INTEGER;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -427,6 +433,9 @@ pub fn run() {
             websearch::search_key_test,
             websearch::search_key_stats,
             websearch::search_endpoint_test,
+            websearch::search_exa_key_set,
+            websearch::search_exa_key_hint,
+            websearch::search_exa_test,
             permissions::permission_check,
             permissions::permission_allow,
             skills::skill_index,

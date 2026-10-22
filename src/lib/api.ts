@@ -47,6 +47,18 @@ export function searchEndpointTest(endpoint: string) {
   return invoke<string>("search_endpoint_test", { endpoint });
 }
 
+export function exaKeyHint() {
+  return invoke<string | null>("search_exa_key_hint");
+}
+
+export function saveExaKey(key: string) {
+  return invoke<void>("search_exa_key_set", { key });
+}
+
+export function exaKeyTest() {
+  return invoke<string>("search_exa_test");
+}
+
 export function storageUsage() {
   return invoke<StorageUsage>("storage_usage");
 }

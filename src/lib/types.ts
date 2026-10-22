@@ -104,6 +104,7 @@ const messageSchema = z.object({
   artifacts: z.string().nullish(),
   attachments: z.string().nullish(),
   model: z.string().nullish(),
+  rating: z.number().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;
@@ -241,6 +242,7 @@ const exportMessageSchema = z.object({
   toolLog: z.array(toolLogEntrySchema),
   artifacts: z.array(declaredArtifactSchema),
   model: z.string().nullable().optional(),
+  rating: z.number().nullable().optional(),
   createdAt: z.number(),
 });
 
