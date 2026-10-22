@@ -220,26 +220,62 @@ The Send button is a 32px accent circle. Borders are always 1px Line.
 - **User:** right-aligned bubble on Surface Raised with a Line border, 12px
   radius, max 80% width; hover reveals copy and edit actions.
 - **Assistant:** accent-ring avatar with the model name in muted micro type, then
-  rendered markdown; typing shows three pulsing dots, streaming shows an accent
-  caret; hover reveals copy, regenerate (last only), branch, artifact and
-  remember actions.
+  rendered markdown; streaming shows an accent caret, and no in-transcript dots —
+  the activity pill above the composer owns that signal; hover reveals copy,
+  regenerate (last only), branch, thumbs up/down, artifact and remember actions.
+- **Attachments:** a 168px card per document — type chip from the mime type, name
+  wrapping to two lines, and a meta line with size and character count ("Size
+  unknown" when it is).
 
 ### Composer
 - **Shape:** 12px radius container on Surface Raised with a Line border; accent
   border + ring while focused.
 - **Contents:** auto-growing textarea (to ~8 lines), an attachment row when used,
-  and a tool row: model chip, token estimate, and a 32px round Send button
-  (accent; gray when disabled) that becomes Stop while streaming.
+  and a tool row: model chip, effort (only where the provider takes it), mic, and
+  a 32px round Send button (accent; gray when disabled) that becomes Stop while
+  streaming. No token estimate — the context bar above the box already answers
+  that question with provider numbers.
 - **Slash menu:** an anchored popover above the box for `/new /clear /memory
   /settings`, with arrow-key navigation.
+- **Paste:** a block-looking paste arrives as a fenced code block with a guessed
+  language; Undo restores the raw paste at the same position.
 - **Footer:** a centered muted disclaimer line.
 
-### Artifact Panel
-- **Shape:** a 420px right-hand pane with a left hairline and a 48px header.
-- **Header:** title, language badge, Preview/Code or Doc/Source tabs, Copy,
-  Download, Close.
-- **Body:** sandboxed iframe preview for HTML, rendered document for Markdown,
-  plain source otherwise; a muted footer names the active view.
+### Activity pill
+- **Shape:** `rounded-full` on Surface Raised at 95% with a Line border, the
+  panel shadow and backdrop blur; 3px radius gap to the composer.
+- **Placements:** centered in the page while the transcript is empty, otherwise a
+  centered inline row directly above the composer. Never inside the transcript.
+- **States:** `Thinking`, `Writing`, `Compacting` with a staggered ellipsis;
+  `Listening — release to send` with the mic and a pulsing dot; `Transcribing`
+  with the mic and a spinner. Static `…` under `prefers-reduced-motion`.
+- **Voice:** the mic's phase outranks the model's, because the user is holding
+  the button; the pill only renders above the composer while recording.
+
+### Progress panel and artifacts
+- **Progress dock:** 344px right-hand pane with a left hairline and a 48px
+  header: steps in position order, Outputs (the first two artifacts as cards, the
+  rest and written files as rows), and Used in this session (uploads, images,
+  tools, search domains).
+- **Artifact dock:** 480px by default, resizable and persisted; the header starts
+  with a Back arrow to Progress, then title, language badge, tabs, Copy, Download,
+  minimize, fullscreen and Close.
+- **Narrow windows:** below 1100px the open panel overlays the app with a dimmed
+  backdrop and traps focus; closing returns focus to the header trigger.
+- **Outputs gallery:** the sidebar entry opens a grid of the chat's artifacts and
+  written files, each with the same sandboxed thumbnail the panel uses.
+
+### Sidebar
+- **Style:** flat 260px rail on Sidebar tone with a right hairline; collapses to
+  a 56px icon rail.
+- **Rows:** 32–34px, 4px radius; active chat rows get a 3px accent bar at the
+  left edge; project rows show a stable color dot.
+- **Groups:** sticky uppercase micro headers (Pinned, Today, Yesterday,
+  Previous 7 days, Older).
+- **Filter:** All chats, Pinned or one project by name; a filtered empty list
+  names the filter and offers Show all chats instead of reading like data loss.
+- **Footer:** a settings icon plus a profile button (avatar, name, plan) opening
+  a small menu.
 
 ### Command Palette
 - **Shape:** a 560px modal pinned near the top over a dimmed app, with a 48px
@@ -355,11 +391,13 @@ Compare it with a neighbouring screen: if it looks like a different app, fix it.
 | Colour | tokens only: `--bg --sidebar --surface --surface-2 --border --text --muted --hover --active --accent --accent-contrast --danger --success --warn --shadow`. Never hard-code hex; the accent is user-selectable |
 | Icons | `lucide-react`, 16px inside the control grid. Icon-only buttons need `aria-label` and `title` |
 | Mono | mono for anything a machine wrote: commands, keys, URLs, tool names |
-| Settings dialog | 960×640 max; the page content scrolls, the 220px nav never does |
+| Settings dialog | 960×640 max, shrinking to 92vw × 86vh; the page content scrolls, the 220px nav never does |
 
 ### Settings pages
-Nav order: General, Appearance, Providers, Models, Search, MCP, Audit, Memory,
-Data, Shortcuts, About (planned: **Changelog** before About). Every page reuses
+Nav order: General, Appearance, Providers, Models, Search, MCP, Sandbox, Voice,
+Audit, Memory, Data, Shortcuts, Changelog, About. Every page carries a subtitle
+under its title and at least one search-index term; a page without either fails
+the test in `lib/settings-pages.test.ts`. Each page reuses
 the same primitives — section header with the section's primary action, bordered
 groups with dividers, list rows with a badge, status pill and action icons, a
 callout above the content it governs, field label above input with help text

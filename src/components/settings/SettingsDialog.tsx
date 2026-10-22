@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Brain,
   Cpu,
@@ -36,43 +36,36 @@ import {
 import { cn } from "../../lib/utils";
 import { hitKey, searchSettings } from "../../lib/settings-search";
 import { SETTINGS_INDEX } from "../../lib/settings-index";
+import {
+  resolveSettingsPage,
+  SETTINGS_PAGES,
+  SETTINGS_SUBTITLES,
+  type SettingsPageId,
+} from "../../lib/settings-pages";
 import { useFocusTrap } from "../../lib/useFocusTrap";
 
-const PAGES = [
-  { id: "general", label: "General", icon: <SettingsIcon size={16} /> },
-  { id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
-  { id: "providers", label: "Providers", icon: <Plug size={16} /> },
-  { id: "models", label: "Models", icon: <Cpu size={16} /> },
-  { id: "search", label: "Search", icon: <Search size={16} /> },
-  { id: "mcp", label: "MCP", icon: <Blocks size={16} /> },
-  { id: "sandbox", label: "Sandbox", icon: <Shield size={16} /> },
-  { id: "voice", label: "Voice", icon: <Mic size={16} /> },
-  { id: "audit", label: "Audit", icon: <History size={16} /> },
-  { id: "memory", label: "Memory", icon: <Brain size={16} /> },
-  { id: "data", label: "Data", icon: <Database size={16} /> },
-  { id: "shortcuts", label: "Shortcuts", icon: <Keyboard size={16} /> },
-  { id: "changelog", label: "Changelog", icon: <Sparkles size={16} /> },
-  { id: "about", label: "About", icon: <Info size={16} /> },
-];
+const ICONS: Record<SettingsPageId, ReactNode> = {
+  general: <SettingsIcon size={16} />,
+  appearance: <Palette size={16} />,
+  providers: <Plug size={16} />,
+  models: <Cpu size={16} />,
+  search: <Search size={16} />,
+  mcp: <Blocks size={16} />,
+  sandbox: <Shield size={16} />,
+  voice: <Mic size={16} />,
+  audit: <History size={16} />,
+  memory: <Brain size={16} />,
+  data: <Database size={16} />,
+  shortcuts: <Keyboard size={16} />,
+  changelog: <Sparkles size={16} />,
+  about: <Info size={16} />,
+};
+
+const PAGES = SETTINGS_PAGES.map((page) => ({ ...page, icon: ICONS[page.id] }));
 
 const TITLES: Record<string, string> = Object.fromEntries(PAGES.map((p) => [p.id, p.label]));
 
-const SUBTITLES: Record<string, string> = {
-  general: "How a chat starts, and how much context is sent with every message.",
-  appearance: "Theme, accent color, and how dense the interface feels.",
-  providers: "API keys and base URLs. Keys stay in Windows Credential Manager.",
-  models: "What the active model can do, and which model answers first.",
-  search: "Where web results come from, and which keys get spent.",
-  mcp: "External tool servers, and what each tool may do without asking.",
-  sandbox: "Run commands in Docker instead of the host shell.",
-  voice: "Microphone, transcription model, and where the audio goes.",
-  audit: "Every tool decision, newest first, with the reason behind it.",
-  memory: "Notes sent with every chat. Global lives here, project memory lives with the project.",
-  data: "What this app has stored, and how to take it or remove it.",
-  shortcuts: "Keys that work anywhere in the app.",
-  changelog: "Every release, newest first.",
-  about: "Version, updates, and where the source lives.",
-};
+const SUBTITLES = SETTINGS_SUBTITLES;
 
 const SETTLE_MS = 180;
 const HIGHLIGHT_TRIES = 12;
@@ -99,7 +92,7 @@ export function SettingsDialog() {
     wasOpen.current = settingsPage !== null;
   }, [settingsPage]);
 
-  const page = settingsPage !== null && PAGES.some((p) => p.id === settingsPage) ? settingsPage : "general";
+  const page = resolveSettingsPage(settingsPage);
   const q = search.trim().toLowerCase();
   const hits = useMemo(() => searchSettings(PAGES, SETTINGS_INDEX, search), [search]);
   const rowHits = hits.filter((hit) => hit.term !== null);

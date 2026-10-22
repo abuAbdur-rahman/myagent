@@ -72,20 +72,20 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** The same markdown string renders identically for user and assistant bubbles.
 
 ## A10. Code blocks in messages
-- **Status:** Partial (shiki highlighting, language label and Copy ship; highlighting runs on every content change, so the Build line's lazy highlight after streaming is unimplemented; the Copy-equals-fenced-source acceptance test is missing)
+- **Status:** Partial (shiki highlighting, language label and Copy ship; highlighting runs on every content change, so the Build line's lazy highlight after streaming is unimplemented; the Copy-equals-fenced-source acceptance test is missing. 0.4.1: fence aliases moved to `lib/languages.ts`, `script`/`airtable-script`/`airscript`/`apps-script`/`gs` route to javascript, and `airtable`/`airtable-formula` render through a new TextMate grammar proven in the same JS regex engine the composer uses; the header shows the fence as the author wrote it)
 - **Ref:** Claude and OpenWebUI: language label, copy button, syntax highlighting; OpenWebUI also allows editable code blocks.
 - **Build:** Header with language and Copy; monospace; horizontal scroll; highlight lazily after streaming finishes. Copy copies raw text only.
 - **Not:** Editable code blocks, run buttons.
 - **Done:** Copy output equals the fenced source exactly.
 
 ## A11. Composer (input)
-- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; the composer acceptance list is still unverified)
+- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; the composer acceptance list is still unverified)
 - **Ref:** Claude Code: multiline input, history with Up arrow, Esc Esc for rewind. Claude app: rich input with shortcuts.
 - **Build:** Rich-text editor serializing to markdown. Single focus ring on the container. Clear immediately on send. History on ArrowUp at doc start, ArrowDown at doc end. Lists continue with Shift+Enter. "```lang" plus Space or Shift+Enter makes a code block. Enter sends outside code blocks.
 - **Done:** The acceptance list from the composer spec passes.
 
 ## A12. Message actions
-- **Status:** Have (destructive edit)
+- **Status:** Have (destructive edit. 0.4.1: thumbs up/down set and clear a stored rating with `aria-pressed`; the rating is exported as data)
 - **Ref:** † OpenWebUI edits and regenerates by adding branches; Claude shows `< 2/3 >` version switchers.
 - **Build:** Copy, Regenerate, Edit (user messages). Edit and Regenerate create new branches (see B2). Delete only on explicit confirm.
 - **Done:** Edit never removes the old version.
@@ -123,7 +123,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 ```
 
 ## B3. Chat list / sidebar
-- **Status:** Have (verify)
+- **Status:** Have (verify. 0.4.1: a filter offers All chats, Pinned and each project by name, composes with the tag filter, and an empty result names the filter and offers Show all chats)
 - **Ref:** † OpenWebUI sidebar groups by recency, tracks unread state, and does not bump a chat for being auto-titled.
 - **Build:** List ordered by last user activity, grouped (Today, Yesterday, Earlier). Rename, delete with confirm. Virtualize if over 200 chats.
 - **Not:** Unread dots.
@@ -185,7 +185,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing)
+- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
@@ -197,13 +197,13 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Switching mid-chat applies to the next turn only.
 
 ## C3. Model catalogue and capabilities
-- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider)
+- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider. 0.4.1: the Models page is a capability table per connection; DeepSeek seeds `deepseek-chat` and `deepseek-reasoner` with an unknown window and no vision, and Ollama Cloud falls back from `/v1/models` to `/api/tags`)
 - **Ref:** † OpenRouter's models list includes context length and supported parameters.
 - **Build:** Fetch, cache with a TTL, and read: context length, supports reasoning, supports tools. Disable UI that a model cannot use. Fall back to safe defaults when unknown, to a known-family table for image support, and to a per-model override when the user knows better.
 - **Done:** A model without tool support never gets tools in its request.
 
 ## C4. Reasoning effort control
-- **Status:** Have (0.1.7: caps-gated selector, mixed param shape, Rust re-gate)
+- **Status:** Have (0.1.7: caps-gated selector, mixed param shape, Rust re-gate. 0.4.1: hidden for DeepSeek, Ollama Cloud and local Ollama, whose request body carries no reasoning field)
 - **Ref:** † OpenRouter accepts a `reasoning` request parameter with effort. Claude Code has effort levels and a thinking toggle.
 - **Build:** Selector (off, minimal, low, medium, high) shown only for reasoning-capable models (C3). Maps to the provider parameter.
 - **Done:** The request body contains the parameter only when supported.
@@ -342,7 +342,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Requests to localhost and 169.254.x.x are rejected.
 
 ## D15. Web search
-- **Status:** Have (0.2.0: `web_search`, Tavily default + SearXNG endpoint, key in vault, Settings/onboarding; multi-key rotation on 429/402/quota)
+- **Status:** Have (0.2.0: `web_search`, Tavily default + SearXNG endpoint, key in vault, Settings/onboarding; multi-key rotation on 429/402/quota. 0.4.1: Exa as a quota-only fallback with its own stored key, mask, probe and a tested decision function)
 - **Ref:** OpenCode has a `websearch` permission; OpenRouter offers web search plugins.
 - **Build:** One provider behind one tool; default ask; returns titles, URLs, snippets. Needs a key. Not before D14.
 - **Done:** Results render as links the model can fetch.
@@ -354,7 +354,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** The loop resumes with the chosen answer.
 
 ## D17. Todo list tool
-- **Status:** Have (0.2.0: `todo_write`/`todo_set`, per-chat in DB, sticky checklist)
+- **Status:** Have (0.2.0: `todo_write`/`todo_set`, per-chat in DB, sticky checklist. 0.4.1: the sticky card is gone — the list lives in the session panel and the header shows `Step n of m` from the same rows)
 - **Ref:** † OpenCode `todowrite` and `todoread`; OpenWebUI has task management in chat for multi-step work.
 - **Build:** Tool that replaces a list of `{text, status}`. Rendered as a sticky checklist above the composer. Per chat, stored in the DB.
 - **Done:** The model updates the list and the UI reflects it.
@@ -399,7 +399,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** One approval covers search and fetches; the memo cites its sources and opens as a markdown artifact; cancel stops the job; tests cover query parsing, dedupe, notes and memo caps.
 
 ## D24. Voice transcription
-- **Status:** Done (v0.4.0: hold-to-talk in the composer, local Moonshine base int8, optional OpenAI-compatible remote provider)
+- **Status:** Done (v0.4.0: hold-to-talk in the composer, local Moonshine base int8, optional OpenAI-compatible remote provider. 0.4.1: the activity pill mirrors the phase — `Listening — release to send` with a pulsing dot, then `Transcribing` with a spinner, cleared on cancel or append)
 - **Ref:** Whisper-style dictation in chat clients; the plan's V1 spec.
 - **Build:** `public/pcm-worklet.js` captures 16 kHz mono in 1024-frame chunks; `src/lib/voice.ts` merges, converts to i16 and caps at 60 s; `useVoiceInput` owns press-and-hold, cancel and the draft append. Rust `voice.rs` exposes `voice_status`, `voice_enable`, `voice_disable`, `voice_set_provider` and `audio_transcribe`. Enable downloads `onnx-community/moonshine-base-ONNX` (encoder + merged decoder + tokenizer, ~64 MB, pinned sizes) into `app_local_data_dir/models/moonshine-base` with progress events; the model loads lazily and unloads after five idle minutes. `transcribe-rs` is vendored at `src-tauri/vendor/transcribe-rs` with the ort rc.15 environment patch. The remote path uses a custom connection's base URL and vault key to POST a WAV to `/audio/transcriptions`. Mic permission is granted through the app-level `on_permission_request` for `Microphone` only.
 - **Not:** Hands-free VAD, streaming partial transcripts, TTS, voice clone, the HAP accent notice and the Common Voice WER matrix (v0.4.x follow-up).
@@ -443,7 +443,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Override order is tested.
 
 ## E6. Auto memory (agent-written)
-- **Status:** Missing (0.3.6: the model writes, updates and deletes memories through tools; thread roll-up and the E2 gate are still missing)
+- **Status:** Partial (0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast; Save moves that row into `memories`, Undo reverses the one step, and `source_conversation_id` keeps the provenance. E2's secret gate is still missing, so the approval step is the only guard; thread roll-up is still missing)
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
 - **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.
@@ -454,20 +454,21 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # F. Rendering and files
 
 ## F1. Artifact drawer
-- **Status:** Partial (preview exists)
+- **Status:** Partial (preview exists. 0.4.1: the dock is a 344 px Progress panel — steps, outputs, used in this session — with the artifact view one Back arrow away; the artifact dock defaults to 480 px and resizes; below 1100 px the panel overlays with a focus trap; a sidebar Outputs entry opens a gallery of the chat's artifacts and written files)
 - **Ref:** † OpenWebUI renders web content and SVGs in the interface with live updates. Claude shows artifacts in a side panel with Preview and Code tabs.
 - **Build:** Side drawer: Preview and Code tabs, Copy, Download, version list from regenerations. Triggered by a fenced block with an artifact marker.
+- **Not:** Version list from regenerations.
 - **Done:** Regenerating adds a version instead of replacing.
 
 ## F2. Artifact isolation
-- **Status:** Missing (iframe can reach IPC)
+- **Status:** Partial (the artifact preview iframe still allows scripts, so it can reach IPC. 0.4.1: gallery thumbnails are a stricter case — `sandbox=""` with `<script>`, inline handlers and `javascript:` URLs stripped by a tested function, so a thumbnail cannot run anything)
 - **Ref:** † OpenWebUI renders in an iframe with an injected CSP. † Tauri's Isolation pattern guards the IPC channel from untrusted frontend code but does not sandbox artifact HTML.
 - **Build:** `<iframe sandbox="allow-scripts" srcdoc=...>` without `allow-same-origin` (opaque origin: no parent, storage or IPC access). Strict CSP meta in the artifact: `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:`. No Tauri capabilities for it. Parent talks to it via `postMessage` with validated shapes. External links opened by the host through a checked handler. Consider Tauri's Isolation pattern for the main window as extra hardening.
 - **Not:** Per-artifact origins, artifact storage.
 - **Done:** A test artifact that calls `parent`, `localStorage` and `invoke` fails on all three.
 
 ## F3. Attachments and project knowledge
-- **Status:** Have (0.3.0: project Docs tab with sha256 dedupe and capped excerpts. 0.3.5: any chat can attach documents — text, markdown, code, HTML, PDF, DOCX, XLSX/XLS/ODS — extracted in Rust, injected into the user turn, and reachable later through the `read_document` tool; docs in a project also leave a reference in the project bucket; stored text is freed when nothing points at it)
+- **Status:** Have (0.3.0: project Docs tab with sha256 dedupe and capped excerpts. 0.3.5: any chat can attach documents — text, markdown, code, HTML, PDF, DOCX, XLSX/XLS/ODS — extracted in Rust, injected into the user turn, and reachable later through the `read_document` tool; docs in a project also leave a reference in the project bucket; stored text is freed when nothing points at it. 0.4.1: attachments render as a 168 px card with a type chip, a two-line name and a size/character meta line that says Size unknown rather than guessing)
 - **Ref:** Claude app Projects hold knowledge files every chat inherits; OpenWebUI accepts files in the composer.
 - **Build:** Two paths, one content-addressed store under `documents/<sha256>.txt`: composer attachments (chat-scoped, up to 3 per turn, 10 MB per file) plus a project knowledge panel whose docs are searched on every send. Extraction classifies by mime then extension and caps text at 2 MB; the turn carries 40k chars per file. Full re-read through `read_document`. No code execution.
 - **Not:** OCR, embedded media, charts, legacy `.doc`/`.ppt` binaries, audio/video.
@@ -503,13 +504,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Shortcuts do not fire while an IME is composing.
 
 ## G3. Settings page
-- **Status:** Unknown
+- **Status:** Have (0.4.1: one 960 px / 92vw modal, 86vh tall, with 14 pages, a subtitle per page, a search that jumps to a row on another page and highlights it, a focus trap, and close restoring focus to the opener. A test holds every page id to a subtitle and to at least one search term, and no term may point at a page that does not exist)
 - **Ref:** † Claude Code `/config`; OpenWebUI has settings per account.
 - **Build:** Sections: Provider (C1), Models, Permissions (D4 rules list), Memory, Data (B9-B11), Appearance. One JSON file backs it.
 - **Done:** Settings persist and reload.
 
 ## G4. Theme
-- **Status:** Unknown
+- **Status:** Have (0.4.1: theme tiles, accent, a text-size scale applied to the root font size so rem-based text and spacing grow together, and comfortable/compact density; prefs persist in localStorage and a corrupt value falls back instead of breaking the layout)
 - **Build:** Light, dark, system. CSS variables only.
 - **Done:** No hard-coded colors outside the variable file.
 
