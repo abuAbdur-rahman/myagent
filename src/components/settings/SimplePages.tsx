@@ -19,7 +19,7 @@ import { applyVisionOverride, type ConnectionModelOption, type VisionFallback } 
 import * as api from "../../lib/api";
 import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
-import { MemoryEditor } from "../MemoryEditor";
+import { MemoryEditor, KindChip } from "../MemoryEditor";
 import {
   Badge,
   Button,
@@ -36,6 +36,7 @@ import { DropdownMenu, Select, type MenuEntry } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText, copyText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
+import { timeAgo } from "../../lib/grouping";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
@@ -1877,8 +1878,20 @@ export function ModelsPage() {
 }
 
 export function MemoryPage() {
-  const { loadMemories, addMemory, editMemory, deleteMemory } = useApp();
+  const {
+    loadMemories,
+    addMemory,
+    editMemory,
+    deleteMemory,
+    pendingMemories,
+    approvePendingMemory,
+    dismissPendingMemory,
+    undoApprovedMemory,
+    conversations,
+  } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -1887,6 +1900,47 @@ export function MemoryPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const chatTitle = (conversationId: string | null) => {
+    if (!conversationId) return "from a chat";
+    const chat = conversations.find((item) => item.id === conversationId);
+    return chat?.title ? `from "${chat.title}"` : "from a chat";
+  };
+
+  const approve = async (id: string) => {
+    setBusyId(id);
+    try {
+      await approvePendingMemory(id);
+      await reload();
+      setActionError(null);
+      toast("Memory saved", {
+        actions: [
+          {
+            label: "Undo",
+            run: () => {
+              void undoApprovedMemory(id).then(reload);
+            },
+          },
+        ],
+      });
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const dismiss = async (id: string) => {
+    setBusyId(id);
+    try {
+      await dismissPendingMemory(id);
+      setActionError(null);
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const clearAll = async () => {
     const confirmed = await confirmDialog({
@@ -1904,6 +1958,73 @@ export function MemoryPage() {
 
   return (
     <div>
+      {pendingMemories.length > 0 && (
+        <div
+          className="mb-3 rounded-control border border-warn/40 p-3"
+          data-setting-term="Pending memory"
+        >
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <span className="text-xs font-medium">
+              {pendingMemories.length} {pendingMemories.length === 1 ? "memory" : "memories"}{" "}
+              waiting for review
+            </span>
+            <span className="text-xs text-text-muted">
+              Nothing is stored until you save it.
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {pendingMemories.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-control border border-vault-line px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <KindChip kind={item.kind} />
+                      <span className="text-xs text-text-faint">
+                        {item.scope === "global" ? "Every chat" : "This project"} ·{" "}
+                        {chatTitle(item.conversation_id)} · {timeAgo(item.created_at)}
+                      </span>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
+                      {item.content}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void dismiss(item.id)}
+                      disabled={busyId !== null}
+                    >
+                      Dismiss
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => void approve(item.id)}
+                      disabled={busyId !== null}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {actionError && (
+            <p className="mt-2 text-xs text-alarm" role="alert">
+              {actionError}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium">Saved memory</span>
+        <span className="text-xs text-text-muted">
+          {memories.length} {memories.length === 1 ? "note" : "notes"}
+        </span>
+      </div>
       <MemoryEditor
         memories={memories}
         emptyHint="No global memory yet. These notes are sent with every chat."

@@ -321,6 +321,23 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 22,
+            description: "add_pending_memories",
+            sql: "
+                CREATE TABLE IF NOT EXISTS pending_memories (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    project_id TEXT,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    conversation_id TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_pending_memories_project ON pending_memories(project_id);
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

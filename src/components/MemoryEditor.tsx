@@ -18,7 +18,7 @@ function snippet(content: string): string {
   return chars.length > SNIPPET_MAX ? `${chars.slice(0, SNIPPET_MAX).join("")}…` : flat;
 }
 
-function KindChip({ kind }: { kind: string }) {
+export function KindChip({ kind }: { kind: string }) {
   return (
     <span className="rounded-control bg-vault-raised px-1.5 py-0.5 text-xs uppercase tracking-wide text-text-muted">
       {kind}

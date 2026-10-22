@@ -20,6 +20,7 @@ import type {
   MemoryScope,
   Message,
   MessageAttachmentInput,
+  PendingMemory,
   Project,
   ProjectInput,
   Role,
@@ -32,6 +33,7 @@ import type {
 import {
   auditLogSchema,
   declaredArtifactSchema,
+  pendingMemorySchema,
   searchQuerySchema,
   tagSchema,
   todoSchema,
@@ -186,6 +188,7 @@ export async function wipeAll(): Promise<void> {
   await db.execute("DELETE FROM messages");
   await db.execute("DELETE FROM conversations");
   await db.execute("DELETE FROM memories");
+  await db.execute("DELETE FROM pending_memories");
   await db.execute("DELETE FROM projects");
   await db.execute("DELETE FROM audit_log");
   await db.execute("DELETE FROM permission_rules");
@@ -797,6 +800,40 @@ export async function updateMemory(
 
 export async function deleteMemory(id: string): Promise<void> {
   const db = await getDb();
+  await db.execute("DELETE FROM memories WHERE id = $1", [id]);
+}
+
+export async function listPendingMemories(): Promise<PendingMemory[]> {
+  const db = await getDb();
+  const rows = await db.select<unknown[]>(
+    "SELECT id, scope, project_id, kind, content, conversation_id, created_at FROM pending_memories ORDER BY created_at DESC",
+  );
+  return rows.flatMap((row) => {
+    const parsed = pendingMemorySchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export async function approvePendingMemory(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, created_at, updated_at) SELECT id, scope, project_id, kind, content, created_at, created_at FROM pending_memories WHERE id = $1",
+    [id],
+  );
+  await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
+}
+
+export async function dismissPendingMemory(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
+}
+
+export async function restorePendingMemory(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) SELECT id, scope, project_id, kind, content, NULL, created_at FROM memories WHERE id = $1",
+    [id],
+  );
   await db.execute("DELETE FROM memories WHERE id = $1", [id]);
 }
 

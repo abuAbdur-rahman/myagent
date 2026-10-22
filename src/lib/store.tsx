@@ -54,6 +54,7 @@ import type {
   MemoryDraft,
   MemoryInput,
   MemoryScope,
+  PendingMemory,
   Project,
   ProjectInput,
   Message,
@@ -320,11 +321,16 @@ interface AppContextValue {
 
   globalMemories: Memory[];
   projectMemories: Memory[];
+  pendingMemories: PendingMemory[];
   refreshMemories: () => Promise<void>;
+  refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
   editMemory: (id: string, draft: MemoryDraft) => Promise<void>;
   deleteMemory: (id: string) => Promise<void>;
+  approvePendingMemory: (id: string) => Promise<void>;
+  dismissPendingMemory: (id: string) => Promise<void>;
+  undoApprovedMemory: (id: string) => Promise<void>;
 
   conversations: Conversation[];
   activeConversationId: string | null;
@@ -456,6 +462,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<View>("chat");
   const [globalMemories, setGlobalMemories] = useState<Memory[]>([]);
   const [projectMemories, setProjectMemories] = useState<Memory[]>([]);
+  const [pendingMemories, setPendingMemories] = useState<PendingMemory[]>([]);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -511,6 +518,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [autoCompact]);
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
+  const pendingMemoriesRef = useRef<PendingMemory[]>([]);
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
   const reasoningRef = useRef("");
@@ -555,6 +563,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     projectMemoriesRef.current = projectMemories;
   }, [projectMemories]);
+  useEffect(() => {
+    pendingMemoriesRef.current = pendingMemories;
+  }, [pendingMemories]);
 
   const refreshConnections = useCallback(async () => {
     const rows = await db.listConnections();
@@ -586,12 +597,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProjectMemories(project);
   }, []);
 
+  const refreshPendingMemories = useCallback(async () => {
+    const rows = await db.listPendingMemories();
+    setPendingMemories(rows);
+    return rows;
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
         await refreshConnections();
         await refreshProjects();
         await refreshMemories();
+        await refreshPendingMemories();
         setConversations(await db.listConversations());
       } catch (e) {
         reportError(e);
@@ -599,7 +617,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setReady(true);
       }
     })();
-  }, [refreshConnections, refreshProjects, refreshMemories]);
+  }, [refreshConnections, refreshProjects, refreshMemories, refreshPendingMemories]);
 
   useEffect(() => {
     if (activeConnectionId) {
@@ -1109,6 +1127,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [refreshMemories],
   );
 
+  const approvePendingMemory = useCallback(
+    async (id: string) => {
+      await db.approvePendingMemory(id);
+      await Promise.all([refreshMemories(), refreshPendingMemories()]);
+    },
+    [refreshMemories, refreshPendingMemories],
+  );
+
+  const dismissPendingMemory = useCallback(
+    async (id: string) => {
+      await db.dismissPendingMemory(id);
+      await refreshPendingMemories();
+    },
+    [refreshPendingMemories],
+  );
+
+  const undoApprovedMemory = useCallback(
+    async (id: string) => {
+      await db.restorePendingMemory(id);
+      await Promise.all([refreshMemories(), refreshPendingMemories()]);
+    },
+    [refreshMemories, refreshPendingMemories],
+  );
+
   const loadMemories = useCallback(
     (scope: MemoryScope, projectId: string | null) => db.listMemories(scope, projectId),
     [],
@@ -1457,7 +1499,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
         await refreshTodos(conversationId);
         if (toolLogRef.current.some((entry) => MEMORY_WRITE_TOOLS.has(entry.name))) {
-          await refreshMemories();
+          const waiting = pendingMemoriesRef.current.length;
+          const [, rows] = await Promise.all([refreshMemories(), refreshPendingMemories()]);
+          const added = rows.length - waiting;
+          if (added > 0) {
+            toast(`${added} ${added === 1 ? "memory is" : "memories are"} waiting for review`, {
+              actions: [{ label: "Review", run: () => setSettingsPage("memory") }],
+            });
+          }
         }
       } catch (e) {
         if (requestIdRef.current === requestId) {
@@ -1490,6 +1539,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       resolveTools,
       refreshTodos,
       refreshMemories,
+      refreshPendingMemories,
       searchBackend,
       searchEndpoint,
     ],
@@ -2159,11 +2209,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshProjects,
     globalMemories,
     projectMemories,
+    pendingMemories,
     refreshMemories,
+    refreshPendingMemories,
     loadMemories,
     addMemory: saveMemoryToScope,
     editMemory,
     deleteMemory,
+    approvePendingMemory,
+    dismissPendingMemory,
+    undoApprovedMemory,
     conversations,
     activeConversationId,
     selectConversation,

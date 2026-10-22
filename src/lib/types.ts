@@ -145,6 +145,17 @@ const memorySchema = z.object({
 });
 export type Memory = z.infer<typeof memorySchema>;
 
+export const pendingMemorySchema = z.object({
+  id: z.string(),
+  scope: memoryScopeSchema,
+  project_id: z.string().nullable(),
+  kind: memoryKindSchema,
+  content: z.string().min(1).max(2000),
+  conversation_id: z.string().nullable(),
+  created_at: z.number(),
+});
+export type PendingMemory = z.infer<typeof pendingMemorySchema>;
+
 export const memoryInputSchema = memorySchema.omit({
   id: true,
   created_at: true,

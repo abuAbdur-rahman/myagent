@@ -412,7 +412,7 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "remember",
-                "description": "Save a durable fact about the user. Use only when the user asks to remember something or states a lasting preference.",
+                "description": "Propose a durable fact about the user. Use only when the user asks to remember something or states a lasting preference. The user reviews and approves the note before it is stored, so do not claim it is saved.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1276,20 +1276,23 @@ pub async fn execute(
             let id = uuid::Uuid::new_v4().to_string();
             let now = now_millis();
             sqlx::query(
-                "INSERT INTO memories (id, scope, project_id, kind, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(&scope)
             .bind(if scope == "project" { project_id } else { None })
             .bind(&kind)
             .bind(&content)
-            .bind(now)
+            .bind(conversation_id)
             .bind(now)
             .execute(&pool)
             .await
             .map_err(|e| format!("database: {e}"))?;
             Ok(ExecOutput {
-                output: format!("Saved to {scope} memory."),
+                output: format!(
+                    "Queued for the user to review: {}. It is not saved until they approve it.",
+                    memory_preview(&content)
+                ),
                 artifact: None,
             })
         }
