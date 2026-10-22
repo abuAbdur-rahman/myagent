@@ -93,7 +93,7 @@ export async function importChatExport(raw: unknown): Promise<string> {
   if (data.chat.summary) await db.setConversationSummary(created.id, data.chat.summary, null);
   const ordered = [...data.messages].sort((a, b) => a.createdAt - b.createdAt);
   for (const message of ordered) {
-    await db.insertMessageFull(created.id, {
+    const inserted = await db.insertMessageFull(created.id, {
       role: message.role,
       content: message.content,
       reasoning: message.reasoning,
@@ -109,6 +109,9 @@ export async function importChatExport(raw: unknown): Promise<string> {
       model: db.sqlNull(message.model),
       createdAt: message.createdAt,
     });
+    if (message.rating !== undefined && message.rating !== null) {
+      await db.setMessageRating(inserted.id, message.rating);
+    }
   }
   return created.id;
 }

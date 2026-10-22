@@ -223,6 +223,14 @@ impl DsmlScanner {
             }
             return Taken::Need;
         };
+        let start = usize::from(self.buf.starts_with('<'));
+        if let Some(next) = self.buf[start..].find('<').map(|i| i + start) {
+            if next < end {
+                let raw: String = self.buf[..next].to_string();
+                self.buf.drain(..next);
+                return Taken::Literal(raw);
+            }
+        }
         let raw: String = self.buf[..=end].to_string();
         self.buf.drain(..=end);
         match decode(&raw) {
@@ -586,6 +594,38 @@ mod tests {
         let raw = format!("{}hi{}", fw("begin_of_sentence"), fw("end_of_sentence"));
         let (visible, _) = scan_all(&raw);
         assert_eq!(visible, "hi");
+    }
+
+    #[test]
+    fn a_comparison_before_an_envelope_does_not_swallow_it() {
+        let raw = format!(
+            "a < b. {}",
+            call("run_powershell", &[("command", "Get-Date", true)])
+        );
+        let (visible, calls) = scan_all(&raw);
+        assert_eq!(visible, "a < b. ");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "run_powershell");
+
+        let chars: Vec<char> = raw.chars().collect();
+        for cut in 0..=chars.len() {
+            let head: String = chars[..cut].iter().collect();
+            let tail: String = chars[cut..].iter().collect();
+            let mut scanner = DsmlScanner::new();
+            let mut events = scanner.push(&head);
+            events.extend(scanner.push(&tail));
+            events.extend(scanner.finish());
+            let mut text = String::new();
+            let mut found = 0;
+            for event in events {
+                match event {
+                    InbandEvent::Text(chunk) => text.push_str(&chunk),
+                    InbandEvent::Call { .. } => found += 1,
+                }
+            }
+            assert_eq!(text, "a < b. ", "visible text differs at cut {cut}");
+            assert_eq!(found, 1, "call lost at cut {cut}");
+        }
     }
 
     #[test]

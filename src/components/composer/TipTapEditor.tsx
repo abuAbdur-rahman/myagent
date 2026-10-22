@@ -106,6 +106,7 @@ export function TipTapEditor({
               {
                 label: "Undo",
                 run: () => {
+                  if (current.isDestroyed) return;
                   current.commands.undo();
                   current.commands.insertContentAt(at, { type: "text", text: wrap.code });
                 },

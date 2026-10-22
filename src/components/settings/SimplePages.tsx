@@ -2474,12 +2474,12 @@ export function MemoryPage() {
               </div>
             ))}
           </div>
-          {actionError && (
-            <p className="mt-2 text-xs text-alarm" role="alert">
-              {actionError}
-            </p>
-          )}
         </div>
+      )}
+      {actionError && (
+        <p className="mb-2 text-xs text-alarm" role="alert">
+          {actionError}
+        </p>
       )}
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium">Saved memory</span>

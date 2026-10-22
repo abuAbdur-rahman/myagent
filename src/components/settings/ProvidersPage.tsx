@@ -58,7 +58,7 @@ function ProviderDialog({
   connection: Connection | null;
   onClose: () => void;
 }) {
-  const { saveConnection, removeConnection } = useApp();
+  const { saveConnection, removeConnection, refreshConnections } = useApp();
   const [kind, setKind] = useState<ProviderKind>(connection?.kind ?? "openrouter");
   const [name, setName] = useState(connection?.name ?? "OpenRouter");
   const [baseUrl, setBaseUrl] = useState(
@@ -111,6 +111,7 @@ function ProviderDialog({
         throw new Error("No models found. Check the API key and base URL.");
       }
       await db.markKeyTested(saved.id);
+      await refreshConnections();
       setStatus(`Connected · ${found} models found`);
       if (!testFirst) onClose();
     } catch (e) {
@@ -392,6 +393,9 @@ export function ProvidersPage() {
     setTestingId(connection.id);
     try {
       const found = await api.verifyProvider(connection.id, connection.kind);
+      if (found === 0) {
+        throw new Error("No models found. Check the API key and base URL.");
+      }
       await db.markKeyTested(connection.id);
       await refreshConnections();
       setTestState((prev) => ({

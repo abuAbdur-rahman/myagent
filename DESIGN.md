@@ -213,6 +213,8 @@ The Send button is a 32px accent circle. Borders are always 1px Line.
   left edge; project rows show a stable color dot.
 - **Groups:** sticky uppercase micro headers (Pinned, Today, Yesterday,
   Previous 7 days, Older).
+- **Filter:** All chats, Pinned or one project by name; a filtered empty list
+  names the filter and offers Show all chats instead of reading like data loss.
 - **Footer:** a settings icon plus a profile button (avatar, name, plan) opening
   a small menu.
 
@@ -265,17 +267,6 @@ The Send button is a 32px accent circle. Borders are always 1px Line.
 - **Outputs gallery:** the sidebar entry opens a grid of the chat's artifacts and
   written files, each with the same sandboxed thumbnail the panel uses.
 
-### Sidebar
-- **Style:** flat 260px rail on Sidebar tone with a right hairline; collapses to
-  a 56px icon rail.
-- **Rows:** 32–34px, 4px radius; active chat rows get a 3px accent bar at the
-  left edge; project rows show a stable color dot.
-- **Groups:** sticky uppercase micro headers (Pinned, Today, Yesterday,
-  Previous 7 days, Older).
-- **Filter:** All chats, Pinned or one project by name; a filtered empty list
-  names the filter and offers Show all chats instead of reading like data loss.
-- **Footer:** a settings icon plus a profile button (avatar, name, plan) opening
-  a small menu.
 
 ### Command Palette
 - **Shape:** a 560px modal pinned near the top over a dimmed app, with a 48px
