@@ -50,6 +50,11 @@ pub enum StreamEvent {
         ok: bool,
         preview: String,
     },
+    ToolSources {
+        id: String,
+        domains: Vec<String>,
+        files: Vec<String>,
+    },
     ApprovalAsked {
         id: String,
         tool: String,
@@ -253,6 +258,30 @@ pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
 
 fn truncate_preview(text: &str) -> String {
     truncate_chars(text.trim(), 500)
+}
+
+fn domains_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in text.split(|c: char| {
+        c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | ',' | '<' | '>')
+    }) {
+        let trimmed = token.trim_end_matches(['.', ')', ',', ';', ':', '}', ']']);
+        let rest = trimmed
+            .strip_prefix("https://")
+            .or_else(|| trimmed.strip_prefix("http://"));
+        let Some(rest) = rest else { continue };
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if host.is_empty() || host.contains(' ') {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == host) {
+            out.push(host.to_string());
+        }
+        if out.len() >= 12 {
+            break;
+        }
+    }
+    out
 }
 
 const CHILD_SYSTEM: &str = "You are a focused subagent. Complete the task with the tools available, then reply with a concise summary of what you found or changed. You cannot see the parent conversation and you cannot delegate further. Do not ask the user questions unless the task is impossible without one.";
@@ -1983,6 +2012,14 @@ impl ToolRunner for RealTools<'_> {
             return Ok(StepControl::Continue);
         }
 
+        let touched_path = if matches!(name.as_str(), "sandbox_write" | "sandbox_edit") {
+            args.get("path")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        } else {
+            None
+        };
+
         match match crate::mcp::try_execute(
             self.app,
             self.req.project_id.as_deref(),
@@ -2023,6 +2060,19 @@ impl ToolRunner for RealTools<'_> {
                         title: artifact.title,
                         lang: artifact.lang,
                         code: artifact.code,
+                    });
+                }
+                let domains = if name == "web_search" {
+                    domains_in(&done.output)
+                } else {
+                    Vec::new()
+                };
+                let files: Vec<String> = touched_path.clone().into_iter().collect();
+                if !domains.is_empty() || !files.is_empty() {
+                    self.on_event.send(StreamEvent::ToolSources {
+                        id: id.clone(),
+                        domains,
+                        files,
                     });
                 }
                 self.on_event.send(StreamEvent::ToolResult {
@@ -2247,6 +2297,20 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domains_in_keeps_each_host_once() {
+        let text = r#"{"results":[{"url":"https://docs.rs/serde/latest"},{"url":"https://docs.rs/serde/latest?x=1"},{"url":"http://example.com/a"},{"url":"mailto:x@y.z"}]}"#;
+        assert_eq!(
+            domains_in(text),
+            vec!["docs.rs".to_string(), "example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn domains_in_needs_a_scheme() {
+        assert!(domains_in("see docs.rs and example.com").is_empty());
+    }
 
     #[test]
     fn direct_providers_get_no_effort_field() {

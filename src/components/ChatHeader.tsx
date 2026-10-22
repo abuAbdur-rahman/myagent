@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
-import { Cpu, Download, FolderInput, MessageSquare, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
+import { Cpu, Download, FolderInput, ListChecks, MessageSquare, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectColor } from "../lib/grouping";
+import { stepLabel } from "../lib/session";
 import { buildChatExport, conversationToMarkdown, importChatExport, safeFilename } from "../lib/export";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
@@ -24,10 +25,13 @@ export function ChatHeader() {
     model,
     messages,
     togglePanel,
-    panelArtifact,
+    panelOpen,
+    openSessionPanel,
+    todos,
     refreshConversations,
     selectConversation,
   } = useApp();
+  const step = stepLabel(todos);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   const [promptOpen, setPromptOpen] = useState(false);
@@ -217,6 +221,19 @@ export function ChatHeader() {
 
       <span className="flex-1" />
 
+      {step && (
+        <button
+          type="button"
+          onClick={openSessionPanel}
+          aria-label={`Open progress: ${step}`}
+          title={`${step} · open progress`}
+          className="flex items-center gap-1.5 rounded-control px-2 py-1 text-xs text-muted hover:bg-hover hover:text-text"
+        >
+          <ListChecks size={14} />
+          {step}
+        </button>
+      )}
+
       {chat && (
         <DropdownMenu
           align="end"
@@ -230,10 +247,10 @@ export function ChatHeader() {
         />
       )}
       <IconButton
-        label="Toggle artifact panel"
-        title={panelArtifact ? "Artifacts (Ctrl+Shift+A)" : "No artifacts yet"}
+        label="Toggle side panel"
+        title="Progress and artifacts (Ctrl+Shift+A)"
+        aria-expanded={panelOpen}
         onClick={togglePanel}
-        disabled={!panelArtifact}
       >
         <PanelRight size={16} />
       </IconButton>

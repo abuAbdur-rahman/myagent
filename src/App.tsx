@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppProvider, useApp } from "./lib/store";
+import { useFocusTrap } from "./lib/useFocusTrap";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { ChatHeader } from "./components/ChatHeader";
 import { ContextBar } from "./components/ContextBar";
-import { TodoChecklist } from "./components/TodoChecklist";
 import { ProjectsGrid } from "./components/ProjectsGrid";
+import { OutputsGallery } from "./components/OutputsGallery";
 import { ProjectDetail } from "./components/ProjectDetail";
 import { Welcome } from "./components/Welcome";
 import { Composer } from "./components/Composer";
@@ -40,7 +41,9 @@ function Shell() {
     togglePanel,
     panelOpen,
     panelMode,
+    panelView,
     panelWidth,
+    closePanel,
     view,
     setView,
   } = useApp();
@@ -48,6 +51,7 @@ function Shell() {
     open: false,
     id: null,
   });
+  const overlayRef = useRef<HTMLDivElement | null>(null);
 
   const showWelcome = activeConversationId === null && messages.length === 0;
 
@@ -103,8 +107,29 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [newConversation, setPaletteOpen, setSettingsPage, stopStream, streaming, toggleSidebar, togglePanel]);
 
-  const docked = panelOpen && panelMode !== "full";
-  const panelCols = docked ? (panelMode === "mini" ? 300 : panelWidth) : 0;
+  const [wide, setWide] = useState(() =>
+    window.matchMedia("(min-width: 1100px)").matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1100px)");
+    const apply = () => setWide(query.matches);
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, []);
+
+  const docked = panelOpen && panelMode !== "full" && wide;
+  const overlayPanel = panelOpen && panelMode !== "full" && !wide;
+  const panelCols = docked
+    ? panelView === "session"
+      ? 344
+      : panelMode === "mini"
+        ? 300
+        : panelWidth
+    : 0;
+
+  useFocusTrap(overlayRef, overlayPanel, closePanel);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden">
@@ -119,6 +144,8 @@ function Shell() {
         <main className="flex min-w-0 flex-col overflow-hidden bg-surface">
           {view === "projects" ? (
             <ProjectsGrid onNew={() => setProjectDialog({ open: true, id: null })} />
+          ) : view === "outputs" ? (
+            <OutputsGallery />
           ) : view === "project" ? (
             <ProjectDetail onBack={() => setView("projects")} />
           ) : showWelcome ? (
@@ -133,7 +160,6 @@ function Shell() {
               <div className="flex-none px-4 pb-2">
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
-                  <TodoChecklist />
                   {streaming || compacting ? (
                     <div className="mb-1.5 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
@@ -147,8 +173,27 @@ function Shell() {
             </>
           )}
         </main>
-        {!(panelOpen && panelMode === "full") && <ArtifactsPanel />}
+        {!(panelOpen && panelMode === "full") && docked && <ArtifactsPanel />}
       </div>
+      {overlayPanel && (
+        <div
+          className="fixed inset-0 z-40 flex justify-end bg-black/20"
+          role="presentation"
+          ref={overlayRef}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closePanel();
+          }}
+        >
+          <div
+            className="h-full shadow-[var(--shadow)]"
+            style={{
+              width: panelView === "session" ? 344 : panelMode === "mini" ? 300 : panelWidth,
+            }}
+          >
+            <ArtifactsPanel />
+          </div>
+        </div>
+      )}
       {panelOpen && panelMode === "full" && (
         <div className="fixed inset-0 z-50 bg-surface">
           <ArtifactsPanel />

@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useRef } from "react";
-import { BookOpen, Code, Copy, Download, Eye, Maximize2, Minimize2, X } from "lucide-react";
+import {
+  BookOpen,
+  ChevronLeft,
+  Code,
+  Copy,
+  Download,
+  Eye,
+  Maximize2,
+  Minimize2,
+  X,
+} from "lucide-react";
 import { useApp, type PanelMode, type PanelTab } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { Badge } from "./ui";
+import { SessionPanel } from "./SessionPanel";
 import { cn, copyText, downloadText } from "../lib/utils";
 import { toast } from "../lib/toast";
 
@@ -49,10 +60,12 @@ export function ArtifactsPanel() {
     panelArtifact,
     panelTab,
     panelMode,
+    panelView,
     panelWidth,
     setPanelTab,
     setPanelMode,
     setPanelWidth,
+    showSessionView,
     closePanel,
   } = useApp();
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -87,7 +100,11 @@ export function ArtifactsPanel() {
 
   useEffect(() => endDrag, [endDrag]);
 
-  if (!panelOpen || !panelArtifact) return null;
+  if (!panelOpen) return null;
+
+  if (panelView === "session" || !panelArtifact) {
+    return <SessionPanel />;
+  }
 
   const tabs = tabsFor(panelArtifact.lang);
   const activeTab = tabs.some((t) => t.id === panelTab) ? panelTab : tabs[0].id;
@@ -128,6 +145,15 @@ export function ArtifactsPanel() {
         />
       )}
       <div className="flex h-12 flex-none items-center gap-2 px-2 pl-3.5">
+        <button
+          type="button"
+          aria-label="Back to progress"
+          title="Progress"
+          onClick={showSessionView}
+          className="grid h-7 w-7 flex-none place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+        >
+          <ChevronLeft size={16} />
+        </button>
         <b className="truncate text-sm" title={panelArtifact.title}>
           {panelArtifact.title}
         </b>

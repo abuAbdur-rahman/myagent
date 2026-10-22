@@ -41,6 +41,8 @@ export const toolLogEntrySchema = z.object({
   summary: z.string(),
   status: z.enum(["running", "ok", "err"]),
   preview: z.string().nullable(),
+  domains: z.array(z.string()).optional(),
+  files: z.array(z.string()).optional(),
 });
 export type ToolLogEntry = z.infer<typeof toolLogEntrySchema>;
 
@@ -303,6 +305,12 @@ const streamEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("tool_start"), id: z.string(), name: z.string(), summary: z.string() }),
   z.object({ type: z.literal("tool_result"), id: z.string(), ok: z.boolean(), preview: z.string() }),
+  z.object({
+    type: z.literal("tool_sources"),
+    id: z.string(),
+    domains: z.array(z.string()),
+    files: z.array(z.string()),
+  }),
   z.object({ type: z.literal("artifact"), title: z.string(), lang: z.string(), code: z.string() }),
 ]);
 

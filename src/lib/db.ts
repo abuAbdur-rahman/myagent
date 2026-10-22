@@ -13,7 +13,6 @@ import type {
   Connection,
   ConnectionInput,
   Conversation,
-  DeclaredArtifact,
   Memory,
   MemoryInput,
   MemoryKind,
@@ -28,16 +27,13 @@ import type {
   SearchQuery,
   Tag,
   Todo,
-  ToolLogEntry,
 } from "./types";
 import {
   auditLogSchema,
-  declaredArtifactSchema,
   pendingMemorySchema,
   searchQuerySchema,
   tagSchema,
   todoSchema,
-  toolLogEntrySchema,
 } from "./types";
 
 let dbPromise: Promise<Database> | null = null;
@@ -530,50 +526,12 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
   );
 }
 
-export function parseDeclaredArtifacts(raw: unknown): DeclaredArtifact[] {
-  if (typeof raw !== "string") return [];
-  if (!raw) return [];
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    console.warn("parseDeclaredArtifacts: invalid JSON, dropping artifacts");
-    return [];
-  }
-  if (!Array.isArray(value)) return [];
-  const artifacts: DeclaredArtifact[] = [];
-  for (const entry of value) {
-    const parsed = declaredArtifactSchema.safeParse(entry);
-    if (parsed.success) artifacts.push(parsed.data);
-  }
-  return artifacts;
-}
-
-export function parseToolLog(raw: unknown): ToolLogEntry[] {
-  if (typeof raw !== "string" && !Array.isArray(raw)) return [];
-  let value: unknown = raw;
-  if (typeof raw === "string") {
-    if (!raw) return [];
-    try {
-      value = JSON.parse(raw);
-    } catch {
-      console.warn("parseToolLog: invalid JSON, dropping tool log");
-      return [];
-    }
-  }
-  if (!Array.isArray(value)) return [];
-  const entries: ToolLogEntry[] = [];
-  for (const entry of value) {
-    const parsed = toolLogEntrySchema.safeParse(entry);
-    if (parsed.success) entries.push(parsed.data);
-  }
-  return entries;
-}
-
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE id = $1", [id]);
 }
+
+export { parseDeclaredArtifacts, parseToolLog } from "./message-parse";
 
 export async function truncateConversation(
   conversationId: string,

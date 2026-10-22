@@ -222,10 +222,11 @@ function subagentPreview(current: string | null, event: StreamEvent): string | n
     : next;
 }
 
-type View = "chat" | "projects" | "project";
+type View = "chat" | "projects" | "project" | "outputs";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
 export type PanelMode = "dock" | "full" | "mini";
+type PanelView = "session" | "artifact";
 
 interface PanelArtifact {
   id: string;
@@ -418,8 +419,11 @@ interface AppContextValue {
   panelArtifact: PanelArtifact | null;
   panelTab: PanelTab;
   panelMode: PanelMode;
+  panelView: PanelView;
   panelWidth: number;
   openArtifact: (artifact: PanelArtifact) => void;
+  openSessionPanel: () => void;
+  showSessionView: () => void;
   closePanel: () => void;
   togglePanel: () => void;
   setPanelTab: (tab: PanelTab) => void;
@@ -841,9 +845,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
   const [panelTab, setPanelTabState] = useState<PanelTab>("code");
   const [panelMode, setPanelModeState] = useState<PanelMode>("dock");
+  const [panelView, setPanelViewState] = useState<PanelView>("session");
   const [panelWidth, setPanelWidthState] = useState(() => {
     const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 420);
+    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 480);
   });
 
   const setPanelWidth = useCallback((width: number) => {
@@ -863,17 +868,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const openArtifact = useCallback((artifact: PanelArtifact) => {
     if (!panelOpenRef.current) setPanelModeState("dock");
     setPanelArtifact(artifact);
+    setPanelViewState("artifact");
     setPanelTabState(defaultPanelTab(artifact.lang));
     setPanelOpen(true);
   }, []);
 
+  const openSessionPanel = useCallback(() => {
+    if (!panelOpenRef.current) setPanelModeState("dock");
+    setPanelViewState("session");
+    setPanelOpen(true);
+  }, []);
+
+  const showSessionView = useCallback(() => setPanelViewState("session"), []);
+
   const closePanel = useCallback(() => setPanelOpen(false), []);
 
   const togglePanel = useCallback(() => {
-    setPanelOpen((prev) => {
-      if (prev) return false;
-      return panelArtifact !== null;
-    });
+    if (panelOpenRef.current) {
+      setPanelOpen(false);
+      return;
+    }
+    setPanelModeState("dock");
+    if (panelArtifact === null) setPanelViewState("session");
+    setPanelOpen(true);
   }, [panelArtifact]);
 
   const setPanelTab = useCallback((tab: PanelTab) => setPanelTabState(tab), []);
@@ -1552,6 +1569,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
                                 SUBAGENT_PREVIEW_LIMIT,
                               )
                             : event.preview,
+                      }
+                    : entry,
+                ),
+              );
+            } else if (event.type === "tool_sources") {
+              applyToolLog(
+                toolLogRef.current.map((entry) =>
+                  entry.id === event.id
+                    ? {
+                        ...entry,
+                        domains: event.domains.length > 0 ? event.domains : entry.domains,
+                        files: event.files.length > 0 ? event.files : entry.files,
                       }
                     : entry,
                 ),
@@ -2398,8 +2427,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     panelArtifact,
     panelTab,
     panelMode,
+    panelView,
     panelWidth,
     openArtifact,
+    openSessionPanel,
+    showSessionView,
     closePanel,
     togglePanel,
     setPanelTab,

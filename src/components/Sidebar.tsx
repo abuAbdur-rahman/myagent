@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
   ChevronsLeft,
   ChevronsRight,
+  Filter,
   Folder,
   FolderInput,
   FolderOpen,
   MoreHorizontal,
+  Package,
   Pencil,
   Pin,
   PinOff,
@@ -18,8 +20,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { useApp } from "../lib/store";
+import { sessionOutputs } from "../lib/session";
 import * as db from "../lib/db";
 import { arrangeChats, projectColor } from "../lib/grouping";
+import {
+  emptyFilterText,
+  filterChats,
+  parseChatFilter,
+  type ChatFilter,
+} from "../lib/chat-filter";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { Avatar, Button, Dialog, Input } from "./ui";
@@ -235,6 +244,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     view,
     setView,
     groupByDate,
+    messages,
   } = useApp();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -244,9 +254,11 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [chatFilter, setChatFilter] = useState<ChatFilter>("all");
   const [allTags, setAllTags] = useState<{ tag: string; count: number }[]>([]);
   const [tagMap, setTagMap] = useState<Map<string, string[]>>(new Map());
   const [tagDialogChat, setTagDialogChat] = useState<Conversation | null>(null);
+  const outputCount = useMemo(() => sessionOutputs(messages).length, [messages]);
 
   const reloadTags = async () => {
     try {
@@ -304,9 +316,17 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const chatById = new Map(conversations.map((c) => [c.id, c]));
 
-  const shown = tagFilter
-    ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
-    : conversations;
+  const shown = filterChats(
+    tagFilter ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter)) : conversations,
+    chatFilter,
+  );
+  const filterEmpty = emptyFilterText(
+    chatFilter,
+    chatFilter.startsWith("project:")
+      ? (projectById.get(chatFilter.slice("project:".length))?.name ?? null)
+      : null,
+  );
+  const filterProjects = chatFilter === "all";
   const groups = arrangeChats(shown, groupByDate);
   const threadsByProject = new Map<string, Conversation[]>();
   for (const chat of shown) {
@@ -511,11 +531,26 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
           title="Projects"
           className={cn(
             "flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm hover:bg-hover",
-            view !== "chat" && "bg-active",
+            (view === "projects" || view === "project") && "bg-active",
           )}
         >
           <Folder size={16} className="text-muted" />
           <span>Projects</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("outputs")}
+          title="Outputs"
+          className={cn(
+            "flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm hover:bg-hover",
+            view === "outputs" && "bg-active",
+          )}
+        >
+          <Package size={16} className="text-muted" />
+          <span>Outputs</span>
+          {outputCount > 0 && (
+            <span className="ml-auto text-xs tabular-nums text-muted">{outputCount}</span>
+          )}
         </button>
       </div>
 
@@ -540,6 +575,25 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
               {searchError}
             </p>
           )}
+          <div className="flex items-center gap-1.5 px-2.5 pt-1.5">
+            <Filter size={14} className="flex-none text-muted" />
+            <Select
+              size="sm"
+              className="min-w-0 flex-1"
+              value={chatFilter}
+              onChange={(next) => setChatFilter(parseChatFilter(next))}
+              aria-label="Filter chats"
+              options={[
+                { value: "all", label: "All chats" },
+                { value: "pinned", label: "Pinned" },
+                ...projects.map((project) => ({
+                  value: `project:${project.id}`,
+                  label: project.name,
+                  group: "Projects",
+                })),
+              ]}
+            />
+          </div>
           {allTags.length > 0 && (
             <div className="flex items-center gap-1.5 px-2.5 pt-1.5">
               <Tag size={14} className="flex-none text-muted" />
@@ -590,6 +644,8 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
             })}
           </div>
         ) : (
+          <>
+        {filterProjects && (
           <>
         <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted">
           Projects
@@ -671,6 +727,21 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         >
           <Plus size={14} /> New project
         </button>
+          </>
+        )}
+
+        {filterEmpty && shown.length === 0 && (
+          <div className="flex flex-col items-start gap-1.5 px-2.5 py-4">
+            <p className="m-0 text-xs text-muted">{filterEmpty}</p>
+            <button
+              type="button"
+              onClick={() => setChatFilter("all")}
+              className="text-xs text-accent hover:underline"
+            >
+              Show all chats
+            </button>
+          </div>
+        )}
 
         {groups.map((group) => {
           const collapsed = collapsedGroups.has(group.name);
