@@ -36,6 +36,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { page: "audit", term: "Clear log" },
   { page: "memory", term: "Memory" },
   { page: "memory", term: "Clear all" },
+  { page: "data", term: "Storage" },
   { page: "data", term: "Export all data" },
   { page: "data", term: "Clear all chats" },
   { page: "data", term: "Delete everything" },

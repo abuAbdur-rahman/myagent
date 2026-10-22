@@ -14,6 +14,7 @@ mod screen;
 mod skills;
 mod sse;
 mod state;
+mod storage;
 mod tools;
 mod tooltext;
 mod vault;
@@ -375,6 +376,7 @@ pub fn run() {
             llm::suggest_title,
             llm::summarize,
             delete_spill,
+            storage::storage_usage,
             tools::spill_image_write,
             knowledge::knowledge_sidecar_wipe,
             knowledge::knowledge_sidecar_delete,

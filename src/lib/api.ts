@@ -1,6 +1,7 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type { FileCommand, StreamEvent } from "./types";
 import { parseBackendCaps, type ModelCapabilities } from "./catalog";
+import type { StorageUsage } from "./storage";
 
 export const SEARCH_KEY_ACCOUNT = "search:tavily";
 
@@ -40,6 +41,10 @@ export function searchKeyStats() {
 
 export function searchEndpointTest(endpoint: string) {
   return invoke<string>("search_endpoint_test", { endpoint });
+}
+
+export function storageUsage() {
+  return invoke<StorageUsage>("storage_usage");
 }
 
 export function addSearchKey(apiKey: string) {

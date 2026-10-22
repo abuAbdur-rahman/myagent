@@ -53,6 +53,14 @@ import {
   groupAuditByDay,
   type AuditDecisionFilter,
 } from "../../lib/audit";
+import { formatBytes } from "../../lib/chat-docs";
+import {
+  storageParts,
+  storageShares,
+  storageTotal,
+  type StoragePart,
+  type StorageUsage,
+} from "../../lib/storage";
 
 function SettingRow({
   label,
@@ -1935,12 +1943,23 @@ export function DataPage() {
     stopStream,
   } = useApp();
   const [stats, setStats] = useState({ conversations: 0, messages: 0, memories: 0, projects: 0 });
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [counts, sizes] = await Promise.all([db.stats(), api.storageUsage()]);
+      setStats(counts);
+      setUsage(sizes);
+      setUsageError(null);
+    } catch (e) {
+      setUsageError(errorText(e));
+    }
+  }, []);
 
   useEffect(() => {
-    db.stats()
-      .then(setStats)
-      .catch(() => undefined);
-  }, [conversations]);
+    void refresh();
+  }, [refresh, conversations]);
 
   const exportAll = async () => {
     try {
@@ -1984,6 +2003,7 @@ export function DataPage() {
     for (const conversation of conversations) {
       await removeConversation(conversation.id);
     }
+    await refresh();
     toast("Chats cleared");
   };
 
@@ -2009,6 +2029,7 @@ export function DataPage() {
       await refreshConversations();
       await refreshProjects();
       await refreshMemories();
+      await refresh();
       toast(
         spillLeftovers.length > 0
           ? "Deleted, but some spill files remain on disk"
@@ -2039,21 +2060,61 @@ export function DataPage() {
           Delete
         </Button>
       </SettingRow>
-      <div className="mt-4 flex flex-col gap-1.5 px-2">
-        <div className="text-xs text-muted">
-          {stats.conversations} chats · {stats.messages} messages · {stats.memories} memories ·{" "}
-          {stats.projects} projects
+      <div className="mt-4 flex flex-col gap-2 px-2" data-setting-term="Storage">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+          <span className="font-medium">Storage on disk</span>
+          <span className="text-muted">
+            {stats.conversations} chats · {stats.messages} messages · {stats.memories} memories ·{" "}
+            {stats.projects} projects
+          </span>
         </div>
-        <div className="flex">
-          <div className="h-1 flex-1 overflow-hidden rounded bg-active">
-            <div
-              className="h-full bg-accent"
-              style={{ width: `${Math.min(100, stats.messages / 10)}%` }}
-            />
-          </div>
-        </div>
+        {usage && <StorageBar usage={usage} />}
+        {usageError && (
+          <p className="text-xs text-danger" role="status">
+            {usageError}
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+function StorageBar({ usage }: { usage: StorageUsage }) {
+  const parts = storageParts(usage);
+  const shares = storageShares(parts);
+  const total = storageTotal(usage);
+  const tones: Record<StoragePart["key"], string> = {
+    db: "bg-accent",
+    documents: "bg-success",
+    spill: "bg-warn",
+  };
+  return (
+    <>
+      <div
+        className="flex h-1.5 overflow-hidden rounded-full bg-active"
+        role="img"
+        aria-label={`Storage: ${parts
+          .map((part) => `${part.label} ${formatBytes(part.bytes)}`)
+          .join(", ")}`}
+      >
+        {shares.map(({ part, pct }) =>
+          pct > 0 ? (
+            <div key={part.key} className={tones[part.key]} style={{ width: `${pct}%` }} />
+          ) : null,
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+        {parts.map((part) => (
+          <span key={part.key} className="inline-flex items-center gap-1.5">
+            <span className={cn("h-2 w-2 rounded-full", tones[part.key])} aria-hidden="true" />
+            {part.label} {formatBytes(part.bytes)}
+          </span>
+        ))}
+        <span className="ml-auto tabular-nums">
+          {formatBytes(total)} in {usage.files} {usage.files === 1 ? "file" : "files"} on disk
+        </span>
+      </div>
+    </>
   );
 }
 
