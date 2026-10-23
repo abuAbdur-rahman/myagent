@@ -116,14 +116,17 @@ function csvCell(value: string): string {
 }
 
 export function auditCsv(rows: AuditLog[]): string {
-  const lines = ["time,tool,decision,conversation,detail"];
+  const lines = ["time,tool,decision,source,conversation,duration_ms,exit_code,detail"];
   for (const row of rows) {
     lines.push(
       [
         new Date(row.ts).toISOString(),
         row.tool,
         row.decision,
+        row.source ?? "",
         row.conversation_id ?? "",
+        row.duration_ms == null ? "" : String(row.duration_ms),
+        row.exit_code == null ? "" : String(row.exit_code),
         row.detail ?? "",
       ]
         .map(csvCell)
@@ -139,10 +142,19 @@ export function auditJson(rows: AuditLog[]): string {
       time: new Date(row.ts).toISOString(),
       tool: row.tool,
       decision: row.decision,
+      source: row.source ?? null,
       conversation: row.conversation_id,
+      duration_ms: row.duration_ms ?? null,
+      exit_code: row.exit_code ?? null,
       detail: row.detail,
     })),
     null,
     2,
   );
+}
+
+export function auditDuration(ms: number | null | undefined): string | null {
+  if (ms == null) return null;
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
 }

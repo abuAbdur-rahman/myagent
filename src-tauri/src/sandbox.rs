@@ -1005,7 +1005,19 @@ pub async fn run(
         "sensitive": result.sensitive,
     })
     .to_string();
-    crate::tools::log_audit(app, conversation_id, "sandbox_run", "allow", &detail).await;
+    crate::tools::log_audit_meta(
+        app,
+        conversation_id,
+        "sandbox_run",
+        "allow",
+        &detail,
+        crate::tools::AuditMeta {
+            source: "sandbox",
+            duration_ms: Some(result.duration_ms),
+            exit_code: Some(result.exit_code),
+        },
+    )
+    .await;
     Ok(result)
 }
 

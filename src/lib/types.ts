@@ -204,6 +204,9 @@ export const auditLogSchema = z.object({
   tool: z.string(),
   decision: z.string(),
   detail: z.string().nullable(),
+  duration_ms: z.number().int().nullable().optional(),
+  exit_code: z.number().int().nullable().optional(),
+  source: z.string().nullable().optional(),
 });
 export type AuditLog = z.infer<typeof auditLogSchema>;
 

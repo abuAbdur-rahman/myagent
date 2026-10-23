@@ -362,6 +362,16 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN rating INTEGER;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 27,
+            description: "add_audit_detail_columns",
+            sql: "
+                ALTER TABLE audit_log ADD COLUMN duration_ms INTEGER;
+                ALTER TABLE audit_log ADD COLUMN exit_code INTEGER;
+                ALTER TABLE audit_log ADD COLUMN source TEXT;
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -671,6 +681,31 @@ mod migration_tests {
                 .expect("audit readable")
                 .get("d");
         assert_eq!(detail, "example.com");
+    }
+
+    #[tokio::test]
+    async fn audit_columns_migrate_an_old_row_without_data_loss() {
+        let pool = pool().await;
+        apply_versions(&pool, |version| version <= 26).await;
+        sqlx::query("INSERT INTO audit_log (id, ts, conversation_id, tool, decision, detail) VALUES ('old', 7, 'c1', 'web_fetch', 'once', 'example.com')")
+            .execute(&pool)
+            .await
+            .expect("old audit row");
+        apply_versions(&pool, |version| version > 26).await;
+        let row = sqlx::query(
+            "SELECT detail, duration_ms, exit_code, source FROM audit_log WHERE id = 'old'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("old row survives");
+        let detail: String = row.get("detail");
+        let duration: Option<i64> = row.get("duration_ms");
+        let exit: Option<i64> = row.get("exit_code");
+        let source: Option<String> = row.get("source");
+        assert_eq!(detail, "example.com");
+        assert_eq!(duration, None);
+        assert_eq!(exit, None);
+        assert_eq!(source, None);
     }
 
     #[tokio::test]

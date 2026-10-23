@@ -47,6 +47,7 @@ import type { AuditLog, Connection, Memory } from "../../lib/types";import { mcp
 import {
   auditCounts,
   auditCsv,
+  auditDuration,
   auditJson,
   auditSummary,
   auditTime,
@@ -972,6 +973,7 @@ function useMcpServers(projectId: string | null) {
 function AuditEntry({ row }: { row: AuditLog }) {
   const [open, setOpen] = useState(false);
   const kind = decisionClass(row.decision);
+  const duration = auditDuration(row.duration_ms);
   const tone: PillTone =
     kind === "allow" ? "success" : kind === "deny" ? "danger" : kind === "ask" ? "warn" : "neutral";
   return (
@@ -999,6 +1001,24 @@ function AuditEntry({ row }: { row: AuditLog }) {
           <dd className="break-all font-mono">{row.conversation_id ?? "global"}</dd>
           <dt className="text-muted">Decision</dt>
           <dd>{row.decision}</dd>
+          {row.source && (
+            <>
+              <dt className="text-muted">Source</dt>
+              <dd>{row.source}</dd>
+            </>
+          )}
+          {duration && (
+            <>
+              <dt className="text-muted">Duration</dt>
+              <dd className="tabular-nums">{duration}</dd>
+            </>
+          )}
+          {row.exit_code != null && (
+            <>
+              <dt className="text-muted">Exit code</dt>
+              <dd className="tabular-nums">{row.exit_code}</dd>
+            </>
+          )}
           {row.detail && (
             <>
               <dt className="text-muted">Detail</dt>

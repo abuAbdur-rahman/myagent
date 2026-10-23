@@ -1207,6 +1207,29 @@ fn approval_audit_label(reply: ApprovalReply) -> &'static str {
     }
 }
 
+async fn log_decision(
+    app: &tauri::AppHandle,
+    conversation_id: Option<&str>,
+    tool: &str,
+    decision: &str,
+    detail: &str,
+    source: &str,
+) {
+    tools::log_audit_meta(
+        app,
+        conversation_id,
+        tool,
+        decision,
+        detail,
+        tools::AuditMeta {
+            source,
+            duration_ms: None,
+            exit_code: None,
+        },
+    )
+    .await;
+}
+
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
     if name == "sandbox_run" {
         if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
@@ -1849,12 +1872,13 @@ impl ToolRunner for RealTools<'_> {
         let checked =
             permissions::check(self.app, &name, &resources, self.req.project_id.as_deref()).await;
         if let Err(error) = &checked {
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 "check(error)",
                 &error.to_string(),
+                "rule",
             )
             .await;
         }
@@ -1910,23 +1934,25 @@ impl ToolRunner for RealTools<'_> {
         };
         if let Some(verdict) = &verdict {
             if verdict.suggest_deny {
-                tools::log_audit(
+                log_decision(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
                     "screen(flag)",
                     &format!("{} {:.3}", verdict.label, verdict.score),
+                    "screen",
                 )
                 .await;
             }
         }
         if screen_failed {
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 "screen(unavailable)",
                 &resources.join("\n"),
+                "screen",
             )
             .await;
         }
@@ -1935,23 +1961,25 @@ impl ToolRunner for RealTools<'_> {
         if decision == permissions::Effect::Ask && sandbox_auto && verdict_ok && !screen_failed {
             decision = permissions::Effect::Allow;
             if name != "sandbox_run" {
-                tools::log_audit(
+                log_decision(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
                     "allow(sandbox-screen)",
                     &resources.join("\n"),
+                    "sandbox",
                 )
                 .await;
             }
         }
         if decision == permissions::Effect::Deny {
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 "deny(rule)",
                 &resources.join("\n"),
+                "rule",
             )
             .await;
             self.on_event.send(StreamEvent::ToolResult {
@@ -1999,24 +2027,26 @@ impl ToolRunner for RealTools<'_> {
             let reply = tokio::select! {
                 reply = rx => reply.unwrap_or(ApprovalReply::Deny),
                 _ = self.cancel.notified() => {
-                    tools::log_audit(
+                    log_decision(
                         self.app,
                         self.req.conversation_id.as_deref(),
                         &name,
                         approval_audit_label(ApprovalReply::Deny),
                         &resources.join("\n"),
+                        "user",
                     )
                     .await;
                     return Ok(StepControl::StopTurn);
                 }
             };
             if reply == ApprovalReply::Deny {
-                tools::log_audit(
+                log_decision(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
                     approval_audit_label(reply),
                     &resources.join("\n"),
+                    "user",
                 )
                 .await;
                 self.on_event.send(StreamEvent::ToolResult {
@@ -2027,12 +2057,13 @@ impl ToolRunner for RealTools<'_> {
                 history.push(tool_text_message(&id, "denied by user"));
                 return Ok(StepControl::Continue);
             }
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 approval_audit_label(reply),
                 &resources.join("\n"),
+                "user",
             )
             .await;
         }
@@ -2139,7 +2170,7 @@ impl ToolRunner for RealTools<'_> {
                         lang: "markdown".to_string(),
                         code: outcome.memo.clone(),
                     });
-                    tools::log_audit(
+                    log_decision(
                         self.app,
                         self.req.conversation_id.as_deref(),
                         "research_run",
@@ -2148,6 +2179,7 @@ impl ToolRunner for RealTools<'_> {
                             "{} sources, {} pages, {} failed",
                             outcome.sources, outcome.fetched, outcome.failed
                         ),
+                        "tool",
                     )
                     .await;
                     self.on_event.send(StreamEvent::ToolResult {

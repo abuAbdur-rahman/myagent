@@ -1404,12 +1404,17 @@ pub async fn execute(
             if written == 0 {
                 return Err("no memory with that id is visible in this chat".to_string());
             }
-            log_audit(
+            log_audit_meta(
                 app,
                 conversation_id,
                 "update_memory",
                 "updated",
                 content.as_deref().unwrap_or("(kind changed)"),
+                AuditMeta {
+                    source: "tool",
+                    duration_ms: None,
+                    exit_code: None,
+                },
             )
             .await;
             Ok(ExecOutput {
@@ -1430,7 +1435,19 @@ pub async fn execute(
             if deleted == 0 {
                 return Err("the memory was already gone".to_string());
             }
-            log_audit(app, conversation_id, "delete_memory", "deleted", &content).await;
+            log_audit_meta(
+                app,
+                conversation_id,
+                "delete_memory",
+                "deleted",
+                &content,
+                AuditMeta {
+                    source: "tool",
+                    duration_ms: None,
+                    exit_code: None,
+                },
+            )
+            .await;
             Ok(ExecOutput {
                 output: format!("Deleted memory: {}", memory_preview(&content)),
                 artifact: None,
@@ -1939,12 +1956,19 @@ async fn render_todos(pool: &SqlitePool, conversation: &str) -> Result<String, S
 
 const AUDIT_LOG_CAP: i64 = 500;
 
-pub async fn log_audit(
+pub struct AuditMeta<'a> {
+    pub source: &'a str,
+    pub duration_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+}
+
+pub async fn log_audit_meta(
     app: &AppHandle,
     conversation_id: Option<&str>,
     tool: &str,
     decision: &str,
     detail: &str,
+    meta: AuditMeta<'_>,
 ) {
     let Ok(pool) = memory_pool(app).await else {
         eprintln!("audit: database unavailable");
@@ -1953,7 +1977,7 @@ pub async fn log_audit(
     let id = uuid::Uuid::new_v4().to_string();
     let detail: String = detail.chars().take(2000).collect();
     if let Err(error) = sqlx::query(
-        "INSERT INTO audit_log (id, ts, conversation_id, tool, decision, detail) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO audit_log (id, ts, conversation_id, tool, decision, detail, duration_ms, exit_code, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(now_millis())
@@ -1961,6 +1985,13 @@ pub async fn log_audit(
     .bind(tool)
     .bind(decision)
     .bind(&detail)
+    .bind(meta.duration_ms.map(|ms| ms as i64))
+    .bind(meta.exit_code.map(i64::from))
+    .bind(if meta.source.is_empty() {
+        None
+    } else {
+        Some(meta.source)
+    })
     .execute(&pool)
     .await
     {
