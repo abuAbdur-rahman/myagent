@@ -70,6 +70,42 @@ export const RELEASES: readonly Release[] = [
     ],
   },
   {
+    version: "0.4.0",
+    date: "2026-10-21",
+    summary:
+      "The assistant can talk, research and delegate: hold the mic button to dictate, ask for a research run and get a cited memo, and let a subagent carry a scoped piece of work while the parent waits. Project code can run in a Docker sandbox instead of the host, and an approval card now says when the request it is asking about looks like a prompt-injection attempt.",
+    changes: [
+      {
+        kind: "new",
+        text: "Push-to-talk transcription: hold the mic to record 16 kHz mono, release to transcribe. The local Moonshine base model downloads once (~64 MB, pinned sizes) and loads only when used; an OpenAI-compatible provider can transcribe instead, and the recording caps at 60 seconds.",
+      },
+      {
+        kind: "new",
+        text: "`research_run` turns a question into planner queries, asks once, then returns a markdown memo whose claims cite the pages they came from. Results arrive as a normal artifact.",
+      },
+      {
+        kind: "new",
+        text: "`delegate_task` runs a depth-one subagent. Its events stay inside the parent tool entry, so the transcript shows one block of work instead of two interleaved streams, and a turn cannot spawn children without limit.",
+      },
+      {
+        kind: "new",
+        text: "A Docker sandbox runs project code away from the host: protected paths stay read-only, host writes are refused, auto-allow is limited to the commands the sandbox can contain, and the packages you add stay editable after a reload.",
+      },
+      {
+        kind: "new",
+        text: "Approval cards screen the pending request with a bundled local model. A flagged request is labelled as such, and approving it cannot persist an allow rule, so one careless click cannot widen the permission for the rest of the chat.",
+      },
+      {
+        kind: "fixed",
+        text: "Forged envelope markers in MCP and web results are redacted, so a page or a server cannot dress its output up as a tool call the assistant made.",
+      },
+      {
+        kind: "fixed",
+        text: "The `SKILL.md` body injected into context is capped, and the test suite now runs in CI so a broken frontend fails the build instead of reaching a release.",
+      },
+    ],
+  },
+  {
     version: "0.3.6",
     date: "2026-10-18",
     summary:

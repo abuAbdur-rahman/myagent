@@ -26,7 +26,7 @@ Exit: the Changelog page ships; MCP upgrades from 0.3.1 with no data loss; #10, 
 | [x] | D19 | Tool output controls (code-mode Phase 0) | Have (0.3.2) | M | D13 |
 | [x] | — | Issue fixes #10, #13, #15 | Closed (0.3.2) | M | none |
 
-Detail: `docs/releases/v0.3.2.md`. Code-mode Phases 1 and 2 stay in Later.
+Shipped in v0.3.2; details in git history at tag `v0.3.2`. Code-mode Phases 1 and 2 stay in Later.
 
 ### v0.3.3: verified stream reliability and agent-loop safety
 
@@ -40,7 +40,7 @@ match the code.
 | [x] | D3 | Step cap and doom-loop guard | Have (0.3.3 verified) | S | D1 |
 | [x] | — | Roadmap truth pass (`features.md` statuses) | Done (0.3.3) | S | none |
 
-Detail: `docs/releases/v0.3.3.md`. The three items were already in the build;
+Shipped in v0.3.3; details in git history at tag `v0.3.3`. The three items were already in the build;
 this release adds the tests their Done lines asked for and corrects the record.
 The deferred review debt under Later stays open.
 
@@ -262,7 +262,7 @@ Trigger: measured intermediate tokens over ~10K per turn on a regular basis. Spi
 
 ## Sandbox and developer workspace (v0.4.0 S1; remainder in v2)
 
-v1 is an office harness (Claude app / ChatGPT / OpenWebUI alt), not developer-first. The file-tools and sandbox set below is scheduled as v0.4.0 S1 (`docs/releases/v0.4.0.md`, plan `docs/plan/v0.4.0-sandbox.md` rev 2), not v2, as `docs/releases/v1.0.0.md` already records. Projects (E3) stay in v1 as grouping plus docs storage (pdfs, docs). The undo and diff UI, and the rest of the developer workspace, stay in v2.
+v1 is an office harness (Claude app / ChatGPT / OpenWebUI alt), not developer-first. The file-tools and sandbox set below shipped as v0.4.0 S1, not v2, as `docs/releases/v1.0.0.md` already records. Projects (E3) stay in v1 as grouping plus docs storage (pdfs, docs). The undo and diff UI, and the rest of the developer workspace, stay in v2.
 
 Exit: the agent can read, search, edit and undo inside a project and nothing escapes it.
 
@@ -275,6 +275,23 @@ Exit: the agent can read, search, edit and undo inside a project and nothing esc
 | [ ] | D12 | Checkpoints / undo | Missing | M | D10, B2 |
 | [ ] | D6 | Permission modes (ask, accept edits, plan) | Missing | M | D4, D10 |
 | [ ] | E4 | Project instructions file (`AGENTS.md`) | Unknown | S | E3 |
+
+---
+
+## Deferred from 0.5.0
+
+Owner decisions on 2026-10-22: these do not ship with the memory file release.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [ ] | — | Provider key rotation: several keys per connection, skip the exhausted one, retry after 10 min, per-key list in Providers | Missing (promised in 0.4.1 S8, moved to 0.6.0) | M | C1 |
+| [ ] | — | Generic sandbox permissions: one Read / Write / Bash / Host category instead of per-path and per-command rules | Missing | M | D4 |
+| [ ] | — | YOLO mode: no prompts, explicit Deny still wins; toggles in the composer and on the Sandbox page | Missing | S | D4, generic permissions |
+| [ ] | — | Recent models in the picker: top 3 used, filtered against what the provider still offers | Missing | S | C2 |
+| [ ] | — | OpenCode provider: its free models through an OpenCode container with an OpenAI-compatible `/v1` shim | Missing | L | C1, S1 |
+
+The 0.6.0 judge model stays in `docs/plan/v0.5.0-memory-file.md`; it is the only
+part of the memory design that is deliberately late.
 
 ---
 
