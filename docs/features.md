@@ -123,14 +123,14 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 ```
 
 ## B3. Chat list / sidebar
-- **Status:** Have (verify. 0.4.1: a filter offers All chats, Pinned and each project by name, composes with the tag filter, and an empty result names the filter and offers Show all chats)
+- **Status:** Have (0.5.0: the All chats / Pinned / project dropdown was removed by owner request; the tag filter remains)
 - **Ref:** † OpenWebUI sidebar groups by recency, tracks unread state, and does not bump a chat for being auto-titled.
 - **Build:** List ordered by last user activity, grouped (Today, Yesterday, Earlier). Rename, delete with confirm. Virtualize if over 200 chats.
 - **Not:** Unread dots.
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Partial (0.1.6: FTS5 + sidebar box + filters; searchMessages test in search.test.ts)
+- **Status:** Missing (0.1.6 shipped FTS5 and a sidebar box; both were removed with the box in 0.5.0. The Ctrl+K palette switches chats by title.)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.

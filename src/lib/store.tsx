@@ -52,7 +52,7 @@ import {
 } from "./vision";
 import { KEYLESS_KINDS, fileCommandSchema, memoryInputSchema } from "./types";
 import { errorText, newId } from "./utils";
-import { deriveFallbackTitle } from "./title";
+import { deriveFallbackTitle, plainTitle } from "./title";
 import type {
   Connection,
   ConnectionInput,
@@ -1708,7 +1708,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             assistantText,
             connection.kind,
           );
-          trimmed = title.trim();
+          trimmed = plainTitle(title);
           if (trimmed) break;
         } catch (cause) {
           console.warn("title generation failed", cause);

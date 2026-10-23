@@ -179,16 +179,6 @@ export type MemoryInput = z.infer<typeof memoryInputSchema>;
 
 export const MEMORY_KINDS: MemoryKind[] = [...memoryKindSchema.options];
 
-export const searchQuerySchema = z.object({
-  q: z.string().trim().min(1, "Search cannot be empty").max(200),
-  projectId: z.string().nullable().optional(),
-  pinnedOnly: z.boolean().optional(),
-  from: z.number().nullable().optional(),
-  to: z.number().nullable().optional(),
-  limit: z.number().int().min(1).max(50).optional(),
-});
-export type SearchQuery = z.infer<typeof searchQuerySchema>;
-
 export const tagSchema = z
   .string()
   .trim()
@@ -216,12 +206,6 @@ export const auditLogSchema = z.object({
   detail: z.string().nullable(),
 });
 export type AuditLog = z.infer<typeof auditLogSchema>;
-
-export interface SearchHit {
-  conversationId: string;
-  messageId: string | null;
-  snippet: string;
-}
 
 const usageSchema = z.object({
   prompt: z.number(),

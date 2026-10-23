@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveFallbackTitle } from "./title";
+import { deriveFallbackTitle, plainTitle } from "./title";
+
+describe("plainTitle", () => {
+  it("drops bold markers from a generated title", () => {
+    expect(plainTitle("**Memory Management** - notes")).toBe("Memory Management - notes");
+  });
+
+  it("drops headings, backticks and wrapping quotes", () => {
+    expect(plainTitle("## Local models")).toBe("Local models");
+    expect(plainTitle("`agent` setup")).toBe("agent setup");
+    expect(plainTitle("\"DeepSeek setup.\"")).toBe("DeepSeek setup");
+  });
+
+  it("leaves a plain title alone and keeps underscores inside words", () => {
+    expect(plainTitle("Agent Router")).toBe("Agent Router");
+    expect(plainTitle("my_agent setup")).toBe("my_agent setup");
+  });
+});
 
 describe("deriveFallbackTitle", () => {
   it("takes the first few words of a plain message", () => {

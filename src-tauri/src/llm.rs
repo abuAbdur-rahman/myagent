@@ -993,6 +993,35 @@ pub async fn summarize(
     Ok(summary.chars().take(2000).collect())
 }
 
+fn clean_title(raw: &str) -> String {
+    let line = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let line = ["Title:", "title:", "Chat title:", "chat title:"]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))
+        .map(str::trim)
+        .unwrap_or(line);
+    let mut text = String::with_capacity(line.len());
+    for c in line.chars() {
+        match c {
+            '*' | '`' => {}
+            '#' | '>' if text.trim().is_empty() => {}
+            _ => text.push(c),
+        }
+    }
+    let text = text.replace("__", "");
+    let text = text
+        .trim()
+        .trim_matches(|c| matches!(c, '"' | '\'' | '“' | '”' | '‘' | '’'))
+        .trim()
+        .trim_end_matches(['.', ':', ';', '!'])
+        .trim();
+    text.chars().take(60).collect::<String>().trim().to_string()
+}
+
 #[tauri::command]
 pub async fn suggest_title(
     mut req: TitleRequest,
@@ -1036,12 +1065,7 @@ pub async fn suggest_title(
     .await?;
 
     let value: serde_json::Value = resp.json().await?;
-    let title = message_text(&value["choices"][0]["message"]["content"])
-        .trim()
-        .trim_matches(|c| c == '"' || c == '\'' || c == '.' || c == ':')
-        .trim()
-        .to_string();
-    let title: String = title.chars().take(60).collect();
+    let title = clean_title(&message_text(&value["choices"][0]["message"]["content"]));
     if title.is_empty() {
         return Err(AppError::Upstream("empty title".to_string()));
     }
@@ -2432,6 +2456,19 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_cleaning_strips_markdown_and_labels() {
+        assert_eq!(
+            clean_title("**Memory Management** - notes"),
+            "Memory Management - notes"
+        );
+        assert_eq!(clean_title("\"DeepSeek setup.\""), "DeepSeek setup");
+        assert_eq!(clean_title("Title: ## Local models"), "Local models");
+        assert_eq!(clean_title("`agent` setup"), "agent setup");
+        assert_eq!(clean_title("Plain title"), "Plain title");
+        assert_eq!(clean_title("  \n \n"), "");
+    }
 
     #[test]
     fn deepseek_seeds_fill_an_empty_catalog_without_inventing_a_window() {

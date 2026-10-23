@@ -23,18 +23,16 @@ import type {
   Project,
   ProjectInput,
   Role,
-  SearchHit,
-  SearchQuery,
   Tag,
   Todo,
 } from "./types";
 import {
   auditLogSchema,
   pendingMemorySchema,
-  searchQuerySchema,
   tagSchema,
   todoSchema,
 } from "./types";
+import { plainTitle } from "./title";
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -110,9 +108,10 @@ export async function deleteConnection(id: string): Promise<void> {
 
 export async function listConversations(): Promise<Conversation[]> {
   const db = await getDb();
-  return db.select<Conversation[]>(
+  const rows = await db.select<Conversation[]>(
     "SELECT * FROM conversations ORDER BY updated_at DESC",
   );
+  return rows.map((row) => ({ ...row, title: plainTitle(row.title) || "New chat" }));
 }
 
 export async function createConversation(
@@ -273,128 +272,6 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
     "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
     [conversationId],
   );
-}
-
-let searchReady: boolean | null = null;
-
-async function ensureSearchIndex(): Promise<boolean> {
-  if (searchReady !== null) return searchReady;
-  try {
-    const db = await getDb();
-    await db.execute(
-      "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, conversation_id UNINDEXED, tokenize='unicode61')",
-    );
-    await db.execute(
-      "CREATE TRIGGER IF NOT EXISTS trg_fts_insert AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(rowid, content, conversation_id) VALUES (new.rowid, new.content, new.conversation_id); END",
-    );
-    await db.execute(
-      "CREATE TRIGGER IF NOT EXISTS trg_fts_delete AFTER DELETE ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.rowid; END",
-    );
-    await db.execute(
-      "CREATE TRIGGER IF NOT EXISTS trg_fts_update AFTER UPDATE ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.rowid; INSERT INTO messages_fts(rowid, content, conversation_id) VALUES (new.rowid, new.content, new.conversation_id); END",
-    );
-    await db.execute(
-      "INSERT INTO messages_fts(rowid, content, conversation_id) SELECT rowid, content, conversation_id FROM messages WHERE rowid NOT IN (SELECT rowid FROM messages_fts)",
-    );
-    searchReady = true;
-  } catch {
-    searchReady = false;
-  }
-  return searchReady;
-}
-
-export async function searchMessages(input: unknown): Promise<SearchHit[]> {
-  const parsed = searchQuerySchema.safeParse(input);
-  if (!parsed.success) {
-    throw new Error(parsed.error.issues[0]?.message ?? "Invalid search");
-  }
-  const query: SearchQuery = parsed.data;
-  const { q, projectId, pinnedOnly, from, to, limit = 20 } = query;
-  const db = await getDb();
-  const filters: string[] = [];
-  const values: unknown[] = [];
-  if (projectId) {
-    values.push(projectId);
-    filters.push(`c.project_id = $${values.length}`);
-  }
-  if (pinnedOnly) filters.push("c.pinned = 1");
-  if (from != null) {
-    values.push(from);
-    filters.push(`m.created_at >= $${values.length}`);
-  }
-  if (to != null) {
-    values.push(to);
-    filters.push(`m.created_at <= $${values.length}`);
-  }
-  const where = filters.length > 0 ? `AND ${filters.join(" AND ")}` : "";
-  const likeFilters = filters.map((f) => f.replace(/^m\./, "m.")).join(" AND ");
-  const likeWhere = filters.length > 0 ? `AND ${likeFilters}` : "";
-
-  const titleValues: unknown[] = projectId ? [projectId] : [];
-  const titleWhere = [
-    projectId ? `c.project_id = $1` : null,
-    pinnedOnly ? "c.pinned = 1" : null,
-  ]
-    .filter(Boolean)
-    .join(" AND ");
-  const titleRows = await db.select<{ id: string; title: string }[]>(
-    `SELECT c.id, c.title FROM conversations c WHERE c.title LIKE $${titleValues.length + 1}${titleWhere ? ` AND ${titleWhere}` : ""} ORDER BY c.updated_at DESC LIMIT ${limit}`,
-    [...titleValues, `%${q}%`],
-  );
-  const hits: SearchHit[] = titleRows.map((row) => ({
-    conversationId: row.id,
-    messageId: null,
-    snippet: row.title,
-  }));
-
-  if (await ensureSearchIndex()) {
-    const tokens = q
-      .split(/\s+/)
-      .map((token) => token.replace(/["*:()^]/g, "").trim())
-      .filter(Boolean);
-    if (tokens.length === 0) return hits;
-    values.push(tokens.map((token) => `"${token}"`).join(" "));
-    const rows = await db.select<
-      { conversation_id: string; message_id: string; snippet: string }[]
-    >(
-      `SELECT m.conversation_id, m.id AS message_id, snippet(messages_fts, 0, '', '', '…', 12) AS snippet
-       FROM messages_fts
-       JOIN messages m ON m.rowid = messages_fts.rowid
-       JOIN conversations c ON c.id = m.conversation_id
-       WHERE messages_fts MATCH $${values.length} ${where}
-       ORDER BY bm25(messages_fts) LIMIT ${limit}`,
-      values,
-    );
-    for (const row of rows) {
-      if (hits.length >= limit) break;
-      hits.push({
-        conversationId: row.conversation_id,
-        messageId: row.message_id,
-        snippet: row.snippet,
-      });
-    }
-    return hits;
-  }
-
-  values.push(`%${q}%`);
-  const rows = await db.select<
-    { conversation_id: string; message_id: string; snippet: string }[]
-  >(
-    `SELECT m.conversation_id, m.id AS message_id, substr(m.content, 1, 160) AS snippet
-     FROM messages m JOIN conversations c ON c.id = m.conversation_id
-     WHERE m.content LIKE $${values.length} ${likeWhere}
-     ORDER BY m.created_at DESC LIMIT ${limit}`,
-    values,
-  );
-  for (const row of rows) {
-    if (hits.length >= limit) break;
-    hits.push({
-      conversationId: row.conversation_id,
-      messageId: row.message_id,
-      snippet: row.snippet,
-    });
-  }
-  return hits;
 }
 
 export async function addMessage(
