@@ -2864,9 +2864,14 @@ export function DataPage() {
       );
       await Promise.all([refreshConversations(), refreshProjects(), refreshMemories(), refresh()]);
       const skipped = report.skippedConversations + report.skippedMemories;
+      const refused = report.memoryErrors[0];
       toast(
         `Imported ${report.conversations} chats, ${report.messages} messages, ${report.projects} projects and ${report.memories} memories` +
-          (skipped > 0 ? `; skipped ${skipped} items already present` : ""),
+          (refused
+            ? `; ${report.memoryErrors.length} memory notes refused (${refused})`
+            : skipped > 0
+              ? `; skipped ${skipped} items already present`
+              : ""),
       );
     } catch (e) {
       toast(errorText(e));

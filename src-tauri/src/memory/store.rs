@@ -227,6 +227,9 @@ pub fn write_raw(
         return Err("changed on disk".to_string());
     }
     let doc = file::parse(markdown);
+    if doc.entries().any(|entry| super::looks_secret(&entry.text)) {
+        return Err(super::secret_message().to_string());
+    }
     if let Some(entry) = doc
         .entries()
         .find(|entry| entry.text.chars().count() > 2000)

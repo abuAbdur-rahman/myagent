@@ -16,7 +16,7 @@ vi.mock("./api", () => ({
 const load = vi.mocked(Database.load);
 
 const project = {
-  id: "p1",
+  id: "11111111-2222-3333-4444-555555555555",
   name: "Work",
   description: "",
   instructions: "",
@@ -28,7 +28,7 @@ const conversation = {
   id: "c1",
   title: "Weekly plan",
   connection_id: "conn-1",
-  project_id: "p1",
+  project_id: "11111111-2222-3333-4444-555555555555",
   pinned: 0,
   compacted: 0,
   model: "deepseek-chat",
@@ -60,7 +60,7 @@ const globalMemory = {
 const projectMemory = {
   id: "pm1",
   scope: "project" as const,
-  project_id: "p1",
+  project_id: "11111111-2222-3333-4444-555555555555",
   kind: "note" as const,
   content: "Uses staging first",
   created_at: 7,
@@ -94,14 +94,14 @@ describe("exportBundle", () => {
     expect(bundle.scope).toBe("chats");
     expect(bundle.conversations).toHaveLength(1);
     expect(bundle.conversations[0].messages).toHaveLength(1);
-    expect(bundle.projects.map((row) => row.id)).toEqual(["p1"]);
+    expect(bundle.projects.map((row) => row.id)).toEqual(["11111111-2222-3333-4444-555555555555"]);
     expect(bundle.memories).toEqual([]);
   });
 
   it("exports memory and projects without conversations", async () => {
     const bundle = await exportBundle("memory");
     expect(bundle.conversations).toEqual([]);
-    expect(bundle.projects.map((row) => row.id)).toEqual(["p1"]);
+    expect(bundle.projects.map((row) => row.id)).toEqual(["11111111-2222-3333-4444-555555555555"]);
     expect(bundle.memories.map((row) => row.id).sort()).toEqual(["g1", "pm1"]);
     expect(select.mock.calls.some(([sql]) => sql.includes("FROM conversations ORDER BY"))).toBe(
       false,
@@ -128,16 +128,17 @@ describe("importBundle", () => {
       memories: 2,
       skippedConversations: 0,
       skippedMemories: 0,
+      memoryErrors: [],
     });
     const chatInsert = execute.mock.calls.find(([sql]) => sql.includes("INTO conversations"));
     expect(chatInsert?.[1]?.[2]).toBeNull();
-    expect(chatInsert?.[1]?.[3]).toBe("p1");
+    expect(chatInsert?.[1]?.[3]).toBe("11111111-2222-3333-4444-555555555555");
   });
 
   it("skips a chat that is already here", async () => {
     select.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM conversations WHERE id")) return [{ id: "c1" }];
-      if (sql.includes("FROM projects")) return [{ id: "p1" }];
+      if (sql.includes("FROM projects")) return [{ id: "11111111-2222-3333-4444-555555555555" }];
       return [];
     });
     const report = await importBundle({
@@ -158,7 +159,7 @@ describe("importBundle", () => {
 
   it("hands memory to the file store when one is given", async () => {
     select.mockImplementation(async (sql: string) =>
-      sql.includes("FROM projects") ? [{ id: "p1" }] : [],
+      sql.includes("FROM projects") ? [{ id: "11111111-2222-3333-4444-555555555555" }] : [],
     );
     const appended: string[] = [];
     const report = await importBundle(
@@ -174,7 +175,7 @@ describe("importBundle", () => {
 
   it("accepts the older export shape with global and per-project memory", async () => {
     select.mockImplementation(async (sql: string) =>
-      sql.includes("FROM projects") ? [{ id: "p1" }] : [],
+      sql.includes("FROM projects") ? [{ id: "11111111-2222-3333-4444-555555555555" }] : [],
     );
     const report = await importBundle({
       conversations: [],
@@ -183,5 +184,27 @@ describe("importBundle", () => {
       projectMemories: [{ project, memories: [projectMemory] }],
     });
     expect(report.memories).toBe(2);
+  });
+
+  it("drops a project whose id could escape the memory folder", async () => {
+    select.mockImplementation(async () => []);
+    const report = await importBundle({ projects: [{ ...project, id: "../../x" }] });
+    expect(report.projects).toBe(0);
+    expect(execute.mock.calls.some(([sql]) => sql.includes("INTO projects"))).toBe(false);
+  });
+
+  it("keeps importing the remaining notes when one is refused", async () => {
+    select.mockImplementation(async (sql: string) =>
+      sql.includes("FROM projects") ? [{ id: "11111111-2222-3333-4444-555555555555" }] : [],
+    );
+    const report = await importBundle(
+      { projects: [project], memories: [globalMemory, projectMemory] },
+      async (memory) => {
+        if (memory.id === "g1") throw new Error("That looks like a secret");
+      },
+    );
+    expect(report.memories).toBe(1);
+    expect(report.skippedMemories).toBe(1);
+    expect(report.memoryErrors).toEqual(["That looks like a secret"]);
   });
 });

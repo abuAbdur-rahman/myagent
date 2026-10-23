@@ -214,7 +214,11 @@ export interface ImportReport {
   memories: number;
   skippedConversations: number;
   skippedMemories: number;
+  memoryErrors: string[];
 }
+
+const SAFE_PROJECT_ID =
+  /^[0-9a-fA-F]{32}$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export async function exportBundle(scope: ExportScope): Promise<ExportBundle> {
   const projects = await listProjects();
@@ -264,11 +268,13 @@ export async function importBundle(
     memories: 0,
     skippedConversations: 0,
     skippedMemories: 0,
+    memoryErrors: [],
   };
 
   const legacyProjects = (bundle.projectMemories ?? []).map((entry) => entry.project);
   const projects = new Map<string, Project>();
   for (const project of [...bundle.projects, ...legacyProjects]) {
+    if (!SAFE_PROJECT_ID.test(project.id)) continue;
     projects.set(project.id, project);
   }
   const projectIds = new Set(
@@ -362,8 +368,13 @@ export async function importBundle(
       continue;
     }
     if (appendMemory) {
-      await appendMemory(memory);
-      report.memories += 1;
+      try {
+        await appendMemory(memory);
+        report.memories += 1;
+      } catch (e) {
+        report.skippedMemories += 1;
+        report.memoryErrors.push(e instanceof Error ? e.message : String(e));
+      }
       continue;
     }
     const result = await db.execute(

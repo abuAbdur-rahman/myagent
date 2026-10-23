@@ -1805,10 +1805,16 @@ impl ToolRunner for RealTools<'_> {
             "web_search"
                 | "web_fetch"
                 | "knowledge_search"
+                | "sandbox_run"
                 | "sandbox_read"
+                | "sandbox_glob"
+                | "sandbox_grep"
+                | "run_powershell"
+                | "describe_image"
                 | "read_document"
                 | "delegate_task"
-        ) {
+        ) || name.starts_with("mcp__")
+        {
             self.untrusted = true;
         }
 

@@ -41,7 +41,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "improved",
-        text: "A note proposed by the assistant is refused when it looks like an API key, token or password. Notes written after a web search, a fetched page or a document are marked untrusted in the inbox, so approval is an informed decision.",
+        text: "A note proposed by the assistant is refused when it looks like an API key, token or password. Notes written after a web search, a fetched page, a document, a shell command or an MCP tool are marked untrusted in the inbox, so approval is an informed decision. Editing an existing note now asks first; deleting already did.",
       },
       {
         kind: "improved",
