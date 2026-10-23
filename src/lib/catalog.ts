@@ -135,9 +135,27 @@ export function lookupEfforts(
   return familyEfforts(modelId);
 }
 
+const CITED_CONTEXT: Record<string, number> = {
+  "deepseek-chat": 128_000,
+  "deepseek-reasoner": 128_000,
+  "deepseek-coder": 128_000,
+  "deepseek-v3": 128_000,
+  "deepseek-v3.1": 128_000,
+  "deepseek-v3.2": 128_000,
+  "deepseek-r1": 128_000,
+};
+
+function citedContextLength(modelId: string): number | null {
+  const id = modelId.toLowerCase().split("/").pop() ?? "";
+  const exact = CITED_CONTEXT[id];
+  if (exact !== undefined) return exact;
+  if (/^deepseek-(v3|r1)(\.|-|$)/.test(id)) return 128_000;
+  return null;
+}
+
 export function lookupContextLength(
   catalog: ModelCapabilities[] | null,
   modelId: string,
 ): number | null {
-  return catalog?.find((m) => m.id === modelId)?.contextLength ?? null;
+  return catalog?.find((m) => m.id === modelId)?.contextLength ?? citedContextLength(modelId);
 }
