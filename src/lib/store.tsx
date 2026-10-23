@@ -730,7 +730,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await refreshProjects();
         try {
           const report = await api.memoryMigrate();
-          if (report.migrated) setMemoryReport(report);
+          if (report.migrated && (report.notes > 0 || report.unassigned > 0)) {
+            setMemoryReport(report);
+          }
         } catch (e) {
           reportError(e);
         }

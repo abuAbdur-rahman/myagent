@@ -314,7 +314,7 @@ pub async fn run(pool: &SqlitePool, root: &Path, version: &str) -> Result<Migrat
         skipped,
         duplicates,
         files: file_names,
-        legacy: Some(legacy_rel),
+        legacy: Some(legacy_path.to_string_lossy().to_string()),
     };
     write_marker(pool, &report).await?;
     Ok(report)

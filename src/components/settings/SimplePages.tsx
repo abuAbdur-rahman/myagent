@@ -2540,7 +2540,7 @@ export function MemoryPage() {
           each scope sends at most 2500 characters. Remove or shorten notes to make room.
         </p>
       )}
-      {unassigned.length > 0 && (
+      {!memoryCompat && unassigned.length > 0 && (
         <div className="mb-3 rounded-control border border-warn/40 p-3">
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
             <span className="text-xs font-medium">

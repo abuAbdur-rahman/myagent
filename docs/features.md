@@ -443,7 +443,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Override order is tested.
 
 ## E6. Auto memory (agent-written)
-- **Status:** Partial (0.5.0: Save appends the approved note to the memory file and Undo puts the pending row back; 0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast, and `source_conversation_id` keeps the provenance. E2's secret gate is still missing, so the approval step is the only guard; thread roll-up is still missing)
+- **Status:** Partial (0.5.0: Save appends the approved note to the memory file and Undo puts the pending row back; E2's secret gate and untrusted tag now guard proposals. 0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast, and `source_conversation_id` keeps the provenance; thread roll-up is still missing)
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
 - **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.
