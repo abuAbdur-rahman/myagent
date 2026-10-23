@@ -2768,14 +2768,26 @@ export function DataPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [counts, sizes] = await Promise.all([db.stats(), api.storageUsage()]);
+      const [counts, sizes, projects] = await Promise.all([
+        db.stats(),
+        api.storageUsage(),
+        db.listProjects(),
+      ]);
+      if (!memoryCompat) {
+        let memories = (await api.memoryRead(null)).global.entries.length;
+        for (const project of projects) {
+          const read = await api.memoryRead(project.id);
+          memories += read.project?.entries.length ?? 0;
+        }
+        counts.memories = memories;
+      }
       setStats(counts);
       setUsage(sizes);
       setUsageError(null);
     } catch (e) {
       setUsageError(errorText(e));
     }
-  }, []);
+  }, [memoryCompat]);
 
   useEffect(() => {
     void refresh();

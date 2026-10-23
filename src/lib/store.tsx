@@ -685,25 +685,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshMemories = useCallback(async () => {
     const projectId = projectRef.current?.id ?? null;
+    let read: Awaited<ReturnType<typeof api.memoryRead>>;
     try {
-      const read = await api.memoryRead(projectId);
-      if (read.available) {
-        setGlobalMemories(
-          read.global.entries.map((entry) => memoryFromEntry(entry, "global", null)),
-        );
-        setProjectMemories(
-          (read.project?.entries ?? []).map((entry) =>
-            memoryFromEntry(entry, "project", projectId),
-          ),
-        );
-        setMemoryCompat(false);
-        setMemoryOmitted(read.global.omitted + (read.project?.omitted ?? 0));
-        globalSentRef.current = new Set(read.global.sent);
-        projectSentRef.current = new Set(read.project?.sent ?? []);
-        return;
-      }
+      read = await api.memoryRead(projectId);
     } catch (e) {
       reportError(e);
+      return;
+    }
+    if (read.available) {
+      setGlobalMemories(
+        read.global.entries.map((entry) => memoryFromEntry(entry, "global", null)),
+      );
+      setProjectMemories(
+        (read.project?.entries ?? []).map((entry) =>
+          memoryFromEntry(entry, "project", projectId),
+        ),
+      );
+      setMemoryCompat(false);
+      setMemoryOmitted(read.global.omitted + (read.project?.omitted ?? 0));
+      globalSentRef.current = new Set(read.global.sent);
+      projectSentRef.current = new Set(read.project?.sent ?? []);
+      return;
     }
     const [global, project] = await Promise.all([
       db.listMemories("global", null),

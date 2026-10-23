@@ -452,7 +452,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ## E7. Memory file (`MEMORY.md`)
 - **Status:** Have (0.5.0: one `MEMORY.md` plus `projects/<id>.md`, four headings - User, Preferences, Project, Decisions - and an id/date comment on every bullet. 0.4.1 rows migrate once at boot into the files, with a full JSON backup under `memory/legacy/`, an unassigned queue for notes whose project was deleted, and the `memories` table frozen rather than dropped. The raw editor rejects a save when the file changed on disk. A failed migration keeps the database path and shows a banner)
 - **Ref:** † Claude Code `/memory` edits markdown; † OpenCode reads `AGENTS.md`.
-- **Build:** The file is the source of truth; SQLite is only the migration source and the fallback. Writes are atomic (temp file, backup swap) and serialised. Outside text and unknown comments are preserved. New manual notes cap at 200 characters; migrated notes keep their full 2000.
+- **Build:** The file is the source of truth; SQLite is only the migration source and the fallback. Writes are atomic (temp file, backup swap) and serialised. Outside text and unknown comments are preserved. Notes cap at 2000 characters; the send budget, not the write, keeps the file small.
 - **Not:** Syncing the file with the database after migration, or editing project files from the global page.
 - **Done:** File tests cover round-trip, CRLF/BOM, escaped comment markers, unknown text, duplicate ids and the sent budget. Migration tests cover an empty DB, an old row, an unknown kind, a deleted project, an existing file and a lost marker.
 

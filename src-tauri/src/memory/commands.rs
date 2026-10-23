@@ -74,9 +74,8 @@ pub struct AppendInput {
 pub fn memory_append(app: AppHandle, input: AppendInput) -> Result<store::EntryView, String> {
     let project = target(&input.scope, input.project_id.as_deref())?;
     let kind = kind_of(&input.kind)?;
-    let limit = if input.id.is_some() { 2000 } else { 200 };
-    if input.text.chars().count() > limit {
-        return Err(format!("content too long (max {limit} chars)"));
+    if input.text.chars().count() > 2000 {
+        return Err("content too long (max 2000 chars)".to_string());
     }
     if super::looks_secret(&input.text) {
         return Err(super::secret_message().to_string());

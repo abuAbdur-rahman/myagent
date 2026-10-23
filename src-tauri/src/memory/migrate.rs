@@ -25,6 +25,8 @@ pub struct MigrationReport {
     pub duplicates: usize,
     pub files: Vec<String>,
     pub legacy: Option<String>,
+    #[serde(default)]
+    pub ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -197,11 +199,76 @@ fn row_entry(row: &MemoryRow, project_file: bool) -> (Section, Entry) {
     }
 }
 
+fn normalized(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+async fn merge_late_rows(
+    pool: &SqlitePool,
+    root: &Path,
+    report: &mut MigrationReport,
+) -> Result<(), String> {
+    let all = rows(pool).await?;
+    let known: HashSet<String> = report.ids.iter().map(|id| file::canonical_id(id)).collect();
+    let projects = live_projects(pool).await?;
+    let mut changed = false;
+    for row in all {
+        let id = file::canonical_id(&row.id);
+        if known.contains(&id) {
+            continue;
+        }
+        changed = true;
+        if file::one_line(&row.content).is_empty() {
+            report.ids.push(row.id);
+            continue;
+        }
+        let project = if row.scope == "project" {
+            match row.project_id.as_deref() {
+                Some(pid) if projects.contains(pid) && store::safe_project_id(pid) => Some(pid),
+                _ => {
+                    report.ids.push(row.id);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let doc = store::read(root, project)?;
+        let needle = normalized(&row.content);
+        if doc.entry(&id).is_some() || doc.entries().any(|entry| normalized(&entry.text) == needle)
+        {
+            report.ids.push(row.id);
+            continue;
+        }
+        let (_, entry) = row_entry(&row, project.is_some());
+        store::append(
+            root,
+            project,
+            &id,
+            &entry.text,
+            entry.kind,
+            &entry.date,
+            false,
+        )?;
+        report.ids.push(row.id);
+    }
+    if changed {
+        write_marker(pool, report).await?;
+    }
+    Ok(())
+}
+
 pub async fn run(pool: &SqlitePool, root: &Path, version: &str) -> Result<MigrationReport, String> {
     if let Some(value) = read_marker(pool).await? {
         let mut report: MigrationReport = serde_json::from_str(&value).unwrap_or_default();
         report.migrated = false;
         report.reason = "already-migrated".to_string();
+        if let Err(error) = merge_late_rows(pool, root, &mut report).await {
+            report.reason = format!("already-migrated; late merge failed: {error}");
+        }
         return Ok(report);
     }
 
@@ -252,7 +319,9 @@ pub async fn run(pool: &SqlitePool, root: &Path, version: &str) -> Result<Migrat
         }
         let project_key = if row.scope == "project" {
             match row.project_id.as_deref() {
-                Some(id) if projects.contains(id) => Some(id.to_string()),
+                Some(id) if projects.contains(id) && store::safe_project_id(id) => {
+                    Some(id.to_string())
+                }
                 _ => {
                     unassigned_rows.push(row.clone());
                     continue;
@@ -315,6 +384,7 @@ pub async fn run(pool: &SqlitePool, root: &Path, version: &str) -> Result<Migrat
         duplicates,
         files: file_names,
         legacy: Some(legacy_path.to_string_lossy().to_string()),
+        ids: rows.iter().map(|row| row.id.clone()).collect(),
     };
     write_marker(pool, &report).await?;
     Ok(report)
@@ -571,5 +641,58 @@ mod tests {
         run(&pool, &dir, "0.5.0").await.expect("run");
         let text = fs::read_to_string(dir.join("MEMORY.md")).expect("file");
         assert_eq!(text.matches(&long).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_note_saved_after_the_migration_merges_but_a_deleted_note_stays_deleted() {
+        let pool = pool().await;
+        let dir = root("late");
+        insert(
+            &pool,
+            "11111111-1111-1111-1111-111111111111",
+            "global",
+            None,
+            "fact",
+            "First note",
+            1,
+        )
+        .await;
+        insert(
+            &pool,
+            "22222222-2222-2222-2222-222222222222",
+            "global",
+            None,
+            "fact",
+            "Second note",
+            2,
+        )
+        .await;
+        let first = run(&pool, &dir, "0.5.0").await.expect("first");
+        assert_eq!(first.notes, 2);
+
+        assert!(store::forget(&dir, None, "11111111-1111-1111-1111-111111111111").expect("forget"));
+        insert(
+            &pool,
+            "33333333-3333-3333-3333-333333333333",
+            "global",
+            None,
+            "fact",
+            "Added after",
+            3,
+        )
+        .await;
+
+        let second = run(&pool, &dir, "0.5.0").await.expect("second");
+        assert!(!second.migrated);
+        let doc = store::read(&dir, None).expect("read");
+        let texts: Vec<&str> = doc.entries().map(|entry| entry.text.as_str()).collect();
+        assert!(texts.contains(&"Second note"));
+        assert!(texts.contains(&"Added after"));
+        assert!(!texts.contains(&"First note"));
+
+        let third = run(&pool, &dir, "0.5.0").await.expect("third");
+        assert!(!third.migrated);
+        let doc = store::read(&dir, None).expect("read");
+        assert_eq!(doc.entries().count(), 2);
     }
 }

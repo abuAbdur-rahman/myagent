@@ -46,7 +46,9 @@ function MemoryReportDialog() {
             legacy/unassigned.json.
           </li>
         )}
-        {memoryReport.duplicates > 0 && <li>{memoryReport.duplicates} duplicates were merged.</li>}
+        {memoryReport.duplicates > 0 && (
+          <li>{memoryReport.duplicates} duplicate notes were kept as-is.</li>
+        )}
         {memoryReport.legacy && <li className="break-all">Backup: {memoryReport.legacy}</li>}
       </ul>
       <div className="mt-4 flex justify-end gap-2">

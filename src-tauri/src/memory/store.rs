@@ -227,6 +227,15 @@ pub fn write_raw(
         return Err("changed on disk".to_string());
     }
     let doc = file::parse(markdown);
+    if let Some(entry) = doc
+        .entries()
+        .find(|entry| entry.text.chars().count() > 2000)
+    {
+        return Err(format!(
+            "note is too long (max 2000 chars): {}",
+            entry.text.chars().take(80).collect::<String>()
+        ));
+    }
     write_atomic(&path, &file::render(&doc))?;
     Ok(meta(&path))
 }
@@ -428,6 +437,19 @@ mod tests {
         ));
         write_raw(&dir, None, &edited, mtime, len).expect("first writer wins");
         assert!(write_raw(&dir, None, &edited, mtime, len).is_err());
+    }
+
+    #[test]
+    fn write_raw_rejects_a_note_over_the_import_cap() {
+        let dir = root("raw-long");
+        append(&dir, None, &id(6), "one", Kind::Fact, "2026-10-20", false).expect("append");
+        let path = scope_path(&dir, None).unwrap();
+        let (mtime, len) = meta(&path);
+        let long = format!(
+            "# MEMORY\n\n## User\n- {} <!--m:00000000000000000000000000000008 2026-10-20-->\n",
+            "x".repeat(2001)
+        );
+        assert!(write_raw(&dir, None, &long, mtime, len).is_err());
     }
 
     #[test]
