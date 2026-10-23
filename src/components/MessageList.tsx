@@ -600,8 +600,9 @@ export function MessageList() {
   const activeModel = activeConversation?.model ?? null;
 
   return (
-    <div ref={scrollRef} onScroll={onScroll} className="relative h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-[760px] px-4 py-6">
+    <>
+      <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+        <div className="mx-auto w-full max-w-[760px] px-4 py-6">
         {error && (
           <div className="mb-6">
             <ErrorBanner message={error} onDismiss={clearError} />
@@ -646,16 +647,17 @@ export function MessageList() {
           ),
         )}
       </div>
+      </div>
 
       {!stuck && (
         <button
           type="button"
           onClick={scrollToBottom}
-          className="absolute bottom-[150px] left-1/2 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-control border border-border bg-surface px-3 text-[13px] shadow-[var(--shadow)] hover:bg-hover"
+          className="absolute bottom-4 left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-control border border-border bg-surface px-3 text-[13px] shadow-[var(--shadow)] hover:bg-hover"
         >
           <ArrowDown size={14} /> Jump to latest
         </button>
       )}
-    </div>
+    </>
   );
 }

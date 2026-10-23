@@ -11,6 +11,7 @@ import { ProjectDetail } from "./components/ProjectDetail";
 import { Welcome } from "./components/Welcome";
 import { Composer } from "./components/Composer";
 import { ActivityPill } from "./components/ActivityPill";
+import { pillPlacement } from "./lib/activity";
 import { TurnCards } from "./components/TurnCards";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
@@ -55,6 +56,7 @@ function Shell() {
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
   const showWelcome = activeConversationId === null && messages.length === 0;
+  const pill = pillPlacement(messages.length > 0);
 
   useEffect(() => {
     let live = true;
@@ -156,12 +158,12 @@ function Shell() {
               <ChatHeader />
               <div className="relative min-h-0 flex-1">
                 <MessageList />
-                <ActivityPill placement="center" />
+                {pill === "center" ? <ActivityPill placement="center" /> : null}
               </div>
               <div className="flex-none px-4 pb-2">
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
-                  {streaming || compacting || voicePhase !== "idle" ? (
+                  {pill === "inline" && (streaming || compacting || voicePhase !== "idle") ? (
                     <div className="mb-1.5 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
                     </div>

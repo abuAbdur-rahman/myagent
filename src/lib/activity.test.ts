@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityState, pillState } from "./activity";
+import { activityState, pillPlacement, pillState } from "./activity";
 import type { Message } from "./types";
 
 function message(role: Message["role"], content: string): Message {
@@ -24,6 +24,16 @@ describe("activityState", () => {
 
   it("thinks again while a tool runs after the prose", () => {
     expect(activityState([message("user", "hi"), message("assistant", "")], true)).toBe("thinking");
+  });
+});
+
+describe("pillPlacement", () => {
+  it("centers the pill while the transcript is empty", () => {
+    expect(pillPlacement(false)).toBe("center");
+  });
+
+  it("moves inline as soon as a message exists", () => {
+    expect(pillPlacement(true)).toBe("inline");
   });
 });
 
