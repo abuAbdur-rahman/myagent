@@ -162,15 +162,15 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** After closing, nothing about it exists on disk.
 
 ## B9. Export
-- **Status:** Partial (0.1.6: markdown + lossless JSON single chat)
+- **Status:** Have (0.5.0: whole-data JSON with three scopes - everything, chats + projects, memory. Single-chat JSON and Markdown from the chat header)
 - **Ref:** † OpenWebUI exports chats as JSON including the tree, tags and pinned state.
 - **Build:** Markdown (readable, active branch only) and JSON (lossless, all branches). Single chat and all chats.
 - **Done:** JSON export re-imports to an identical chat.
 
 ## B10. Import
-- **Status:** Partial (0.1.6: single-chat import, needs round-trip test)
+- **Status:** Have (0.5.0: whole-data merge in Settings -> Data, single-chat JSON from the chat header)
 - **Ref:** † OpenWebUI imports its own JSON and can convert other platforms' exports.
-- **Build:** Import MyAgents JSON only. Validate schema, generate new ids, never overwrite.
+- **Build:** Import MyAgents JSON only. Whole-data import keeps the original ids so importing the same file twice is a no-op; an id that already exists is skipped, never overwritten. Missing projects detach the chat; a project memory with no project is skipped. Single-chat import still generates new ids.
 - **Not:** Other platforms' formats.
 - **Done:** Round trip with B9 passes.
 

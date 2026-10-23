@@ -43,7 +43,8 @@ import { timeAgo } from "../../lib/grouping";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
-import type { AuditLog, Connection, Memory } from "../../lib/types";import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
+import type { AuditLog, Connection, ExportScope, Memory } from "../../lib/types";
+import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
   auditCounts,
   auditCsv,
@@ -2578,6 +2579,8 @@ export function DataPage() {
   const [stats, setStats] = useState({ conversations: 0, messages: 0, memories: 0, projects: 0 });
   const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -2594,34 +2597,43 @@ export function DataPage() {
     void refresh();
   }, [refresh, conversations]);
 
-  const exportAll = async () => {
+  const exportData = async (scope: ExportScope) => {
     try {
-      const allConversations = await db.listConversations();
-      const withMessages = await Promise.all(
-        allConversations.map(async (c) => ({ ...c, messages: await db.listMessages(c.id) })),
-      );
-      const allProjects = await db.listProjects();
-      const projectMemories = await Promise.all(
-        allProjects.map(async (p) => ({ project: p, memories: await db.listMemories("project", p.id) })),
-      );
+      const bundle = await db.exportBundle(scope);
       downloadText(
-        `myagent-export-${Date.now()}.json`,
-        JSON.stringify(
-          {
-            exportedAt: new Date().toISOString(),
-            conversations: withMessages,
-            projects: allProjects,
-            globalMemories: await db.listMemories("global", null),
-            projectMemories,
-          },
-          null,
-          2,
-        ),
+        `myagent-export-${scope}-${Date.now()}.json`,
+        JSON.stringify(bundle, null, 2),
         "application/json",
       );
-      toast("Data exported");
+      toast(
+        scope === "all" ? "Everything exported" : scope === "chats" ? "Chats exported" : "Memory exported",
+      );
     } catch (e) {
       toast(errorText(e));
+    }
+  };
+
+  const importFile = async (file: File) => {
+    setImporting(true);
+    try {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        toast("That file is not valid JSON.");
+        return;
+      }
+      const report = await db.importBundle(parsed);
+      await Promise.all([refreshConversations(), refreshProjects(), refreshMemories(), refresh()]);
+      const skipped = report.skippedConversations + report.skippedMemories;
+      toast(
+        `Imported ${report.conversations} chats, ${report.messages} messages, ${report.projects} projects and ${report.memories} memories` +
+          (skipped > 0 ? `; skipped ${skipped} items already present` : ""),
+      );
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -2675,9 +2687,41 @@ export function DataPage() {
 
   return (
     <div>
-      <SettingRow label="Export all data" description="Download chats, projects and memory as JSON">
-        <Button variant="default" size="sm" onClick={() => void exportAll()}>
-          Export
+      <SettingRow label="Export data" description="Download chats, projects and memory as JSON">
+        <DropdownMenu
+          align="end"
+          aria-label="Choose what to export"
+          items={[
+            { id: "export-all", label: "Everything", onSelect: () => void exportData("all") },
+            { id: "export-chats", label: "Chats and projects", onSelect: () => void exportData("chats") },
+            { id: "export-memory", label: "Memory", onSelect: () => void exportData("memory") },
+          ]}
+          trigger={
+            <Button variant="default" size="sm">
+              Export
+            </Button>
+          }
+        />
+      </SettingRow>
+      <SettingRow label="Import data" description="Merge an export file; items already here are kept">
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void importFile(file);
+          }}
+        />
+        <Button
+          variant="default"
+          size="sm"
+          disabled={importing}
+          onClick={() => fileInput.current?.click()}
+        >
+          {importing ? "Importing…" : "Import"}
         </Button>
       </SettingRow>
       <SettingRow label="Clear all chats" description="Projects and memory are kept">

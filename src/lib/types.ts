@@ -179,6 +179,25 @@ export type MemoryInput = z.infer<typeof memoryInputSchema>;
 
 export const MEMORY_KINDS: MemoryKind[] = [...memoryKindSchema.options];
 
+const exportedConversationSchema = conversationSchema.extend({
+  messages: z.array(messageSchema).default([]),
+});
+
+export const exportBundleSchema = z.object({
+  version: z.number().optional(),
+  exportedAt: z.string().optional(),
+  scope: z.enum(["all", "chats", "memory"]).optional(),
+  conversations: z.array(exportedConversationSchema).default([]),
+  projects: z.array(projectSchema).default([]),
+  memories: z.array(memorySchema).default([]),
+  globalMemories: z.array(memorySchema).optional(),
+  projectMemories: z
+    .array(z.object({ project: projectSchema, memories: z.array(memorySchema) }))
+    .optional(),
+});
+export type ExportBundle = z.infer<typeof exportBundleSchema>;
+export type ExportScope = "all" | "chats" | "memory";
+
 export const tagSchema = z
   .string()
   .trim()

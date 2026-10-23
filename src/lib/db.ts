@@ -13,6 +13,8 @@ import type {
   Connection,
   ConnectionInput,
   Conversation,
+  ExportBundle,
+  ExportScope,
   Memory,
   MemoryInput,
   MemoryKind,
@@ -28,6 +30,7 @@ import type {
 } from "./types";
 import {
   auditLogSchema,
+  exportBundleSchema,
   pendingMemorySchema,
   tagSchema,
   todoSchema,
@@ -202,6 +205,177 @@ export async function wipeAll(): Promise<void> {
   await knowledgeSidecarWipeAll();
   await documentsWipeAll();
   await db.execute("VACUUM");
+}
+
+export interface ImportReport {
+  projects: number;
+  conversations: number;
+  messages: number;
+  memories: number;
+  skippedConversations: number;
+  skippedMemories: number;
+}
+
+export async function exportBundle(scope: ExportScope): Promise<ExportBundle> {
+  const projects = await listProjects();
+  const bundle: ExportBundle = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    scope,
+    conversations: [],
+    projects: [],
+    memories: [],
+  };
+  if (scope !== "memory") {
+    const conversations = await listConversations();
+    bundle.conversations = await Promise.all(
+      conversations.map(async (conversation) => ({
+        ...conversation,
+        messages: await listMessages(conversation.id),
+      })),
+    );
+    bundle.projects = projects;
+  }
+  if (scope !== "chats") {
+    const global = await listMemories("global", null);
+    const perProject = await Promise.all(
+      projects.map((project) => listMemories("project", project.id)),
+    );
+    bundle.memories = [...global, ...perProject.flat()];
+    if (scope === "memory") bundle.projects = projects;
+  }
+  return bundle;
+}
+
+export async function importBundle(input: unknown): Promise<ImportReport> {
+  const parsed = exportBundleSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "Not a myagent export file");
+  }
+  const bundle = parsed.data;
+  const db = await getDb();
+  const report: ImportReport = {
+    projects: 0,
+    conversations: 0,
+    messages: 0,
+    memories: 0,
+    skippedConversations: 0,
+    skippedMemories: 0,
+  };
+
+  const legacyProjects = (bundle.projectMemories ?? []).map((entry) => entry.project);
+  const projects = new Map<string, Project>();
+  for (const project of [...bundle.projects, ...legacyProjects]) {
+    projects.set(project.id, project);
+  }
+  const projectIds = new Set(
+    (await db.select<{ id: string }[]>("SELECT id FROM projects")).map((row) => row.id),
+  );
+  for (const project of projects.values()) {
+    const result = await db.execute(
+      "INSERT OR IGNORE INTO projects (id, name, description, instructions, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
+      [
+        project.id,
+        project.name,
+        project.description,
+        project.instructions,
+        project.created_at,
+        project.updated_at,
+      ],
+    );
+    if (result.rowsAffected > 0) report.projects += 1;
+    projectIds.add(project.id);
+  }
+
+  for (const conversation of bundle.conversations) {
+    const existing = await db.select<{ id: string }[]>(
+      "SELECT id FROM conversations WHERE id = $1",
+      [conversation.id],
+    );
+    if (existing.length > 0) {
+      report.skippedConversations += 1;
+      continue;
+    }
+    const projectId =
+      conversation.project_id && projectIds.has(conversation.project_id)
+        ? conversation.project_id
+        : null;
+    await db.execute(
+      "INSERT INTO conversations (id, title, connection_id, project_id, pinned, compacted, model, summary, summary_through, system_prompt, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      [
+        conversation.id,
+        conversation.title,
+        null,
+        projectId,
+        conversation.pinned,
+        conversation.compacted,
+        conversation.model,
+        sqlNull(conversation.summary),
+        sqlNull(conversation.summary_through),
+        sqlNull(conversation.system_prompt),
+        conversation.created_at,
+        conversation.updated_at,
+      ],
+    );
+    report.conversations += 1;
+    for (const message of conversation.messages) {
+      const result = await db.execute(
+        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        [
+          message.id,
+          conversation.id,
+          message.role,
+          message.content,
+          sqlNull(message.reasoning),
+          sqlNull(message.thinking_ms),
+          sqlNull(message.prompt_tokens),
+          sqlNull(message.completion_tokens),
+          sqlNull(message.total_tokens),
+          sqlNull(message.finish_reason),
+          sqlNull(message.tool_log),
+          sqlNull(message.artifacts),
+          sqlNull(message.attachments),
+          sqlNull(message.model),
+          sqlNull(message.rating),
+          message.created_at,
+        ],
+      );
+      if (result.rowsAffected > 0) report.messages += 1;
+    }
+  }
+
+  const memories = new Map<string, Memory>();
+  for (const memory of [
+    ...bundle.memories,
+    ...(bundle.globalMemories ?? []),
+    ...(bundle.projectMemories ?? []).flatMap((entry) => entry.memories),
+  ]) {
+    memories.set(memory.id, memory);
+  }
+  for (const memory of memories.values()) {
+    const projectId = memory.scope === "project" ? memory.project_id : null;
+    if (memory.scope === "project" && (!projectId || !projectIds.has(projectId))) {
+      report.skippedMemories += 1;
+      continue;
+    }
+    const result = await db.execute(
+      "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [
+        memory.id,
+        memory.scope,
+        projectId,
+        memory.kind,
+        memory.content,
+        sqlNull(memory.source_conversation_id),
+        memory.created_at,
+        memory.updated_at,
+      ],
+    );
+    if (result.rowsAffected > 0) report.memories += 1;
+    else report.skippedMemories += 1;
+  }
+
+  return report;
 }
 
 export async function listTags(conversationId: string): Promise<Tag[]> {
