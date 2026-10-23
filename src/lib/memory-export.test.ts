@@ -32,6 +32,7 @@ const PENDING: PendingMemory = {
   content: "Prefers short release notes.",
   conversation_id: "c1",
   created_at: Date.parse("2026-10-20T10:00:00Z"),
+  trust: "trusted",
 };
 
 const title = (conversationId: string | null) =>

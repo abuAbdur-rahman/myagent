@@ -123,14 +123,14 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 ```
 
 ## B3. Chat list / sidebar
-- **Status:** Have (verify. 0.4.1: a filter offers All chats, Pinned and each project by name, composes with the tag filter, and an empty result names the filter and offers Show all chats)
+- **Status:** Have (0.5.0: the All chats / Pinned / project dropdown was removed by owner request; the tag filter remains)
 - **Ref:** † OpenWebUI sidebar groups by recency, tracks unread state, and does not bump a chat for being auto-titled.
 - **Build:** List ordered by last user activity, grouped (Today, Yesterday, Earlier). Rename, delete with confirm. Virtualize if over 200 chats.
 - **Not:** Unread dots.
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Partial (0.1.6: FTS5 + sidebar box + filters; searchMessages test in search.test.ts)
+- **Status:** Missing (0.1.6 shipped FTS5 and a sidebar box; both were removed with the box in 0.5.0. The Ctrl+K palette switches chats by title.)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.
@@ -162,15 +162,15 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** After closing, nothing about it exists on disk.
 
 ## B9. Export
-- **Status:** Partial (0.1.6: markdown + lossless JSON single chat)
+- **Status:** Have (0.5.0: whole-data JSON with three scopes - everything, chats + projects, memory. Single-chat JSON and Markdown from the chat header)
 - **Ref:** † OpenWebUI exports chats as JSON including the tree, tags and pinned state.
 - **Build:** Markdown (readable, active branch only) and JSON (lossless, all branches). Single chat and all chats.
 - **Done:** JSON export re-imports to an identical chat.
 
 ## B10. Import
-- **Status:** Partial (0.1.6: single-chat import, needs round-trip test)
+- **Status:** Have (0.5.0: whole-data merge in Settings -> Data, single-chat JSON from the chat header)
 - **Ref:** † OpenWebUI imports its own JSON and can convert other platforms' exports.
-- **Build:** Import MyAgents JSON only. Validate schema, generate new ids, never overwrite.
+- **Build:** Import MyAgents JSON only. Whole-data import keeps the original ids so importing the same file twice is a no-op; an id that already exists is skipped, never overwritten. Missing projects detach the chat; a project memory with no project is skipped. Single-chat import still generates new ids.
 - **Not:** Other platforms' formats.
 - **Done:** Round trip with B9 passes.
 
@@ -385,7 +385,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Windows `rquickjs` spike builds and enforces the limits; a fake-model loop test asserts 2 model requests; hostile scripts (infinite loop, memory bomb, huge output, recursive call, `fetch` or filesystem attempt) fail structurally
 
 ## D22. Container sandbox
-- **Status:** Done (v0.4.0 S1; implementation notes and deviations in `docs/plan/v0.4.0-sandbox.md`)
+- **Status:** Done (v0.4.0 S1)
 - **Ref:** † Claude Code and OpenCode run tools on the host behind permission rules; this moves code execution into a container instead, and keeps only file operations on the jailed host.
 - **Build:** One `sandbox_run(cmd, cwd, timeout)` tool. Each call is one ephemeral `docker run --rm` with `--network none`, `--read-only`, a writable 256MB `/tmp` used as `HOME`, `--user 1000:1000`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit 256`, `--memory-swap` equal to `--memory`, a single project-dir bind (`.git`, `.vscode`, `.husky`, `.github` and the agent-config files overlaid read-only) and a `timeout` wrapper inside. Cancel and timeout call `docker kill`. A pinned Debian slim base is pulled on Enable, then one local derived image is built and referenced by digest. Output is collected, capped and spilled through D13 (no per-call event channel yet). Before each exec a git snapshot is written to `refs/myagent/pre-exec/<id>` (temporary index, so untracked files are included); after exit a receipt lists changed config, hook and agent-config files. No secret env reaches the container. Host file tools stay jailed (D8-D10) and refuse the overlaid paths.
 - **Not:** Untrusted third-party code, per-exec undo or diff UI (v2), background or long-lived execs, host-exec fallback when Docker is absent.
@@ -410,18 +410,18 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # E. Memory and instructions
 
 ## E1. Global memory
-- **Status:** Partial (0.3.6: the model can update and delete a memory by the id `recall_memory` prints; per-turn retrieval is still a full dump)
+- **Status:** Partial (0.5.0: notes live in `MEMORY.md` and are sent from there; retrieval is still a full dump, capped at 2500 characters and 24 notes per scope, with an “N not sent” counter in Settings. 0.3.6: the model can update and delete a memory by the id `recall_memory` prints)
 - **Ref:** Claude app memory; † Claude Code `/memory` edits memory files and auto-memory. † OpenWebUI injects only retrieved memories per turn (`add_memory_context`).
 - **Build:** A list of short facts the user can view, edit and delete. Per turn, retrieve by the current user text (keyword match, top-k), char-cap the block, and replace the previous turn's block — never dump all memories. Unrelated memories must not reach the model.
 - **Not:** Sending every memory every turn.
 - **Done:** A test sends an unrelated memory plus a matching one; only the matching one is in the prompt.
 
 ## E2. Secret refusal in memory
-- **Status:** Missing
+- **Status:** Have (0.5.0: `memory::looks_secret` runs before every file write, every assistant proposal and every manual edit. Key shapes, private-key headers and `password=`/`token=`/`Bearer` are refused with a reason. A note proposed after a web, shell, sandbox, document, image or MCP tool is tagged untrusted in the inbox and in the file; filters can only drop, never approve. Editing an existing note asks first)
 - **Ref:** Claude does not store credentials in memory.
 - **Build:** Pure function `looks_secret(&str) -> bool`: API key shapes (`sk-`, `ghp_`, `AKIA`, long hex/base64), private key headers, `password=`, `token=`, `Bearer`. Runs before every memory write; tell the user when blocked. Panic-free.
 - **Not:** Entropy scanning of all chat.
-- **Done:** A 15+ row table test passes.
+- **Done:** Unit tests cover obvious keys and ordinary notes; the tool path refuses `remember this sk-…` with a reason.
 
 ## E3. Projects
 - **Status:** Partial (threads + instructions + shared memory have; knowledge files missing)
@@ -443,11 +443,18 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Override order is tested.
 
 ## E6. Auto memory (agent-written)
-- **Status:** Partial (0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast; Save moves that row into `memories`, Undo reverses the one step, and `source_conversation_id` keeps the provenance. E2's secret gate is still missing, so the approval step is the only guard; thread roll-up is still missing)
+- **Status:** Partial (0.5.0: Save appends the approved note to the memory file and Undo puts the pending row back; E2's secret gate and untrusted tag now guard proposals. 0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast, and `source_conversation_id` keeps the provenance; thread roll-up is still missing)
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
 - **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.
 - **Done:** Test asserts the tool rules, E2 blocks secrets, roll-up carries decisions with no private detail, and no auto-write path exists.
+
+## E7. Memory file (`MEMORY.md`)
+- **Status:** Have (0.5.0: one `MEMORY.md` plus `projects/<id>.md`, four headings - User, Preferences, Project, Decisions - and an id/date comment on every bullet. 0.4.1 rows migrate once at boot into the files, with a full JSON backup under `memory/legacy/`, an unassigned queue for notes whose project was deleted, and the `memories` table frozen rather than dropped. The raw editor rejects a save when the file changed on disk. A failed migration keeps the database path and shows a banner)
+- **Ref:** † Claude Code `/memory` edits markdown; † OpenCode reads `AGENTS.md`.
+- **Build:** The file is the source of truth; SQLite is only the migration source and the fallback. Writes are atomic (temp file, backup swap) and serialised. Outside text and unknown comments are preserved. Notes cap at 2000 characters; the send budget, not the write, keeps the file small.
+- **Not:** Syncing the file with the database after migration, or editing project files from the global page.
+- **Done:** File tests cover round-trip, CRLF/BOM, escaped comment markers, unknown text, duplicate ids and the sent budget. Migration tests cover an empty DB, an old row, an unknown kind, a deleted project, an existing file and a lost marker.
 
 ---
 

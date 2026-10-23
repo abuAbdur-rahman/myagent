@@ -195,7 +195,7 @@ pub fn default_rules() -> Vec<Rule> {
         Rule {
             action: "update_memory".to_string(),
             resource: "*".to_string(),
-            effect: Effect::Allow,
+            effect: Effect::Ask,
         },
         Rule {
             action: "delete_memory".to_string(),
@@ -684,7 +684,7 @@ mod tests {
         );
         assert_eq!(
             decide("update_memory", &["*".to_string()], &rules),
-            Effect::Allow
+            Effect::Ask
         );
         assert_eq!(
             decide("delete_memory", &["*".to_string()], &rules),

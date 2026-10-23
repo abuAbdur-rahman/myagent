@@ -13,6 +13,8 @@ import type {
   Connection,
   ConnectionInput,
   Conversation,
+  ExportBundle,
+  ExportScope,
   Memory,
   MemoryInput,
   MemoryKind,
@@ -23,18 +25,17 @@ import type {
   Project,
   ProjectInput,
   Role,
-  SearchHit,
-  SearchQuery,
   Tag,
   Todo,
 } from "./types";
 import {
   auditLogSchema,
+  exportBundleSchema,
   pendingMemorySchema,
-  searchQuerySchema,
   tagSchema,
   todoSchema,
 } from "./types";
+import { plainTitle } from "./title";
 
 let dbPromise: Promise<Database> | null = null;
 
@@ -110,9 +111,10 @@ export async function deleteConnection(id: string): Promise<void> {
 
 export async function listConversations(): Promise<Conversation[]> {
   const db = await getDb();
-  return db.select<Conversation[]>(
+  const rows = await db.select<Conversation[]>(
     "SELECT * FROM conversations ORDER BY updated_at DESC",
   );
+  return rows.map((row) => ({ ...row, title: plainTitle(row.title) || "New chat" }));
 }
 
 export async function createConversation(
@@ -205,6 +207,196 @@ export async function wipeAll(): Promise<void> {
   await db.execute("VACUUM");
 }
 
+export interface ImportReport {
+  projects: number;
+  conversations: number;
+  messages: number;
+  memories: number;
+  skippedConversations: number;
+  skippedMemories: number;
+  memoryErrors: string[];
+}
+
+const SAFE_PROJECT_ID =
+  /^[0-9a-fA-F]{32}$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+export async function exportBundle(scope: ExportScope): Promise<ExportBundle> {
+  const projects = await listProjects();
+  const bundle: ExportBundle = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    scope,
+    conversations: [],
+    projects: [],
+    memories: [],
+  };
+  if (scope !== "memory") {
+    const conversations = await listConversations();
+    bundle.conversations = await Promise.all(
+      conversations.map(async (conversation) => ({
+        ...conversation,
+        messages: await listMessages(conversation.id),
+      })),
+    );
+    bundle.projects = projects;
+  }
+  if (scope !== "chats") {
+    const global = await listMemories("global", null);
+    const perProject = await Promise.all(
+      projects.map((project) => listMemories("project", project.id)),
+    );
+    bundle.memories = [...global, ...perProject.flat()];
+    if (scope === "memory") bundle.projects = projects;
+  }
+  return bundle;
+}
+
+export async function importBundle(
+  input: unknown,
+  appendMemory?: (memory: Memory) => Promise<void>,
+): Promise<ImportReport> {
+  const parsed = exportBundleSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "Not a myagent export file");
+  }
+  const bundle = parsed.data;
+  const db = await getDb();
+  const report: ImportReport = {
+    projects: 0,
+    conversations: 0,
+    messages: 0,
+    memories: 0,
+    skippedConversations: 0,
+    skippedMemories: 0,
+    memoryErrors: [],
+  };
+
+  const legacyProjects = (bundle.projectMemories ?? []).map((entry) => entry.project);
+  const projects = new Map<string, Project>();
+  for (const project of [...bundle.projects, ...legacyProjects]) {
+    if (!SAFE_PROJECT_ID.test(project.id)) continue;
+    projects.set(project.id, project);
+  }
+  const projectIds = new Set(
+    (await db.select<{ id: string }[]>("SELECT id FROM projects")).map((row) => row.id),
+  );
+  for (const project of projects.values()) {
+    const result = await db.execute(
+      "INSERT OR IGNORE INTO projects (id, name, description, instructions, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
+      [
+        project.id,
+        project.name,
+        project.description,
+        project.instructions,
+        project.created_at,
+        project.updated_at,
+      ],
+    );
+    if (result.rowsAffected > 0) report.projects += 1;
+    projectIds.add(project.id);
+  }
+
+  for (const conversation of bundle.conversations) {
+    const existing = await db.select<{ id: string }[]>(
+      "SELECT id FROM conversations WHERE id = $1",
+      [conversation.id],
+    );
+    if (existing.length > 0) {
+      report.skippedConversations += 1;
+      continue;
+    }
+    const projectId =
+      conversation.project_id && projectIds.has(conversation.project_id)
+        ? conversation.project_id
+        : null;
+    await db.execute(
+      "INSERT INTO conversations (id, title, connection_id, project_id, pinned, compacted, model, summary, summary_through, system_prompt, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+      [
+        conversation.id,
+        conversation.title,
+        null,
+        projectId,
+        conversation.pinned,
+        conversation.compacted,
+        conversation.model,
+        sqlNull(conversation.summary),
+        sqlNull(conversation.summary_through),
+        sqlNull(conversation.system_prompt),
+        conversation.created_at,
+        conversation.updated_at,
+      ],
+    );
+    report.conversations += 1;
+    for (const message of conversation.messages) {
+      const result = await db.execute(
+        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        [
+          message.id,
+          conversation.id,
+          message.role,
+          message.content,
+          sqlNull(message.reasoning),
+          sqlNull(message.thinking_ms),
+          sqlNull(message.prompt_tokens),
+          sqlNull(message.completion_tokens),
+          sqlNull(message.total_tokens),
+          sqlNull(message.finish_reason),
+          sqlNull(message.tool_log),
+          sqlNull(message.artifacts),
+          sqlNull(message.attachments),
+          sqlNull(message.model),
+          sqlNull(message.rating),
+          message.created_at,
+        ],
+      );
+      if (result.rowsAffected > 0) report.messages += 1;
+    }
+  }
+
+  const memories = new Map<string, Memory>();
+  for (const memory of [
+    ...bundle.memories,
+    ...(bundle.globalMemories ?? []),
+    ...(bundle.projectMemories ?? []).flatMap((entry) => entry.memories),
+  ]) {
+    memories.set(memory.id, memory);
+  }
+  for (const memory of memories.values()) {
+    const projectId = memory.scope === "project" ? memory.project_id : null;
+    if (memory.scope === "project" && (!projectId || !projectIds.has(projectId))) {
+      report.skippedMemories += 1;
+      continue;
+    }
+    if (appendMemory) {
+      try {
+        await appendMemory(memory);
+        report.memories += 1;
+      } catch (e) {
+        report.skippedMemories += 1;
+        report.memoryErrors.push(e instanceof Error ? e.message : String(e));
+      }
+      continue;
+    }
+    const result = await db.execute(
+      "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [
+        memory.id,
+        memory.scope,
+        projectId,
+        memory.kind,
+        memory.content,
+        sqlNull(memory.source_conversation_id),
+        memory.created_at,
+        memory.updated_at,
+      ],
+    );
+    if (result.rowsAffected > 0) report.memories += 1;
+    else report.skippedMemories += 1;
+  }
+
+  return report;
+}
+
 export async function listTags(conversationId: string): Promise<Tag[]> {
   const db = await getDb();
   const rows = await db.select<{ tag: string }[]>(
@@ -273,128 +465,6 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
     "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
     [conversationId],
   );
-}
-
-let searchReady: boolean | null = null;
-
-async function ensureSearchIndex(): Promise<boolean> {
-  if (searchReady !== null) return searchReady;
-  try {
-    const db = await getDb();
-    await db.execute(
-      "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, conversation_id UNINDEXED, tokenize='unicode61')",
-    );
-    await db.execute(
-      "CREATE TRIGGER IF NOT EXISTS trg_fts_insert AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(rowid, content, conversation_id) VALUES (new.rowid, new.content, new.conversation_id); END",
-    );
-    await db.execute(
-      "CREATE TRIGGER IF NOT EXISTS trg_fts_delete AFTER DELETE ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.rowid; END",
-    );
-    await db.execute(
-      "CREATE TRIGGER IF NOT EXISTS trg_fts_update AFTER UPDATE ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.rowid; INSERT INTO messages_fts(rowid, content, conversation_id) VALUES (new.rowid, new.content, new.conversation_id); END",
-    );
-    await db.execute(
-      "INSERT INTO messages_fts(rowid, content, conversation_id) SELECT rowid, content, conversation_id FROM messages WHERE rowid NOT IN (SELECT rowid FROM messages_fts)",
-    );
-    searchReady = true;
-  } catch {
-    searchReady = false;
-  }
-  return searchReady;
-}
-
-export async function searchMessages(input: unknown): Promise<SearchHit[]> {
-  const parsed = searchQuerySchema.safeParse(input);
-  if (!parsed.success) {
-    throw new Error(parsed.error.issues[0]?.message ?? "Invalid search");
-  }
-  const query: SearchQuery = parsed.data;
-  const { q, projectId, pinnedOnly, from, to, limit = 20 } = query;
-  const db = await getDb();
-  const filters: string[] = [];
-  const values: unknown[] = [];
-  if (projectId) {
-    values.push(projectId);
-    filters.push(`c.project_id = $${values.length}`);
-  }
-  if (pinnedOnly) filters.push("c.pinned = 1");
-  if (from != null) {
-    values.push(from);
-    filters.push(`m.created_at >= $${values.length}`);
-  }
-  if (to != null) {
-    values.push(to);
-    filters.push(`m.created_at <= $${values.length}`);
-  }
-  const where = filters.length > 0 ? `AND ${filters.join(" AND ")}` : "";
-  const likeFilters = filters.map((f) => f.replace(/^m\./, "m.")).join(" AND ");
-  const likeWhere = filters.length > 0 ? `AND ${likeFilters}` : "";
-
-  const titleValues: unknown[] = projectId ? [projectId] : [];
-  const titleWhere = [
-    projectId ? `c.project_id = $1` : null,
-    pinnedOnly ? "c.pinned = 1" : null,
-  ]
-    .filter(Boolean)
-    .join(" AND ");
-  const titleRows = await db.select<{ id: string; title: string }[]>(
-    `SELECT c.id, c.title FROM conversations c WHERE c.title LIKE $${titleValues.length + 1}${titleWhere ? ` AND ${titleWhere}` : ""} ORDER BY c.updated_at DESC LIMIT ${limit}`,
-    [...titleValues, `%${q}%`],
-  );
-  const hits: SearchHit[] = titleRows.map((row) => ({
-    conversationId: row.id,
-    messageId: null,
-    snippet: row.title,
-  }));
-
-  if (await ensureSearchIndex()) {
-    const tokens = q
-      .split(/\s+/)
-      .map((token) => token.replace(/["*:()^]/g, "").trim())
-      .filter(Boolean);
-    if (tokens.length === 0) return hits;
-    values.push(tokens.map((token) => `"${token}"`).join(" "));
-    const rows = await db.select<
-      { conversation_id: string; message_id: string; snippet: string }[]
-    >(
-      `SELECT m.conversation_id, m.id AS message_id, snippet(messages_fts, 0, '', '', '…', 12) AS snippet
-       FROM messages_fts
-       JOIN messages m ON m.rowid = messages_fts.rowid
-       JOIN conversations c ON c.id = m.conversation_id
-       WHERE messages_fts MATCH $${values.length} ${where}
-       ORDER BY bm25(messages_fts) LIMIT ${limit}`,
-      values,
-    );
-    for (const row of rows) {
-      if (hits.length >= limit) break;
-      hits.push({
-        conversationId: row.conversation_id,
-        messageId: row.message_id,
-        snippet: row.snippet,
-      });
-    }
-    return hits;
-  }
-
-  values.push(`%${q}%`);
-  const rows = await db.select<
-    { conversation_id: string; message_id: string; snippet: string }[]
-  >(
-    `SELECT m.conversation_id, m.id AS message_id, substr(m.content, 1, 160) AS snippet
-     FROM messages m JOIN conversations c ON c.id = m.conversation_id
-     WHERE m.content LIKE $${values.length} ${likeWhere}
-     ORDER BY m.created_at DESC LIMIT ${limit}`,
-    values,
-  );
-  for (const row of rows) {
-    if (hits.length >= limit) break;
-    hits.push({
-      conversationId: row.conversation_id,
-      messageId: row.message_id,
-      snippet: row.snippet,
-    });
-  }
-  return hits;
 }
 
 export async function addMessage(
@@ -780,7 +850,7 @@ export async function deleteMemory(id: string): Promise<void> {
 export async function listPendingMemories(): Promise<PendingMemory[]> {
   const db = await getDb();
   const rows = await db.select<unknown[]>(
-    "SELECT id, scope, project_id, kind, content, conversation_id, created_at FROM pending_memories ORDER BY created_at DESC",
+    "SELECT id, scope, project_id, kind, content, conversation_id, created_at, trust FROM pending_memories ORDER BY created_at DESC",
   );
   return rows.flatMap((row) => {
     const parsed = pendingMemorySchema.safeParse(row);
@@ -800,6 +870,23 @@ export async function approvePendingMemory(id: string): Promise<void> {
 export async function dismissPendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
+}
+
+export async function addPendingMemory(memory: PendingMemory): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    [
+      memory.id,
+      memory.scope,
+      memory.project_id,
+      memory.kind,
+      memory.content,
+      memory.conversation_id,
+      memory.created_at,
+      memory.trust,
+    ],
+  );
 }
 
 export async function restorePendingMemory(id: string): Promise<void> {
@@ -1058,11 +1145,11 @@ export async function listAuditLogs(search: string, limit = 200): Promise<AuditL
   const capped = Math.min(Math.max(limit, 1), 500);
   const rows = term
     ? await db.select<unknown[]>(
-        "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log WHERE tool LIKE $1 ESCAPE '\\' OR decision LIKE $1 ESCAPE '\\' OR detail LIKE $1 ESCAPE '\\' ORDER BY ts DESC LIMIT $2",
+        "SELECT id, ts, conversation_id, tool, decision, detail, duration_ms, exit_code, source FROM audit_log WHERE tool LIKE $1 ESCAPE '\\' OR decision LIKE $1 ESCAPE '\\' OR detail LIKE $1 ESCAPE '\\' OR source LIKE $1 ESCAPE '\\' ORDER BY ts DESC LIMIT $2",
         [`%${escapeLike(term)}%`, capped],
       )
     : await db.select<unknown[]>(
-        "SELECT id, ts, conversation_id, tool, decision, detail FROM audit_log ORDER BY ts DESC LIMIT $1",
+        "SELECT id, ts, conversation_id, tool, decision, detail, duration_ms, exit_code, source FROM audit_log ORDER BY ts DESC LIMIT $1",
         [capped],
       );
   return rows.flatMap((row) => {

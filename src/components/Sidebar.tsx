@@ -4,7 +4,6 @@ import {
   ChevronUp,
   ChevronsLeft,
   ChevronsRight,
-  Filter,
   Folder,
   FolderInput,
   FolderOpen,
@@ -23,18 +22,12 @@ import { useApp } from "../lib/store";
 import { sessionOutputs } from "../lib/session";
 import * as db from "../lib/db";
 import { arrangeChats, projectColor } from "../lib/grouping";
-import {
-  emptyFilterText,
-  filterChats,
-  parseChatFilter,
-  type ChatFilter,
-} from "../lib/chat-filter";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { Avatar, Button, Dialog, Input } from "./ui";
 import { Select } from "./ui/select";
 import { cn } from "../lib/utils";
-import type { Conversation, SearchHit } from "../lib/types";
+import type { Conversation } from "../lib/types";
 
 function initialsOf(name: string): string {
   const trimmed = name.trim();
@@ -249,12 +242,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<SearchHit[] | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const [chatFilter, setChatFilter] = useState<ChatFilter>("all");
   const [allTags, setAllTags] = useState<{ tag: string; count: number }[]>([]);
   const [tagMap, setTagMap] = useState<Map<string, string[]>>(new Map());
   const [tagDialogChat, setTagDialogChat] = useState<Conversation | null>(null);
@@ -276,29 +264,6 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
-  useEffect(() => {
-    const trimmed = query.trim();
-    if (!trimmed) {
-      setHits(null);
-      setSearching(false);
-      setSearchError(null);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(() => {
-      db.searchMessages({ q: trimmed })
-        .then((found) => {
-          setHits(found);
-          setSearchError(null);
-        })
-        .catch((e) => {
-          setHits([]);
-          setSearchError(e instanceof Error ? e.message : "Search failed");
-        })
-        .finally(() => setSearching(false));
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [query]);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set(["Older"]),
@@ -314,19 +279,10 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   };
 
   const projectById = new Map(projects.map((p) => [p.id, p]));
-  const chatById = new Map(conversations.map((c) => [c.id, c]));
 
-  const shown = filterChats(
-    tagFilter ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter)) : conversations,
-    chatFilter,
-  );
-  const filterEmpty = emptyFilterText(
-    chatFilter,
-    chatFilter.startsWith("project:")
-      ? (projectById.get(chatFilter.slice("project:".length))?.name ?? null)
-      : null,
-  );
-  const filterProjects = chatFilter === "all";
+  const shown = tagFilter
+    ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
+    : conversations;
   const groups = arrangeChats(shown, groupByDate);
   const threadsByProject = new Map<string, Conversation[]>();
   for (const chat of shown) {
@@ -555,98 +511,32 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
-        <div className="px-2.5 pb-1 pt-2">
-          <div className="flex h-8 items-center gap-2 rounded-control border border-border bg-surface-2 px-2.5">
-            <Search size={14} className="flex-none text-muted" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setQuery("");
-              }}
-              aria-label="Search chats"
-              placeholder="Search chats…"
-              className="w-full border-0 bg-transparent text-sm outline-none placeholder:text-muted"
-            />
-          </div>
-          {searching && <p className="px-2.5 pt-1 text-xs text-muted">Searching…</p>}
-          {searchError && (
-            <p className="px-2.5 pt-1 text-xs text-danger" role="alert">
-              {searchError}
-            </p>
-          )}
-          <div className="flex items-center gap-1.5 px-2.5 pt-1.5">
-            <Filter size={14} className="flex-none text-muted" />
+        {allTags.length > 0 && (
+          <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2">
+            <Tag size={14} className="flex-none text-muted" />
             <Select
               size="sm"
               className="min-w-0 flex-1"
-              value={chatFilter}
-              onChange={(next) => setChatFilter(parseChatFilter(next))}
-              aria-label="Filter chats"
+              value={tagFilter}
+              onChange={(next) => setTagFilter(next || null)}
+              aria-label="Filter by tag"
               options={[
-                { value: "all", label: "All chats" },
-                { value: "pinned", label: "Pinned" },
-                ...projects.map((project) => ({
-                  value: `project:${project.id}`,
-                  label: project.name,
-                  group: "Projects",
-                })),
+                { value: "", label: "All tags" },
+                ...allTags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.count})` })),
               ]}
             />
-          </div>
-          {allTags.length > 0 && (
-            <div className="flex items-center gap-1.5 px-2.5 pt-1.5">
-              <Tag size={14} className="flex-none text-muted" />
-              <Select
-                size="sm"
-                className="min-w-0 flex-1"
-                value={tagFilter}
-                onChange={(next) => setTagFilter(next || null)}
-                aria-label="Filter by tag"
-                options={[
-                  { value: "", label: "All tags" },
-                  ...allTags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.count})` })),
-                ]}
-              />
-              {tagFilter && (
-                <button
-                  type="button"
-                  aria-label="Clear tag filter"
-                  onClick={() => setTagFilter(null)}
-                  className="text-xs text-muted hover:text-text"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-        {hits !== null ? (
-          <div>
-            {hits.length === 0 && !searching && (
-              <p className="px-2.5 py-4 text-xs text-muted">No matches.</p>
+            {tagFilter && (
+              <button
+                type="button"
+                aria-label="Clear tag filter"
+                onClick={() => setTagFilter(null)}
+                className="text-xs text-muted hover:text-text"
+              >
+                ×
+              </button>
             )}
-            {hits.map((hit, i) => {
-              const chat = chatById.get(hit.conversationId);
-              if (!chat) return null;
-              return (
-                <button
-                  key={`${hit.conversationId}:${hit.messageId ?? "title"}:${i}`}
-                  type="button"
-                  onClick={() => openChat(chat.id)}
-                  title={chat.title}
-                  className="block w-full rounded-control px-2.5 py-1.5 text-left hover:bg-hover"
-                >
-                  <span className="block truncate text-sm">{chat.title}</span>
-                  <span className="block truncate text-xs text-muted">{hit.snippet}</span>
-                </button>
-              );
-            })}
           </div>
-        ) : (
-          <>
-        {filterProjects && (
-          <>
+        )}
         <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted">
           Projects
         </div>
@@ -727,21 +617,6 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         >
           <Plus size={14} /> New project
         </button>
-          </>
-        )}
-
-        {filterEmpty && shown.length === 0 && (
-          <div className="flex flex-col items-start gap-1.5 px-2.5 py-4">
-            <p className="m-0 text-xs text-muted">{filterEmpty}</p>
-            <button
-              type="button"
-              onClick={() => setChatFilter("all")}
-              className="text-xs text-accent hover:underline"
-            >
-              Show all chats
-            </button>
-          </div>
-        )}
 
         {groups.map((group) => {
           const collapsed = collapsedGroups.has(group.name);
@@ -790,8 +665,6 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         })}
         {ready && conversations.length === 0 && (
           <p className="px-2.5 py-4 text-xs text-muted">No chats yet.</p>
-        )}
-          </>
         )}
       </div>
 

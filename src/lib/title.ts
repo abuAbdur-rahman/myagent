@@ -1,5 +1,21 @@
 const MAX_TITLE = 48;
 
+export function plainTitle(raw: string): string {
+  return raw
+    .replace(/^\s*#{1,6}\s*/, "")
+    .replace(/^\s*>\s*/, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/^\s*[-*]\s+/, "")
+    .replace(/[*`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+    .replace(/[.:;!]+$/, "")
+    .trim();
+}
+
 function strip(markdown: string): string {
   return markdown
     .replace(/```[\s\S]*?```/g, " ")

@@ -52,7 +52,7 @@ import {
 } from "./vision";
 import { KEYLESS_KINDS, fileCommandSchema, memoryInputSchema } from "./types";
 import { errorText, newId } from "./utils";
-import { deriveFallbackTitle } from "./title";
+import { deriveFallbackTitle, plainTitle } from "./title";
 import type {
   Connection,
   ConnectionInput,
@@ -61,6 +61,7 @@ import type {
   Memory,
   MemoryDraft,
   MemoryInput,
+  MemoryKind,
   MemoryScope,
   PendingMemory,
   Project,
@@ -81,6 +82,33 @@ const THEME_KEY = "theme";
 const DISPLAY_NAME_KEY = "displayName";
 const PANEL_WIDTH_KEY = "panelWidth";
 const SHOW_CONTEXT_BAR_KEY = "showContextBar";
+
+const MEMORY_KIND_NAMES = ["fact", "preference", "summary", "note"];
+
+function memoryFromEntry(
+  entry: api.MemoryEntryView,
+  scope: MemoryScope,
+  projectId: string | null,
+): Memory {
+  return {
+    id: entry.id,
+    scope,
+    project_id: projectId,
+    kind: MEMORY_KIND_NAMES.includes(entry.kind) ? (entry.kind as MemoryKind) : "note",
+    content: entry.text,
+    created_at: entry.created_at,
+    updated_at: entry.created_at,
+  };
+}
+
+function canonicalMemoryId(id: string): string {
+  return id.replace(/-/g, "").toLowerCase();
+}
+
+function sentMemories(memories: Memory[], ids: Set<string> | null): Memory[] {
+  return ids === null ? memories : memories.filter((memory) => ids.has(memory.id));
+}
+
 function canSeeFor(
   catalog: ModelCapabilities[] | null,
   overrides: Record<string, VisionOverride>,
@@ -332,12 +360,21 @@ interface AppContextValue {
   globalMemories: Memory[];
   projectMemories: Memory[];
   pendingMemories: PendingMemory[];
+  memoryOmitted: number;
+  memoryCompat: boolean;
+  memoryReport: api.MemoryMigrationReport | null;
+  dismissMemoryReport: () => void;
   refreshMemories: () => Promise<void>;
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
-  editMemory: (id: string, draft: MemoryDraft) => Promise<void>;
-  deleteMemory: (id: string) => Promise<void>;
+  editMemory: (
+    id: string,
+    draft: MemoryDraft,
+    scope?: MemoryScope,
+    projectId?: string | null,
+  ) => Promise<void>;
+  deleteMemory: (id: string, scope?: MemoryScope, projectId?: string | null) => Promise<void>;
   approvePendingMemory: (id: string) => Promise<void>;
   dismissPendingMemory: (id: string) => Promise<void>;
   undoApprovedMemory: (id: string) => Promise<void>;
@@ -497,6 +534,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [globalMemories, setGlobalMemories] = useState<Memory[]>([]);
   const [projectMemories, setProjectMemories] = useState<Memory[]>([]);
   const [pendingMemories, setPendingMemories] = useState<PendingMemory[]>([]);
+  const [memoryOmitted, setMemoryOmitted] = useState(0);
+  const [memoryCompat, setMemoryCompat] = useState(false);
+  const [memoryReport, setMemoryReport] = useState<api.MemoryMigrationReport | null>(null);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -565,6 +605,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
   const pendingMemoriesRef = useRef<PendingMemory[]>([]);
+  const globalSentRef = useRef<Set<string> | null>(null);
+  const projectSentRef = useRef<Set<string> | null>(null);
+  const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
   const reasoningRef = useRef("");
@@ -642,12 +685,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshMemories = useCallback(async () => {
     const projectId = projectRef.current?.id ?? null;
+    let read: Awaited<ReturnType<typeof api.memoryRead>>;
+    try {
+      read = await api.memoryRead(projectId);
+    } catch (e) {
+      reportError(e);
+      return;
+    }
+    if (read.available) {
+      setGlobalMemories(
+        read.global.entries.map((entry) => memoryFromEntry(entry, "global", null)),
+      );
+      setProjectMemories(
+        (read.project?.entries ?? []).map((entry) =>
+          memoryFromEntry(entry, "project", projectId),
+        ),
+      );
+      setMemoryCompat(false);
+      setMemoryOmitted(read.global.omitted + (read.project?.omitted ?? 0));
+      globalSentRef.current = new Set(read.global.sent);
+      projectSentRef.current = new Set(read.project?.sent ?? []);
+      return;
+    }
     const [global, project] = await Promise.all([
       db.listMemories("global", null),
       projectId ? db.listMemories("project", projectId) : Promise.resolve<Memory[]>([]),
     ]);
     setGlobalMemories(global);
     setProjectMemories(project);
+    setMemoryCompat(true);
+    setMemoryOmitted(0);
+    globalSentRef.current = null;
+    projectSentRef.current = null;
   }, []);
 
   const refreshPendingMemories = useCallback(async () => {
@@ -661,6 +730,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         await refreshConnections();
         await refreshProjects();
+        try {
+          const report = await api.memoryMigrate();
+          if (report.migrated && (report.notes > 0 || report.unassigned > 0)) {
+            setMemoryReport(report);
+          }
+        } catch (e) {
+          reportError(e);
+        }
         await refreshMemories();
         await refreshPendingMemories();
         setConversations(await db.listConversations());
@@ -671,6 +748,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, [refreshConnections, refreshProjects, refreshMemories, refreshPendingMemories]);
+
+  useEffect(() => {
+    void refreshMemories();
+  }, [activeProjectId, refreshMemories]);
 
   useEffect(() => {
     if (activeConnectionId) {
@@ -1207,13 +1288,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const removeProject = useCallback(
     async (id: string) => {
+      if (!memoryCompat) {
+        await api.memoryProjectDelete(id).catch(reportError);
+      }
       await db.deleteProject(id);
       if (activeProjectId === id) setActiveProjectId(null);
       await refreshProjects();
       await refreshMemories();
       setConversations(await db.listConversations());
     },
-    [activeProjectId, refreshProjects, refreshMemories],
+    [activeProjectId, memoryCompat, refreshProjects, refreshMemories],
   );
 
   const saveMemoryToScope = useCallback(
@@ -1222,34 +1306,90 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? "Invalid memory");
       }
-      await db.createMemory(parsed.data);
+      if (memoryCompat) {
+        await db.createMemory(parsed.data);
+      } else {
+        await api.memoryAppend({
+          scope: parsed.data.scope,
+          projectId: parsed.data.scope === "project" ? parsed.data.project_id : null,
+          text: parsed.data.content,
+          kind: parsed.data.kind,
+        });
+      }
       await refreshMemories();
     },
-    [refreshMemories],
+    [memoryCompat, refreshMemories],
   );
 
   const editMemory = useCallback(
-    async (id: string, draft: MemoryDraft) => {
-      await db.updateMemory(id, draft.content.trim(), draft.kind);
+    async (
+      id: string,
+      draft: MemoryDraft,
+      scope?: MemoryScope,
+      projectId?: string | null,
+    ) => {
+      const target = [...globalMemoriesRef.current, ...projectMemoriesRef.current].find(
+        (memory) => canonicalMemoryId(memory.id) === canonicalMemoryId(id),
+      );
+      if (memoryCompat) {
+        await db.updateMemory(id, draft.content.trim(), draft.kind);
+      } else {
+        const written = await api.memoryUpdate({
+          scope: scope ?? target?.scope ?? "global",
+          projectId: scope ? (projectId ?? null) : (target?.project_id ?? null),
+          id: target?.id ?? id,
+          text: draft.content.trim(),
+          kind: draft.kind,
+        });
+        if (!written) throw new Error("That memory is not in the file anymore");
+      }
       await refreshMemories();
     },
-    [refreshMemories],
+    [memoryCompat, refreshMemories],
   );
 
   const deleteMemory = useCallback(
-    async (id: string) => {
-      await db.deleteMemory(id);
+    async (id: string, scope?: MemoryScope, projectId?: string | null) => {
+      const target = [...globalMemoriesRef.current, ...projectMemoriesRef.current].find(
+        (memory) => canonicalMemoryId(memory.id) === canonicalMemoryId(id),
+      );
+      if (memoryCompat) {
+        await db.deleteMemory(id);
+      } else {
+        await api.memoryForget(
+          scope ?? target?.scope ?? "global",
+          scope ? (projectId ?? null) : (target?.project_id ?? null),
+          target?.id ?? id,
+        );
+      }
       await refreshMemories();
     },
-    [refreshMemories],
+    [memoryCompat, refreshMemories],
   );
 
   const approvePendingMemory = useCallback(
     async (id: string) => {
-      await db.approvePendingMemory(id);
+      if (memoryCompat) {
+        await db.approvePendingMemory(id);
+      } else {
+        const rows = await db.listPendingMemories();
+        const row = rows.find((pending) => pending.id === id);
+        if (!row) throw new Error("That memory is already gone");
+        await api.memoryAppend({
+          scope: row.scope,
+          projectId: row.project_id,
+          text: row.content,
+          kind: row.kind,
+          id: row.id,
+          date: undefined,
+          trust: row.trust,
+        });
+        approvedMemoryRef.current.set(id, row);
+        await db.dismissPendingMemory(id);
+      }
       await Promise.all([refreshMemories(), refreshPendingMemories()]);
     },
-    [refreshMemories, refreshPendingMemories],
+    [memoryCompat, refreshMemories, refreshPendingMemories],
   );
 
   const dismissPendingMemory = useCallback(
@@ -1262,15 +1402,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const undoApprovedMemory = useCallback(
     async (id: string) => {
-      await db.restorePendingMemory(id);
+      if (memoryCompat) {
+        await db.restorePendingMemory(id);
+      } else {
+        const approved = approvedMemoryRef.current.get(id);
+        const target = [...globalMemoriesRef.current, ...projectMemoriesRef.current].find(
+          (memory) => canonicalMemoryId(memory.id) === canonicalMemoryId(id),
+        );
+        const scope = approved?.scope ?? target?.scope;
+        if (scope) {
+          await api.memoryForget(
+            scope,
+            approved?.project_id ?? target?.project_id ?? null,
+            target?.id ?? id,
+          );
+          if (approved) await db.addPendingMemory(approved);
+        }
+        approvedMemoryRef.current.delete(id);
+      }
       await Promise.all([refreshMemories(), refreshPendingMemories()]);
     },
-    [refreshMemories, refreshPendingMemories],
+    [memoryCompat, refreshMemories, refreshPendingMemories],
   );
 
   const loadMemories = useCallback(
-    (scope: MemoryScope, projectId: string | null) => db.listMemories(scope, projectId),
-    [],
+    async (scope: MemoryScope, projectId: string | null): Promise<Memory[]> => {
+      if (!memoryCompat) {
+        try {
+          const read = await api.memoryRead(scope === "project" ? projectId : null);
+          const view = scope === "project" ? read.project : read.global;
+          if (view) {
+            return view.entries.map((entry) =>
+              memoryFromEntry(entry, scope, scope === "project" ? projectId : null),
+            );
+          }
+        } catch (e) {
+          reportError(e);
+        }
+      }
+      return db.listMemories(scope, projectId);
+    },
+    [memoryCompat],
   );
 
   const selectConversation = useCallback(async (id: string | null) => {
@@ -1385,9 +1557,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const systemPromptFromRefs = useCallback(
     () =>
       buildSystemPrompt({
-        globalMemories: globalMemoriesRef.current,
+        globalMemories: sentMemories(globalMemoriesRef.current, globalSentRef.current),
         project: projectRef.current,
-        projectMemories: projectMemoriesRef.current,
+        projectMemories: sentMemories(projectMemoriesRef.current, projectSentRef.current),
         userName: displayNameRef.current || undefined,
         standingPrompt: standingPromptRef.current || undefined,
         chatPrompt: chatPromptRef.current ?? undefined,
@@ -1708,7 +1880,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             assistantText,
             connection.kind,
           );
-          trimmed = title.trim();
+          trimmed = plainTitle(title);
           if (trimmed) break;
         } catch (cause) {
           console.warn("title generation failed", cause);
@@ -2378,6 +2550,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     globalMemories,
     projectMemories,
     pendingMemories,
+    memoryOmitted,
+    memoryCompat,
+    memoryReport,
+    dismissMemoryReport: () => setMemoryReport(null),
     refreshMemories,
     refreshPendingMemories,
     loadMemories,

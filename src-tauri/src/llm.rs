@@ -993,6 +993,35 @@ pub async fn summarize(
     Ok(summary.chars().take(2000).collect())
 }
 
+fn clean_title(raw: &str) -> String {
+    let line = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let line = ["Title:", "title:", "Chat title:", "chat title:"]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))
+        .map(str::trim)
+        .unwrap_or(line);
+    let mut text = String::with_capacity(line.len());
+    for c in line.chars() {
+        match c {
+            '*' | '`' => {}
+            '#' | '>' if text.trim().is_empty() => {}
+            _ => text.push(c),
+        }
+    }
+    let text = text.replace("__", "");
+    let text = text
+        .trim()
+        .trim_matches(|c| matches!(c, '"' | '\'' | '“' | '”' | '‘' | '’'))
+        .trim()
+        .trim_end_matches(['.', ':', ';', '!'])
+        .trim();
+    text.chars().take(60).collect::<String>().trim().to_string()
+}
+
 #[tauri::command]
 pub async fn suggest_title(
     mut req: TitleRequest,
@@ -1036,12 +1065,7 @@ pub async fn suggest_title(
     .await?;
 
     let value: serde_json::Value = resp.json().await?;
-    let title = message_text(&value["choices"][0]["message"]["content"])
-        .trim()
-        .trim_matches(|c| c == '"' || c == '\'' || c == '.' || c == ':')
-        .trim()
-        .to_string();
-    let title: String = title.chars().take(60).collect();
+    let title = clean_title(&message_text(&value["choices"][0]["message"]["content"]));
     if title.is_empty() {
         return Err(AppError::Upstream("empty title".to_string()));
     }
@@ -1181,6 +1205,29 @@ fn approval_audit_label(reply: ApprovalReply) -> &'static str {
         ApprovalReply::Once => "once",
         ApprovalReply::Deny => "deny(user)",
     }
+}
+
+async fn log_decision(
+    app: &tauri::AppHandle,
+    conversation_id: Option<&str>,
+    tool: &str,
+    decision: &str,
+    detail: &str,
+    source: &str,
+) {
+    tools::log_audit_meta(
+        app,
+        conversation_id,
+        tool,
+        decision,
+        detail,
+        tools::AuditMeta {
+            source,
+            duration_ms: None,
+            exit_code: None,
+        },
+    )
+    .await;
 }
 
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
@@ -1644,6 +1691,7 @@ struct RealTools<'a> {
     repeat: RepeatGuard,
     last_pure: Option<(String, String)>,
     children: u32,
+    untrusted: bool,
 }
 
 impl RealTools<'_> {
@@ -1752,6 +1800,24 @@ impl ToolRunner for RealTools<'_> {
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::Value::Null);
 
+        if matches!(
+            name.as_str(),
+            "web_search"
+                | "web_fetch"
+                | "knowledge_search"
+                | "sandbox_run"
+                | "sandbox_read"
+                | "sandbox_glob"
+                | "sandbox_grep"
+                | "run_powershell"
+                | "describe_image"
+                | "read_document"
+                | "delegate_task"
+        ) || name.starts_with("mcp__")
+        {
+            self.untrusted = true;
+        }
+
         self.on_event.send(StreamEvent::ToolStart {
             id: id.clone(),
             name: name.clone(),
@@ -1825,12 +1891,13 @@ impl ToolRunner for RealTools<'_> {
         let checked =
             permissions::check(self.app, &name, &resources, self.req.project_id.as_deref()).await;
         if let Err(error) = &checked {
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 "check(error)",
                 &error.to_string(),
+                "rule",
             )
             .await;
         }
@@ -1886,23 +1953,25 @@ impl ToolRunner for RealTools<'_> {
         };
         if let Some(verdict) = &verdict {
             if verdict.suggest_deny {
-                tools::log_audit(
+                log_decision(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
                     "screen(flag)",
                     &format!("{} {:.3}", verdict.label, verdict.score),
+                    "screen",
                 )
                 .await;
             }
         }
         if screen_failed {
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 "screen(unavailable)",
                 &resources.join("\n"),
+                "screen",
             )
             .await;
         }
@@ -1911,23 +1980,25 @@ impl ToolRunner for RealTools<'_> {
         if decision == permissions::Effect::Ask && sandbox_auto && verdict_ok && !screen_failed {
             decision = permissions::Effect::Allow;
             if name != "sandbox_run" {
-                tools::log_audit(
+                log_decision(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
                     "allow(sandbox-screen)",
                     &resources.join("\n"),
+                    "sandbox",
                 )
                 .await;
             }
         }
         if decision == permissions::Effect::Deny {
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 "deny(rule)",
                 &resources.join("\n"),
+                "rule",
             )
             .await;
             self.on_event.send(StreamEvent::ToolResult {
@@ -1975,24 +2046,26 @@ impl ToolRunner for RealTools<'_> {
             let reply = tokio::select! {
                 reply = rx => reply.unwrap_or(ApprovalReply::Deny),
                 _ = self.cancel.notified() => {
-                    tools::log_audit(
+                    log_decision(
                         self.app,
                         self.req.conversation_id.as_deref(),
                         &name,
                         approval_audit_label(ApprovalReply::Deny),
                         &resources.join("\n"),
+                        "user",
                     )
                     .await;
                     return Ok(StepControl::StopTurn);
                 }
             };
             if reply == ApprovalReply::Deny {
-                tools::log_audit(
+                log_decision(
                     self.app,
                     self.req.conversation_id.as_deref(),
                     &name,
                     approval_audit_label(reply),
                     &resources.join("\n"),
+                    "user",
                 )
                 .await;
                 self.on_event.send(StreamEvent::ToolResult {
@@ -2003,12 +2076,13 @@ impl ToolRunner for RealTools<'_> {
                 history.push(tool_text_message(&id, "denied by user"));
                 return Ok(StepControl::Continue);
             }
-            tools::log_audit(
+            log_decision(
                 self.app,
                 self.req.conversation_id.as_deref(),
                 &name,
                 approval_audit_label(reply),
                 &resources.join("\n"),
+                "user",
             )
             .await;
         }
@@ -2084,6 +2158,7 @@ impl ToolRunner for RealTools<'_> {
         }
 
         if name == "research_run" {
+            self.untrusted = true;
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let progress = |summary: &str| {
                 self.on_event.send(StreamEvent::ToolStart {
@@ -2115,7 +2190,7 @@ impl ToolRunner for RealTools<'_> {
                         lang: "markdown".to_string(),
                         code: outcome.memo.clone(),
                     });
-                    tools::log_audit(
+                    log_decision(
                         self.app,
                         self.req.conversation_id.as_deref(),
                         "research_run",
@@ -2124,6 +2199,7 @@ impl ToolRunner for RealTools<'_> {
                             "{} sources, {} pages, {} failed",
                             outcome.sources, outcome.fetched, outcome.failed
                         ),
+                        "tool",
                     )
                     .await;
                     self.on_event.send(StreamEvent::ToolResult {
@@ -2180,6 +2256,7 @@ impl ToolRunner for RealTools<'_> {
                         connection_id: Some(self.req.connection_id.as_str()),
                         vision_fallback_model: self.req.vision_fallback_model.as_deref(),
                         vision_fallback_connection: self.req.vision_fallback_connection.as_deref(),
+                        untrusted_source: self.untrusted,
                     },
                     self.cancel,
                 )
@@ -2321,6 +2398,7 @@ async fn run_agentic(
         repeat: RepeatGuard::new(),
         last_pure: None,
         children: 0,
+        untrusted: false,
     };
     agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await
 }
@@ -2432,6 +2510,19 @@ async fn stream_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_cleaning_strips_markdown_and_labels() {
+        assert_eq!(
+            clean_title("**Memory Management** - notes"),
+            "Memory Management - notes"
+        );
+        assert_eq!(clean_title("\"DeepSeek setup.\""), "DeepSeek setup");
+        assert_eq!(clean_title("Title: ## Local models"), "Local models");
+        assert_eq!(clean_title("`agent` setup"), "agent setup");
+        assert_eq!(clean_title("Plain title"), "Plain title");
+        assert_eq!(clean_title("  \n \n"), "");
+    }
 
     #[test]
     fn deepseek_seeds_fill_an_empty_catalog_without_inventing_a_window() {

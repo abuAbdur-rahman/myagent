@@ -152,11 +152,11 @@ export function ProjectDialog({
                 await reloadMemories(currentId);
               }}
               onUpdate={async (id, draft) => {
-                await editMemory(id, draft);
+                await editMemory(id, draft, "project", currentId);
                 await reloadMemories(currentId);
               }}
               onDelete={async (id) => {
-                await deleteMemory(id);
+                await deleteMemory(id, "project", currentId);
                 await reloadMemories(currentId);
               }}
             />

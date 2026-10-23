@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   knownModelVision,
+  lookupContextLength,
   lookupSupportsTools,
   lookupVisionSupport,
   modelCanSeeImages,
@@ -54,6 +55,24 @@ describe("catalog smoke", () => {
     expect(knownModelVision("qwen2.5-72b-instruct")).toBe("no");
     expect(knownModelVision("o3")).toBe("yes");
     expect(knownModelVision("o4-mini")).toBe("unknown");
+  });
+
+  it("reads a cited window for DeepSeek when the gateway reports none", () => {
+    expect(lookupContextLength(null, "deepseek-chat")).toBe(128_000);
+    expect(lookupContextLength(null, "deepseek-reasoner")).toBe(128_000);
+    expect(lookupContextLength(null, "deepseek-v3.2")).toBe(128_000);
+    expect(lookupContextLength(null, "deepseek-r1-0528")).toBe(128_000);
+    expect(lookupContextLength(null, "deepseek-ai/DeepSeek-V3")).toBe(128_000);
+  });
+
+  it("keeps unknown models unknown and prefers what the provider reported", () => {
+    expect(lookupContextLength(null, "some-new-model")).toBeNull();
+    expect(
+      lookupContextLength(
+        [{ id: "deepseek-chat", contextLength: 64_000, supportsTools: null, supportsVision: null, reasoningEfforts: null, reasoningMandatory: false }],
+        "deepseek-chat",
+      ),
+    ).toBe(64_000);
   });
 
   it("treats an unreported model as able to see, and lets an override decide", () => {

@@ -19,7 +19,6 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
   const { messages, streaming, compacting, voicePhase } = useApp();
   const state = pillState({ messages, streaming, compacting, voice: voicePhase });
   if (state === null) return null;
-  if (placement === "center" && (state === "recording" || state === "transcribing")) return null;
 
   const voice = state === "recording" || state === "transcribing";
 

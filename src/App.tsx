@@ -11,6 +11,7 @@ import { ProjectDetail } from "./components/ProjectDetail";
 import { Welcome } from "./components/Welcome";
 import { Composer } from "./components/Composer";
 import { ActivityPill } from "./components/ActivityPill";
+import { pillPlacement } from "./lib/activity";
 import { TurnCards } from "./components/TurnCards";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
@@ -21,8 +22,52 @@ import { ArtifactsPanel } from "./components/ArtifactsPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { Toaster } from "./components/Toaster";
 import { ConfirmHost } from "./components/ConfirmDialog";
+import { Button, Dialog } from "./components/ui";
 import { check } from "@tauri-apps/plugin-updater";
 import { toast } from "./lib/toast";
+
+function MemoryReportDialog() {
+  const { memoryReport, dismissMemoryReport, setSettingsPage } = useApp();
+  if (!memoryReport) return null;
+  const notes = memoryReport.global + memoryReport.project;
+  return (
+    <Dialog open onClose={dismissMemoryReport} title="Memory moved to a file">
+      <p className="text-sm text-muted">
+        Your notes now live in MEMORY.md next to the database. {notes}{" "}
+        {notes === 1 ? "note was" : "notes were"} copied; the database copy stays as a rollback.
+      </p>
+      <ul className="mt-2 space-y-1 text-xs text-muted">
+        <li>
+          {memoryReport.global} global, {memoryReport.project} project
+        </li>
+        {memoryReport.unassigned > 0 && (
+          <li>
+            {memoryReport.unassigned} project notes had no live project and wait in
+            legacy/unassigned.json.
+          </li>
+        )}
+        {memoryReport.duplicates > 0 && (
+          <li>{memoryReport.duplicates} duplicate notes were kept as-is.</li>
+        )}
+        {memoryReport.legacy && <li className="break-all">Backup: {memoryReport.legacy}</li>}
+      </ul>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={dismissMemoryReport}>
+          Close
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            dismissMemoryReport();
+            setSettingsPage("memory");
+          }}
+        >
+          Review memory
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
 
 function Shell() {
   const {
@@ -55,6 +100,7 @@ function Shell() {
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
   const showWelcome = activeConversationId === null && messages.length === 0;
+  const pill = pillPlacement(messages.length > 0);
 
   useEffect(() => {
     let live = true;
@@ -156,12 +202,12 @@ function Shell() {
               <ChatHeader />
               <div className="relative min-h-0 flex-1">
                 <MessageList />
-                <ActivityPill placement="center" />
+                {pill === "center" ? <ActivityPill placement="center" /> : null}
               </div>
               <div className="flex-none px-4 pb-2">
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
-                  {streaming || compacting || voicePhase !== "idle" ? (
+                  {pill === "inline" && (streaming || compacting || voicePhase !== "idle") ? (
                     <div className="mb-1.5 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
                     </div>
@@ -203,6 +249,7 @@ function Shell() {
       <SettingsDialog />
       <OnboardingDialog />
       <SearchKeyDialog />
+      <MemoryReportDialog />
       <ProjectDialog
         open={projectDialog.open}
         projectId={projectDialog.id}

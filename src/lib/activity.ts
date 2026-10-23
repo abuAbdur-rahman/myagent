@@ -4,6 +4,12 @@ export type ActivityState = "thinking" | "writing";
 export type PillState = ActivityState | "compacting" | "recording" | "transcribing";
 export type VoicePhase = "idle" | "recording" | "transcribing";
 
+export type PillPlacement = "center" | "inline";
+
+export function pillPlacement(hasMessages: boolean): PillPlacement {
+  return hasMessages ? "inline" : "center";
+}
+
 export function activityState(messages: Message[], streaming: boolean): ActivityState | null {
   if (!streaming) return null;
   const last = messages[messages.length - 1];

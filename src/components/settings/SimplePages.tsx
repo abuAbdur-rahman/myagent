@@ -43,10 +43,12 @@ import { timeAgo } from "../../lib/grouping";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
-import type { AuditLog, Connection, Memory } from "../../lib/types";import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
+import type { AuditLog, Connection, ExportScope, Memory } from "../../lib/types";
+import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
   auditCounts,
   auditCsv,
+  auditDuration,
   auditJson,
   auditSummary,
   auditTime,
@@ -75,6 +77,27 @@ import {
   type StoragePart,
   type StorageUsage,
 } from "../../lib/storage";
+
+const MEMORY_KIND_NAMES = ["fact", "preference", "summary", "note"] as const;
+
+function entryToMemory(
+  entry: api.MemoryEntryView,
+  scope: Memory["scope"],
+  projectId: string | null,
+): Memory {
+  const kind = (MEMORY_KIND_NAMES as readonly string[]).includes(entry.kind)
+    ? (entry.kind as Memory["kind"])
+    : "note";
+  return {
+    id: entry.id,
+    scope,
+    project_id: projectId,
+    kind,
+    content: entry.text,
+    created_at: entry.created_at,
+    updated_at: entry.created_at,
+  };
+}
 
 function SettingRow({
   label,
@@ -972,6 +995,7 @@ function useMcpServers(projectId: string | null) {
 function AuditEntry({ row }: { row: AuditLog }) {
   const [open, setOpen] = useState(false);
   const kind = decisionClass(row.decision);
+  const duration = auditDuration(row.duration_ms);
   const tone: PillTone =
     kind === "allow" ? "success" : kind === "deny" ? "danger" : kind === "ask" ? "warn" : "neutral";
   return (
@@ -999,6 +1023,24 @@ function AuditEntry({ row }: { row: AuditLog }) {
           <dd className="break-all font-mono">{row.conversation_id ?? "global"}</dd>
           <dt className="text-muted">Decision</dt>
           <dd>{row.decision}</dd>
+          {row.source && (
+            <>
+              <dt className="text-muted">Source</dt>
+              <dd>{row.source}</dd>
+            </>
+          )}
+          {duration && (
+            <>
+              <dt className="text-muted">Duration</dt>
+              <dd className="tabular-nums">{duration}</dd>
+            </>
+          )}
+          {row.exit_code != null && (
+            <>
+              <dt className="text-muted">Exit code</dt>
+              <dd className="tabular-nums">{row.exit_code}</dd>
+            </>
+          )}
           {row.detail && (
             <>
               <dt className="text-muted">Detail</dt>
@@ -2328,19 +2370,47 @@ export function MemoryPage() {
     dismissPendingMemory,
     undoApprovedMemory,
     conversations,
+    memoryCompat,
+    memoryOmitted,
+    refreshMemories,
   } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [raw, setRaw] = useState<{ markdown: string; mtime: number; len: number } | null>(null);
+  const [rawText, setRawText] = useState("");
+  const [rawBusy, setRawBusy] = useState(false);
+  const [rawError, setRawError] = useState<string | null>(null);
+  const [unassigned, setUnassigned] = useState<api.UnassignedMemory[]>([]);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
+    setUnassigned(await api.memoryUnassigned().catch(() => []));
   }, [loadMemories]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const keepUnassigned = async (id: string) => {
+    try {
+      await api.memoryAssignUnassigned(id, "global", null);
+      await Promise.all([reload(), refreshMemories()]);
+      toast("Note saved to global memory");
+    } catch (e) {
+      setActionError(errorText(e));
+    }
+  };
+
+  const discardUnassigned = async (id: string) => {
+    try {
+      await api.memoryDiscardUnassigned(id);
+      await reload();
+    } catch (e) {
+      setActionError(errorText(e));
+    }
+  };
 
   const chatName = (conversationId: string | null) => {
     if (!conversationId) return null;
@@ -2359,6 +2429,41 @@ export function MemoryPage() {
     const source = name ? `from "${name}"` : "Added by you";
     const scope = memory.scope === "global" ? "Every chat" : "This project";
     return `${scope} · ${source} · ${timeAgo(memory.created_at)}`;
+  };
+
+  const openRaw = async () => {
+    try {
+      const read = await api.memoryRead(null);
+      setRaw({
+        markdown: read.global.markdown,
+        mtime: read.global.mtime,
+        len: read.global.len,
+      });
+      setRawText(read.global.markdown);
+      setRawError(null);
+    } catch (e) {
+      setActionError(errorText(e));
+    }
+  };
+
+  const saveRaw = async () => {
+    if (!raw) return;
+    setRawBusy(true);
+    try {
+      await api.memoryWriteRaw("global", null, rawText, raw.mtime, raw.len);
+      setRaw(null);
+      await Promise.all([reload(), refreshMemories()]);
+      toast("Memory file saved");
+    } catch (e) {
+      const message = errorText(e);
+      setRawError(
+        message.includes("changed on disk")
+          ? "The file changed on disk. Close and reopen it to load the latest text."
+          : message,
+      );
+    } finally {
+      setRawBusy(false);
+    }
   };
 
   const exportJson = () => memoryJson(memories, pendingMemories, chatName);
@@ -2413,13 +2518,67 @@ export function MemoryPage() {
     });
     if (!confirmed) return;
     for (const memory of memories) {
-      await deleteMemory(memory.id);
+      await deleteMemory(memory.id, "global", null);
     }
     await reload();
   };
 
   return (
     <div>
+      {memoryCompat && (
+        <div className="mb-3 rounded-control border border-warn/40 p-3" role="status">
+          <p className="text-xs font-medium">Memory is still in the database.</p>
+          <p className="mt-1 text-xs text-muted">
+            The file migration did not run, so notes keep working but MEMORY.md is not in use.
+            Restart the app to retry.
+          </p>
+        </div>
+      )}
+      {memoryOmitted > 0 && (
+        <p className="mb-2 text-xs text-warn" data-setting-term="Memory budget">
+          {memoryOmitted} {memoryOmitted === 1 ? "note is" : "notes are"} saved but not sent:
+          each scope sends at most 2500 characters. Remove or shorten notes to make room.
+        </p>
+      )}
+      {!memoryCompat && unassigned.length > 0 && (
+        <div className="mb-3 rounded-control border border-warn/40 p-3">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <span className="text-xs font-medium">
+              {unassigned.length} {unassigned.length === 1 ? "note" : "notes"} lost their project
+            </span>
+            <span className="text-xs text-muted">
+              Saved from 0.4.1; the project no longer exists.
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {unassigned.map((row) => (
+              <div
+                key={row.id}
+                className="flex items-start justify-between gap-3 rounded-control border border-vault-line px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="whitespace-pre-wrap text-sm text-text-primary">{row.content}</p>
+                  <p className="mt-0.5 text-xs text-text-faint">
+                    {row.kind} · {timeAgo(row.created_at)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void discardUnassigned(row.id)}
+                  >
+                    Discard
+                  </Button>
+                  <Button size="sm" onClick={() => void keepUnassigned(row.id)}>
+                    Keep as global
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {pendingMemories.length > 0 && (
         <div
           className="mb-3 rounded-control border border-warn/40 p-3"
@@ -2444,11 +2603,21 @@ export function MemoryPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <KindChip kind={item.kind} />
+                      {item.trust === "untrusted" && (
+                        <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                          Web or document
+                        </span>
+                      )}
                       <span className="text-xs text-text-faint">
                         {item.scope === "global" ? "Every chat" : "This project"} ·{" "}
                         {chatLabel(item.conversation_id)} · {timeAgo(item.created_at)}
                       </span>
                     </div>
+                    {item.trust === "untrusted" && (
+                      <p className="mt-1 text-xs text-warn">
+                        Came from a web page or document. Read it before saving.
+                      </p>
+                    )}
                     <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
                       {item.content}
                     </p>
@@ -2495,6 +2664,11 @@ export function MemoryPage() {
           aria-label="Search memory"
           className="ml-auto h-7 w-44 text-xs"
         />
+        {!memoryCompat && (
+          <Button variant="ghost" size="sm" onClick={() => void openRaw()}>
+            Edit file
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -2525,11 +2699,11 @@ export function MemoryPage() {
           await reload();
         }}
         onUpdate={async (id, draft) => {
-          await editMemory(id, draft);
+          await editMemory(id, draft, "global", null);
           await reload();
         }}
         onDelete={async (id) => {
-          await deleteMemory(id);
+          await deleteMemory(id, "global", null);
           await reload();
         }}
       />
@@ -2540,6 +2714,36 @@ export function MemoryPage() {
           </Button>
         </div>
       )}
+      <Dialog open={raw !== null} onClose={() => setRaw(null)} title="Edit MEMORY.md">
+        <p className="mb-2 text-xs text-muted">
+          The file is the source of truth. Keep the four headings. A line without an id
+          comment is left alone, but it is not sent as a note.
+        </p>
+        <Textarea
+          value={rawText}
+          onChange={(event) => setRawText(event.target.value)}
+          rows={18}
+          spellCheck={false}
+          className="font-mono text-xs"
+        />
+        {rawError && (
+          <p className="mt-2 text-xs text-alarm" role="alert">
+            {rawError}
+          </p>
+        )}
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setRaw(null)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={rawBusy || rawText === raw?.markdown}
+            onClick={() => void saveRaw()}
+          >
+            {rawBusy ? <Spinner label="Saving" /> : "Save"}
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -2554,54 +2758,125 @@ export function DataPage() {
     selectConversation,
     selectProject,
     stopStream,
+    memoryCompat,
   } = useApp();
   const [stats, setStats] = useState({ conversations: 0, messages: 0, memories: 0, projects: 0 });
   const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [counts, sizes] = await Promise.all([db.stats(), api.storageUsage()]);
+      const [counts, sizes, projects] = await Promise.all([
+        db.stats(),
+        api.storageUsage(),
+        db.listProjects(),
+      ]);
+      if (!memoryCompat) {
+        let memories = (await api.memoryRead(null)).global.entries.length;
+        for (const project of projects) {
+          const read = await api.memoryRead(project.id);
+          memories += read.project?.entries.length ?? 0;
+        }
+        counts.memories = memories;
+      }
       setStats(counts);
       setUsage(sizes);
       setUsageError(null);
     } catch (e) {
       setUsageError(errorText(e));
     }
-  }, []);
+  }, [memoryCompat]);
 
   useEffect(() => {
     void refresh();
   }, [refresh, conversations]);
 
-  const exportAll = async () => {
+  const exportData = async (scope: ExportScope) => {
     try {
-      const allConversations = await db.listConversations();
-      const withMessages = await Promise.all(
-        allConversations.map(async (c) => ({ ...c, messages: await db.listMessages(c.id) })),
-      );
-      const allProjects = await db.listProjects();
-      const projectMemories = await Promise.all(
-        allProjects.map(async (p) => ({ project: p, memories: await db.listMemories("project", p.id) })),
-      );
+      const bundle = await db.exportBundle(scope);
+      if (!memoryCompat && scope !== "chats") {
+        const read = await api.memoryRead(null);
+        const files: {
+          scope: "global" | "project";
+          project_id: string | null;
+          markdown: string;
+        }[] = [{ scope: "global", project_id: null, markdown: read.global.markdown }];
+        const list: Memory[] = read.global.entries.map((entry) =>
+          entryToMemory(entry, "global", null),
+        );
+        for (const project of bundle.projects) {
+          const projectRead = await api.memoryRead(project.id);
+          if (!projectRead.project) continue;
+          files.push({
+            scope: "project",
+            project_id: project.id,
+            markdown: projectRead.project.markdown,
+          });
+          list.push(
+            ...projectRead.project.entries.map((entry) =>
+              entryToMemory(entry, "project", project.id),
+            ),
+          );
+        }
+        bundle.memories = list;
+        bundle.memoryFiles = files;
+      }
       downloadText(
-        `myagent-export-${Date.now()}.json`,
-        JSON.stringify(
-          {
-            exportedAt: new Date().toISOString(),
-            conversations: withMessages,
-            projects: allProjects,
-            globalMemories: await db.listMemories("global", null),
-            projectMemories,
-          },
-          null,
-          2,
-        ),
+        `myagent-export-${scope}-${Date.now()}.json`,
+        JSON.stringify(bundle, null, 2),
         "application/json",
       );
-      toast("Data exported");
+      toast(
+        scope === "all" ? "Everything exported" : scope === "chats" ? "Chats exported" : "Memory exported",
+      );
     } catch (e) {
       toast(errorText(e));
+    }
+  };
+
+  const importFile = async (file: File) => {
+    setImporting(true);
+    try {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        toast("That file is not valid JSON.");
+        return;
+      }
+      const report = await db.importBundle(
+        parsed,
+        memoryCompat
+          ? undefined
+          : async (memory) => {
+              await api.memoryAppend({
+                scope: memory.scope,
+                projectId: memory.scope === "project" ? memory.project_id : null,
+                text: memory.content,
+                kind: memory.kind,
+                id: memory.id,
+                date: new Date(memory.created_at).toISOString().slice(0, 10),
+                trust: "trusted",
+              });
+            },
+      );
+      await Promise.all([refreshConversations(), refreshProjects(), refreshMemories(), refresh()]);
+      const skipped = report.skippedConversations + report.skippedMemories;
+      const refused = report.memoryErrors[0];
+      toast(
+        `Imported ${report.conversations} chats, ${report.messages} messages, ${report.projects} projects and ${report.memories} memories` +
+          (refused
+            ? `; ${report.memoryErrors.length} memory notes refused (${refused})`
+            : skipped > 0
+              ? `; skipped ${skipped} items already present`
+              : ""),
+      );
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -2637,6 +2912,8 @@ export function DataPage() {
         });
       }
       await db.wipeAll();
+      await api.memoryReset();
+      await api.memoryMigrate();
       await selectConversation(null);
       selectProject(null);
       await refreshConversations();
@@ -2655,9 +2932,41 @@ export function DataPage() {
 
   return (
     <div>
-      <SettingRow label="Export all data" description="Download chats, projects and memory as JSON">
-        <Button variant="default" size="sm" onClick={() => void exportAll()}>
-          Export
+      <SettingRow label="Export data" description="Download chats, projects and memory as JSON">
+        <DropdownMenu
+          align="end"
+          aria-label="Choose what to export"
+          items={[
+            { id: "export-all", label: "Everything", onSelect: () => void exportData("all") },
+            { id: "export-chats", label: "Chats and projects", onSelect: () => void exportData("chats") },
+            { id: "export-memory", label: "Memory", onSelect: () => void exportData("memory") },
+          ]}
+          trigger={
+            <Button variant="default" size="sm">
+              Export
+            </Button>
+          }
+        />
+      </SettingRow>
+      <SettingRow label="Import data" description="Merge an export file; items already here are kept">
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void importFile(file);
+          }}
+        />
+        <Button
+          variant="default"
+          size="sm"
+          disabled={importing}
+          onClick={() => fileInput.current?.click()}
+        >
+          {importing ? "Importing…" : "Import"}
         </Button>
       </SettingRow>
       <SettingRow label="Clear all chats" description="Projects and memory are kept">

@@ -168,6 +168,7 @@ export const pendingMemorySchema = z.object({
   content: z.string().min(1).max(2000),
   conversation_id: z.string().nullable(),
   created_at: z.number(),
+  trust: z.enum(["trusted", "untrusted"]).default("trusted"),
 });
 export type PendingMemory = z.infer<typeof pendingMemorySchema>;
 export const memoryInputSchema = memorySchema.omit({
@@ -179,15 +180,33 @@ export type MemoryInput = z.infer<typeof memoryInputSchema>;
 
 export const MEMORY_KINDS: MemoryKind[] = [...memoryKindSchema.options];
 
-export const searchQuerySchema = z.object({
-  q: z.string().trim().min(1, "Search cannot be empty").max(200),
-  projectId: z.string().nullable().optional(),
-  pinnedOnly: z.boolean().optional(),
-  from: z.number().nullable().optional(),
-  to: z.number().nullable().optional(),
-  limit: z.number().int().min(1).max(50).optional(),
+const exportedConversationSchema = conversationSchema.extend({
+  messages: z.array(messageSchema).default([]),
 });
-export type SearchQuery = z.infer<typeof searchQuerySchema>;
+
+export const exportBundleSchema = z.object({
+  version: z.number().optional(),
+  exportedAt: z.string().optional(),
+  scope: z.enum(["all", "chats", "memory"]).optional(),
+  conversations: z.array(exportedConversationSchema).default([]),
+  projects: z.array(projectSchema).default([]),
+  memories: z.array(memorySchema).default([]),
+  memoryFiles: z
+    .array(
+      z.object({
+        scope: z.enum(["global", "project"]),
+        project_id: z.string().nullable(),
+        markdown: z.string(),
+      }),
+    )
+    .optional(),
+  globalMemories: z.array(memorySchema).optional(),
+  projectMemories: z
+    .array(z.object({ project: projectSchema, memories: z.array(memorySchema) }))
+    .optional(),
+});
+export type ExportBundle = z.infer<typeof exportBundleSchema>;
+export type ExportScope = "all" | "chats" | "memory";
 
 export const tagSchema = z
   .string()
@@ -214,14 +233,11 @@ export const auditLogSchema = z.object({
   tool: z.string(),
   decision: z.string(),
   detail: z.string().nullable(),
+  duration_ms: z.number().int().nullable().optional(),
+  exit_code: z.number().int().nullable().optional(),
+  source: z.string().nullable().optional(),
 });
 export type AuditLog = z.infer<typeof auditLogSchema>;
-
-export interface SearchHit {
-  conversationId: string;
-  messageId: string | null;
-  snippet: string;
-}
 
 const usageSchema = z.object({
   prompt: z.number(),

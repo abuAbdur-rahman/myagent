@@ -7,6 +7,7 @@ mod inband;
 mod knowledge;
 mod llm;
 mod mcp;
+mod memory;
 mod permissions;
 mod research;
 mod sandbox;
@@ -362,6 +363,28 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN rating INTEGER;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 27,
+            description: "add_audit_detail_columns",
+            sql: "
+                ALTER TABLE audit_log ADD COLUMN duration_ms INTEGER;
+                ALTER TABLE audit_log ADD COLUMN exit_code INTEGER;
+                ALTER TABLE audit_log ADD COLUMN source TEXT;
+            ",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 28,
+            description: "add_meta",
+            sql: "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 29,
+            description: "add_pending_memory_trust",
+            sql: "ALTER TABLE pending_memories ADD COLUMN trust TEXT NOT NULL DEFAULT 'trusted';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -418,6 +441,17 @@ pub fn run() {
             llm::chat_stream,
             llm::suggest_title,
             llm::summarize,
+            memory::commands::memory_migrate,
+            memory::commands::memory_read,
+            memory::commands::memory_append,
+            memory::commands::memory_update,
+            memory::commands::memory_forget,
+            memory::commands::memory_write_raw,
+            memory::commands::memory_project_delete,
+            memory::commands::memory_reset,
+            memory::commands::memory_unassigned,
+            memory::commands::memory_assign_unassigned,
+            memory::commands::memory_discard_unassigned,
             delete_spill,
             storage::storage_usage,
             tools::spill_image_write,
@@ -606,6 +640,83 @@ mod migration_tests {
     }
 
     #[tokio::test]
+    async fn a_0_4_1_database_migrates_memory_into_a_file_once() {
+        let pool = pool().await;
+        apply_all(&pool).await;
+        let project = "11111111-2222-3333-4444-555555555555";
+        sqlx::query(
+            "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, 'Work', 1, 1)",
+        )
+        .bind(project)
+        .execute(&pool)
+        .await
+        .expect("project");
+        for (id, scope, project_id, kind, content) in [
+            (
+                "aaaaaaaa-1111-2222-3333-444444444444",
+                "global",
+                None,
+                "fact",
+                "Prefers short answers",
+            ),
+            (
+                "bbbbbbbb-1111-2222-3333-444444444444",
+                "project",
+                Some(project),
+                "note",
+                "Staging first",
+            ),
+        ] {
+            sqlx::query("INSERT INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, 1, 1)")
+                .bind(id)
+                .bind(scope)
+                .bind(project_id)
+                .bind(kind)
+                .bind(content)
+                .execute(&pool)
+                .await
+                .expect("memory");
+        }
+        sqlx::query("INSERT INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) VALUES ('p1', 'global', NULL, 'note', 'old pending', NULL, 1)")
+            .execute(&pool)
+            .await
+            .expect("pending");
+
+        let dir = std::env::temp_dir().join(format!("myagent-upgrade-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let report = crate::memory::migrate::run(&pool, &dir, "0.5.0")
+            .await
+            .expect("migrate");
+        assert!(report.migrated);
+        assert_eq!(report.notes, 2);
+        let global = std::fs::read_to_string(dir.join("MEMORY.md")).expect("global file");
+        assert!(global.contains("Prefers short answers"));
+        let project_file =
+            std::fs::read_to_string(dir.join("projects").join(format!("{project}.md")))
+                .expect("project file");
+        assert!(project_file.contains("Staging first"));
+
+        let trust: String =
+            sqlx::query_scalar("SELECT trust FROM pending_memories WHERE id = 'p1'")
+                .fetch_one(&pool)
+                .await
+                .expect("pending survives");
+        assert_eq!(trust, "trusted");
+
+        let again = crate::memory::migrate::run(&pool, &dir, "0.5.0")
+            .await
+            .expect("second run");
+        assert!(!again.migrated);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("MEMORY.md"))
+                .expect("global file")
+                .matches("Prefers short answers")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn shipped_sqlite_searches_fts5() {
         let pool = pool().await;
         apply_all(&pool).await;
@@ -671,6 +782,31 @@ mod migration_tests {
                 .expect("audit readable")
                 .get("d");
         assert_eq!(detail, "example.com");
+    }
+
+    #[tokio::test]
+    async fn audit_columns_migrate_an_old_row_without_data_loss() {
+        let pool = pool().await;
+        apply_versions(&pool, |version| version <= 26).await;
+        sqlx::query("INSERT INTO audit_log (id, ts, conversation_id, tool, decision, detail) VALUES ('old', 7, 'c1', 'web_fetch', 'once', 'example.com')")
+            .execute(&pool)
+            .await
+            .expect("old audit row");
+        apply_versions(&pool, |version| version > 26).await;
+        let row = sqlx::query(
+            "SELECT detail, duration_ms, exit_code, source FROM audit_log WHERE id = 'old'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("old row survives");
+        let detail: String = row.get("detail");
+        let duration: Option<i64> = row.get("duration_ms");
+        let exit: Option<i64> = row.get("exit_code");
+        let source: Option<String> = row.get("source");
+        assert_eq!(detail, "example.com");
+        assert_eq!(duration, None);
+        assert_eq!(exit, None);
+        assert_eq!(source, None);
     }
 
     #[tokio::test]

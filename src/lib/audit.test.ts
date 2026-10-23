@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   auditCounts,
   auditCsv,
+  auditDuration,
   auditJson,
   auditSummary,
   auditTools,
@@ -125,7 +126,9 @@ describe("groupAuditByDay", () => {
 
 describe("auditCsv", () => {
   it("writes a header even with no rows", () => {
-    expect(auditCsv([])).toBe("time,tool,decision,conversation,detail");
+    expect(auditCsv([])).toBe(
+      "time,tool,decision,source,conversation,duration_ms,exit_code,detail",
+    );
   });
 
   it("quotes commas, quotes and newlines", () => {
@@ -134,9 +137,18 @@ describe("auditCsv", () => {
       row("2", TODAY, "browser", "deny"),
     ]);
     const lines = csv.split("\n");
-    expect(lines[0]).toBe("time,tool,decision,conversation,detail");
+    expect(lines[0]).toBe("time,tool,decision,source,conversation,duration_ms,exit_code,detail");
     expect(csv).toContain('"a, b ""c""\nd"');
-    expect(lines[lines.length - 1]).toBe(`${new Date(TODAY).toISOString()},browser,deny,c1,`);
+    expect(lines[lines.length - 1]).toBe(`${new Date(TODAY).toISOString()},browser,deny,,c1,,,`);
+  });
+
+  it("carries the audit detail columns", () => {
+    const csv = auditCsv([
+      { ...row("1", TODAY, "sandbox_run", "allow", "run"), source: "sandbox", duration_ms: 1250, exit_code: 2 },
+    ]);
+    expect(csv.split("\n")[1]).toBe(
+      `${new Date(TODAY).toISOString()},sandbox_run,allow,sandbox,c1,1250,2,run`,
+    );
   });
 });
 
@@ -148,7 +160,10 @@ describe("auditJson", () => {
         time: new Date(TODAY).toISOString(),
         tool: "web_fetch",
         decision: "allow",
+        source: null,
         conversation: "c1",
+        duration_ms: null,
+        exit_code: null,
         detail: "why",
       },
     ]);
@@ -156,5 +171,14 @@ describe("auditJson", () => {
 
   it("writes an empty list for no rows", () => {
     expect(auditJson([])).toBe("[]");
+  });
+});
+
+describe("auditDuration", () => {
+  it("formats milliseconds and seconds and leaves missing values blank", () => {
+    expect(auditDuration(250)).toBe("250 ms");
+    expect(auditDuration(1250)).toBe("1.3 s");
+    expect(auditDuration(null)).toBeNull();
+    expect(auditDuration(undefined)).toBeNull();
   });
 });

@@ -502,3 +502,128 @@ export function voiceSetProvider(provider: string | null, model: string | null) 
 export function audioTranscribe(pcm: number[], sampleRate: number) {
   return invoke<Transcript>("audio_transcribe", { pcm, sampleRate });
 }
+
+export interface MemoryEntryView {
+  id: string;
+  text: string;
+  kind: string;
+  date: string;
+  created_at: number;
+  untrusted: boolean;
+}
+
+interface MemoryScopeView {
+  path: string;
+  exists: boolean;
+  mtime: number;
+  len: number;
+  notes: number;
+  entries: MemoryEntryView[];
+  sent: string[];
+  omitted: number;
+  chars: number;
+  markdown: string;
+}
+
+interface MemoryReadView {
+  available: boolean;
+  root: string;
+  global: MemoryScopeView;
+  project: MemoryScopeView | null;
+}
+
+export interface MemoryMigrationReport {
+  migrated: boolean;
+  reason: string;
+  at: string;
+  version: string;
+  global: number;
+  project: number;
+  notes: number;
+  unassigned: number;
+  skipped: number;
+  duplicates: number;
+  files: string[];
+  legacy: string | null;
+}
+
+export function memoryMigrate() {
+  return invoke<MemoryMigrationReport>("memory_migrate");
+}
+
+export function memoryRead(projectId: string | null) {
+  return invoke<MemoryReadView>("memory_read", { projectId });
+}
+
+export function memoryAppend(input: {
+  scope: "global" | "project";
+  projectId: string | null;
+  text: string;
+  kind: string;
+  id?: string;
+  date?: string;
+  trust?: "trusted" | "untrusted";
+}) {
+  return invoke<MemoryEntryView>("memory_append", { input });
+}
+
+export function memoryUpdate(input: {
+  scope: "global" | "project";
+  projectId: string | null;
+  id: string;
+  text?: string;
+  kind?: string;
+}) {
+  return invoke<boolean>("memory_update", input);
+}
+
+export function memoryForget(scope: "global" | "project", projectId: string | null, id: string) {
+  return invoke<boolean>("memory_forget", { scope, projectId, id });
+}
+
+export function memoryWriteRaw(
+  scope: "global" | "project",
+  projectId: string | null,
+  markdown: string,
+  mtime: number,
+  len: number,
+) {
+  return invoke<{ mtime: number; len: number }>("memory_write_raw", {
+    scope,
+    projectId,
+    markdown,
+    mtime,
+    len,
+  });
+}
+
+export function memoryProjectDelete(projectId: string) {
+  return invoke<void>("memory_project_delete", { projectId });
+}
+
+export function memoryReset() {
+  return invoke<void>("memory_reset");
+}
+
+export interface UnassignedMemory {
+  id: string;
+  content: string;
+  kind: string;
+  created_at: number;
+}
+
+export function memoryUnassigned() {
+  return invoke<UnassignedMemory[]>("memory_unassigned");
+}
+
+export function memoryAssignUnassigned(
+  id: string,
+  scope: "global" | "project",
+  projectId: string | null,
+) {
+  return invoke<void>("memory_assign_unassigned", { id, scope, projectId });
+}
+
+export function memoryDiscardUnassigned(id: string) {
+  return invoke<void>("memory_discard_unassigned", { id });
+}
