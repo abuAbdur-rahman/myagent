@@ -2349,11 +2349,18 @@ export function MemoryPage() {
     dismissPendingMemory,
     undoApprovedMemory,
     conversations,
+    memoryCompat,
+    memoryOmitted,
+    refreshMemories,
   } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [raw, setRaw] = useState<{ markdown: string; mtime: number; len: number } | null>(null);
+  const [rawText, setRawText] = useState("");
+  const [rawBusy, setRawBusy] = useState(false);
+  const [rawError, setRawError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -2380,6 +2387,41 @@ export function MemoryPage() {
     const source = name ? `from "${name}"` : "Added by you";
     const scope = memory.scope === "global" ? "Every chat" : "This project";
     return `${scope} · ${source} · ${timeAgo(memory.created_at)}`;
+  };
+
+  const openRaw = async () => {
+    try {
+      const read = await api.memoryRead(null);
+      setRaw({
+        markdown: read.global.markdown,
+        mtime: read.global.mtime,
+        len: read.global.len,
+      });
+      setRawText(read.global.markdown);
+      setRawError(null);
+    } catch (e) {
+      setActionError(errorText(e));
+    }
+  };
+
+  const saveRaw = async () => {
+    if (!raw) return;
+    setRawBusy(true);
+    try {
+      await api.memoryWriteRaw("global", null, rawText, raw.mtime, raw.len);
+      setRaw(null);
+      await Promise.all([reload(), refreshMemories()]);
+      toast("Memory file saved");
+    } catch (e) {
+      const message = errorText(e);
+      setRawError(
+        message.includes("changed on disk")
+          ? "The file changed on disk. Close and reopen it to load the latest text."
+          : message,
+      );
+    } finally {
+      setRawBusy(false);
+    }
   };
 
   const exportJson = () => memoryJson(memories, pendingMemories, chatName);
@@ -2434,13 +2476,28 @@ export function MemoryPage() {
     });
     if (!confirmed) return;
     for (const memory of memories) {
-      await deleteMemory(memory.id);
+      await deleteMemory(memory.id, "global", null);
     }
     await reload();
   };
 
   return (
     <div>
+      {memoryCompat && (
+        <div className="mb-3 rounded-control border border-warn/40 p-3" role="status">
+          <p className="text-xs font-medium">Memory is still in the database.</p>
+          <p className="mt-1 text-xs text-muted">
+            The file migration did not run, so notes keep working but MEMORY.md is not in use.
+            Restart the app to retry.
+          </p>
+        </div>
+      )}
+      {memoryOmitted > 0 && (
+        <p className="mb-2 text-xs text-warn" data-setting-term="Memory budget">
+          {memoryOmitted} {memoryOmitted === 1 ? "note is" : "notes are"} saved but not sent:
+          each scope sends at most 2500 characters. Remove or shorten notes to make room.
+        </p>
+      )}
       {pendingMemories.length > 0 && (
         <div
           className="mb-3 rounded-control border border-warn/40 p-3"
@@ -2516,6 +2573,11 @@ export function MemoryPage() {
           aria-label="Search memory"
           className="ml-auto h-7 w-44 text-xs"
         />
+        {!memoryCompat && (
+          <Button variant="ghost" size="sm" onClick={() => void openRaw()}>
+            Edit file
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -2546,11 +2608,11 @@ export function MemoryPage() {
           await reload();
         }}
         onUpdate={async (id, draft) => {
-          await editMemory(id, draft);
+          await editMemory(id, draft, "global", null);
           await reload();
         }}
         onDelete={async (id) => {
-          await deleteMemory(id);
+          await deleteMemory(id, "global", null);
           await reload();
         }}
       />
@@ -2561,6 +2623,36 @@ export function MemoryPage() {
           </Button>
         </div>
       )}
+      <Dialog open={raw !== null} onClose={() => setRaw(null)} title="Edit MEMORY.md">
+        <p className="mb-2 text-xs text-muted">
+          The file is the source of truth. Keep the four headings. A line without an id
+          comment is left alone, but it is not sent as a note.
+        </p>
+        <Textarea
+          value={rawText}
+          onChange={(event) => setRawText(event.target.value)}
+          rows={18}
+          spellCheck={false}
+          className="font-mono text-xs"
+        />
+        {rawError && (
+          <p className="mt-2 text-xs text-alarm" role="alert">
+            {rawError}
+          </p>
+        )}
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setRaw(null)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={rawBusy || rawText === raw?.markdown}
+            onClick={() => void saveRaw()}
+          >
+            {rawBusy ? <Spinner label="Saving" /> : "Save"}
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -2669,6 +2761,8 @@ export function DataPage() {
         });
       }
       await db.wipeAll();
+      await api.memoryReset();
+      await api.memoryMigrate();
       await selectConversation(null);
       selectProject(null);
       await refreshConversations();

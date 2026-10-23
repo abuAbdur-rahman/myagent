@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use regex::Regex;
@@ -879,6 +880,69 @@ fn memory_id_prefix(args: &Value) -> String {
     }
 }
 
+fn memory_file_mode(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let root = crate::memory::store::root(app).ok()?;
+    if crate::memory::store::has_file(&root) {
+        Some(root)
+    } else {
+        None
+    }
+}
+
+fn file_memory_find(root: &Path, id: &str, project_id: Option<&str>) -> Option<String> {
+    let id = crate::memory::file::canonical_id(id);
+    if let Some(pid) = project_id {
+        if let Ok(doc) = crate::memory::store::read(root, Some(pid)) {
+            if let Some(entry) = doc.entry(&id) {
+                return Some(entry.text.clone());
+            }
+        }
+    }
+    crate::memory::store::read(root, None)
+        .ok()?
+        .entry(&id)
+        .map(|entry| entry.text.clone())
+}
+
+fn file_memory_recall(
+    root: &Path,
+    query: &str,
+    project_id: Option<&str>,
+) -> Vec<(String, String, String, bool, String)> {
+    let needle = query.to_lowercase();
+    let mut rows: Vec<(String, String, String, bool, String)> = Vec::new();
+    if let Ok(doc) = crate::memory::store::read(root, None) {
+        for entry in doc.entries() {
+            if entry.text.to_lowercase().contains(&needle) {
+                rows.push((
+                    entry.id.clone(),
+                    entry.kind_label(),
+                    entry.text.clone(),
+                    false,
+                    entry.date.clone(),
+                ));
+            }
+        }
+    }
+    if let Some(pid) = project_id {
+        if let Ok(doc) = crate::memory::store::read(root, Some(pid)) {
+            for entry in doc.entries() {
+                if entry.text.to_lowercase().contains(&needle) {
+                    rows.push((
+                        entry.id.clone(),
+                        entry.kind_label(),
+                        entry.text.clone(),
+                        true,
+                        entry.date.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| b.4.cmp(&a.4));
+    rows
+}
+
 async fn find_memory_content(
     pool: &SqlitePool,
     id: &str,
@@ -964,13 +1028,17 @@ pub async fn memory_approval_text(
     let Ok(id) = memory_id_arg(args) else {
         return summarize_call(name, args);
     };
-    let Ok(pool) = memory_pool(app).await else {
-        return summarize_call(name, args);
+    let current = if let Some(root) = memory_file_mode(app) {
+        file_memory_find(&root, &id, project_id)
+    } else {
+        let Ok(pool) = memory_pool(app).await else {
+            return summarize_call(name, args);
+        };
+        find_memory_content(&pool, &id, project_id)
+            .await
+            .ok()
+            .flatten()
     };
-    let current = find_memory_content(&pool, &id, project_id)
-        .await
-        .ok()
-        .flatten();
     let Some(current) = current else {
         return summarize_call(name, args);
     };
@@ -1334,6 +1402,43 @@ pub async fn execute(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5)
                 .clamp(1, 20) as i64;
+            if let Some(root) = memory_file_mode(app) {
+                let rows = file_memory_recall(&root, &query, project_id);
+                let total = rows.len();
+                if total == 0 {
+                    return Ok(ExecOutput {
+                        output: format!("No matching memories.\n{}", tooltext::count_report(0, 0)),
+                        artifact: None,
+                    });
+                }
+                let shown = total.min(limit as usize);
+                let lines: Vec<String> = rows
+                    .iter()
+                    .take(shown)
+                    .map(|(id, kind, content, in_project, _)| {
+                        format!(
+                            "- [{id}] ({kind}, {}) {content}",
+                            if *in_project {
+                                "this project"
+                            } else {
+                                "global"
+                            }
+                        )
+                    })
+                    .collect();
+                let mut output = format!(
+                    "{}\n{}",
+                    lines.join("\n"),
+                    tooltext::count_report(shown, total)
+                );
+                if total > shown {
+                    output.push_str(" Call recall_memory again with a larger limit to see more.");
+                }
+                return Ok(ExecOutput {
+                    output,
+                    artifact: None,
+                });
+            }
             let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
             let pattern = like_pattern(&query);
             let rows: Vec<(String, String, String, Option<String>, String)> = sqlx::query_as(
@@ -1396,11 +1501,21 @@ pub async fn execute(
                     return Err("kind must be fact, preference, summary or note".to_string());
                 }
             }
-            let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
-            let written =
+            let written = if let Some(root) = memory_file_mode(app) {
+                let parsed = kind.as_deref().and_then(crate::memory::file::Kind::parse);
+                crate::memory::store::update_any(
+                    &root,
+                    project_id,
+                    &id,
+                    content.as_deref(),
+                    parsed,
+                )? as usize
+            } else {
+                let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
                 update_memory_row(&pool, &id, content.as_deref(), kind.as_deref(), project_id)
                     .await
-                    .map_err(|e| format!("database: {e}"))?;
+                    .map_err(|e| format!("database: {e}"))? as usize
+            };
             if written == 0 {
                 return Err("no memory with that id is visible in this chat".to_string());
             }
@@ -1424,14 +1539,22 @@ pub async fn execute(
         }
         "delete_memory" => {
             let id = memory_id_arg(&args)?;
-            let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
-            let content = find_memory_content(&pool, &id, project_id)
-                .await
-                .map_err(|e| format!("database: {e}"))?
-                .ok_or("no memory with that id is visible in this chat")?;
-            let deleted = delete_memory_row(&pool, &id, project_id)
-                .await
-                .map_err(|e| format!("database: {e}"))?;
+            let (content, deleted) = if let Some(root) = memory_file_mode(app) {
+                let content = file_memory_find(&root, &id, project_id)
+                    .ok_or("no memory with that id is visible in this chat")?;
+                let deleted = crate::memory::store::forget_any(&root, project_id, &id)? as usize;
+                (content, deleted)
+            } else {
+                let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+                let content = find_memory_content(&pool, &id, project_id)
+                    .await
+                    .map_err(|e| format!("database: {e}"))?
+                    .ok_or("no memory with that id is visible in this chat")?;
+                let deleted = delete_memory_row(&pool, &id, project_id)
+                    .await
+                    .map_err(|e| format!("database: {e}"))? as usize;
+                (content, deleted)
+            };
             if deleted == 0 {
                 return Err("the memory was already gone".to_string());
             }

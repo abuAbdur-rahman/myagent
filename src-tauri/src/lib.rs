@@ -7,6 +7,7 @@ mod inband;
 mod knowledge;
 mod llm;
 mod mcp;
+mod memory;
 mod permissions;
 mod research;
 mod sandbox;
@@ -372,6 +373,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 28,
+            description: "add_meta",
+            sql: "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -428,6 +435,14 @@ pub fn run() {
             llm::chat_stream,
             llm::suggest_title,
             llm::summarize,
+            memory::commands::memory_migrate,
+            memory::commands::memory_read,
+            memory::commands::memory_append,
+            memory::commands::memory_update,
+            memory::commands::memory_forget,
+            memory::commands::memory_write_raw,
+            memory::commands::memory_project_delete,
+            memory::commands::memory_reset,
             delete_spill,
             storage::storage_usage,
             tools::spill_image_write,

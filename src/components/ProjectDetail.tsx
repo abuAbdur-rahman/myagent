@@ -303,8 +303,8 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
               memories={projectMemories}
               emptyHint="No memory for this project yet."
               onAdd={(d) => addMemory({ scope: "project", project_id: project.id, ...d })}
-              onUpdate={(id, d) => editMemory(id, d)}
-              onDelete={(id) => deleteMemory(id)}
+              onUpdate={(id, d) => editMemory(id, d, "project", project.id)}
+              onDelete={(id) => deleteMemory(id, "project", project.id)}
             />
           </div>
 

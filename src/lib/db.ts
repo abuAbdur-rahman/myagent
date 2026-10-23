@@ -853,6 +853,22 @@ export async function dismissPendingMemory(id: string): Promise<void> {
   await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
 }
 
+export async function addPendingMemory(memory: PendingMemory): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    [
+      memory.id,
+      memory.scope,
+      memory.project_id,
+      memory.kind,
+      memory.content,
+      memory.conversation_id,
+      memory.created_at,
+    ],
+  );
+}
+
 export async function restorePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(

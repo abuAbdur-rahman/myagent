@@ -410,7 +410,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # E. Memory and instructions
 
 ## E1. Global memory
-- **Status:** Partial (0.3.6: the model can update and delete a memory by the id `recall_memory` prints; per-turn retrieval is still a full dump)
+- **Status:** Partial (0.5.0: notes live in `MEMORY.md` and are sent from there; retrieval is still a full dump, capped at 2500 characters and 24 notes per scope, with an “N not sent” counter in Settings. 0.3.6: the model can update and delete a memory by the id `recall_memory` prints)
 - **Ref:** Claude app memory; † Claude Code `/memory` edits memory files and auto-memory. † OpenWebUI injects only retrieved memories per turn (`add_memory_context`).
 - **Build:** A list of short facts the user can view, edit and delete. Per turn, retrieve by the current user text (keyword match, top-k), char-cap the block, and replace the previous turn's block — never dump all memories. Unrelated memories must not reach the model.
 - **Not:** Sending every memory every turn.
@@ -443,11 +443,18 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Override order is tested.
 
 ## E6. Auto memory (agent-written)
-- **Status:** Partial (0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast; Save moves that row into `memories`, Undo reverses the one step, and `source_conversation_id` keeps the provenance. E2's secret gate is still missing, so the approval step is the only guard; thread roll-up is still missing)
+- **Status:** Partial (0.5.0: Save appends the approved note to the memory file and Undo puts the pending row back; 0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast, and `source_conversation_id` keeps the provenance. E2's secret gate is still missing, so the approval step is the only guard; thread roll-up is still missing)
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
 - **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.
 - **Done:** Test asserts the tool rules, E2 blocks secrets, roll-up carries decisions with no private detail, and no auto-write path exists.
+
+## E7. Memory file (`MEMORY.md`)
+- **Status:** Have (0.5.0: one `MEMORY.md` plus `projects/<id>.md`, four headings - User, Preferences, Project, Decisions - and an id/date comment on every bullet. 0.4.1 rows migrate once at boot into the files, with a full JSON backup under `memory/legacy/`, an unassigned queue for notes whose project was deleted, and the `memories` table frozen rather than dropped. The raw editor rejects a save when the file changed on disk. A failed migration keeps the database path and shows a banner)
+- **Ref:** † Claude Code `/memory` edits markdown; † OpenCode reads `AGENTS.md`.
+- **Build:** The file is the source of truth; SQLite is only the migration source and the fallback. Writes are atomic (temp file, backup swap) and serialised. Outside text and unknown comments are preserved. New manual notes cap at 200 characters; migrated notes keep their full 2000.
+- **Not:** Syncing the file with the database after migration, or editing project files from the global page.
+- **Done:** File tests cover round-trip, CRLF/BOM, escaped comment markers, unknown text, duplicate ids and the sent budget. Migration tests cover an empty DB, an old row, an unknown kind, a deleted project, an existing file and a lost marker.
 
 ---
 
