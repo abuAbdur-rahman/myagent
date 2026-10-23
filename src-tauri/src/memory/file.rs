@@ -102,6 +102,7 @@ pub struct Entry {
     pub date: String,
     pub kind: Kind,
     pub raw_kind: Option<String>,
+    pub untrusted: bool,
 }
 
 impl Entry {
@@ -117,6 +118,7 @@ impl Entry {
             date: date.into(),
             kind,
             raw_kind: None,
+            untrusted: false,
         }
     }
 
@@ -235,7 +237,7 @@ fn anchor_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^-\s+(.*?)\s*<!--m:([0-9a-fA-F]{32})\s+(\d{4}-\d{2}-\d{2})(?:\s+k:([A-Za-z0-9_-]+))?-->$",
+            r"^-\s+(.*?)\s*<!--m:([0-9a-fA-F]{32})\s+(\d{4}-\d{2}-\d{2})(?:\s+k:([A-Za-z0-9_-]+))?(?:\s+trust=([a-z]+))?-->$",
         )
         .expect("memory anchor regex")
     })
@@ -281,12 +283,17 @@ pub fn parse(markdown: &str) -> Doc {
                         }
                     }
                 };
+                let untrusted = caps
+                    .get(5)
+                    .map(|value| value.as_str() == "untrusted")
+                    .unwrap_or(false);
                 doc.sections[current.index()].push(Entry {
                     id,
                     text,
                     date,
                     kind,
                     raw_kind,
+                    untrusted,
                 });
                 continue;
             }
@@ -322,6 +329,9 @@ pub fn render(doc: &Doc) -> String {
             if let Some(kind) = suffix {
                 out.push_str(" k:");
                 out.push_str(&kind);
+            }
+            if entry.untrusted {
+                out.push_str(" trust=untrusted");
             }
             out.push_str("-->\n");
         }
@@ -578,5 +588,19 @@ mod tests {
     fn dates_convert_both_ways() {
         let ms = millis_of_date("2026-10-22");
         assert_eq!(date_of_millis(ms), "2026-10-22");
+    }
+
+    #[test]
+    fn trust_metadata_round_trips_without_reaching_the_note_text() {
+        let mut doc = Doc::default();
+        let id = "a".repeat(32);
+        let mut entry = Entry::new(id.clone(), "From a fetched page", "2026-10-20", Kind::Fact);
+        entry.untrusted = true;
+        doc.push(Section::User, entry);
+        let text = render(&doc);
+        assert!(text.contains("trust=untrusted"));
+        assert!(!text.contains("From a fetched page trust"));
+        let back = parse(&text);
+        assert!(back.entry(&id).unwrap().untrusted);
     }
 }

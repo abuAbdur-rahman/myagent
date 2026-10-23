@@ -156,6 +156,22 @@ describe("importBundle", () => {
     expect(execute.mock.calls.some(([sql]) => sql.includes("INTO memories"))).toBe(false);
   });
 
+  it("hands memory to the file store when one is given", async () => {
+    select.mockImplementation(async (sql: string) =>
+      sql.includes("FROM projects") ? [{ id: "p1" }] : [],
+    );
+    const appended: string[] = [];
+    const report = await importBundle(
+      { projects: [project], memories: [globalMemory, projectMemory] },
+      async (memory) => {
+        appended.push(memory.id);
+      },
+    );
+    expect(appended.sort()).toEqual(["g1", "pm1"]);
+    expect(report.memories).toBe(2);
+    expect(execute.mock.calls.some(([sql]) => sql.includes("INTO memories"))).toBe(false);
+  });
+
   it("accepts the older export shape with global and per-project memory", async () => {
     select.mockImplementation(async (sql: string) =>
       sql.includes("FROM projects") ? [{ id: "p1" }] : [],

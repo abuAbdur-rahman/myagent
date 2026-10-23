@@ -509,6 +509,7 @@ export interface MemoryEntryView {
   kind: string;
   date: string;
   created_at: number;
+  untrusted: boolean;
 }
 
 interface MemoryScopeView {
@@ -531,7 +532,7 @@ interface MemoryReadView {
   project: MemoryScopeView | null;
 }
 
-interface MemoryMigrationReport {
+export interface MemoryMigrationReport {
   migrated: boolean;
   reason: string;
   at: string;
@@ -561,8 +562,9 @@ export function memoryAppend(input: {
   kind: string;
   id?: string;
   date?: string;
+  trust?: "trusted" | "untrusted";
 }) {
-  return invoke<MemoryEntryView>("memory_append", input);
+  return invoke<MemoryEntryView>("memory_append", { input });
 }
 
 export function memoryUpdate(input: {
@@ -601,4 +603,27 @@ export function memoryProjectDelete(projectId: string) {
 
 export function memoryReset() {
   return invoke<void>("memory_reset");
+}
+
+export interface UnassignedMemory {
+  id: string;
+  content: string;
+  kind: string;
+  created_at: number;
+}
+
+export function memoryUnassigned() {
+  return invoke<UnassignedMemory[]>("memory_unassigned");
+}
+
+export function memoryAssignUnassigned(
+  id: string,
+  scope: "global" | "project",
+  projectId: string | null,
+) {
+  return invoke<void>("memory_assign_unassigned", { id, scope, projectId });
+}
+
+export function memoryDiscardUnassigned(id: string) {
+  return invoke<void>("memory_discard_unassigned", { id });
 }

@@ -149,6 +149,7 @@ fn row_entry(row: &MemoryRow, project_file: bool) -> (Section, Entry) {
                     date,
                     kind,
                     raw_kind: raw,
+                    untrusted: false,
                 },
             )
         }
@@ -167,6 +168,7 @@ fn row_entry(row: &MemoryRow, project_file: bool) -> (Section, Entry) {
                     date,
                     kind,
                     raw_kind: raw,
+                    untrusted: false,
                 },
             )
         }
@@ -178,6 +180,7 @@ fn row_entry(row: &MemoryRow, project_file: bool) -> (Section, Entry) {
                 date,
                 kind: Kind::Note,
                 raw_kind: Some(row.kind.clone()),
+                untrusted: false,
             },
         ),
         None => (
@@ -188,6 +191,7 @@ fn row_entry(row: &MemoryRow, project_file: bool) -> (Section, Entry) {
                 date,
                 kind: Kind::Summary,
                 raw_kind: Some(row.kind.clone()),
+                untrusted: false,
             },
         ),
     }

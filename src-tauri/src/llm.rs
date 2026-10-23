@@ -1691,6 +1691,7 @@ struct RealTools<'a> {
     repeat: RepeatGuard,
     last_pure: Option<(String, String)>,
     children: u32,
+    untrusted: bool,
 }
 
 impl RealTools<'_> {
@@ -1798,6 +1799,18 @@ impl ToolRunner for RealTools<'_> {
             .and_then(|v| v.as_str())
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::Value::Null);
+
+        if matches!(
+            name.as_str(),
+            "web_search"
+                | "web_fetch"
+                | "knowledge_search"
+                | "sandbox_read"
+                | "read_document"
+                | "delegate_task"
+        ) {
+            self.untrusted = true;
+        }
 
         self.on_event.send(StreamEvent::ToolStart {
             id: id.clone(),
@@ -2139,6 +2152,7 @@ impl ToolRunner for RealTools<'_> {
         }
 
         if name == "research_run" {
+            self.untrusted = true;
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let progress = |summary: &str| {
                 self.on_event.send(StreamEvent::ToolStart {
@@ -2236,6 +2250,7 @@ impl ToolRunner for RealTools<'_> {
                         connection_id: Some(self.req.connection_id.as_str()),
                         vision_fallback_model: self.req.vision_fallback_model.as_deref(),
                         vision_fallback_connection: self.req.vision_fallback_connection.as_deref(),
+                        untrusted_source: self.untrusted,
                     },
                     self.cancel,
                 )
@@ -2377,6 +2392,7 @@ async fn run_agentic(
         repeat: RepeatGuard::new(),
         last_pure: None,
         children: 0,
+        untrusted: false,
     };
     agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await
 }

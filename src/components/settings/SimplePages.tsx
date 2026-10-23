@@ -78,6 +78,27 @@ import {
   type StorageUsage,
 } from "../../lib/storage";
 
+const MEMORY_KIND_NAMES = ["fact", "preference", "summary", "note"] as const;
+
+function entryToMemory(
+  entry: api.MemoryEntryView,
+  scope: Memory["scope"],
+  projectId: string | null,
+): Memory {
+  const kind = (MEMORY_KIND_NAMES as readonly string[]).includes(entry.kind)
+    ? (entry.kind as Memory["kind"])
+    : "note";
+  return {
+    id: entry.id,
+    scope,
+    project_id: projectId,
+    kind,
+    content: entry.text,
+    created_at: entry.created_at,
+    updated_at: entry.created_at,
+  };
+}
+
 function SettingRow({
   label,
   description,
@@ -2361,14 +2382,35 @@ export function MemoryPage() {
   const [rawText, setRawText] = useState("");
   const [rawBusy, setRawBusy] = useState(false);
   const [rawError, setRawError] = useState<string | null>(null);
+  const [unassigned, setUnassigned] = useState<api.UnassignedMemory[]>([]);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
+    setUnassigned(await api.memoryUnassigned().catch(() => []));
   }, [loadMemories]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const keepUnassigned = async (id: string) => {
+    try {
+      await api.memoryAssignUnassigned(id, "global", null);
+      await Promise.all([reload(), refreshMemories()]);
+      toast("Note saved to global memory");
+    } catch (e) {
+      setActionError(errorText(e));
+    }
+  };
+
+  const discardUnassigned = async (id: string) => {
+    try {
+      await api.memoryDiscardUnassigned(id);
+      await reload();
+    } catch (e) {
+      setActionError(errorText(e));
+    }
+  };
 
   const chatName = (conversationId: string | null) => {
     if (!conversationId) return null;
@@ -2498,6 +2540,45 @@ export function MemoryPage() {
           each scope sends at most 2500 characters. Remove or shorten notes to make room.
         </p>
       )}
+      {unassigned.length > 0 && (
+        <div className="mb-3 rounded-control border border-warn/40 p-3">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <span className="text-xs font-medium">
+              {unassigned.length} {unassigned.length === 1 ? "note" : "notes"} lost their project
+            </span>
+            <span className="text-xs text-muted">
+              Saved from 0.4.1; the project no longer exists.
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {unassigned.map((row) => (
+              <div
+                key={row.id}
+                className="flex items-start justify-between gap-3 rounded-control border border-vault-line px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="whitespace-pre-wrap text-sm text-text-primary">{row.content}</p>
+                  <p className="mt-0.5 text-xs text-text-faint">
+                    {row.kind} · {timeAgo(row.created_at)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void discardUnassigned(row.id)}
+                  >
+                    Discard
+                  </Button>
+                  <Button size="sm" onClick={() => void keepUnassigned(row.id)}>
+                    Keep as global
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {pendingMemories.length > 0 && (
         <div
           className="mb-3 rounded-control border border-warn/40 p-3"
@@ -2522,11 +2603,21 @@ export function MemoryPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <KindChip kind={item.kind} />
+                      {item.trust === "untrusted" && (
+                        <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                          Web or document
+                        </span>
+                      )}
                       <span className="text-xs text-text-faint">
                         {item.scope === "global" ? "Every chat" : "This project"} ·{" "}
                         {chatLabel(item.conversation_id)} · {timeAgo(item.created_at)}
                       </span>
                     </div>
+                    {item.trust === "untrusted" && (
+                      <p className="mt-1 text-xs text-warn">
+                        Came from a web page or document. Read it before saving.
+                      </p>
+                    )}
                     <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
                       {item.content}
                     </p>
@@ -2667,6 +2758,7 @@ export function DataPage() {
     selectConversation,
     selectProject,
     stopStream,
+    memoryCompat,
   } = useApp();
   const [stats, setStats] = useState({ conversations: 0, messages: 0, memories: 0, projects: 0 });
   const [usage, setUsage] = useState<StorageUsage | null>(null);
@@ -2692,6 +2784,33 @@ export function DataPage() {
   const exportData = async (scope: ExportScope) => {
     try {
       const bundle = await db.exportBundle(scope);
+      if (!memoryCompat && scope !== "chats") {
+        const read = await api.memoryRead(null);
+        const files: {
+          scope: "global" | "project";
+          project_id: string | null;
+          markdown: string;
+        }[] = [{ scope: "global", project_id: null, markdown: read.global.markdown }];
+        const list: Memory[] = read.global.entries.map((entry) =>
+          entryToMemory(entry, "global", null),
+        );
+        for (const project of bundle.projects) {
+          const projectRead = await api.memoryRead(project.id);
+          if (!projectRead.project) continue;
+          files.push({
+            scope: "project",
+            project_id: project.id,
+            markdown: projectRead.project.markdown,
+          });
+          list.push(
+            ...projectRead.project.entries.map((entry) =>
+              entryToMemory(entry, "project", project.id),
+            ),
+          );
+        }
+        bundle.memories = list;
+        bundle.memoryFiles = files;
+      }
       downloadText(
         `myagent-export-${scope}-${Date.now()}.json`,
         JSON.stringify(bundle, null, 2),
@@ -2715,7 +2834,22 @@ export function DataPage() {
         toast("That file is not valid JSON.");
         return;
       }
-      const report = await db.importBundle(parsed);
+      const report = await db.importBundle(
+        parsed,
+        memoryCompat
+          ? undefined
+          : async (memory) => {
+              await api.memoryAppend({
+                scope: memory.scope,
+                projectId: memory.scope === "project" ? memory.project_id : null,
+                text: memory.content,
+                kind: memory.kind,
+                id: memory.id,
+                date: new Date(memory.created_at).toISOString().slice(0, 10),
+                trust: "trusted",
+              });
+            },
+      );
       await Promise.all([refreshConversations(), refreshProjects(), refreshMemories(), refresh()]);
       const skipped = report.skippedConversations + report.skippedMemories;
       toast(

@@ -362,6 +362,8 @@ interface AppContextValue {
   pendingMemories: PendingMemory[];
   memoryOmitted: number;
   memoryCompat: boolean;
+  memoryReport: api.MemoryMigrationReport | null;
+  dismissMemoryReport: () => void;
   refreshMemories: () => Promise<void>;
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
@@ -534,6 +536,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [pendingMemories, setPendingMemories] = useState<PendingMemory[]>([]);
   const [memoryOmitted, setMemoryOmitted] = useState(0);
   const [memoryCompat, setMemoryCompat] = useState(false);
+  const [memoryReport, setMemoryReport] = useState<api.MemoryMigrationReport | null>(null);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -726,7 +729,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await refreshConnections();
         await refreshProjects();
         try {
-          await api.memoryMigrate();
+          const report = await api.memoryMigrate();
+          if (report.migrated) setMemoryReport(report);
         } catch (e) {
           reportError(e);
         }
@@ -1374,6 +1378,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           kind: row.kind,
           id: row.id,
           date: undefined,
+          trust: row.trust,
         });
         approvedMemoryRef.current.set(id, row);
         await db.dismissPendingMemory(id);
@@ -2543,6 +2548,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingMemories,
     memoryOmitted,
     memoryCompat,
+    memoryReport,
+    dismissMemoryReport: () => setMemoryReport(null),
     refreshMemories,
     refreshPendingMemories,
     loadMemories,

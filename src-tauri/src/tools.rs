@@ -943,6 +943,23 @@ fn file_memory_recall(
     rows
 }
 
+fn normalized_memory(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn file_memory_has(root: &Path, project_id: Option<&str>, text: &str) -> bool {
+    let needle = normalized_memory(text);
+    crate::memory::store::read(root, project_id)
+        .map(|doc| {
+            doc.entries()
+                .any(|entry| normalized_memory(&entry.text) == needle)
+        })
+        .unwrap_or(false)
+}
+
 async fn find_memory_content(
     pool: &SqlitePool,
     id: &str,
@@ -1298,6 +1315,7 @@ pub struct ExecContext<'a> {
     pub connection_id: Option<&'a str>,
     pub vision_fallback_model: Option<&'a str>,
     pub vision_fallback_connection: Option<&'a str>,
+    pub untrusted_source: bool,
 }
 
 pub async fn execute(
@@ -1312,6 +1330,7 @@ pub async fn execute(
     let project_id = context.project_id;
     let search_backend = context.search_backend;
     let search_endpoint = context.search_endpoint;
+    let untrusted_source = context.untrusted_source;
     match name {
         "get_time" => {
             let now = chrono::Utc::now();
@@ -1340,25 +1359,74 @@ pub async fn execute(
             if scope == "project" && project_id.is_none() {
                 return Err("no active project for project-scoped memory".to_string());
             }
+            if crate::memory::looks_secret(&content) {
+                return Err(crate::memory::secret_message().to_string());
+            }
+            let target_project = if scope == "project" { project_id } else { None };
+            let needle = normalized_memory(&content);
             let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+            let seen: Vec<String> = sqlx::query_scalar(
+                "SELECT content FROM pending_memories WHERE scope = ? AND project_id IS ?",
+            )
+            .bind(&scope)
+            .bind(target_project)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| format!("database: {e}"))?;
+            if seen.iter().any(|row| normalized_memory(row) == needle) {
+                return Ok(ExecOutput {
+                    output: "That note is already waiting for the user to review it.".to_string(),
+                    artifact: None,
+                });
+            }
+            let duplicate = if let Some(root) = memory_file_mode(app) {
+                file_memory_has(&root, target_project, &content)
+            } else {
+                let rows: Vec<String> = sqlx::query_scalar(
+                    "SELECT content FROM memories WHERE scope = ? AND project_id IS ?",
+                )
+                .bind(&scope)
+                .bind(target_project)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| format!("database: {e}"))?;
+                rows.iter().any(|row| normalized_memory(row) == needle)
+            };
+            if duplicate {
+                return Ok(ExecOutput {
+                    output: "That is already in memory; nothing was queued.".to_string(),
+                    artifact: None,
+                });
+            }
             let id = uuid::Uuid::new_v4().to_string();
             let now = now_millis();
+            let trust = if untrusted_source {
+                "untrusted"
+            } else {
+                "trusted"
+            };
             sqlx::query(
-                "INSERT INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(&scope)
-            .bind(if scope == "project" { project_id } else { None })
+            .bind(target_project)
             .bind(&kind)
             .bind(&content)
             .bind(conversation_id)
             .bind(now)
+            .bind(trust)
             .execute(&pool)
             .await
             .map_err(|e| format!("database: {e}"))?;
+            let source = if untrusted_source {
+                " It came from a web page or document, so it is marked untrusted."
+            } else {
+                ""
+            };
             Ok(ExecOutput {
                 output: format!(
-                    "Queued for the user to review: {}. It is not saved until they approve it.",
+                    "Queued for the user to review: {}. It is not saved until they approve it.{source}",
                     memory_preview(&content)
                 ),
                 artifact: None,
@@ -1494,6 +1562,9 @@ pub async fn execute(
             if let Some(text) = content.as_deref() {
                 if text.chars().count() > MEMORY_CAP {
                     return Err("content too long (max 2000 chars)".to_string());
+                }
+                if crate::memory::looks_secret(text) {
+                    return Err(crate::memory::secret_message().to_string());
                 }
             }
             if let Some(name) = kind.as_deref() {

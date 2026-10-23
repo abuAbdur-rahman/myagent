@@ -417,11 +417,11 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A test sends an unrelated memory plus a matching one; only the matching one is in the prompt.
 
 ## E2. Secret refusal in memory
-- **Status:** Missing
+- **Status:** Have (0.5.0: `memory::looks_secret` runs before every file write, every assistant proposal and every manual edit. Key shapes, private-key headers and `password=`/`token=`/`Bearer` are refused with a reason. A note proposed after `web_search`, `web_fetch`, `knowledge_search`, `sandbox_read`, `read_document` or `delegate_task` is tagged untrusted in the inbox and in the file; filters can only drop, never approve)
 - **Ref:** Claude does not store credentials in memory.
 - **Build:** Pure function `looks_secret(&str) -> bool`: API key shapes (`sk-`, `ghp_`, `AKIA`, long hex/base64), private key headers, `password=`, `token=`, `Bearer`. Runs before every memory write; tell the user when blocked. Panic-free.
 - **Not:** Entropy scanning of all chat.
-- **Done:** A 15+ row table test passes.
+- **Done:** Unit tests cover obvious keys and ordinary notes; the tool path refuses `remember this sk-…` with a reason.
 
 ## E3. Projects
 - **Status:** Partial (threads + instructions + shared memory have; knowledge files missing)

@@ -379,6 +379,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 29,
+            description: "add_pending_memory_trust",
+            sql: "ALTER TABLE pending_memories ADD COLUMN trust TEXT NOT NULL DEFAULT 'trusted';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -443,6 +449,9 @@ pub fn run() {
             memory::commands::memory_write_raw,
             memory::commands::memory_project_delete,
             memory::commands::memory_reset,
+            memory::commands::memory_unassigned,
+            memory::commands::memory_assign_unassigned,
+            memory::commands::memory_discard_unassigned,
             delete_spill,
             storage::storage_usage,
             tools::spill_image_write,

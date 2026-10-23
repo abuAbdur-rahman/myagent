@@ -22,6 +22,62 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.5.0",
+    date: "2026-10-23",
+    summary:
+      "Memory became one editable file per scope, migrated from the database without losing a note. Settings can open and edit the file directly, the inbox still gates every assistant write, and a note that looks like a key is refused. This release also finishes the 0.4.1 ledger: audit rows record duration, exit code and source; DeepSeek models know their context window; data export and import gained scopes; and the chat's jump button and activity pill stay where they belong.",
+    changes: [
+      {
+        kind: "new",
+        text: "Memory lives in MEMORY.md, with one file per project, beside the database. Four headings keep it readable, every note carries an id and date in a comment, and 0.4.1 notes migrate once with a full JSON backup. The database copy is frozen as a rollback, and a failed migration keeps memory working from it with a banner.",
+      },
+      {
+        kind: "new",
+        text: "Settings → Memory edits the file itself. A save is refused when the file changed on disk since it was opened, so a hand edit is never silently lost. Notes whose project no longer exists wait in an unassigned list instead of disappearing.",
+      },
+      {
+        kind: "new",
+        text: "Data export offers a scope: everything, chats and projects, or memory. The export carries the memory markdown, and import keeps the original ids, so importing the same file twice changes nothing.",
+      },
+      {
+        kind: "improved",
+        text: "A note proposed by the assistant is refused when it looks like an API key, token or password. Notes written after a web search, a fetched page or a document are marked untrusted in the inbox, so approval is an informed decision.",
+      },
+      {
+        kind: "improved",
+        text: "The 2500-character send budget is visible: Settings says how many notes are saved but not sent, and shortening a note makes room again.",
+      },
+      {
+        kind: "improved",
+        text: "Audit rows show the decision source, duration and exit code, and rows recorded before this release still render.",
+      },
+      {
+        kind: "improved",
+        text: "DeepSeek models show a context window instead of Unknown. A value reported by the provider still wins.",
+      },
+      {
+        kind: "fixed",
+        text: "The jump-to-latest button holds its place at the bottom of the chat instead of scrolling away with the transcript.",
+      },
+      {
+        kind: "fixed",
+        text: "Only one activity pill is mounted: centred on an empty chat and above the composer after the first message.",
+      },
+      {
+        kind: "fixed",
+        text: "Generated chat titles are plain text in the sidebar and header, including titles stored before this release.",
+      },
+      {
+        kind: "fixed",
+        text: "The sidebar lost the message box and the All chats filter; tags and the Ctrl+K palette remain.",
+      },
+      {
+        kind: "fixed",
+        text: "An approved memory now appends to the file, and Undo restores the exact pending note.",
+      },
+    ],
+  },
+  {
     version: "0.4.1",
     date: "2026-10-22",
     summary:

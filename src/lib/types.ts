@@ -168,6 +168,7 @@ export const pendingMemorySchema = z.object({
   content: z.string().min(1).max(2000),
   conversation_id: z.string().nullable(),
   created_at: z.number(),
+  trust: z.enum(["trusted", "untrusted"]).default("trusted"),
 });
 export type PendingMemory = z.infer<typeof pendingMemorySchema>;
 export const memoryInputSchema = memorySchema.omit({
@@ -190,6 +191,15 @@ export const exportBundleSchema = z.object({
   conversations: z.array(exportedConversationSchema).default([]),
   projects: z.array(projectSchema).default([]),
   memories: z.array(memorySchema).default([]),
+  memoryFiles: z
+    .array(
+      z.object({
+        scope: z.enum(["global", "project"]),
+        project_id: z.string().nullable(),
+        markdown: z.string(),
+      }),
+    )
+    .optional(),
   globalMemories: z.array(memorySchema).optional(),
   projectMemories: z
     .array(z.object({ project: projectSchema, memories: z.array(memorySchema) }))

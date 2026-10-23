@@ -22,8 +22,50 @@ import { ArtifactsPanel } from "./components/ArtifactsPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { Toaster } from "./components/Toaster";
 import { ConfirmHost } from "./components/ConfirmDialog";
+import { Button, Dialog } from "./components/ui";
 import { check } from "@tauri-apps/plugin-updater";
 import { toast } from "./lib/toast";
+
+function MemoryReportDialog() {
+  const { memoryReport, dismissMemoryReport, setSettingsPage } = useApp();
+  if (!memoryReport) return null;
+  const notes = memoryReport.global + memoryReport.project;
+  return (
+    <Dialog open onClose={dismissMemoryReport} title="Memory moved to a file">
+      <p className="text-sm text-muted">
+        Your notes now live in MEMORY.md next to the database. {notes}{" "}
+        {notes === 1 ? "note was" : "notes were"} copied; the database copy stays as a rollback.
+      </p>
+      <ul className="mt-2 space-y-1 text-xs text-muted">
+        <li>
+          {memoryReport.global} global, {memoryReport.project} project
+        </li>
+        {memoryReport.unassigned > 0 && (
+          <li>
+            {memoryReport.unassigned} project notes had no live project and wait in
+            legacy/unassigned.json.
+          </li>
+        )}
+        {memoryReport.duplicates > 0 && <li>{memoryReport.duplicates} duplicates were merged.</li>}
+        {memoryReport.legacy && <li className="break-all">Backup: {memoryReport.legacy}</li>}
+      </ul>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={dismissMemoryReport}>
+          Close
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            dismissMemoryReport();
+            setSettingsPage("memory");
+          }}
+        >
+          Review memory
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
 
 function Shell() {
   const {
@@ -205,6 +247,7 @@ function Shell() {
       <SettingsDialog />
       <OnboardingDialog />
       <SearchKeyDialog />
+      <MemoryReportDialog />
       <ProjectDialog
         open={projectDialog.open}
         projectId={projectDialog.id}

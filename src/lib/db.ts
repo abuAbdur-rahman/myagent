@@ -247,7 +247,10 @@ export async function exportBundle(scope: ExportScope): Promise<ExportBundle> {
   return bundle;
 }
 
-export async function importBundle(input: unknown): Promise<ImportReport> {
+export async function importBundle(
+  input: unknown,
+  appendMemory?: (memory: Memory) => Promise<void>,
+): Promise<ImportReport> {
   const parsed = exportBundleSchema.safeParse(input);
   if (!parsed.success) {
     throw new Error(parsed.error.issues[0]?.message ?? "Not a myagent export file");
@@ -356,6 +359,11 @@ export async function importBundle(input: unknown): Promise<ImportReport> {
     const projectId = memory.scope === "project" ? memory.project_id : null;
     if (memory.scope === "project" && (!projectId || !projectIds.has(projectId))) {
       report.skippedMemories += 1;
+      continue;
+    }
+    if (appendMemory) {
+      await appendMemory(memory);
+      report.memories += 1;
       continue;
     }
     const result = await db.execute(
@@ -831,7 +839,7 @@ export async function deleteMemory(id: string): Promise<void> {
 export async function listPendingMemories(): Promise<PendingMemory[]> {
   const db = await getDb();
   const rows = await db.select<unknown[]>(
-    "SELECT id, scope, project_id, kind, content, conversation_id, created_at FROM pending_memories ORDER BY created_at DESC",
+    "SELECT id, scope, project_id, kind, content, conversation_id, created_at, trust FROM pending_memories ORDER BY created_at DESC",
   );
   return rows.flatMap((row) => {
     const parsed = pendingMemorySchema.safeParse(row);
@@ -856,7 +864,7 @@ export async function dismissPendingMemory(id: string): Promise<void> {
 export async function addPendingMemory(memory: PendingMemory): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     [
       memory.id,
       memory.scope,
@@ -865,6 +873,7 @@ export async function addPendingMemory(memory: PendingMemory): Promise<void> {
       memory.content,
       memory.conversation_id,
       memory.created_at,
+      memory.trust,
     ],
   );
 }

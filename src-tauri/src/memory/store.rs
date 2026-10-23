@@ -132,6 +132,7 @@ pub fn append(
     text: &str,
     kind: Kind,
     date: &str,
+    untrusted: bool,
 ) -> Result<Entry, String> {
     let id = file::canonical_id(id);
     let text = file::one_line(text);
@@ -149,7 +150,8 @@ pub fn append(
     } else {
         kind.section()
     };
-    let entry = Entry::new(id, text, date.to_string(), kind);
+    let mut entry = Entry::new(id, text, date.to_string(), kind);
+    entry.untrusted = untrusted;
     doc.push(section, entry.clone());
     write_atomic(&path, &file::render(&doc))?;
     Ok(entry)
@@ -255,6 +257,7 @@ pub struct EntryView {
     pub kind: String,
     pub date: String,
     pub created_at: i64,
+    pub untrusted: bool,
 }
 
 impl From<&Entry> for EntryView {
@@ -265,6 +268,7 @@ impl From<&Entry> for EntryView {
             kind: entry.kind_label(),
             date: entry.date.clone(),
             created_at: file::millis_of_date(&entry.date),
+            untrusted: entry.untrusted,
         }
     }
 }
@@ -326,8 +330,16 @@ mod tests {
     #[test]
     fn append_read_update_and_forget_round_trip() {
         let dir = root("store");
-        let entry =
-            append(&dir, None, &id(1), "first note", Kind::Fact, "2026-10-20").expect("append");
+        let entry = append(
+            &dir,
+            None,
+            &id(1),
+            "first note",
+            Kind::Fact,
+            "2026-10-20",
+            false,
+        )
+        .expect("append");
         assert_eq!(entry.id, id(1));
         let doc = read(&dir, None).expect("read");
         assert_eq!(doc.entry(&id(1)).unwrap().text, "first note");
@@ -356,6 +368,7 @@ mod tests {
             "staging first",
             Kind::Preference,
             "2026-10-20",
+            false,
         )
         .expect("append");
         let text = fs::read_to_string(scope_path(&dir, Some(project)).unwrap()).expect("file");
@@ -376,8 +389,8 @@ mod tests {
     #[test]
     fn an_atomic_write_leaves_no_temp_or_backup() {
         let dir = root("atomic");
-        append(&dir, None, &id(3), "one", Kind::Fact, "2026-10-20").expect("append");
-        append(&dir, None, &id(4), "two", Kind::Fact, "2026-10-20").expect("append");
+        append(&dir, None, &id(3), "one", Kind::Fact, "2026-10-20", false).expect("append");
+        append(&dir, None, &id(4), "two", Kind::Fact, "2026-10-20", false).expect("append");
         let path = scope_path(&dir, None).unwrap();
         assert!(path.is_file());
         assert!(!temp_path(&path).exists());
@@ -387,7 +400,16 @@ mod tests {
     #[test]
     fn a_lost_file_recovers_from_the_backup() {
         let dir = root("backup");
-        append(&dir, None, &id(5), "keep me", Kind::Fact, "2026-10-20").expect("append");
+        append(
+            &dir,
+            None,
+            &id(5),
+            "keep me",
+            Kind::Fact,
+            "2026-10-20",
+            false,
+        )
+        .expect("append");
         let path = scope_path(&dir, None).unwrap();
         fs::rename(&path, backup_path(&path)).expect("simulate crash");
         let doc = read(&dir, None).expect("read");
@@ -398,7 +420,7 @@ mod tests {
     #[test]
     fn write_raw_rejects_a_stale_mtime() {
         let dir = root("raw");
-        append(&dir, None, &id(6), "one", Kind::Fact, "2026-10-20").expect("append");
+        append(&dir, None, &id(6), "one", Kind::Fact, "2026-10-20", false).expect("append");
         let path = scope_path(&dir, None).unwrap();
         let (mtime, len) = meta(&path);
         let edited = file::render(&file::parse(
@@ -422,6 +444,7 @@ mod tests {
                         &format!("note {n}"),
                         Kind::Fact,
                         "2026-10-20",
+                        false,
                     )
                     .expect("append");
                 })
@@ -436,7 +459,16 @@ mod tests {
     #[test]
     fn a_view_reports_the_budget_and_the_sent_ids() {
         let dir = root("view");
-        append(&dir, None, &id(7), "visible", Kind::Fact, "2026-10-20").expect("append");
+        append(
+            &dir,
+            None,
+            &id(7),
+            "visible",
+            Kind::Fact,
+            "2026-10-20",
+            false,
+        )
+        .expect("append");
         let view = view(&dir, None).expect("view");
         assert_eq!(view.notes, 1);
         assert_eq!(view.entries.len(), 1);
@@ -449,10 +481,19 @@ mod tests {
     fn delete_project_and_reset_remove_the_files() {
         let dir = root("delete");
         let project = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-        append(&dir, Some(project), &id(8), "p", Kind::Note, "2026-10-20").expect("append");
+        append(
+            &dir,
+            Some(project),
+            &id(8),
+            "p",
+            Kind::Note,
+            "2026-10-20",
+            false,
+        )
+        .expect("append");
         delete_project(&dir, project).expect("delete");
         assert!(!scope_path(&dir, Some(project)).unwrap().exists());
-        append(&dir, None, &id(9), "g", Kind::Fact, "2026-10-20").expect("append");
+        append(&dir, None, &id(9), "g", Kind::Fact, "2026-10-20", false).expect("append");
         reset(&dir).expect("reset");
         assert!(!dir.exists());
     }
