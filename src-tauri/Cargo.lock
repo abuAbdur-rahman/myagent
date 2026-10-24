@@ -3125,6 +3125,7 @@ dependencies = [
 name = "myagent"
 version = "0.5.1"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "calamine",
  "chrono",
@@ -3152,6 +3153,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "transcribe-rs",
+ "url",
  "uuid",
 ]
 

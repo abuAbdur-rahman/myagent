@@ -118,7 +118,11 @@ fn token_present(id: &str) -> bool {
 }
 
 fn fill_token_state(row: &mut McpServerRow) {
-    row.has_token = row.auth_type != "none" && token_present(&row.id);
+    row.has_token = match row.auth_type.as_str() {
+        "bearer" => token_present(&row.id),
+        "oauth" => crate::mcp_oauth::has_credentials(&row.id),
+        _ => false,
+    };
 }
 
 #[cfg(test)]
@@ -577,6 +581,7 @@ pub async fn mcp_add(
 
 #[tauri::command]
 pub async fn mcp_remove(app: AppHandle, id: String) -> Result<(), String> {
+    crate::mcp_oauth::clear_credentials(&id)?;
     crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
     let pool = crate::tools::memory_pool(&app)
         .await
@@ -636,7 +641,63 @@ pub async fn mcp_delete_token(app: AppHandle, id: String) -> Result<McpServerRow
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
+    let row = server_row(&pool, &id).await?;
+    if row.auth_type == "oauth" {
+        crate::mcp_oauth::clear_credentials(&id)?;
+    } else {
+        crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
+    }
+    let row = server_row(&pool, &id).await?;
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn mcp_begin_auth(app: AppHandle, id: String) -> Result<McpServerRow, String> {
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    let row = server_row(&pool, &id).await?;
+    if row.auth_type != "oauth" {
+        return Err("server auth mode is not oauth".to_string());
+    }
+    if row.transport == "stdio" {
+        return Err("oauth requires an http or sse transport".to_string());
+    }
+    let url = row.url.as_deref().unwrap_or("").trim();
+    if url.is_empty() {
+        return Err("oauth server needs a url".to_string());
+    }
+    crate::mcp_oauth::authorize(&id, url).await?;
+    let row = match server_row(&pool, &id).await {
+        Ok(row) => row,
+        Err(error) => {
+            if let Err(cleanup) = crate::mcp_oauth::clear_credentials(&id) {
+                eprintln!("mcp oauth: cleanup after missing server failed: {cleanup}");
+            }
+            return Err(error);
+        }
+    };
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    if let Err(error) = mcp_probe(app.clone(), id.clone()).await {
+        eprintln!("mcp oauth: post-auth probe failed: {error}");
+    }
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn mcp_disconnect(app: AppHandle, id: String) -> Result<McpServerRow, String> {
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
     server_row(&pool, &id).await?;
+    crate::mcp_oauth::clear_credentials(&id)?;
     crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
     let row = server_row(&pool, &id).await?;
     let state = app.state::<McpState>();
@@ -644,6 +705,11 @@ pub async fn mcp_delete_token(app: AppHandle, id: String) -> Result<McpServerRow
     let key = McpState::key(&McpServerConfig::from(&row));
     state.sessions.lock().await.remove(&key);
     Ok(row)
+}
+
+#[tauri::command]
+pub async fn mcp_cancel_auth(id: String) -> Result<(), String> {
+    crate::mcp_oauth::cancel(&id).await
 }
 
 fn validate_auth_type(auth_type: &str) -> Result<(), String> {
@@ -709,6 +775,8 @@ pub async fn mcp_update(
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
+    let before = server_row(&pool, &id).await?;
+    let target_changed = before.transport != transport || before.url != url;
     sqlx::query(
         "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ? WHERE id = ?",
     )
@@ -721,8 +789,11 @@ pub async fn mcp_update(
     .execute(&pool)
     .await
     .map_err(|e| e.to_string())?;
-    if auth_type != "bearer" {
+    if target_changed || auth_type != "bearer" {
         crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
+    }
+    if target_changed || auth_type != "oauth" {
+        crate::mcp_oauth::clear_credentials(&id)?;
     }
     let state = app.state::<McpState>();
     forget_probe(&state, &id);
@@ -884,11 +955,17 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
             }
             Some(token)
         }
-        "oauth" => return Err("oauth authorization is not configured yet".to_string()),
+        "oauth" => {
+            if config.transport == "stdio" {
+                return Err("oauth requires an http or sse transport".to_string());
+            }
+            let endpoint = config.url.as_deref().unwrap_or("");
+            Some(crate::mcp_oauth::access_token(&config.id, endpoint).await?)
+        }
         other => return Err(format!("unsupported auth type: {other}")),
     };
     if config.transport == "stdio" && auth_token.is_some() {
-        return Err("stdio servers do not use bearer auth".to_string());
+        return Err("stdio servers do not use authorization".to_string());
     }
     let transport = if config.transport == "sse" {
         let endpoint = config.url.as_deref().unwrap_or("");

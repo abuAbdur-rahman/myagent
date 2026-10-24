@@ -358,6 +358,18 @@ export function mcpDeleteToken(id: string) {
   return invoke<McpServerRow>("mcp_delete_token", { id });
 }
 
+export function mcpBeginAuth(id: string) {
+  return invoke<McpServerRow>("mcp_begin_auth", { id });
+}
+
+export function mcpCancelAuth(id: string) {
+  return invoke<void>("mcp_cancel_auth", { id });
+}
+
+export function mcpDisconnect(id: string) {
+  return invoke<McpServerRow>("mcp_disconnect", { id });
+}
+
 export function mcpStatus() {
   return invoke<McpProbe[]>("mcp_status");
 }

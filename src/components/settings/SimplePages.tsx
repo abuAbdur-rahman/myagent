@@ -847,6 +847,269 @@ function McpDialogFooter({
   );
 }
 
+type McpAuthMessage = { ok: boolean; text: string };
+
+interface McpBearerState {
+  token: string;
+  setToken: (value: string) => void;
+  busy: boolean;
+  message: McpAuthMessage | null;
+  hasToken: boolean;
+  save: () => Promise<void>;
+  clear: () => Promise<void>;
+}
+
+interface McpOAuthState {
+  busy: boolean;
+  message: McpAuthMessage | null;
+  hasToken: boolean;
+  connect: () => Promise<void>;
+  cancel: () => Promise<void>;
+  disconnect: () => Promise<void>;
+}
+
+function useMcpBearer(
+  open: boolean,
+  editing: api.McpServerRow | null,
+  authType: string,
+  onChanged: () => void,
+): McpBearerState {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<McpAuthMessage | null>(null);
+  const [hasToken, setHasToken] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setToken("");
+    setMessage(null);
+    setHasToken(editing && editing.auth_type === authType ? editing.has_token : false);
+  }, [open, editing, authType]);
+
+  const save = async () => {
+    if (!editing) return;
+    const value = token.trim();
+    if (!value) {
+      setMessage({ ok: false, text: "Enter a token first." });
+      return;
+    }
+    setBusy(true);
+    try {
+      const row = await api.mcpSetToken(editing.id, value);
+      setHasToken(row.has_token);
+      setToken("");
+      setMessage({ ok: true, text: "Token saved. Reconnect to use it." });
+      onChanged();
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    if (!editing) return;
+    setBusy(true);
+    try {
+      const row = await api.mcpDeleteToken(editing.id);
+      setHasToken(row.has_token);
+      setMessage({ ok: true, text: "Token cleared." });
+      onChanged();
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return { token, setToken, busy, message, hasToken, save, clear };
+}
+
+function useMcpOAuth(
+  open: boolean,
+  editing: api.McpServerRow | null,
+  authType: string,
+  onChanged: () => void,
+): McpOAuthState {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<McpAuthMessage | null>(null);
+  const [hasToken, setHasToken] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setBusy(false);
+    setMessage(null);
+    setHasToken(editing && editing.auth_type === authType ? editing.has_token : false);
+  }, [open, editing, authType]);
+
+  const connect = async () => {
+    if (!editing) return;
+    setBusy(true);
+    setMessage({ ok: true, text: "Waiting for the browser…" });
+    try {
+      const row = await api.mcpBeginAuth(editing.id);
+      setHasToken(row.has_token);
+      setMessage({
+        ok: row.has_token,
+        text: row.has_token ? "Connected." : "Authorization did not complete.",
+      });
+      onChanged();
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancel = async () => {
+    if (!editing) return;
+    try {
+      await api.mcpCancelAuth(editing.id);
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+  };
+
+  const disconnect = async () => {
+    if (!editing) return;
+    setBusy(true);
+    try {
+      const row = await api.mcpDisconnect(editing.id);
+      setHasToken(row.has_token);
+      setMessage({ ok: true, text: "Disconnected." });
+      onChanged();
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return { busy, message, hasToken, connect, cancel, disconnect };
+}
+
+function McpBearerFields({
+  editing,
+  state,
+}: {
+  editing: api.McpServerRow | null;
+  state: McpBearerState;
+}) {
+  if (!editing || editing.auth_type !== "bearer") {
+    return (
+      <p className="mt-3 text-xs text-muted">
+        {editing
+          ? "Save the server with bearer auth first."
+          : "Save the server first, then add its bearer token."}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <McpField
+        label="Bearer token"
+        hint={
+          state.hasToken
+            ? "A token is stored. Enter a new one to replace it."
+            : "Stored in Windows Credential Manager, never in SQLite."
+        }
+      >
+        <Input
+          type="password"
+          value={state.token}
+          autoComplete="off"
+          placeholder={state.hasToken ? "••••••••" : "Paste token"}
+          onChange={(e) => state.setToken(e.target.value)}
+        />
+      </McpField>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={state.busy || !state.token.trim()}
+          onClick={() => void state.save()}
+        >
+          {state.busy ? <Spinner label="Saving" /> : "Save token"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={state.busy || !state.hasToken}
+          onClick={() => void state.clear()}
+        >
+          Clear token
+        </Button>
+        {state.message && (
+          <p
+            className={cn("text-xs", state.message.ok ? "text-muted" : "text-danger")}
+            role="status"
+          >
+            {state.message.text}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function McpOAuthFields({
+  editing,
+  state,
+}: {
+  editing: api.McpServerRow | null;
+  state: McpOAuthState;
+}) {
+  if (!editing || editing.auth_type !== "oauth") {
+    return (
+      <p className="mt-3 text-xs text-muted">
+        {editing
+          ? "Save the server with OAuth first."
+          : "Save the server first, then connect with OAuth."}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <p className="text-xs text-muted">
+        {state.hasToken
+          ? "Authorized. Reconnect if the token expires."
+          : "Authorization required. Connect opens your browser."}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={state.busy}
+          onClick={() => void state.connect()}
+        >
+          {state.busy ? <Spinner label="Waiting" /> : state.hasToken ? "Reconnect" : "Connect"}
+        </Button>
+        {state.busy && (
+          <Button size="sm" variant="ghost" onClick={() => void state.cancel()}>
+            Cancel
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={state.busy || !state.hasToken}
+          onClick={() => void state.disconnect()}
+        >
+          Disconnect
+        </Button>
+        {state.message && (
+          <p
+            className={cn("text-xs", state.message.ok ? "text-muted" : "text-danger")}
+            role="status"
+          >
+            {state.message.text}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function McpServerDialog({
   open,
   editing,
@@ -868,20 +1131,15 @@ export function McpServerDialog({
   const [errors, setErrors] = useState<McpErrors>({});
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
-  const [token, setToken] = useState("");
-  const [tokenBusy, setTokenBusy] = useState(false);
-  const [tokenMessage, setTokenMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [hasToken, setHasToken] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
+  const bearer = useMcpBearer(open, editing, draft.authType, onChanged);
+  const oauth = useMcpOAuth(open, editing, draft.authType, onChanged);
 
   useEffect(() => {
     if (!open) return;
     setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
     setErrors({});
-    setToken("");
-    setTokenMessage(null);
-    setHasToken(editing?.has_token ?? false);
   }, [open, editing, seed]);
 
   useEffect(() => {
@@ -912,42 +1170,6 @@ export function McpServerDialog({
       setTest({ ok: false, text: errorText(e) });
     } finally {
       setTesting(false);
-    }
-  };
-
-  const saveToken = async () => {
-    if (!editing) return;
-    const value = token.trim();
-    if (!value) {
-      setTokenMessage({ ok: false, text: "Enter a token first." });
-      return;
-    }
-    setTokenBusy(true);
-    try {
-      const row = await api.mcpSetToken(editing.id, value);
-      setHasToken(row.has_token);
-      setToken("");
-      setTokenMessage({ ok: true, text: "Token saved. Reconnect to use it." });
-      onChanged();
-    } catch (e) {
-      setTokenMessage({ ok: false, text: errorText(e) });
-    } finally {
-      setTokenBusy(false);
-    }
-  };
-
-  const clearToken = async () => {
-    if (!editing) return;
-    setTokenBusy(true);
-    try {
-      const row = await api.mcpDeleteToken(editing.id);
-      setHasToken(row.has_token);
-      setTokenMessage({ ok: true, text: "Token cleared." });
-      onChanged();
-    } catch (e) {
-      setTokenMessage({ ok: false, text: errorText(e) });
-    } finally {
-      setTokenBusy(false);
     }
   };
 
@@ -995,60 +1217,8 @@ export function McpServerDialog({
           )
         )}
       </div>
-      {draft.authType === "bearer" &&
-        (editing ? (
-          <div className="mt-3 flex flex-col gap-2">
-            <McpField
-              label="Bearer token"
-              hint={
-                hasToken
-                  ? "A token is stored. Enter a new one to replace it."
-                  : "Stored in Windows Credential Manager, never in SQLite."
-              }
-            >
-              <Input
-                type="password"
-                value={token}
-                autoComplete="off"
-                placeholder={hasToken ? "••••••••" : "Paste token"}
-                onChange={(e) => setToken(e.target.value)}
-              />
-            </McpField>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="default"
-                disabled={tokenBusy || !token.trim()}
-                onClick={() => void saveToken()}
-              >
-                {tokenBusy ? <Spinner label="Saving" /> : "Save token"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={tokenBusy || !hasToken}
-                onClick={() => void clearToken()}
-              >
-                Clear token
-              </Button>
-              {tokenMessage && (
-                <p
-                  className={cn("text-xs", tokenMessage.ok ? "text-muted" : "text-danger")}
-                  role="status"
-                >
-                  {tokenMessage.text}
-                </p>
-              )}
-            </div>
-          </div>
-        ) : (
-          <p className="mt-3 text-xs text-muted">
-            Save the server first, then add its bearer token.
-          </p>
-        ))}
-      {draft.authType === "oauth" && (
-        <p className="mt-3 text-xs text-muted">OAuth sign-in starts after the server is saved.</p>
-      )}
+      {draft.authType === "bearer" && <McpBearerFields editing={editing} state={bearer} />}
+      {draft.authType === "oauth" && <McpOAuthFields editing={editing} state={oauth} />}
       <McpDialogFooter
         editing={editing !== null}
         onClose={onClose}

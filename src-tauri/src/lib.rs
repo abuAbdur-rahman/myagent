@@ -7,6 +7,7 @@ mod inband;
 mod knowledge;
 mod llm;
 mod mcp;
+mod mcp_oauth;
 mod memory;
 mod permissions;
 mod research;
@@ -490,6 +491,9 @@ pub fn run() {
             mcp::mcp_set_approval,
             mcp::mcp_set_token,
             mcp::mcp_delete_token,
+            mcp::mcp_begin_auth,
+            mcp::mcp_cancel_auth,
+            mcp::mcp_disconnect,
             mcp::mcp_status,
             mcp::mcp_probe,
             mcp::mcp_test,

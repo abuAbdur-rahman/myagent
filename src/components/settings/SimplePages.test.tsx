@@ -7,11 +7,17 @@ import type { McpServerRow } from "../../lib/api";
 const mocks = vi.hoisted(() => ({
   mcpSetToken: vi.fn(),
   mcpDeleteToken: vi.fn(),
+  mcpBeginAuth: vi.fn(),
+  mcpCancelAuth: vi.fn(),
+  mcpDisconnect: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
   mcpSetToken: mocks.mcpSetToken,
   mcpDeleteToken: mocks.mcpDeleteToken,
+  mcpBeginAuth: mocks.mcpBeginAuth,
+  mcpCancelAuth: mocks.mcpCancelAuth,
+  mcpDisconnect: mocks.mcpDisconnect,
   mcpTest: vi.fn(),
   mcpList: vi.fn(),
   mcpStatus: vi.fn(),
@@ -39,6 +45,8 @@ const row: McpServerRow = {
   enabled: true,
   has_token: false,
 };
+
+const oauthRow: McpServerRow = { ...row, auth_type: "oauth" };
 
 describe("McpServerDialog bearer token", () => {
   beforeEach(() => {
@@ -91,5 +99,57 @@ describe("McpServerDialog bearer token", () => {
 
     await waitFor(() => expect(mocks.mcpDeleteToken).toHaveBeenCalledWith("s1"));
     expect(await screen.findByText("Token cleared.")).toBeTruthy();
+  });
+});
+
+describe("McpServerDialog oauth", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.mcpBeginAuth.mockResolvedValue({ ...oauthRow, has_token: true });
+    mocks.mcpDisconnect.mockResolvedValue({ ...oauthRow, has_token: false });
+    mocks.mcpCancelAuth.mockResolvedValue(undefined);
+  });
+
+  afterEach(cleanup);
+
+  it("connects through the browser and refreshes the parent list", async () => {
+    const onChanged = vi.fn();
+    render(
+      <McpServerDialog
+        open
+        editing={oauthRow}
+        seed={null}
+        servers={[oauthRow]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onChanged={onChanged}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(mocks.mcpBeginAuth).toHaveBeenCalledWith("s1"));
+    expect(onChanged).toHaveBeenCalled();
+    expect(await screen.findByText("Connected.")).toBeTruthy();
+  });
+
+  it("clears stored oauth credentials on disconnect", async () => {
+    const stored = { ...oauthRow, has_token: true };
+    render(
+      <McpServerDialog
+        open
+        editing={stored}
+        seed={null}
+        servers={[stored]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() => expect(mocks.mcpDisconnect).toHaveBeenCalledWith("s1"));
+    expect(await screen.findByText("Disconnected.")).toBeTruthy();
   });
 });
