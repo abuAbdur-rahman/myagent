@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rmcp::model::{CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion};
+use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RoleClient, RunningService};
+use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
 
 use crate::permissions::Effect;
 
@@ -163,6 +164,37 @@ mod tests {
     fn failure_strings_are_model_actionable() {
         assert_eq!(unavailable("fs"), "MCP_UNAVAILABLE:fs");
         assert_eq!(timed_out("fs_read"), "MCP_TIMEOUT:fs_read");
+    }
+
+    #[test]
+    fn rmcp_tools_map_to_agent_defs() {
+        let schema = json!({"type": "object", "properties": {}});
+        let tool = rmcp::model::Tool::new(
+            "read",
+            "Read a file",
+            schema.as_object().expect("schema object").clone(),
+        );
+        let def = rmcp_tool_def("fs", tool);
+        assert_eq!(def.server, "fs");
+        assert_eq!(def.tool, "read");
+        assert_eq!(def.description, "Read a file");
+        assert_eq!(def.input_schema, schema);
+    }
+
+    #[test]
+    fn rmcp_text_results_are_joined() {
+        let result = CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text("one"),
+            rmcp::model::ContentBlock::text("two"),
+        ]);
+        assert_eq!(rmcp_result_text(&result), (false, "one\ntwo".to_string()));
+    }
+
+    #[test]
+    fn validate_target_accepts_streamable_http() {
+        assert!(validate_target("http", None, Some("https://example.com/mcp")).is_ok());
+        assert!(validate_target("http", None, Some("file:///tmp/server")).is_err());
+        assert!(validate_target("bogus", None, Some("https://example.com")).is_err());
     }
 
     fn config(deny: Option<Vec<&str>>) -> McpServerConfig {
@@ -507,8 +539,8 @@ pub async fn mcp_toggle(app: AppHandle, id: String, enabled: bool) -> Result<(),
 }
 
 fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Result<(), String> {
-    if transport != "stdio" && transport != "sse" {
-        return Err("transport must be stdio or sse".to_string());
+    if transport != "stdio" && transport != "http" && transport != "sse" {
+        return Err("transport must be stdio, http or sse".to_string());
     }
     if transport == "stdio" {
         if cmd.is_none_or(|value| value.trim().is_empty()) {
@@ -518,10 +550,10 @@ fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Res
     }
     let endpoint = url.unwrap_or("");
     if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-        return Err("sse servers need an http(s) url".to_string());
+        return Err(format!("{transport} servers need an http(s) url"));
     }
     crate::webfetch::validate_url_opts(endpoint, true, false)
-        .map_err(|e| format!("sse url rejected: {e}"))
+        .map_err(|e| format!("{transport} url rejected: {e}"))
         .map(|_| ())
 }
 
@@ -708,40 +740,67 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
         let endpoint = config.url.as_deref().unwrap_or("");
         crate::webfetch::validate_url_opts(endpoint, true, false)
             .map_err(|e| format!("mcp url rejected: {e}"))?;
-        ActiveTransport::Sse {
+        McpTransport::LegacySse {
             url: endpoint.to_string(),
         }
     } else {
-        spawn_stdio(config).await?
+        McpTransport::Rmcp(connect_rmcp(config).await?)
     };
     let mut session = Session {
         config: config.clone(),
         transport,
         tools: Vec::new(),
         timeouts: 0,
-        next_id: 0,
     };
     initialize_session(&mut session).await?;
     Ok(session)
 }
 
+async fn connect_rmcp(config: &McpServerConfig) -> Result<RunningService<RoleClient, ()>, String> {
+    let lifecycle = ClientLifecycleMode::Auto {
+        preferred_versions: ProtocolVersion::KNOWN_VERSIONS.to_vec(),
+        legacy_version: Some(ProtocolVersion::V_2024_11_05),
+    };
+    if config.transport == "http" {
+        let endpoint = config.url.as_deref().unwrap_or("");
+        crate::webfetch::validate_url_opts(endpoint, true, false)
+            .map_err(|e| format!("mcp url rejected: {e}"))?;
+        return ()
+            .serve_with_lifecycle(StreamableHttpClientTransport::from_uri(endpoint), lifecycle)
+            .await
+            .map_err(|e| e.to_string());
+    }
+    let cmd = config.cmd.as_deref().unwrap_or("").trim();
+    if cmd.is_empty() {
+        return Err("stdio server needs a command".to_string());
+    }
+    let parts = split_command(cmd);
+    let program = parts.first().ok_or_else(|| "empty command".to_string())?;
+    let transport =
+        TokioChildProcess::new(tokio::process::Command::new(program).configure(|command| {
+            command
+                .args(&parts[1..])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true);
+        }))
+        .map_err(|e| format!("spawn failed: {e}"))?;
+    ().serve_with_lifecycle(transport, lifecycle)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 struct Session {
     config: McpServerConfig,
-    transport: ActiveTransport,
+    transport: McpTransport,
     tools: Vec<McpToolDef>,
     timeouts: u32,
-    next_id: u64,
 }
 
-struct StdioHandles {
-    _child: Child,
-    stdin: tokio::process::ChildStdin,
-    stdout: BufReader<tokio::process::ChildStdout>,
-}
-
-enum ActiveTransport {
-    Stdio(Box<StdioHandles>),
-    Sse { url: String },
+enum McpTransport {
+    Rmcp(RunningService<RoleClient, ()>),
+    LegacySse { url: String },
 }
 
 impl Session {
@@ -950,6 +1009,59 @@ fn result_text(result: &Value) -> (bool, String) {
     (is_error, text)
 }
 
+fn rmcp_tool_def(server: &str, tool: rmcp::model::Tool) -> McpToolDef {
+    McpToolDef {
+        server: server.to_string(),
+        tool: tool.name.to_string(),
+        description: tool
+            .description
+            .map(|text| text.into_owned())
+            .unwrap_or_default(),
+        input_schema: Value::Object((*tool.input_schema).clone()),
+    }
+}
+
+async fn list_rmcp_tools(
+    client: &RunningService<RoleClient, ()>,
+    server: &str,
+    timeout: Duration,
+) -> Result<Vec<McpToolDef>, String> {
+    let mut tools = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let params = cursor
+            .take()
+            .map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
+        let result = tokio::time::timeout(timeout, client.list_tools(params))
+            .await
+            .map_err(|_| "timeout".to_string())?
+            .map_err(|e| e.to_string())?;
+        tools.extend(
+            result
+                .tools
+                .into_iter()
+                .map(|tool| rmcp_tool_def(server, tool)),
+        );
+        match result.next_cursor {
+            Some(next) if !next.is_empty() => cursor = Some(next),
+            _ => break,
+        }
+    }
+    Ok(tools)
+}
+
+fn rmcp_result_text(result: &CallToolResult) -> (bool, String) {
+    let is_error = result.is_error.unwrap_or(false);
+    let text = result
+        .content
+        .iter()
+        .filter_map(|block| block.as_text())
+        .map(|text| text.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (is_error, text)
+}
+
 fn initialize_body(id: u64) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -963,149 +1075,24 @@ fn initialize_body(id: u64) -> Value {
     })
 }
 
-async fn read_line_capped<R: AsyncBufRead + Unpin>(
-    reader: &mut R,
-) -> Result<Option<String>, String> {
-    let mut out: Vec<u8> = Vec::new();
-    loop {
-        let available = reader.fill_buf().await.map_err(|e| e.to_string())?;
-        if available.is_empty() {
-            if out.is_empty() {
-                return Ok(None);
-            }
-            break;
-        }
-        let newline = available.iter().position(|&b| b == b'\n');
-        let take = newline.map(|i| i + 1).unwrap_or(available.len());
-        if out.len() + take > MAX_MCP_TEXT_BYTES {
-            return Err("MCP_LINE_TOO_LARGE".to_string());
-        }
-        out.extend_from_slice(&available[..take]);
-        reader.consume(take);
-        if newline.is_some() {
-            break;
-        }
-    }
-    Ok(Some(String::from_utf8_lossy(&out).into_owned()))
-}
-
-async fn stdio_roundtrip(
-    stdin: &mut tokio::process::ChildStdin,
-    stdout: &mut BufReader<tokio::process::ChildStdout>,
-    timeout: Duration,
-    request: &Value,
-) -> Result<Value, String> {
-    let id = request.get("id").and_then(|v| v.as_u64());
-    let mut line = serde_json::to_string(request).map_err(|e| e.to_string())?;
-    line.push('\n');
-    stdin
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
-    stdin.flush().await.map_err(|e| e.to_string())?;
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
-    loop {
-        let incoming = tokio::select! {
-            line = read_line_capped(stdout) => line?,
-            _ = &mut deadline => return Err("timeout".to_string()),
-        };
-        let Some(buf) = incoming else {
-            return Err("server closed stdio".to_string());
-        };
-        let trimmed = buf.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-        if value.get("method").and_then(|m| m.as_str()) == Some("notifications/tools/list_changed")
-        {
-            continue;
-        }
-        if id.is_some_and(|wanted| value.get("id").and_then(|v| v.as_u64()) != Some(wanted)) {
-            continue;
-        }
-        if let Some(error) = value.get("error") {
-            let message = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown server error");
-            return Err(message.to_string());
-        }
-        return Ok(value);
-    }
-}
-
-async fn spawn_stdio(config: &McpServerConfig) -> Result<ActiveTransport, String> {
-    let cmd = config.cmd.as_deref().unwrap_or("").trim();
-    if cmd.is_empty() {
-        return Err("stdio server needs a command".to_string());
-    }
-    let parts = split_command(cmd);
-    let program = parts.first().ok_or_else(|| "empty command".to_string())?;
-    let mut command = Command::new(program);
-    command
-        .args(&parts[1..])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let mut child = command.spawn().map_err(|e| format!("spawn failed: {e}"))?;
-    let stdin = child.stdin.take().ok_or_else(|| "no stdin".to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
-    Ok(ActiveTransport::Stdio(Box::new(StdioHandles {
-        _child: child,
-        stdin,
-        stdout: BufReader::new(stdout),
-    })))
-}
-
-fn take_id(session: &mut Session) -> u64 {
-    session.next_id += 1;
-    session.next_id
-}
-
 async fn initialize_session(session: &mut Session) -> Result<(), String> {
     let timeout = session.timeout();
     let name = session.config.name.clone();
-    let init_id = take_id(session);
-    let list_id = take_id(session);
-    match &mut session.transport {
-        ActiveTransport::Stdio(handles) => {
-            let StdioHandles { stdin, stdout, .. } = handles.as_mut();
-            stdio_roundtrip(stdin, stdout, timeout, &initialize_body(init_id)).await?;
-            let notify = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-            let mut line = serde_json::to_string(&notify).map_err(|e| e.to_string())?;
-            line.push('\n');
-            stdin
-                .write_all(line.as_bytes())
-                .await
-                .map_err(|e| e.to_string())?;
-            let listed = stdio_roundtrip(
-                stdin,
-                stdout,
-                timeout,
-                &json!({"jsonrpc": "2.0", "id": list_id, "method": "tools/list", "params": {}}),
-            )
-            .await?;
-            session.tools = parse_tools(&name, &listed);
-            Ok(())
-        }
-        ActiveTransport::Sse { url } => {
-            let listed_init = sse_request(url, &initialize_body(init_id), timeout).await?;
-            let _ = listed_init;
-            let tools = sse_request(
+    let tools = match &mut session.transport {
+        McpTransport::Rmcp(client) => list_rmcp_tools(client, &name, timeout).await?,
+        McpTransport::LegacySse { url } => {
+            let _ = sse_request(url, &initialize_body(1), timeout).await?;
+            let listed = sse_request(
                 url,
-                &json!({"jsonrpc": "2.0", "id": list_id, "method": "tools/list", "params": {}}),
+                &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
                 timeout,
             )
             .await?;
-            session.tools = parse_tools(&name, &tools);
-            Ok(())
+            parse_tools(&name, &listed)
         }
-    }
+    };
+    session.tools = tools;
+    Ok(())
 }
 
 fn parse_tool_list(raw: Option<String>, source: &str) -> Option<Vec<String>> {
@@ -1204,31 +1191,31 @@ async fn call_on_session(
     args: &Value,
 ) -> Result<String, String> {
     let timeout = session.timeout();
-    let id = take_id(session);
     let result = match &mut session.transport {
-        ActiveTransport::Stdio(handles) => {
-            let StdioHandles { stdin, stdout, .. } = handles.as_mut();
-            stdio_roundtrip(
-                stdin,
-                stdout,
-                timeout,
-                &json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
-            )
-            .await
+        McpTransport::Rmcp(client) => {
+            let mut params = CallToolRequestParams::new(tool.to_string());
+            if let Some(arguments) = args.as_object() {
+                params = params.with_arguments(arguments.clone());
+            }
+            tokio::time::timeout(timeout, client.call_tool(params))
+                .await
+                .map_err(|_| "timeout".to_string())?
+                .map(|result| rmcp_result_text(&result))
+                .map_err(|e| e.to_string())
         }
-        ActiveTransport::Sse { url } => {
-            sse_request(
-                url,
-                &json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
-                timeout,
-            )
-            .await
-        }
+        McpTransport::LegacySse { url } => sse_request(
+            url,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
+            timeout,
+        )
+        .await
+        .map(|value| {
+            let result = value.get("result").cloned().unwrap_or(Value::Null);
+            result_text(&result)
+        }),
     };
     match result {
-        Ok(value) => {
-            let result = value.get("result").cloned().unwrap_or(Value::Null);
-            let (is_error, text) = result_text(&result);
+        Ok((is_error, text)) => {
             if is_error {
                 return Err(if text.is_empty() {
                     "MCP tool returned an error".to_string()
@@ -1314,42 +1301,16 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
         let handle = match existing {
             Some(handle) => handle,
             None => {
-                let transport = if config.transport == "sse" {
-                    let endpoint = config.url.as_deref().unwrap_or("");
-                    if crate::webfetch::validate_url_opts(endpoint, true, false).is_err() {
-                        eprintln!("mcp: {} rejected (invalid or non-public url)", config.name);
+                let session = match connect_once(config).await {
+                    Ok(session) => session,
+                    Err(error) => {
+                        eprintln!("mcp: connect {} failed: {error}", config.name);
+                        cache_probe(&state, probe_failed(&config.id, error));
                         continue;
-                    }
-                    ActiveTransport::Sse {
-                        url: endpoint.to_string(),
-                    }
-                } else {
-                    match spawn_stdio(config).await {
-                        Ok(transport) => transport,
-                        Err(error) => {
-                            eprintln!("mcp: spawn {} failed: {error}", config.name);
-                            continue;
-                        }
                     }
                 };
-                let created = Arc::new(tokio::sync::Mutex::new(Session {
-                    config: config.clone(),
-                    transport,
-                    tools: Vec::new(),
-                    timeouts: 0,
-                    next_id: 0,
-                }));
-                {
-                    let mut session = created.lock().await;
-                    if let Err(error) = initialize_session(&mut session).await {
-                        eprintln!("mcp: initialize {} failed: {error}", session.config.name);
-                        let report = probe_failed(&config.id, error);
-                        cache_probe(&state, report);
-                        continue;
-                    }
-                    let report = probe_connected(&config.id, &session.tools);
-                    cache_probe(&state, report);
-                }
+                cache_probe(&state, probe_connected(&config.id, &session.tools));
+                let created = Arc::new(tokio::sync::Mutex::new(session));
                 state
                     .sessions
                     .lock()
@@ -1362,12 +1323,10 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
         if session.tools.is_empty() {
             if let Err(error) = initialize_session(&mut session).await {
                 eprintln!("mcp: initialize {} failed: {error}", session.config.name);
-                let report = probe_failed(&config.id, error);
-                cache_probe(&state, report);
+                cache_probe(&state, probe_failed(&config.id, error));
                 continue;
             }
-            let report = probe_connected(&config.id, &session.tools);
-            cache_probe(&state, report);
+            cache_probe(&state, probe_connected(&config.id, &session.tools));
         }
     }
     let (defs, catalog) = collect_catalog(&state, &configs).await;

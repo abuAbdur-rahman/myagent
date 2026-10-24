@@ -5,7 +5,7 @@ description = "Windows desktop chat client with bring-your-own-key providers"
 authors = ["Abu Abdir-rahman <abdulazeezadekiilekun@gmail.com>"]
 repository = "https://github.com/abuAbdur-rahman/myagent"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -46,6 +46,7 @@ globset = "0.4.19"
 tauri-plugin-dialog = "2"
 transcribe-rs = { path = "vendor/transcribe-rs", features = ["onnx"] }
 sha2 = "0.10"
+rmcp = { version = "3.7.0", default-features = false, features = ["client", "auth", "reqwest", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

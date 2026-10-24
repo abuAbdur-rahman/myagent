@@ -46,6 +46,12 @@ import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Connection, ExportScope, Memory } from "../../lib/types";
 import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
+  mcpDraftTarget,
+  mcpTargetArgs,
+  mcpTargetError,
+  type McpDraft,
+} from "../../lib/mcp-draft";
+import {
   auditCounts,
   auditCsv,
   auditDuration,
@@ -121,12 +127,14 @@ function SettingRow({
 
 const MCP_TARGET_HINTS: Record<string, { placeholder: string; label: string }> = {
   stdio: { placeholder: "npx my-server", label: "Command" },
+  http: { placeholder: "https://host:8000/mcp", label: "URL" },
   sse: { placeholder: "https://host:8000/sse", label: "URL" },
 };
 
 const MCP_TRANSPORTS = [
   { value: "stdio", label: "stdio (local command)" },
-  { value: "sse", label: "sse (remote URL)" },
+  { value: "http", label: "http (Streamable HTTP)" },
+  { value: "sse", label: "sse (legacy remote URL)" },
 ];
 
 interface McpPreset {
@@ -158,13 +166,6 @@ const MCP_PRESETS: McpPreset[] = [
 ];
 
 type McpDecision = "ask" | "allow" | "block";
-
-interface McpDraft {
-  name: string;
-  transport: string;
-  command: string;
-  url: string;
-}
 
 interface McpPolicy {
   ask: string[];
@@ -221,10 +222,6 @@ function mcpTarget(server: api.McpServerRow): string {
 function mcpTargetText(server: api.McpServerRow): { text: string; title?: string } {
   const raw = mcpTarget(server);
   return { text: raw || "No target set", title: raw || undefined };
-}
-
-function mcpDraftTarget(draft: McpDraft): string {
-  return draft.transport === "stdio" ? draft.command : draft.url;
 }
 
 function mcpDraftWithTarget(draft: McpDraft, value: string): McpDraft {
@@ -323,17 +320,6 @@ function mcpNameError(
   if (format) return format;
   const clash = servers.some((server) => server.id !== editing && server.name === trimmed);
   return clash ? "Another server in this scope already uses this name." : null;
-}
-
-function mcpTargetMissingError(transport: string): string {
-  return transport === "stdio" ? "Command is required." : "URL is required.";
-}
-
-function mcpTargetError(draft: McpDraft): string | null {
-  const target = mcpDraftTarget(draft).trim();
-  if (!target) return mcpTargetMissingError(draft.transport);
-  if (draft.transport !== "sse") return null;
-  return /^https?:\/\//i.test(target) ? null : "URL must start with http:// or https://.";
 }
 
 function mcpErrors(
@@ -873,11 +859,8 @@ function McpServerDialog({
     }
     setTesting(true);
     try {
-      const probe = await api.mcpTest(
-        draft.transport,
-        draft.transport === "stdio" ? target : null,
-        draft.transport === "sse" ? target : null,
-      );
+      const { cmd, url } = mcpTargetArgs(draft);
+      const probe = await api.mcpTest(draft.transport, cmd, url);
       setTest(
         probe.error
           ? { ok: false, text: probe.error }
@@ -1193,9 +1176,7 @@ export function McpPage() {
 
   const save = (draft: McpDraft) => {
     const name = draft.name.trim();
-    const target = mcpDraftTarget(draft).trim();
-    const cmd = draft.transport === "stdio" ? target : null;
-    const url = draft.transport === "sse" ? target : null;
+    const { cmd, url } = mcpTargetArgs(draft);
     const current = dialog.editing;
     setDialog(CLOSED_MCP_DIALOG);
     void run(
