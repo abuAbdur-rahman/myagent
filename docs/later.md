@@ -295,6 +295,18 @@ part of the memory design that is deliberately late.
 
 ---
 
+## Planned for 0.5.1 and 0.6.0
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [ ] | — | Responses API fallback for OpenAI-compatible providers that reject `/v1/chat/completions` (0.5.1) | Plan: `docs/plan/v0.5.1-responses.md` | M | C1, D1 |
+| [ ] | J12 | MCP authorization and Streamable HTTP via `rmcp` (0.6.0) | Plan: `docs/plan/v0.6.0-mcp-auth.md` | L | D4, D5 |
+
+`mcp-remote` remains a stopgap for online MCP servers until the 0.6.0 client lands;
+it is a third-party npm bridge and is not part of the product.
+
+---
+
 ## Not now
 
 | ID | Feature | Reason |
