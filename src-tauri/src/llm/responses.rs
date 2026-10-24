@@ -280,17 +280,17 @@ fn sanitize_item(item: &Value) -> Option<Value> {
             {
                 match part.get("type").and_then(Value::as_str) {
                     Some("output_text") => {
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
-                            if text.len() <= MAX_ITEM_TEXT_BYTES {
-                                content.push(json!({ "type": "output_text", "text": text }));
-                            }
+                        if let Some(text) = part.get("text").and_then(Value::as_str)
+                            && text.len() <= MAX_ITEM_TEXT_BYTES
+                        {
+                            content.push(json!({ "type": "output_text", "text": text }));
                         }
                     }
                     Some("refusal") => {
-                        if let Some(text) = part.get("refusal").and_then(Value::as_str) {
-                            if text.len() <= MAX_ITEM_TEXT_BYTES {
-                                content.push(json!({ "type": "refusal", "refusal": text }));
-                            }
+                        if let Some(text) = part.get("refusal").and_then(Value::as_str)
+                            && text.len() <= MAX_ITEM_TEXT_BYTES
+                        {
+                            content.push(json!({ "type": "refusal", "refusal": text }));
                         }
                     }
                     _ => {}
@@ -428,14 +428,14 @@ impl StreamState {
                 }
             }
             "response.output_text.done" => {
-                if self.text.is_empty() {
-                    if let Some(text) = event.get("text").and_then(Value::as_str) {
-                        if text.len() > MAX_STREAM_TEXT_BYTES {
-                            return Err("response text too large".to_string());
-                        }
-                        self.text = text.to_string();
-                        update.text = text.to_string();
+                if self.text.is_empty()
+                    && let Some(text) = event.get("text").and_then(Value::as_str)
+                {
+                    if text.len() > MAX_STREAM_TEXT_BYTES {
+                        return Err("response text too large".to_string());
                     }
+                    self.text = text.to_string();
+                    update.text = text.to_string();
                 }
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
@@ -449,21 +449,21 @@ impl StreamState {
                 }
             }
             "response.reasoning_summary_text.done" => {
-                if self.reasoning.is_empty() {
-                    if let Some(text) = event.get("text").and_then(Value::as_str) {
-                        if text.len() > MAX_STREAM_REASONING_BYTES {
-                            return Err("response reasoning too large".to_string());
-                        }
-                        self.reasoning = text.to_string();
-                        update.reasoning = text.to_string();
+                if self.reasoning.is_empty()
+                    && let Some(text) = event.get("text").and_then(Value::as_str)
+                {
+                    if text.len() > MAX_STREAM_REASONING_BYTES {
+                        return Err("response reasoning too large".to_string());
                     }
+                    self.reasoning = text.to_string();
+                    update.reasoning = text.to_string();
                 }
             }
             "response.output_item.added" => {
-                if let Some(item) = event.get("item") {
-                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                        self.add_call(item);
-                    }
+                if let Some(item) = event.get("item")
+                    && item.get("type").and_then(Value::as_str) == Some("function_call")
+                {
+                    self.add_call(item);
                 }
             }
             "response.function_call_arguments.delta" => {
@@ -489,14 +489,14 @@ impl StreamState {
                     .and_then(Value::as_str)
                     .or_else(|| event.get("call_id").and_then(Value::as_str))
                     .unwrap_or("");
-                if let Some(arguments) = event.get("arguments").and_then(Value::as_str) {
-                    if let Some(index) = self.argument_index(id) {
-                        if arguments.len() > MAX_ARGUMENT_BYTES {
-                            self.calls[index].overflowed = true;
-                            self.calls[index].arguments.clear();
-                        } else {
-                            self.calls[index].arguments = arguments.to_string();
-                        }
+                if let Some(arguments) = event.get("arguments").and_then(Value::as_str)
+                    && let Some(index) = self.argument_index(id)
+                {
+                    if arguments.len() > MAX_ARGUMENT_BYTES {
+                        self.calls[index].overflowed = true;
+                        self.calls[index].arguments.clear();
+                    } else {
+                        self.calls[index].arguments = arguments.to_string();
                     }
                 }
             }

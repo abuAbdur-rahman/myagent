@@ -41,10 +41,10 @@ impl StreamState {
             .lock()
             .map_err(|_| poisoned("stream registry"))?
             .insert(request_id.to_string());
-        if let Ok(active) = self.active.lock() {
-            if let Some(notify) = active.get(request_id) {
-                notify.notify_one();
-            }
+        if let Ok(active) = self.active.lock()
+            && let Some(notify) = active.get(request_id)
+        {
+            notify.notify_one();
         }
         Ok(())
     }

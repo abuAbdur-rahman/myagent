@@ -361,13 +361,14 @@ pub async fn enable(
     let bin = docker_bin().ok_or("Docker Desktop was not found")?;
     daemon_version(&bin).await?;
     let packages = packages_for(&cfg)?;
-    if let Some(image) = cfg.image.clone() {
-        if same_packages(&cfg, &packages) && image_info(&bin, &image).await.is_some() {
-            cfg.enabled = true;
-            cfg.project_root = Some(host_path(&root_path));
-            save(app, &cfg)?;
-            return Ok(status(app).await);
-        }
+    if let Some(image) = cfg.image.clone()
+        && same_packages(&cfg, &packages)
+        && image_info(&bin, &image).await.is_some()
+    {
+        cfg.enabled = true;
+        cfg.project_root = Some(host_path(&root_path));
+        save(app, &cfg)?;
+        return Ok(status(app).await);
     }
     let data = app
         .path()
@@ -844,17 +845,16 @@ fn changed_between(root: &Path, base: &str, after: &str) -> Vec<String> {
         ],
         root,
         &[],
-    ) {
-        if raw.status.success() {
-            for line in text(&raw.stdout).lines() {
-                let mut parts = line.split_whitespace();
-                let _old = parts.next();
-                let new_mode = parts.next().unwrap_or("");
-                if new_mode == "100755" {
-                    if let Some(path) = line.split('\t').nth(1) {
-                        paths.push(path.to_string());
-                    }
-                }
+    ) && raw.status.success()
+    {
+        for line in text(&raw.stdout).lines() {
+            let mut parts = line.split_whitespace();
+            let _old = parts.next();
+            let new_mode = parts.next().unwrap_or("");
+            if new_mode == "100755"
+                && let Some(path) = line.split('\t').nth(1)
+            {
+                paths.push(path.to_string());
             }
         }
     }
@@ -1242,10 +1242,10 @@ fn write_at(root: &Path, rel: &str) -> Result<PathBuf, String> {
         return Err(format!("{} is protected and read-only", rel.display()));
     }
     let candidate = root.join(&rel);
-    if let Ok(meta) = std::fs::symlink_metadata(&candidate) {
-        if is_reparse(&meta) {
-            return Err("refusing to write through a link".to_string());
-        }
+    if let Ok(meta) = std::fs::symlink_metadata(&candidate)
+        && is_reparse(&meta)
+    {
+        return Err("refusing to write through a link".to_string());
     }
     let mut anchor = candidate
         .parent()
@@ -1449,10 +1449,10 @@ pub fn grep_files(
             continue;
         }
         let rel = display_rel(&root, entry.path());
-        if let Some(matcher) = &file_matcher {
-            if !matcher.is_match(&rel) {
-                continue;
-            }
+        if let Some(matcher) = &file_matcher
+            && !matcher.is_match(&rel)
+        {
+            continue;
         }
         let Ok(bytes) = std::fs::read(entry.path()) else {
             continue;

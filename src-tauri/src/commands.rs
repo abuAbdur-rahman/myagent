@@ -76,11 +76,11 @@ fn scan_dir(dir: &std::path::Path) -> Vec<(String, String)> {
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_string();
-        if let Ok(meta) = std::fs::metadata(&path) {
-            if meta.len() > MAX_COMMAND_BYTES {
-                eprintln!("commands: skipping oversized file {}", path.display());
-                continue;
-            }
+        if let Ok(meta) = std::fs::metadata(&path)
+            && meta.len() > MAX_COMMAND_BYTES
+        {
+            eprintln!("commands: skipping oversized file {}", path.display());
+            continue;
         }
         let Ok(content) = std::fs::read_to_string(&path) else {
             eprintln!("commands: cannot read {}", path.display());

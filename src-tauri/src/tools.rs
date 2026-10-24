@@ -356,10 +356,10 @@ async fn describe_image_via_fallback(
         _ = cancel.notified() => return Err("cancelled by user".to_string()),
     };
     let content = &value["choices"][0]["message"]["content"];
-    if let Some(text) = content.as_str() {
-        if !text.trim().is_empty() {
-            return Ok(text.to_string());
-        }
+    if let Some(text) = content.as_str()
+        && !text.trim().is_empty()
+    {
+        return Ok(text.to_string());
     }
     if let Some(parts) = content.as_array() {
         let mut out = String::new();
@@ -891,12 +891,11 @@ fn memory_file_mode(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 fn file_memory_find(root: &Path, id: &str, project_id: Option<&str>) -> Option<String> {
     let id = crate::memory::file::canonical_id(id);
-    if let Some(pid) = project_id {
-        if let Ok(doc) = crate::memory::store::read(root, Some(pid)) {
-            if let Some(entry) = doc.entry(&id) {
-                return Some(entry.text.clone());
-            }
-        }
+    if let Some(pid) = project_id
+        && let Ok(doc) = crate::memory::store::read(root, Some(pid))
+        && let Some(entry) = doc.entry(&id)
+    {
+        return Some(entry.text.clone());
     }
     crate::memory::store::read(root, None)
         .ok()?
@@ -924,18 +923,18 @@ fn file_memory_recall(
             }
         }
     }
-    if let Some(pid) = project_id {
-        if let Ok(doc) = crate::memory::store::read(root, Some(pid)) {
-            for entry in doc.entries() {
-                if entry.text.to_lowercase().contains(&needle) {
-                    rows.push((
-                        entry.id.clone(),
-                        entry.kind_label(),
-                        entry.text.clone(),
-                        true,
-                        entry.date.clone(),
-                    ));
-                }
+    if let Some(pid) = project_id
+        && let Ok(doc) = crate::memory::store::read(root, Some(pid))
+    {
+        for entry in doc.entries() {
+            if entry.text.to_lowercase().contains(&needle) {
+                rows.push((
+                    entry.id.clone(),
+                    entry.kind_label(),
+                    entry.text.clone(),
+                    true,
+                    entry.date.clone(),
+                ));
             }
         }
     }
@@ -1567,10 +1566,10 @@ pub async fn execute(
                     return Err(crate::memory::secret_message().to_string());
                 }
             }
-            if let Some(name) = kind.as_deref() {
-                if !MEMORY_KINDS.contains(&name) {
-                    return Err("kind must be fact, preference, summary or note".to_string());
-                }
+            if let Some(name) = kind.as_deref()
+                && !MEMORY_KINDS.contains(&name)
+            {
+                return Err("kind must be fact, preference, summary or note".to_string());
             }
             let written = if let Some(root) = memory_file_mode(app) {
                 let parsed = kind.as_deref().and_then(crate::memory::file::Kind::parse);

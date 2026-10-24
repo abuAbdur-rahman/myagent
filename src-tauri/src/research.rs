@@ -208,24 +208,23 @@ async fn plan_queries(
 }
 
 fn parse_queries(text: &str, fallback: &str) -> Vec<String> {
-    if let (Some(start), Some(end)) = (text.find('['), text.rfind(']')) {
-        if start < end {
-            if let Ok(values) = serde_json::from_str::<Vec<String>>(&text[start..=end]) {
-                let mut queries: Vec<String> = Vec::new();
-                for value in values {
-                    let value = value.trim();
-                    if value.is_empty() || queries.iter().any(|known| known == value) {
-                        continue;
-                    }
-                    queries.push(value.chars().take(MAX_QUERY_CHARS).collect());
-                    if queries.len() == MAX_QUERIES {
-                        break;
-                    }
-                }
-                if !queries.is_empty() {
-                    return queries;
-                }
+    if let (Some(start), Some(end)) = (text.find('['), text.rfind(']'))
+        && start < end
+        && let Ok(values) = serde_json::from_str::<Vec<String>>(&text[start..=end])
+    {
+        let mut queries: Vec<String> = Vec::new();
+        for value in values {
+            let value = value.trim();
+            if value.is_empty() || queries.iter().any(|known| known == value) {
+                continue;
             }
+            queries.push(value.chars().take(MAX_QUERY_CHARS).collect());
+            if queries.len() == MAX_QUERIES {
+                break;
+            }
+        }
+        if !queries.is_empty() {
+            return queries;
         }
     }
     vec![fallback.to_string()]

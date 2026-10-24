@@ -252,51 +252,51 @@ pub fn parse(markdown: &str) -> Doc {
 
     for raw in normalized.split('\n') {
         let trimmed = raw.trim();
-        if let Some(name) = trimmed.strip_prefix("## ") {
-            if let Some(found) = Section::parse(name.trim()) {
-                section = Some(found);
-                continue;
-            }
+        if let Some(name) = trimmed.strip_prefix("## ")
+            && let Some(found) = Section::parse(name.trim())
+        {
+            section = Some(found);
+            continue;
         }
         if trimmed.eq_ignore_ascii_case("# MEMORY") {
             continue;
         }
-        if let Some(current) = section {
-            if let Some(caps) = anchor_regex().captures(trimmed) {
-                let text = unescape(caps.get(1).map(|m| m.as_str()).unwrap_or("").trim());
-                let id = caps
-                    .get(2)
-                    .map(|m| m.as_str().to_ascii_lowercase())
-                    .unwrap_or_default();
-                let date = caps
-                    .get(3)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                let (kind, raw_kind) = match caps.get(4) {
-                    None => (current.default_kind(), None),
-                    Some(value) => {
-                        let raw = value.as_str().to_string();
-                        match Kind::parse(&raw) {
-                            Some(kind) if kind == current.default_kind() => (kind, None),
-                            Some(kind) => (kind, Some(raw)),
-                            None => (current.default_kind(), Some(raw)),
-                        }
+        if let Some(current) = section
+            && let Some(caps) = anchor_regex().captures(trimmed)
+        {
+            let text = unescape(caps.get(1).map(|m| m.as_str()).unwrap_or("").trim());
+            let id = caps
+                .get(2)
+                .map(|m| m.as_str().to_ascii_lowercase())
+                .unwrap_or_default();
+            let date = caps
+                .get(3)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            let (kind, raw_kind) = match caps.get(4) {
+                None => (current.default_kind(), None),
+                Some(value) => {
+                    let raw = value.as_str().to_string();
+                    match Kind::parse(&raw) {
+                        Some(kind) if kind == current.default_kind() => (kind, None),
+                        Some(kind) => (kind, Some(raw)),
+                        None => (current.default_kind(), Some(raw)),
                     }
-                };
-                let untrusted = caps
-                    .get(5)
-                    .map(|value| value.as_str() == "untrusted")
-                    .unwrap_or(false);
-                doc.sections[current.index()].push(Entry {
-                    id,
-                    text,
-                    date,
-                    kind,
-                    raw_kind,
-                    untrusted,
-                });
-                continue;
-            }
+                }
+            };
+            let untrusted = caps
+                .get(5)
+                .map(|value| value.as_str() == "untrusted")
+                .unwrap_or(false);
+            doc.sections[current.index()].push(Entry {
+                id,
+                text,
+                date,
+                kind,
+                raw_kind,
+                untrusted,
+            });
+            continue;
         }
         unknown.push(raw);
     }
