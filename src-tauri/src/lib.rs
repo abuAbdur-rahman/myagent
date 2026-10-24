@@ -488,6 +488,8 @@ pub fn run() {
             mcp::mcp_update,
             mcp::mcp_set_policy,
             mcp::mcp_set_approval,
+            mcp::mcp_set_token,
+            mcp::mcp_delete_token,
             mcp::mcp_status,
             mcp::mcp_probe,
             mcp::mcp_test,

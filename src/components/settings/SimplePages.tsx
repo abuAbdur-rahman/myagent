@@ -847,13 +847,14 @@ function McpDialogFooter({
   );
 }
 
-function McpServerDialog({
+export function McpServerDialog({
   open,
   editing,
   seed,
   servers,
   onClose,
   onSave,
+  onChanged,
 }: {
   open: boolean;
   editing: api.McpServerRow | null;
@@ -861,11 +862,16 @@ function McpServerDialog({
   servers: api.McpServerRow[];
   onClose: () => void;
   onSave: (draft: McpDraft) => void;
+  onChanged: () => void;
 }) {
   const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP_DRAFT);
   const [errors, setErrors] = useState<McpErrors>({});
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [token, setToken] = useState("");
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenMessage, setTokenMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [hasToken, setHasToken] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
 
@@ -873,6 +879,9 @@ function McpServerDialog({
     if (!open) return;
     setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
     setErrors({});
+    setToken("");
+    setTokenMessage(null);
+    setHasToken(editing?.has_token ?? false);
   }, [open, editing, seed]);
 
   useEffect(() => {
@@ -906,6 +915,42 @@ function McpServerDialog({
     }
   };
 
+  const saveToken = async () => {
+    if (!editing) return;
+    const value = token.trim();
+    if (!value) {
+      setTokenMessage({ ok: false, text: "Enter a token first." });
+      return;
+    }
+    setTokenBusy(true);
+    try {
+      const row = await api.mcpSetToken(editing.id, value);
+      setHasToken(row.has_token);
+      setToken("");
+      setTokenMessage({ ok: true, text: "Token saved. Reconnect to use it." });
+      onChanged();
+    } catch (e) {
+      setTokenMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const clearToken = async () => {
+    if (!editing) return;
+    setTokenBusy(true);
+    try {
+      const row = await api.mcpDeleteToken(editing.id);
+      setHasToken(row.has_token);
+      setTokenMessage({ ok: true, text: "Token cleared." });
+      onChanged();
+    } catch (e) {
+      setTokenMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
   const submit = () => {
     const found = mcpErrors(draft, servers, editing);
     setErrors(found);
@@ -933,17 +978,77 @@ function McpServerDialog({
         <Button
           size="sm"
           variant="default"
-          disabled={testing}
+          disabled={testing || draft.authType !== "none"}
           onClick={() => void probeDraft()}
         >
           {testing ? <Spinner label="Testing" /> : "Test connection"}
         </Button>
-        {test && (
-          <p className={cn("pt-1.5 text-xs", test.ok ? "text-muted" : "text-danger")} role="status">
-            {test.text}
+        {draft.authType !== "none" ? (
+          <p className="pt-1.5 text-xs text-muted">
+            Save the server and connect it to test with authorization.
           </p>
+        ) : (
+          test && (
+            <p className={cn("pt-1.5 text-xs", test.ok ? "text-muted" : "text-danger")} role="status">
+              {test.text}
+            </p>
+          )
         )}
       </div>
+      {draft.authType === "bearer" &&
+        (editing ? (
+          <div className="mt-3 flex flex-col gap-2">
+            <McpField
+              label="Bearer token"
+              hint={
+                hasToken
+                  ? "A token is stored. Enter a new one to replace it."
+                  : "Stored in Windows Credential Manager, never in SQLite."
+              }
+            >
+              <Input
+                type="password"
+                value={token}
+                autoComplete="off"
+                placeholder={hasToken ? "••••••••" : "Paste token"}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </McpField>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="default"
+                disabled={tokenBusy || !token.trim()}
+                onClick={() => void saveToken()}
+              >
+                {tokenBusy ? <Spinner label="Saving" /> : "Save token"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={tokenBusy || !hasToken}
+                onClick={() => void clearToken()}
+              >
+                Clear token
+              </Button>
+              {tokenMessage && (
+                <p
+                  className={cn("text-xs", tokenMessage.ok ? "text-muted" : "text-danger")}
+                  role="status"
+                >
+                  {tokenMessage.text}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-muted">
+            Save the server first, then add its bearer token.
+          </p>
+        ))}
+      {draft.authType === "oauth" && (
+        <p className="mt-3 text-xs text-muted">OAuth sign-in starts after the server is saved.</p>
+      )}
       <McpDialogFooter
         editing={editing !== null}
         onClose={onClose}
@@ -1000,7 +1105,7 @@ function useMcpServers(projectId: string | null) {
       .finally(() => setProbing((current) => ({ ...current, [id]: false })));
   }, []);
 
-  return { servers, probes, probing, status, run, reconnect };
+  return { servers, probes, probing, status, run, reconnect, refresh: reload };
 }
 
 function AuditEntry({ row }: { row: AuditLog }) {
@@ -1199,7 +1304,7 @@ export function GeneralPage() {
 export function McpPage() {
   const { activeProject } = useApp();
   const projectId = mcpProjectId(activeProject);
-  const { servers, probes, probing, status, run, reconnect } = useMcpServers(projectId);
+  const { servers, probes, probing, status, run, reconnect, refresh } = useMcpServers(projectId);
   const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
 
   const save = (draft: McpDraft) => {
@@ -1293,6 +1398,7 @@ export function McpPage() {
         servers={servers}
         onClose={close}
         onSave={save}
+        onChanged={() => void refresh()}
       />
     </div>
   );

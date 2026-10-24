@@ -290,6 +290,7 @@ export interface McpServerRow {
   approval_mode: string;
   timeout_ms: number | null;
   enabled: boolean;
+  has_token: boolean;
 }
 
 export function mcpList(projectId: string | null) {
@@ -347,6 +348,14 @@ export function mcpSetPolicy(id: string, ask: string[], allow: string[], deny: s
 
 export function mcpSetApproval(id: string, mode: string) {
   return invoke<McpServerRow>("mcp_set_approval", { id, mode });
+}
+
+export function mcpSetToken(id: string, token: string) {
+  return invoke<McpServerRow>("mcp_set_token", { id, token });
+}
+
+export function mcpDeleteToken(id: string) {
+  return invoke<McpServerRow>("mcp_delete_token", { id });
 }
 
 export function mcpStatus() {

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion};
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RoleClient, RunningService};
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
@@ -96,6 +97,28 @@ pub fn unavailable(server: &str) -> String {
 
 pub fn timed_out(name: &str) -> String {
     format!("MCP_TIMEOUT:{name}")
+}
+
+fn token_key(id: &str) -> String {
+    format!("mcp:{id}")
+}
+
+fn valid_bearer_token(token: &str) -> bool {
+    !token.is_empty() && token.chars().all(|c| c.is_ascii_graphic())
+}
+
+fn token_present(id: &str) -> bool {
+    match crate::vault::read_secret(&token_key(id)) {
+        Ok(secret) => secret.is_some(),
+        Err(error) => {
+            eprintln!("mcp: token lookup failed for {id}: {error}");
+            false
+        }
+    }
+}
+
+fn fill_token_state(row: &mut McpServerRow) {
+    row.has_token = row.auth_type != "none" && token_present(&row.id);
 }
 
 #[cfg(test)]
@@ -206,6 +229,23 @@ mod tests {
         assert!(validate_auth_type("basic").is_err());
     }
 
+    #[test]
+    fn bearer_tokens_must_be_printable_ascii() {
+        assert!(valid_bearer_token("abc-123._~+/="));
+        assert!(!valid_bearer_token(""));
+        assert!(!valid_bearer_token("abc def"));
+        assert!(!valid_bearer_token("abc\n"));
+    }
+
+    #[test]
+    fn auth_requires_a_remote_transport() {
+        assert!(validate_auth_transport("none", "stdio").is_ok());
+        assert!(validate_auth_transport("bearer", "http").is_ok());
+        assert!(validate_auth_transport("oauth", "sse").is_ok());
+        assert!(validate_auth_transport("bearer", "stdio").is_err());
+        assert!(validate_auth_transport("oauth", "stdio").is_err());
+    }
+
     fn config(deny: Option<Vec<&str>>) -> McpServerConfig {
         McpServerConfig {
             id: "s1".to_string(),
@@ -237,6 +277,7 @@ mod tests {
             approval_mode: mode.to_string(),
             timeout_ms: None,
             enabled: true,
+            has_token: false,
         }
     }
 
@@ -458,6 +499,9 @@ pub struct McpServerRow {
     pub approval_mode: String,
     pub timeout_ms: Option<i64>,
     pub enabled: bool,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub has_token: bool,
 }
 
 const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode FROM mcp_servers";
@@ -478,13 +522,16 @@ pub async fn mcp_list(
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    let rows: Vec<McpServerRow> = sqlx::query_as(&format!(
+    let mut rows: Vec<McpServerRow> = sqlx::query_as(&format!(
         "{SERVER_SELECT} WHERE project_id IS ? OR project_id IS NULL ORDER BY name ASC"
     ))
     .bind(&project_id)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
+    for row in &mut rows {
+        fill_token_state(row);
+    }
     Ok(rows)
 }
 
@@ -504,6 +551,7 @@ pub async fn mcp_add(
     }
     validate_target(&transport, cmd.as_deref(), url.as_deref())?;
     validate_auth_type(&auth_type)?;
+    validate_auth_transport(&auth_type, &transport)?;
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
@@ -529,6 +577,7 @@ pub async fn mcp_add(
 
 #[tauri::command]
 pub async fn mcp_remove(app: AppHandle, id: String) -> Result<(), String> {
+    crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
@@ -556,11 +605,59 @@ pub async fn mcp_toggle(app: AppHandle, id: String, enabled: bool) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+pub async fn mcp_set_token(
+    app: AppHandle,
+    id: String,
+    token: String,
+) -> Result<McpServerRow, String> {
+    let token = token.trim();
+    if !valid_bearer_token(token) {
+        return Err("token must contain printable ASCII characters only".to_string());
+    }
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    let row = server_row(&pool, &id).await?;
+    if row.auth_type != "bearer" {
+        return Err("server auth mode is not bearer".to_string());
+    }
+    crate::vault::set_secret(&token_key(&id), token).map_err(|e| e.to_string())?;
+    let row = server_row(&pool, &id).await?;
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn mcp_delete_token(app: AppHandle, id: String) -> Result<McpServerRow, String> {
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    server_row(&pool, &id).await?;
+    crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
+    let row = server_row(&pool, &id).await?;
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    Ok(row)
+}
+
 fn validate_auth_type(auth_type: &str) -> Result<(), String> {
     match auth_type {
         "none" | "bearer" | "oauth" => Ok(()),
         _ => Err("auth_type must be none, bearer or oauth".to_string()),
     }
+}
+
+fn validate_auth_transport(auth_type: &str, transport: &str) -> Result<(), String> {
+    if auth_type != "none" && transport == "stdio" {
+        return Err("authorization requires an http or sse transport".to_string());
+    }
+    Ok(())
 }
 
 fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Result<(), String> {
@@ -583,11 +680,13 @@ fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Res
 }
 
 async fn server_row(pool: &sqlx::SqlitePool, id: &str) -> Result<McpServerRow, String> {
-    sqlx::query_as(&format!("{SERVER_SELECT} WHERE id = ?"))
+    let mut row: McpServerRow = sqlx::query_as(&format!("{SERVER_SELECT} WHERE id = ?"))
         .bind(id)
         .fetch_one(pool)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    fill_token_state(&mut row);
+    Ok(row)
 }
 
 #[tauri::command]
@@ -606,6 +705,7 @@ pub async fn mcp_update(
     }
     validate_target(&transport, cmd.as_deref(), url.as_deref())?;
     validate_auth_type(&auth_type)?;
+    validate_auth_transport(&auth_type, &transport)?;
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
@@ -618,9 +718,12 @@ pub async fn mcp_update(
     .bind(&cmd)
     .bind(&url)
     .bind(&id)
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    .execute(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if auth_type != "bearer" {
+        crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
+    }
     let state = app.state::<McpState>();
     forget_probe(&state, &id);
     let row = server_row(&pool, &id).await?;
@@ -733,6 +836,7 @@ pub async fn mcp_test(
     url: Option<String>,
 ) -> Result<McpProbe, String> {
     validate_auth_type(&auth_type)?;
+    validate_auth_transport(&auth_type, &transport)?;
     let config = McpServerConfig {
         id: "draft".to_string(),
         project_id: None,
@@ -769,11 +873,22 @@ fn clean_tool_names(names: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
-    if config.auth_type != "none" {
-        return Err(format!(
-            "{} authorization is not configured yet",
-            config.auth_type
-        ));
+    let auth_token = match config.auth_type.as_str() {
+        "none" => None,
+        "bearer" => {
+            let token = crate::vault::read_secret(&token_key(&config.id))
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "bearer token is not set".to_string())?;
+            if !valid_bearer_token(&token) {
+                return Err("stored bearer token is invalid".to_string());
+            }
+            Some(token)
+        }
+        "oauth" => return Err("oauth authorization is not configured yet".to_string()),
+        other => return Err(format!("unsupported auth type: {other}")),
+    };
+    if config.transport == "stdio" && auth_token.is_some() {
+        return Err("stdio servers do not use bearer auth".to_string());
     }
     let transport = if config.transport == "sse" {
         let endpoint = config.url.as_deref().unwrap_or("");
@@ -781,9 +896,10 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
             .map_err(|e| format!("mcp url rejected: {e}"))?;
         McpTransport::LegacySse {
             url: endpoint.to_string(),
+            auth_token,
         }
     } else {
-        McpTransport::Rmcp(connect_rmcp(config).await?)
+        McpTransport::Rmcp(connect_rmcp(config, auth_token.as_deref()).await?)
     };
     let mut session = Session {
         config: config.clone(),
@@ -795,7 +911,10 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
     Ok(session)
 }
 
-async fn connect_rmcp(config: &McpServerConfig) -> Result<RunningService<RoleClient, ()>, String> {
+async fn connect_rmcp(
+    config: &McpServerConfig,
+    auth_token: Option<&str>,
+) -> Result<RunningService<RoleClient, ()>, String> {
     let lifecycle = ClientLifecycleMode::Auto {
         preferred_versions: ProtocolVersion::KNOWN_VERSIONS.to_vec(),
         legacy_version: Some(ProtocolVersion::V_2024_11_05),
@@ -804,8 +923,15 @@ async fn connect_rmcp(config: &McpServerConfig) -> Result<RunningService<RoleCli
         let endpoint = config.url.as_deref().unwrap_or("");
         crate::webfetch::validate_url_opts(endpoint, true, false)
             .map_err(|e| format!("mcp url rejected: {e}"))?;
+        let mut http = StreamableHttpClientTransportConfig::with_uri(endpoint);
+        if let Some(token) = auth_token {
+            http = http.auth_header(token);
+        }
         return ()
-            .serve_with_lifecycle(StreamableHttpClientTransport::from_uri(endpoint), lifecycle)
+            .serve_with_lifecycle(
+                StreamableHttpClientTransport::from_config(http),
+                lifecycle,
+            )
             .await
             .map_err(|e| e.to_string());
     }
@@ -839,7 +965,10 @@ struct Session {
 
 enum McpTransport {
     Rmcp(RunningService<RoleClient, ()>),
-    LegacySse { url: String },
+    LegacySse {
+        url: String,
+        auth_token: Option<String>,
+    },
 }
 
 impl Session {
@@ -1119,10 +1248,11 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
     let name = session.config.name.clone();
     let tools = match &mut session.transport {
         McpTransport::Rmcp(client) => list_rmcp_tools(client, &name, timeout).await?,
-        McpTransport::LegacySse { url } => {
-            let _ = sse_request(url, &initialize_body(1), timeout).await?;
+        McpTransport::LegacySse { url, auth_token } => {
+            let _ = sse_request(url, auth_token.as_deref(), &initialize_body(1), timeout).await?;
             let listed = sse_request(
                 url,
+                auth_token.as_deref(),
                 &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
                 timeout,
             )
@@ -1184,11 +1314,20 @@ async fn read_body_capped(
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-async fn sse_request(url: &str, request: &Value, timeout: Duration) -> Result<Value, String> {
+async fn sse_request(
+    url: &str,
+    auth_token: Option<&str>,
+    request: &Value,
+    timeout: Duration,
+) -> Result<Value, String> {
     crate::webfetch::validate_url_opts(url, true, false)
         .map_err(|e| format!("mcp url rejected: {e}"))?;
     let client = reqwest::Client::new();
-    let response = tokio::time::timeout(timeout, client.post(url).json(request).send())
+    let mut builder = client.post(url).json(request);
+    if let Some(token) = auth_token {
+        builder = builder.bearer_auth(token);
+    }
+    let response = tokio::time::timeout(timeout, builder.send())
         .await
         .map_err(|_| "timeout".to_string())?
         .map_err(|e| e.to_string())?;
@@ -1242,8 +1381,9 @@ async fn call_on_session(
                 .map(|result| rmcp_result_text(&result))
                 .map_err(|e| e.to_string())
         }
-        McpTransport::LegacySse { url } => sse_request(
+        McpTransport::LegacySse { url, auth_token } => sse_request(
             url,
+            auth_token.as_deref(),
             &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
             timeout,
         )
