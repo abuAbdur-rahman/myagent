@@ -417,9 +417,9 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A test sends an unrelated memory plus a matching one; only the matching one is in the prompt.
 
 ## E2. Secret refusal in memory
-- **Status:** Have (0.5.0: `memory::looks_secret` runs before every file write, every assistant proposal and every manual edit. Key shapes, private-key headers and `password=`/`token=`/`Bearer` are refused with a reason. A note proposed after a web, shell, sandbox, document, image or MCP tool is tagged untrusted in the inbox and in the file; filters can only drop, never approve. Editing an existing note asks first)
+- **Status:** Have (0.5.0: `memory::looks_secret` runs before checked file writes, every assistant proposal and every manual edit. Key shapes, private-key headers and `password=`/`token=`/`Bearer` are refused with a reason. The one exception is the legacy migration: existing `memories` rows are copied into `MEMORY.md` without this screen so the upgrade does not lose notes. A note proposed after a web, shell, sandbox, document, image or MCP tool is tagged untrusted in the inbox and in the file; filters can only drop, never approve. Editing an existing note asks first)
 - **Ref:** Claude does not store credentials in memory.
-- **Build:** Pure function `looks_secret(&str) -> bool`: API key shapes (`sk-`, `ghp_`, `AKIA`, long hex/base64), private key headers, `password=`, `token=`, `Bearer`. Runs before every memory write; tell the user when blocked. Panic-free.
+- **Build:** Pure function `looks_secret(&str) -> bool`: API key shapes (`sk-`, `ghp_`, `AKIA`, long hex/base64), private key headers, `password=`, `token=`, `Bearer`. Runs before every new memory write; legacy migration copies existing rows without this screen. Tell the user when blocked. Panic-free.
 - **Not:** Entropy scanning of all chat.
 - **Done:** Unit tests cover obvious keys and ordinary notes; the tool path refuses `remember this sk-…` with a reason.
 

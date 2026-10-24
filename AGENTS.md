@@ -93,3 +93,23 @@ Run every check before saying "done".
    restart it. Do not push an empty commit just to get a green check.
 6. Push only when the gates are clean or only minor/nit findings remain.
 7. Never force-push, never commit secrets, never commit `node_modules`/`target`/`dist`.
+
+---
+
+## Release rules
+
+1. **One release at a time.** Do not start, tag, or publish the next version until
+   the current one is merged, tagged, and its release workflow has succeeded.
+   If a release is incomplete or broken, stop and finish that release first.
+2. **One AI review gate per change.** Use CodeRabbit **or** OCR, never both, and
+   never wait for a second success from the same gate. Fix the findings that are
+   still valid, run the gates, then take the next step. Do not restart the review
+   loop.
+3. **Update the release note whenever the release changes.** Before tagging,
+   update both `src/lib/releasenotes.ts` and `docs/releases/<version>.md` with
+   the final user-visible changes, then confirm the version in `package.json`,
+   `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and
+   `src-tauri/tauri.conf.json`.
+4. **Tag only after the release commit is merged and the notes are final.** A
+   tag starts the release workflow; do not use it to test whether the release is
+   ready.

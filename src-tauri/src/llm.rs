@@ -1012,7 +1012,6 @@ fn clean_title(raw: &str) -> String {
             _ => text.push(c),
         }
     }
-    let text = text.replace("__", "");
     let text = text
         .trim()
         .trim_matches(|c| matches!(c, '"' | '\'' | '“' | '”' | '‘' | '’'))
@@ -2398,7 +2397,7 @@ async fn run_agentic(
         repeat: RepeatGuard::new(),
         last_pure: None,
         children: 0,
-        untrusted: false,
+        untrusted: req.subagent,
     };
     agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await
 }
@@ -2520,6 +2519,10 @@ mod tests {
         assert_eq!(clean_title("\"DeepSeek setup.\""), "DeepSeek setup");
         assert_eq!(clean_title("Title: ## Local models"), "Local models");
         assert_eq!(clean_title("`agent` setup"), "agent setup");
+        assert_eq!(
+            clean_title("Python __init__ explained"),
+            "Python __init__ explained"
+        );
         assert_eq!(clean_title("Plain title"), "Plain title");
         assert_eq!(clean_title("  \n \n"), "");
     }

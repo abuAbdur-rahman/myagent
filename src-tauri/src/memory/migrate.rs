@@ -273,11 +273,13 @@ pub async fn run(pool: &SqlitePool, root: &Path, version: &str) -> Result<Migrat
     }
 
     if store::has_file(root) {
+        let ids = rows(pool).await?.into_iter().map(|row| row.id).collect();
         let report = MigrationReport {
             migrated: false,
             reason: "file-present".to_string(),
             at: now(),
             version: version.to_string(),
+            ids,
             ..MigrationReport::default()
         };
         write_marker(pool, &report).await?;
@@ -596,6 +598,11 @@ mod tests {
         let text = fs::read_to_string(dir.join("MEMORY.md")).expect("file");
         assert!(text.contains("- mine"));
         assert!(!text.contains("from db"));
+
+        let second = run(&pool, &dir, "0.5.0").await.expect("second");
+        assert_eq!(second.reason, "already-migrated");
+        let text = fs::read_to_string(dir.join("MEMORY.md")).expect("file");
+        assert!(!text.contains("from db"));
     }
 
     #[tokio::test]
@@ -613,14 +620,18 @@ mod tests {
         )
         .await;
         run(&pool, &dir, "0.5.0").await.expect("first");
+        assert!(store::forget(&dir, None, "7f2a9c1e-5b6d-4a3f-8c2e-1d0b9a8f7e6d").expect("forget"));
         sqlx::query("DELETE FROM meta")
             .execute(&pool)
             .await
             .expect("drop marker");
         let second = run(&pool, &dir, "0.5.0").await.expect("second");
         assert_eq!(second.reason, "file-present");
+        assert_eq!(second.ids.len(), 1);
+        let third = run(&pool, &dir, "0.5.0").await.expect("third");
+        assert_eq!(third.reason, "already-migrated");
         let text = fs::read_to_string(dir.join("MEMORY.md")).expect("file");
-        assert_eq!(text.matches("one").count(), 1);
+        assert!(!text.contains("one"));
     }
 
     #[tokio::test]
