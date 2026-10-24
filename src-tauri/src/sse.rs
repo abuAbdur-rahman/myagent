@@ -18,6 +18,10 @@ impl SseParser {
         }
     }
 
+    pub fn pending_len(&self) -> usize {
+        self.buf.len() + self.data.iter().map(String::len).sum::<usize>()
+    }
+
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<SseItem> {
         self.buf.extend_from_slice(bytes);
         let mut out = Vec::new();
