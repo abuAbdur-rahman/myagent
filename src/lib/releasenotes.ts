@@ -43,6 +43,14 @@ export const RELEASES: readonly Release[] = [
         kind: "fixed",
         text: "The fallback only runs before any answer text or tool call reaches the screen, so a late provider error cannot duplicate a reply. Oversized streams and tool arguments stop with a clear error instead of executing a partial call.",
       },
+      {
+        kind: "fixed",
+        text: "A memory note deleted from MEMORY.md stays deleted if the migration marker is lost; the marker now remembers which legacy notes were already imported. Memory saves replace the file with one atomic rename, and a manual date that is not YYYY-MM-DD is refused.",
+      },
+      {
+        kind: "fixed",
+        text: "Generated titles keep double underscores, so Python names such as __init__ are not mangled. Notes written by a subagent are marked untrusted like notes from other tools.",
+      },
     ],
   },
   {
