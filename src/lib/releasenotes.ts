@@ -22,30 +22,6 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
-    version: "0.5.1",
-    date: "2026-10-24",
-    summary:
-      "AgentRouter's current GPT models reject the Chat Completions endpoint and require the Responses API. MyAgent now detects that response once per model and retries against /v1/responses, keeping chat, tools, titles and summaries working without a new setting.",
-    changes: [
-      {
-        kind: "fixed",
-        text: "A provider that answers a chat request with “does not support /v1/chat/completions, use /v1/responses” is switched to the Responses API for that model. The switch happens once per launch, after the rejected request; later messages go straight to the new endpoint.",
-      },
-      {
-        kind: "improved",
-        text: "Responses requests preserve the tool loop: reasoning, function calls and their outputs are replayed, so a model can call several tools without losing its chain of thought. A partial completed response is reconciled with the calls already seen, and requests stay stateless and are not stored by the provider.",
-      },
-      {
-        kind: "improved",
-        text: "Generated titles and chat summaries use the same fallback and go straight to the Responses endpoint after the first switch. A failed or empty response is reported instead of becoming an empty title or summary.",
-      },
-      {
-        kind: "fixed",
-        text: "The fallback only runs before any answer text or tool call reaches the screen, so a late provider error cannot duplicate a reply. Oversized streams and tool arguments stop with a clear error instead of executing a partial call.",
-      },
-    ],
-  },
-  {
     version: "0.5.0",
     date: "2026-10-23",
     summary:

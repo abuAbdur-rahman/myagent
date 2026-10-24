@@ -73,6 +73,11 @@ pub fn meta(path: &Path) -> (u64, u64) {
 }
 
 pub fn read(root: &Path, project_id: Option<&str>) -> Result<Doc, String> {
+    let _guard = lock();
+    read_unlocked(root, project_id)
+}
+
+fn read_unlocked(root: &Path, project_id: Option<&str>) -> Result<Doc, String> {
     let path = scope_path(root, project_id)?;
     let target = if path.is_file() {
         path.clone()
@@ -103,26 +108,10 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
             .sync_all()
             .map_err(|error| format!("sync {temp:?}: {error}"))?;
     }
-    if !path.exists() {
-        return fs::rename(&temp, path).map_err(|error| format!("rename {temp:?}: {error}"));
-    }
-    let backup = backup_path(path);
-    let _ = fs::remove_file(&backup);
-    if let Err(error) = fs::rename(path, &backup) {
+    fs::rename(&temp, path).map_err(|error| {
         let _ = fs::remove_file(&temp);
-        return Err(format!("rotate {path:?}: {error}"));
-    }
-    match fs::rename(&temp, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&backup);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = fs::rename(&backup, path);
-            let _ = fs::remove_file(&temp);
-            Err(format!("rename {temp:?}: {error}"))
-        }
-    }
+        format!("rename {temp:?}: {error}")
+    })
 }
 
 pub fn append(
@@ -141,7 +130,7 @@ pub fn append(
     }
     let _guard = lock();
     let path = scope_path(root, project_id)?;
-    let mut doc = read(root, project_id)?;
+    let mut doc = read_unlocked(root, project_id)?;
     if let Some(existing) = doc.entry(&id) {
         return Ok(existing.clone());
     }
@@ -167,7 +156,7 @@ pub fn update(
     let id = file::canonical_id(id);
     let _guard = lock();
     let path = scope_path(root, project_id)?;
-    let mut doc = read(root, project_id)?;
+    let mut doc = read_unlocked(root, project_id)?;
     if !doc.update(&id, text, kind) {
         return Ok(false);
     }
@@ -179,7 +168,7 @@ pub fn forget(root: &Path, project_id: Option<&str>, id: &str) -> Result<bool, S
     let id = file::canonical_id(id);
     let _guard = lock();
     let path = scope_path(root, project_id)?;
-    let mut doc = read(root, project_id)?;
+    let mut doc = read_unlocked(root, project_id)?;
     if !doc.forget(&id) {
         return Ok(false);
     }
@@ -300,8 +289,9 @@ pub struct ScopeView {
 }
 
 pub fn view(root: &Path, project_id: Option<&str>) -> Result<ScopeView, String> {
+    let _guard = lock();
     let path = scope_path(root, project_id)?;
-    let doc = read(root, project_id)?;
+    let doc = read_unlocked(root, project_id)?;
     let mut entries: Vec<Entry> = doc.entries().cloned().collect();
     let sent = file::sent(&entries);
     let (mtime, len) = meta(&path);

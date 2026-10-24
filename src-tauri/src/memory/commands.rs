@@ -70,6 +70,19 @@ pub struct AppendInput {
     trust: Option<String>,
 }
 
+fn memory_date(date: Option<String>) -> Result<String, String> {
+    match date {
+        Some(value)
+            if value.len() == 10
+                && chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d").is_ok() =>
+        {
+            Ok(value)
+        }
+        Some(_) => Err("date must be YYYY-MM-DD".to_string()),
+        None => Ok(file::today()),
+    }
+}
+
 #[tauri::command]
 pub fn memory_append(app: AppHandle, input: AppendInput) -> Result<store::EntryView, String> {
     let project = target(&input.scope, input.project_id.as_deref())?;
@@ -81,7 +94,7 @@ pub fn memory_append(app: AppHandle, input: AppendInput) -> Result<store::EntryV
         return Err(super::secret_message().to_string());
     }
     let id = input.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let date = input.date.unwrap_or_else(file::today);
+    let date = memory_date(input.date)?;
     let untrusted = input.trust.as_deref() == Some("untrusted");
     let root = store::root(&app)?;
     let entry = store::append(&root, project, &id, &input.text, kind, &date, untrusted)?;
@@ -275,4 +288,26 @@ pub fn memory_discard_unassigned(app: AppHandle, id: String) -> Result<(), Strin
         .ok_or("that note is no longer waiting")?;
     file.rows.remove(index);
     save_unassigned(&root, &file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::memory_date;
+
+    #[test]
+    fn append_dates_must_be_iso_days() {
+        assert_eq!(
+            memory_date(Some("2026-10-24".to_string())).expect("valid"),
+            "2026-10-24"
+        );
+        assert_eq!(
+            memory_date(Some("2026-02-30".to_string())).expect_err("bad day"),
+            "date must be YYYY-MM-DD"
+        );
+        assert_eq!(
+            memory_date(Some("+010000-01-01".to_string())).expect_err("bad year"),
+            "date must be YYYY-MM-DD"
+        );
+        assert_eq!(memory_date(None).expect("today").len(), 10);
+    }
 }
