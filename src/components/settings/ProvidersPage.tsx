@@ -144,14 +144,16 @@ function ProviderDialogActions({
   );
 }
 
-function ProviderDialog({
+export function ProviderDialog({
   open,
   connection,
   onClose,
+  onResult,
 }: {
   open: boolean;
   connection: Connection | null;
   onClose: () => void;
+  onResult: (id: string, result: TestState) => void;
 }) {
   const {
     saveConnection,
@@ -201,12 +203,18 @@ function ProviderDialog({
       if (rollbackError) {
         setDraftId(saved.id);
         setNeedsAttention(true);
-        return `Couldn't save the key: ${keyError}. The provider row could not be removed: ${rollbackError}`;
+        const text = `Couldn't save the key for ${saved.name}: ${keyError}. The provider row could not be removed: ${rollbackError}`;
+        setStatus(text);
+        onResult(saved.id, { ok: false, text });
+        return text;
       }
       if (isNew) setDraftId(null);
-      return isNew
-        ? `Couldn't save the key: ${keyError}. The provider was not added.`
-        : `Couldn't save the key: ${keyError}`;
+      const text = isNew
+        ? `Couldn't save the key for ${saved.name}: ${keyError}. The provider was not added.`
+        : `Couldn't save the key for ${saved.name}: ${keyError}`;
+      setStatus(text);
+      if (!isNew) onResult(saved.id, { ok: false, text });
+      return text;
     }
   };
 
@@ -218,9 +226,11 @@ function ProviderDialog({
     if (saved) {
       setDraftId(saved.id);
       setNeedsAttention(true);
-      setStatus(`Saved, but the connection test failed. ${message}`);
+      const text = `Saved ${saved.name} at ${saved.base_url}, but the model check failed. ${message}`;
+      setStatus(text);
+      onResult(saved.id, { ok: false, text });
     } else {
-      setStatus(message);
+      setStatus(`Couldn't save the provider: ${message}`);
     }
   };
 
@@ -268,7 +278,9 @@ function ProviderDialog({
       await refreshConnections();
       selectConnection(saved.id);
       setDraftId(null);
-      setStatus(`Connected · ${found} models found`);
+      const text = `Connected · ${found} models found`;
+      setStatus(text);
+      onResult(saved.id, { ok: true, text });
       if (!testFirst) onClose();
     } catch (e) {
       reportSaveFailure(e, saved);
@@ -702,6 +714,9 @@ export function ProvidersPage() {
         onClose={() => {
           setDialog({ open: false, connection: null });
           void reloadKeys();
+        }}
+        onResult={(id, result) => {
+          setTestState((prev) => ({ ...prev, [id]: result }));
         }}
       />
     </div>
