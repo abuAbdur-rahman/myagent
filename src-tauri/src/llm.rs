@@ -1,11 +1,14 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tokio::sync::Notify;
+
+mod responses;
 
 use crate::connections;
 use crate::error::{AppError, AppResult};
@@ -112,6 +115,33 @@ impl EventSink for ScopedSink<'_> {
                 event: Box::new(other),
             }),
         }
+    }
+}
+
+struct ObservedSink<'a> {
+    inner: &'a dyn EventSink,
+    seen: AtomicBool,
+}
+
+impl<'a> ObservedSink<'a> {
+    fn new(inner: &'a dyn EventSink) -> Self {
+        Self {
+            inner,
+            seen: AtomicBool::new(false),
+        }
+    }
+
+    fn seen(&self) -> bool {
+        self.seen.load(Ordering::Relaxed)
+    }
+}
+
+impl EventSink for ObservedSink<'_> {
+    fn send(&self, event: StreamEvent) {
+        if !matches!(event, StreamEvent::Retrying { .. }) {
+            self.seen.store(true, Ordering::Relaxed);
+        }
+        self.inner.send(event);
     }
 }
 
@@ -247,6 +277,26 @@ async fn apply_optional_params(
     attach_effort(body, req.connection_kind.as_deref(), effort);
 }
 
+async fn responses_effort(
+    client: &reqwest::Client,
+    req: &ChatRequest,
+    key: &str,
+) -> Option<String> {
+    let effort = req
+        .reasoning_effort
+        .as_deref()
+        .filter(|value| !value.is_empty() && *value != "none")?;
+    let caps =
+        match fetch_model_caps(client, &req.base_url, key, req.connection_kind.as_deref()).await {
+            Ok(entries) => entries.into_iter().find(|entry| entry.id == req.model),
+            Err(error) => {
+                eprintln!("llm: model caps lookup failed for {}: {error}", req.model);
+                None
+            }
+        };
+    effort_allowed(caps.as_ref(), effort).then(|| effort.to_string())
+}
+
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
     let truncated: String = text.chars().take(max).collect();
     if text.chars().count() > max {
@@ -319,12 +369,26 @@ pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<Stri
         cancel,
         connection_kind,
     } = request;
+    let history = vec![
+        serde_json::json!({ "role": "system", "content": system }),
+        serde_json::json!({ "role": "user", "content": user }),
+    ];
+    if responses::only(base_url, model) {
+        return post_responses_text(ResponsesText {
+            client,
+            base_url,
+            key,
+            model,
+            history: &history,
+            cancel,
+            kind: connection_kind,
+            max_output_tokens: None,
+        })
+        .await;
+    }
     let body = serde_json::json!({
         "model": model,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
+        "messages": &history,
         "stream": false,
     });
     let url = endpoint(base_url, "chat/completions");
@@ -337,19 +401,99 @@ pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<Stri
             cancel,
             None,
             connection_kind,
-        ) => resp?,
+        ) => resp,
         _ = cancel.notified() => return Err(AppError::Cancelled),
     };
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(error) if responses::requires_responses(&error) => {
+            responses::mark(base_url, model);
+            return post_responses_text(ResponsesText {
+                client,
+                base_url,
+                key,
+                model,
+                history: &history,
+                cancel,
+                kind: connection_kind,
+                max_output_tokens: None,
+            })
+            .await;
+        }
+        Err(error) => return Err(error),
+    };
     let value: serde_json::Value = resp.json().await.map_err(AppError::from)?;
-    let text = value["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
+    let text = message_text(&value["choices"][0]["message"]["content"])
         .trim()
         .to_string();
     if text.is_empty() {
         return Err(AppError::Upstream("empty completion".to_string()));
     }
     Ok(text)
+}
+
+async fn post_responses_text(request: ResponsesText<'_>) -> AppResult<String> {
+    let ResponsesText {
+        client,
+        base_url,
+        key,
+        model,
+        history,
+        cancel,
+        kind,
+        max_output_tokens,
+    } = request;
+    let mut body = responses::body(model, history, None, None, false);
+    if let Some(max_output_tokens) = max_output_tokens {
+        body["max_output_tokens"] = serde_json::json!(max_output_tokens);
+    }
+    let url = endpoint(base_url, "responses");
+    let resp = tokio::select! {
+        resp = post_with_retry(
+            client,
+            &url,
+            key,
+            &body,
+            cancel,
+            None,
+            kind,
+        ) => resp?,
+        _ = cancel.notified() => return Err(AppError::Cancelled),
+    };
+    let value: serde_json::Value = resp.json().await.map_err(AppError::from)?;
+    let provider_error = value
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(serde_json::Value::as_str);
+    if matches!(
+        value.get("status").and_then(serde_json::Value::as_str),
+        Some("failed" | "cancelled")
+    ) {
+        return Err(AppError::Upstream(
+            provider_error.unwrap_or("response failed").to_string(),
+        ));
+    }
+    if let Some(message) = provider_error {
+        return Err(AppError::Upstream(message.to_string()));
+    }
+    let text = responses::text(&value).trim().to_string();
+    if text.is_empty() {
+        return Err(AppError::Upstream(
+            "empty response from provider".to_string(),
+        ));
+    }
+    Ok(text)
+}
+
+struct ResponsesText<'a> {
+    client: &'a reqwest::Client,
+    base_url: &'a str,
+    key: &'a str,
+    model: &'a str,
+    history: &'a [serde_json::Value],
+    cancel: &'a Notify,
+    kind: Option<&'a str>,
+    max_output_tokens: Option<u32>,
 }
 
 fn message_text(content: &serde_json::Value) -> String {
@@ -608,9 +752,12 @@ async fn pace_agentrouter(url: &str, cancel: &Notify) -> bool {
 async fn error_body(resp: reqwest::Response) -> String {
     let status = resp.status();
     match resp.text().await {
-        Ok(body) if !body.is_empty() => format!("{status}: {body}"),
+        Ok(body) if !body.is_empty() => format!("{status}: {}", truncate_chars(&body, 8_000)),
         Ok(_) => status.to_string(),
-        Err(e) => format!("{status} (unreadable body: {e})"),
+        Err(e) => format!(
+            "{status} (unreadable body: {})",
+            truncate_chars(&e.to_string(), 500)
+        ),
     }
 }
 
@@ -971,16 +1118,54 @@ pub async fn summarize(
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
     let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let cancel = Notify::new();
+    let body = summary_body(&req.model, &req.text);
+    let history = body["messages"].as_array().cloned().unwrap_or_default();
+    if responses::only(&req.base_url, &req.model) {
+        let summary = post_responses_text(ResponsesText {
+            client: &client,
+            base_url: &req.base_url,
+            key: &key,
+            model: &req.model,
+            history: &history,
+            cancel: &cancel,
+            kind: req.connection_kind.as_deref(),
+            max_output_tokens: Some(500),
+        })
+        .await?;
+        return Ok(summary.chars().take(2000).collect());
+    }
     let resp = post_with_retry(
         &client,
         &endpoint(&req.base_url, "chat/completions"),
         &key,
-        &summary_body(&req.model, &req.text),
+        &body,
         &cancel,
         None,
         req.connection_kind.as_deref(),
     )
-    .await?;
+    .await;
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(error) if responses::requires_responses(&error) => {
+            responses::mark(&req.base_url, &req.model);
+            let summary = post_responses_text(ResponsesText {
+                client: &client,
+                base_url: &req.base_url,
+                key: &key,
+                model: &req.model,
+                history: &history,
+                cancel: &cancel,
+                kind: req.connection_kind.as_deref(),
+                max_output_tokens: Some(500),
+            })
+            .await?;
+            if summary.is_empty() {
+                return Err(AppError::Upstream("empty summary".to_string()));
+            }
+            return Ok(summary.chars().take(2000).collect());
+        }
+        Err(error) => return Err(error),
+    };
     let value: serde_json::Value = resp.json().await.map_err(AppError::from)?;
     let summary = value["choices"][0]["message"]["content"]
         .as_str()
@@ -1029,29 +1214,48 @@ pub async fn suggest_title(
 ) -> AppResult<String> {
     req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
     let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
+    let history = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": "Title this conversation in 6 words or fewer. Plain text only: no quotes, no punctuation, no preamble.",
+        }),
+        serde_json::json!({
+            "role": "user",
+            "content": format!(
+                "User asked: {}\n\nAssistant answered (excerpt): {}",
+                truncate_chars(req.user_text.trim(), 300),
+                truncate_chars(req.assistant_text.trim(), 500),
+            ),
+        }),
+    ];
+    let cancel = Notify::new();
+    if responses::only(&req.base_url, &req.model) {
+        let text = post_responses_text(ResponsesText {
+            client: &client,
+            base_url: &req.base_url,
+            key: &key,
+            model: &req.model,
+            history: &history,
+            cancel: &cancel,
+            kind: req.connection_kind.as_deref(),
+            max_output_tokens: Some(2048),
+        })
+        .await?;
+        let title = clean_title(&text);
+        if title.is_empty() {
+            return Err(AppError::Upstream("empty title".to_string()));
+        }
+        return Ok(title);
+    }
     let url = endpoint(&req.base_url, "chat/completions");
     let body = serde_json::json!({
-        "model": req.model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "Title this conversation in 6 words or fewer. Plain text only: no quotes, no punctuation, no preamble.",
-            },
-            {
-                "role": "user",
-                "content": format!(
-                    "User asked: {}\n\nAssistant answered (excerpt): {}",
-                    truncate_chars(req.user_text.trim(), 300),
-                    truncate_chars(req.assistant_text.trim(), 500),
-                ),
-            },
-        ],
+        "model": &req.model,
+        "messages": &history,
         "max_tokens": 2048,
         "temperature": 0.3,
         "stream": false,
     });
 
-    let cancel = Notify::new();
     let resp = post_with_retry(
         &client,
         &url,
@@ -1061,7 +1265,30 @@ pub async fn suggest_title(
         None,
         req.connection_kind.as_deref(),
     )
-    .await?;
+    .await;
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(error) if responses::requires_responses(&error) => {
+            responses::mark(&req.base_url, &req.model);
+            let text = post_responses_text(ResponsesText {
+                client: &client,
+                base_url: &req.base_url,
+                key: &key,
+                model: &req.model,
+                history: &history,
+                cancel: &cancel,
+                kind: req.connection_kind.as_deref(),
+                max_output_tokens: Some(2048),
+            })
+            .await?;
+            let title = clean_title(&text);
+            if title.is_empty() {
+                return Err(AppError::Upstream("empty title".to_string()));
+            }
+            return Ok(title);
+        }
+        Err(error) => return Err(error),
+    };
 
     let value: serde_json::Value = resp.json().await?;
     let title = clean_title(&message_text(&value["choices"][0]["message"]["content"]));
@@ -1308,6 +1535,7 @@ fn assistant_tool_message(
     calls: &[serde_json::Value],
     reasoning: &str,
     replay_reasoning: bool,
+    responses_items: &[serde_json::Value],
 ) -> serde_json::Value {
     let mut message = serde_json::json!({
         "role": "assistant",
@@ -1316,6 +1544,9 @@ fn assistant_tool_message(
     });
     if replay_reasoning {
         message["reasoning_content"] = serde_json::json!(reasoning);
+    }
+    if !responses_items.is_empty() {
+        message["responses_items"] = serde_json::json!(responses_items);
     }
     message
 }
@@ -1354,6 +1585,18 @@ fn prune_tool_history(history: &[serde_json::Value]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn prune_chat_history(history: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    prune_tool_history(history)
+        .into_iter()
+        .map(|mut message| {
+            if let Some(object) = message.as_object_mut() {
+                object.remove("responses_items");
+            }
+            message
+        })
+        .collect()
+}
+
 struct RepeatGuard {
     last_key: Option<String>,
     streak: u32,
@@ -1387,6 +1630,7 @@ struct Iteration {
     text: String,
     calls: Vec<serde_json::Value>,
     reasoning: String,
+    responses_items: Vec<serde_json::Value>,
 }
 
 fn collapsible_call(name: &str) -> bool {
@@ -1454,6 +1698,16 @@ fn finish_iteration(
 ) -> AppResult<Iteration> {
     accumulator.flush_unannounced();
     let calls = accumulator.calls();
+    finish_iteration_parts(text, reasoning, calls, Vec::new(), on_event)
+}
+
+fn finish_iteration_parts(
+    text: String,
+    reasoning: String,
+    calls: Vec<serde_json::Value>,
+    responses_items: Vec<serde_json::Value>,
+    on_event: &dyn EventSink,
+) -> AppResult<Iteration> {
     if text.is_empty() && calls.is_empty() {
         return Err(AppError::Upstream(
             "empty response from provider".to_string(),
@@ -1468,6 +1722,7 @@ fn finish_iteration(
         text,
         calls,
         reasoning,
+        responses_items,
     })
 }
 
@@ -1612,6 +1867,7 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
             &step.calls,
             &step.reasoning,
             replay_reasoning,
+            &step.responses_items,
         ));
         for call in &step.calls {
             match tools.run(call, history).await? {
@@ -1656,9 +1912,29 @@ impl ModelClient for RealModel<'_> {
             .await
             .map(|()| None);
         }
+        if responses::only(&self.req.base_url, &self.req.model) {
+            let effort = responses_effort(self.client, self.req, &self.key).await;
+            let body = responses::body(
+                &self.req.model,
+                &prune_tool_history(messages),
+                Some(&self.tool_specs),
+                effort.as_deref(),
+                true,
+            );
+            return responses::stream_iteration(
+                self.client,
+                &endpoint(&self.req.base_url, "responses"),
+                &self.key,
+                &body,
+                self.cancel,
+                self.on_event,
+                self.req.connection_kind.as_deref(),
+            )
+            .await;
+        }
         let mut body = serde_json::json!({
             "model": self.req.model,
-            "messages": prune_tool_history(messages),
+            "messages": prune_chat_history(messages),
             "tools": self.tool_specs,
             "stream": true,
         });
@@ -1666,16 +1942,42 @@ impl ModelClient for RealModel<'_> {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
         apply_optional_params(self.client, &mut body, self.req, &self.key).await;
-        stream_agentic_iteration(
+        let observed = ObservedSink::new(self.on_event);
+        match stream_agentic_iteration(
             self.client,
             &self.url,
             &self.key,
             &body,
             self.cancel,
-            self.on_event,
+            &observed,
             self.req.connection_kind.as_deref(),
         )
         .await
+        {
+            Ok(iteration) => Ok(iteration),
+            Err(error) if responses::requires_responses(&error) && !observed.seen() => {
+                responses::mark(&self.req.base_url, &self.req.model);
+                let effort = responses_effort(self.client, self.req, &self.key).await;
+                let body = responses::body(
+                    &self.req.model,
+                    &prune_tool_history(messages),
+                    Some(&self.tool_specs),
+                    effort.as_deref(),
+                    true,
+                );
+                responses::stream_iteration(
+                    self.client,
+                    &endpoint(&self.req.base_url, "responses"),
+                    &self.key,
+                    &body,
+                    self.cancel,
+                    self.on_event,
+                    self.req.connection_kind.as_deref(),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -2410,10 +2712,13 @@ async fn stream_completion(
     on_event: &dyn EventSink,
     cancel: &Notify,
 ) -> AppResult<()> {
+    if responses::only(&req.base_url, &req.model) {
+        return stream_responses_completion(client, req, &key, &history, on_event, cancel).await;
+    }
     let url = endpoint(&req.base_url, "chat/completions");
     let mut body = serde_json::json!({
         "model": req.model,
-        "messages": history,
+        "messages": prune_chat_history(&history),
         "stream": true,
     });
     if wants_stream_usage(req.connection_kind.as_deref()) {
@@ -2433,6 +2738,11 @@ async fn stream_completion(
     .await
     {
         Ok(resp) => resp,
+        Err(error) if responses::requires_responses(&error) => {
+            responses::mark(&req.base_url, &req.model);
+            return stream_responses_completion(client, req, &key, &history, on_event, cancel)
+                .await;
+        }
         Err(error) if is_cancel_shutdown(&error) => return Ok(()),
         Err(error) => return Err(error),
     };
@@ -2504,6 +2814,30 @@ async fn stream_completion(
         ));
     }
     Ok(())
+}
+
+async fn stream_responses_completion(
+    client: &reqwest::Client,
+    req: &ChatRequest,
+    key: &str,
+    history: &[serde_json::Value],
+    on_event: &dyn EventSink,
+    cancel: &Notify,
+) -> AppResult<()> {
+    let effort = responses_effort(client, req, key).await;
+    let history = prune_tool_history(history);
+    let body = responses::body(req.model.as_str(), &history, None, effort.as_deref(), true);
+    responses::stream_iteration(
+        client,
+        &endpoint(&req.base_url, "responses"),
+        key,
+        &body,
+        cancel,
+        on_event,
+        req.connection_kind.as_deref(),
+    )
+    .await
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -3322,7 +3656,7 @@ mod tests {
 
     #[test]
     fn deepseek_tool_message_replays_reasoning_even_when_empty() {
-        let message = assistant_tool_message("ok", &[], "", true);
+        let message = assistant_tool_message("ok", &[], "", true, &[]);
         assert_eq!(message["role"], "assistant");
         assert_eq!(message["content"], "ok");
         assert_eq!(message["reasoning_content"], "");
@@ -3330,7 +3664,7 @@ mod tests {
 
     #[test]
     fn non_deepseek_tool_message_omits_reasoning() {
-        let message = assistant_tool_message("ok", &[], "step reasoning", false);
+        let message = assistant_tool_message("ok", &[], "step reasoning", false, &[]);
         assert!(message.get("reasoning_content").is_none());
     }
 
@@ -3391,6 +3725,7 @@ mod tests {
                     text: text.to_string(),
                     calls: Vec::new(),
                     reasoning: String::new(),
+                    responses_items: Vec::new(),
                 },
                 FakeStep::Tool => Iteration {
                     text: String::new(),
@@ -3400,6 +3735,7 @@ mod tests {
                         "function": { "name": "get_time", "arguments": "{}" },
                     })],
                     reasoning: String::new(),
+                    responses_items: Vec::new(),
                 },
             }))
         }
