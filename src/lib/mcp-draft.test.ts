@@ -6,6 +6,7 @@ function draft(overrides: Partial<McpDraft>): McpDraft {
   return {
     name: "server",
     transport: "stdio",
+    authType: "none",
     command: "",
     url: "",
     ...overrides,

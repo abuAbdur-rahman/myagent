@@ -1,6 +1,7 @@
 export interface McpDraft {
   name: string;
   transport: string;
+  authType: string;
   command: string;
   url: string;
 }

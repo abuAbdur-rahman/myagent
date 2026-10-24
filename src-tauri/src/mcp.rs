@@ -197,12 +197,22 @@ mod tests {
         assert!(validate_target("bogus", None, Some("https://example.com")).is_err());
     }
 
+    #[test]
+    fn validate_auth_type_accepts_the_three_modes() {
+        for auth_type in ["none", "bearer", "oauth"] {
+            assert!(validate_auth_type(auth_type).is_ok());
+        }
+        assert!(validate_auth_type("").is_err());
+        assert!(validate_auth_type("basic").is_err());
+    }
+
     fn config(deny: Option<Vec<&str>>) -> McpServerConfig {
         McpServerConfig {
             id: "s1".to_string(),
             project_id: None,
             name: "fs".to_string(),
             transport: "stdio".to_string(),
+            auth_type: "none".to_string(),
             cmd: Some("npx srv".to_string()),
             url: None,
             deny_tools: deny.map(|list| list.into_iter().map(String::from).collect()),
@@ -218,6 +228,7 @@ mod tests {
             project_id: project.map(String::from),
             name: "fs".to_string(),
             transport: "stdio".to_string(),
+            auth_type: "none".to_string(),
             cmd: Some("npx srv".to_string()),
             url: None,
             allow_tools: allow.map(String::from),
@@ -360,6 +371,7 @@ mod tests {
             .expect("row decodes");
         assert_eq!(row.name, "fs");
         assert_eq!(row.transport, "stdio");
+        assert_eq!(row.auth_type, "none", "migration 30 defaults to none");
         assert!(row.enabled, "INTEGER 1 decodes as true");
         assert_eq!(row.allow_tools.as_deref(), Some("[\"read\"]"));
         assert_eq!(row.approval_mode, "ask", "schema default reaches the row");
@@ -406,6 +418,7 @@ pub struct McpServerConfig {
     pub project_id: Option<String>,
     pub name: String,
     pub transport: String,
+    pub auth_type: String,
     pub cmd: Option<String>,
     pub url: Option<String>,
     pub deny_tools: Option<Vec<String>>,
@@ -420,6 +433,7 @@ impl From<&McpServerRow> for McpServerConfig {
             project_id: row.project_id.clone(),
             name: row.name.clone(),
             transport: row.transport.clone(),
+            auth_type: row.auth_type.clone(),
             cmd: row.cmd.clone(),
             url: row.url.clone(),
             deny_tools: parse_tool_list(row.deny_tools.clone(), "deny_tools"),
@@ -435,6 +449,7 @@ pub struct McpServerRow {
     pub project_id: Option<String>,
     pub name: String,
     pub transport: String,
+    pub auth_type: String,
     pub cmd: Option<String>,
     pub url: Option<String>,
     pub allow_tools: Option<String>,
@@ -445,7 +460,7 @@ pub struct McpServerRow {
     pub enabled: bool,
 }
 
-const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode FROM mcp_servers";
+const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode FROM mcp_servers";
 
 fn valid_server_name(name: &str) -> bool {
     !name.trim().is_empty()
@@ -479,6 +494,7 @@ pub async fn mcp_add(
     project_id: Option<String>,
     name: String,
     transport: String,
+    auth_type: String,
     cmd: Option<String>,
     url: Option<String>,
 ) -> Result<McpServerRow, String> {
@@ -487,6 +503,7 @@ pub async fn mcp_add(
         return Err("server name must be 1-64 chars: letters, digits, - or _".to_string());
     }
     validate_target(&transport, cmd.as_deref(), url.as_deref())?;
+    validate_auth_type(&auth_type)?;
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
@@ -495,11 +512,12 @@ pub async fn mcp_add(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?)")
+    sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?)")
         .bind(&id)
         .bind(&project_id)
         .bind(&name)
         .bind(&transport)
+        .bind(&auth_type)
         .bind(&cmd)
         .bind(&url)
         .bind(now)
@@ -538,6 +556,13 @@ pub async fn mcp_toggle(app: AppHandle, id: String, enabled: bool) -> Result<(),
     Ok(())
 }
 
+fn validate_auth_type(auth_type: &str) -> Result<(), String> {
+    match auth_type {
+        "none" | "bearer" | "oauth" => Ok(()),
+        _ => Err("auth_type must be none, bearer or oauth".to_string()),
+    }
+}
+
 fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Result<(), String> {
     if transport != "stdio" && transport != "http" && transport != "sse" {
         return Err("transport must be stdio, http or sse".to_string());
@@ -571,6 +596,7 @@ pub async fn mcp_update(
     id: String,
     name: String,
     transport: String,
+    auth_type: String,
     cmd: Option<String>,
     url: Option<String>,
 ) -> Result<McpServerRow, String> {
@@ -579,15 +605,19 @@ pub async fn mcp_update(
         return Err("server name must be 1-64 chars: letters, digits, - or _".to_string());
     }
     validate_target(&transport, cmd.as_deref(), url.as_deref())?;
+    validate_auth_type(&auth_type)?;
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    sqlx::query("UPDATE mcp_servers SET name = ?, transport = ?, cmd = ?, url = ? WHERE id = ?")
-        .bind(&name)
-        .bind(&transport)
-        .bind(&cmd)
-        .bind(&url)
-        .bind(&id)
+    sqlx::query(
+        "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ? WHERE id = ?",
+    )
+    .bind(&name)
+    .bind(&transport)
+    .bind(&auth_type)
+    .bind(&cmd)
+    .bind(&url)
+    .bind(&id)
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -698,14 +728,17 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
 #[tauri::command]
 pub async fn mcp_test(
     transport: String,
+    auth_type: String,
     cmd: Option<String>,
     url: Option<String>,
 ) -> Result<McpProbe, String> {
+    validate_auth_type(&auth_type)?;
     let config = McpServerConfig {
         id: "draft".to_string(),
         project_id: None,
         name: "draft".to_string(),
         transport,
+        auth_type,
         cmd,
         url,
         deny_tools: None,
@@ -736,6 +769,12 @@ fn clean_tool_names(names: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
+    if config.auth_type != "none" {
+        return Err(format!(
+            "{} authorization is not configured yet",
+            config.auth_type
+        ));
+    }
     let transport = if config.transport == "sse" {
         let endpoint = config.url.as_deref().unwrap_or("");
         crate::webfetch::validate_url_opts(endpoint, true, false)

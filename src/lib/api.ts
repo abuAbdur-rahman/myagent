@@ -281,6 +281,7 @@ export interface McpServerRow {
   project_id: string | null;
   name: string;
   transport: string;
+  auth_type: string;
   cmd: string | null;
   url: string | null;
   allow_tools: string | null;
@@ -322,20 +323,22 @@ export function mcpAdd(
   projectId: string | null,
   name: string,
   transport: string,
+  authType: string,
   cmd: string | null,
   url: string | null,
 ) {
-  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, cmd, url });
+  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, authType, cmd, url });
 }
 
 export function mcpUpdate(
   id: string,
   name: string,
   transport: string,
+  authType: string,
   cmd: string | null,
   url: string | null,
 ) {
-  return invoke<McpServerRow>("mcp_update", { id, name, transport, cmd, url });
+  return invoke<McpServerRow>("mcp_update", { id, name, transport, authType, cmd, url });
 }
 
 export function mcpSetPolicy(id: string, ask: string[], allow: string[], deny: string[]) {
@@ -354,8 +357,13 @@ export function mcpProbe(id: string) {
   return invoke<McpProbe>("mcp_probe", { id });
 }
 
-export function mcpTest(transport: string, cmd: string | null, url: string | null) {
-  return invoke<McpProbe>("mcp_test", { transport, cmd, url });
+export function mcpTest(
+  transport: string,
+  authType: string,
+  cmd: string | null,
+  url: string | null,
+) {
+  return invoke<McpProbe>("mcp_test", { transport, authType, cmd, url });
 }
 
 export function mcpRemove(id: string) {

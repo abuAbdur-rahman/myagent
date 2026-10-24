@@ -188,7 +188,19 @@ type McpState = { tone: PillTone; label: string };
 
 const CLOSED_MCP_DIALOG: McpDialogState = { open: false, editing: null, seed: null };
 
-const EMPTY_MCP_DRAFT: McpDraft = { name: "", transport: "stdio", command: "", url: "" };
+const EMPTY_MCP_DRAFT: McpDraft = {
+  name: "",
+  transport: "stdio",
+  authType: "none",
+  command: "",
+  url: "",
+};
+
+const MCP_AUTH_MODES: { value: string; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "bearer", label: "Bearer token" },
+  { value: "oauth", label: "OAuth 2.1" },
+];
 
 const MCP_MODES: { value: string; label: string }[] = [
   { value: "ask", label: "Ask" },
@@ -232,6 +244,7 @@ function mcpDraft(server: api.McpServerRow): McpDraft {
   return {
     name: server.name,
     transport: server.transport,
+    authType: server.auth_type,
     command: server.cmd ?? "",
     url: server.url ?? "",
   };
@@ -242,6 +255,7 @@ function mcpPresetDraft(preset: McpPreset): McpDraft {
   return {
     name: preset.id,
     transport: preset.transport,
+    authType: "none",
     command: stdio ? preset.target : "",
     url: stdio ? "" : preset.target,
   };
@@ -249,6 +263,12 @@ function mcpPresetDraft(preset: McpPreset): McpDraft {
 
 function mcpHint(transport: string) {
   return MCP_TARGET_HINTS[transport] ?? MCP_TARGET_HINTS.stdio;
+}
+
+function mcpAuthHint(authType: string): string {
+  if (authType === "bearer") return "Stored in Windows Credential Manager, never in SQLite.";
+  if (authType === "oauth") return "Browser sign-in runs after the server is saved.";
+  return "No authorization header is sent.";
 }
 
 function mcpPolicy(server: api.McpServerRow): McpPolicy {
@@ -780,6 +800,14 @@ function McpDialogFields({
           options={MCP_TRANSPORTS}
         />
       </McpField>
+      <McpField label="Auth" hint={mcpAuthHint(draft.authType)}>
+        <Select
+          value={draft.authType}
+          onChange={(value) => setDraft({ ...draft, authType: value })}
+          aria-label="Auth"
+          options={MCP_AUTH_MODES}
+        />
+      </McpField>
       <McpField
         label={hint.label}
         hint={stdio ? MCP_COMMAND_HINT : MCP_URL_HINT}
@@ -860,7 +888,7 @@ function McpServerDialog({
     setTesting(true);
     try {
       const { cmd, url } = mcpTargetArgs(draft);
-      const probe = await api.mcpTest(draft.transport, cmd, url);
+      const probe = await api.mcpTest(draft.transport, draft.authType, cmd, url);
       setTest(
         probe.error
           ? { ok: false, text: probe.error }
@@ -1182,8 +1210,8 @@ export function McpPage() {
     void run(
       () =>
         current
-          ? api.mcpUpdate(current.id, name, draft.transport, cmd, url)
-          : api.mcpAdd(projectId, name, draft.transport, cmd, url),
+          ? api.mcpUpdate(current.id, name, draft.transport, draft.authType, cmd, url)
+          : api.mcpAdd(projectId, name, draft.transport, draft.authType, cmd, url),
       current ? "Server updated" : "Server added. It connects on the next send.",
     );
   };
