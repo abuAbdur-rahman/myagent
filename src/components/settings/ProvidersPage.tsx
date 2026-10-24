@@ -58,7 +58,12 @@ function ProviderDialog({
   connection: Connection | null;
   onClose: () => void;
 }) {
-  const { saveConnection, removeConnection, refreshConnections } = useApp();
+  const {
+    saveConnection,
+    removeConnection,
+    refreshConnections,
+    selectConnection,
+  } = useApp();
   const [kind, setKind] = useState<ProviderKind>(connection?.kind ?? "openrouter");
   const [name, setName] = useState(connection?.name ?? "OpenRouter");
   const [baseUrl, setBaseUrl] = useState(
@@ -69,6 +74,9 @@ function ProviderDialog({
   const [defaultModel, setDefaultModel] = useState(connection?.default_model ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [needsAttention, setNeedsAttention] = useState(false);
+  const isNew = !connection;
 
   useEffect(() => {
     if (!open) return;
@@ -79,6 +87,8 @@ function ProviderDialog({
     setShowKey(false);
     setDefaultModel(connection?.default_model ?? "");
     setStatus(null);
+    setDraftId(null);
+    setNeedsAttention(false);
   }, [open, connection]);
 
   const save = async (testFirst: boolean) => {
@@ -92,19 +102,46 @@ function ProviderDialog({
       setStatus(parsed.error.issues[0]?.message ?? "Invalid provider");
       return;
     }
-    const isNew = !connection;
-    if (isNew && !key.trim() && !KEYLESS_KINDS.has(kind)) {
+    if (isNew && !draftId && !key.trim() && !KEYLESS_KINDS.has(kind)) {
       setStatus("Enter an API key to add a provider.");
       return;
     }
     setBusy(true);
-    let savedId: string | null = null;
+    setNeedsAttention(false);
+    let saved: Connection | null = null;
     try {
-      const saved = await saveConnection(parsed.data, connection?.id);
-      savedId = saved.id;
+      saved = await saveConnection(
+        parsed.data,
+        connection?.id ?? draftId ?? undefined,
+        { activate: false },
+      );
+      if (isNew) setDraftId(saved.id);
       if (key.trim()) {
-        await api.setApiKey(saved.id, key.trim());
-        setKey("");
+        try {
+          await api.setApiKey(saved.id, key.trim());
+          setKey("");
+        } catch (e) {
+          const keyError = errorText(e);
+          const rollbackError = await rollbackConnection(
+            removeConnection,
+            isNew ? saved.id : null,
+          );
+          if (rollbackError) {
+            setDraftId(saved.id);
+            setNeedsAttention(true);
+            setStatus(
+              `Couldn't save the key: ${keyError}. The provider row could not be removed: ${rollbackError}`,
+            );
+          } else {
+            if (isNew) setDraftId(null);
+            setStatus(
+              isNew
+                ? `Couldn't save the key: ${keyError}. The provider was not added.`
+                : `Couldn't save the key: ${keyError}`,
+            );
+          }
+          return;
+        }
       }
       const found = await api.verifyProvider(saved.id, saved.kind);
       if (found === 0) {
@@ -112,16 +149,39 @@ function ProviderDialog({
       }
       await db.markKeyTested(saved.id);
       await refreshConnections();
+      selectConnection(saved.id);
+      setDraftId(null);
       setStatus(`Connected · ${found} models found`);
       if (!testFirst) onClose();
     } catch (e) {
-      if (isNew) await rollbackConnection(removeConnection, savedId);
       const raw = errorText(e);
       const { hint } = api.classifyStreamError(raw);
-      setStatus(hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300));
+      const message =
+        hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300);
+      if (saved) {
+        setDraftId(saved.id);
+        setNeedsAttention(true);
+        setStatus(`Saved, but the connection test failed. ${message}`);
+      } else {
+        setStatus(message);
+      }
     } finally {
       setBusy(false);
     }
+  };
+
+  const deleteDraft = async () => {
+    if (!draftId) return;
+    setBusy(true);
+    const rollbackError = await rollbackConnection(removeConnection, draftId);
+    setBusy(false);
+    if (rollbackError) {
+      setStatus(`Couldn't delete the provider: ${rollbackError}`);
+      return;
+    }
+    setDraftId(null);
+    setNeedsAttention(false);
+    onClose();
   };
 
   return (
@@ -197,15 +257,31 @@ function ProviderDialog({
           </p>
         )}
         <div className="mt-1.5 flex justify-end gap-2">
-          <Button variant="default" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="default" disabled={busy} onClick={() => void save(true)}>
-            {busy ? <Spinner label="Testing…" /> : "Test connection"}
-          </Button>
-          <Button variant="primary" disabled={busy} onClick={() => void save(false)}>
-            Save
-          </Button>
+          {isNew && needsAttention && draftId ? (
+            <>
+              <Button variant="default" disabled={busy} onClick={() => void deleteDraft()}>
+                Delete provider
+              </Button>
+              <Button variant="default" onClick={onClose}>
+                Keep provider
+              </Button>
+              <Button variant="primary" disabled={busy} onClick={() => void save(true)}>
+                {busy ? <Spinner label="Testing…" /> : "Retry test"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="default" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button variant="default" disabled={busy} onClick={() => void save(true)}>
+                {busy ? <Spinner label="Testing…" /> : "Test connection"}
+              </Button>
+              <Button variant="primary" disabled={busy} onClick={() => void save(false)}>
+                Save
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </Dialog>

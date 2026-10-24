@@ -633,6 +633,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
               label: level === "none" ? "No reasoning" : level,
             }))}
           />
+          <span className="flex-1" />
           <button
             type="button"
             onPointerDown={(event) => {
@@ -669,7 +670,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           >
             <Mic size={14} />
           </button>
-          <span className="flex-1" />
           {streaming ? (
             <button
               type="button"

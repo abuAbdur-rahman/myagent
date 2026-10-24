@@ -3,7 +3,7 @@ import { Check, KeyRound, Plug, ShieldCheck } from "lucide-react";
 import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
-import { DEFAULT_BASE_URLS, KEYLESS_KINDS, PROVIDER_LABELS, connectionInputSchema, type ProviderKind } from "../lib/types";
+import { DEFAULT_BASE_URLS, KEYLESS_KINDS, PROVIDER_LABELS, connectionInputSchema, type Connection, type ProviderKind } from "../lib/types";
 import { Button, Input, Spinner } from "./ui";
 import { cn, errorText, rollbackConnection } from "../lib/utils";
 
@@ -29,7 +29,7 @@ export function OnboardingDialog() {
     completeOnboarding,
     saveConnection,
     removeConnection,
-    refreshModels,
+    selectConnection,
     models,
     model,
     setModel,
@@ -45,6 +45,7 @@ export function OnboardingDialog() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
   const [searchKey, setSearchKey] = useState("");
   const [searchStatus, setSearchStatus] = useState<string | null>(null);
 
@@ -83,24 +84,44 @@ export function OnboardingDialog() {
       return;
     }
     setBusy(true);
-    let savedId: string | null = null;
+    let saved: Connection | null = null;
     try {
-      const saved = await saveConnection(parsed.data);
-      savedId = saved.id;
-      if (!keyless) await api.setApiKey(saved.id, key.trim());
+      saved = await saveConnection(parsed.data, draftId ?? undefined, {
+        activate: false,
+      });
+      setDraftId(saved.id);
+      if (!keyless) {
+        try {
+          await api.setApiKey(saved.id, key.trim());
+        } catch (e) {
+          const keyError = errorText(e);
+          const rollbackError = await rollbackConnection(removeConnection, saved.id);
+          if (rollbackError) {
+            setDraftId(saved.id);
+            setStatus(
+              `Couldn't save the key: ${keyError}. The provider row could not be removed: ${rollbackError}`,
+            );
+          } else {
+            setDraftId(null);
+            setStatus(`Couldn't save the key: ${keyError}. The provider was not added.`);
+          }
+          return;
+        }
+      }
       await api.verifyProvider(saved.id, saved.kind);
       const found = await api.listModels(saved.id, saved.kind);
       if (found.length === 0) {
         throw new Error("No models found. Check the API key and base URL.");
       }
+      selectConnection(saved.id);
       setModel(found[0]);
-      await refreshModels();
+      setDraftId(null);
       setConnected(true);
       setStatus(`Connected · ${found.length} models found`);
       setTimeout(() => setStep(2), 700);
     } catch (e) {
-      await rollbackConnection(removeConnection, savedId);
-      setStatus(errorText(e));
+      const raw = errorText(e);
+      setStatus(saved ? `Saved, but the connection test failed. ${raw}` : raw);
     } finally {
       setBusy(false);
     }

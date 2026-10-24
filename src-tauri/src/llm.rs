@@ -1038,7 +1038,7 @@ pub async fn verify_provider(
     let key = read_key(&connection_id, kind)?;
     if kind == Some("ollama-cloud") {
         let resp = client
-            .get("https://ollama.com/api/me")
+            .get("https://ollama.com/api/balance")
             .bearer_auth(&key)
             .send()
             .await?;
@@ -1053,7 +1053,13 @@ pub async fn verify_provider(
         Ok(caps) if !caps.is_empty() => caps,
         Ok(_) if kind == Some("ollama-cloud") => fetch_ollama_tags(&client, &key).await?,
         Ok(caps) => caps,
-        Err(error) => return Err(error),
+        Err(error) => {
+            if kind == Some("ollama-cloud") {
+                fetch_ollama_tags(&client, &key).await?
+            } else {
+                return Err(error);
+            }
+        }
     };
     Ok(with_model_seeds(kind, caps).len())
 }

@@ -60,6 +60,15 @@ export async function listConnections(): Promise<Connection[]> {
   );
 }
 
+export async function getConnection(id: string): Promise<Connection | null> {
+  const db = await getDb();
+  const rows = await db.select<Connection[]>(
+    "SELECT * FROM connections WHERE id = $1",
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
 export async function createConnection(input: ConnectionInput): Promise<Connection> {
   const db = await getDb();
   const connection: Connection = {

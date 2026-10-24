@@ -306,7 +306,11 @@ interface AppContextValue {
   activeConnectionId: string | null;
   selectConnection: (id: string | null) => void;
   refreshConnections: () => Promise<void>;
-  saveConnection: (input: ConnectionInput, id?: string) => Promise<Connection>;
+  saveConnection: (
+    input: ConnectionInput,
+    id?: string,
+    options?: { activate?: boolean },
+  ) => Promise<Connection>;
   removeConnection: (id: string) => Promise<void>;
 
   models: string[];
@@ -1074,16 +1078,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveConnection = useCallback(
-    async (input: ConnectionInput, id?: string): Promise<Connection> => {
+    async (
+      input: ConnectionInput,
+      id?: string,
+      options?: { activate?: boolean },
+    ): Promise<Connection> => {
+      const activate = options?.activate ?? true;
       let saved: Connection;
       if (id) {
-        const existing = connections.find((c) => c.id === id);
+        const existing = connections.find((c) => c.id === id) ?? (await db.getConnection(id));
         if (!existing) throw new Error("Connection no longer exists");
         saved = { ...existing, ...input };
         await db.updateConnection(saved);
       } else {
         saved = await db.createConnection(input);
-        setActiveConnectionId(saved.id);
+        if (activate) setActiveConnectionId(saved.id);
       }
       await refreshConnections();
       return saved;
