@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine;
@@ -17,7 +17,7 @@ const OAUTH_KEY_PREFIX: &str = "mcp-oauth";
 const CHUNK_CHARS: usize = 1000;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 
-fn is_loopback_host(url: &reqwest::Url) -> bool {
+pub(crate) fn is_loopback_host(url: &reqwest::Url) -> bool {
     match url.host_str() {
         Some("localhost") => true,
         Some(host) => host
@@ -45,12 +45,23 @@ fn validate_oauth_resource(raw: &str) -> Result<reqwest::Url, String> {
     Err("mcp oauth requires https, except loopback http".to_string())
 }
 
-fn validate_authorization_url(raw: &str) -> Result<(), String> {
+fn validate_authorization_url(raw: &str, resource_raw: &str) -> Result<(), String> {
     let url = reqwest::Url::parse(raw).map_err(|e| format!("authorization url is invalid: {e}"))?;
     if !url.username().is_empty() || url.password().is_some() {
         return Err("authorization url has credentials".to_string());
     }
-    if url.scheme() == "https" || (url.scheme() == "http" && is_loopback_host(&url)) {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err("authorization url is not https".to_string());
+    }
+    if is_loopback_host(&url) {
+        let resource =
+            reqwest::Url::parse(resource_raw).map_err(|e| format!("mcp url rejected: {e}"))?;
+        if is_loopback_host(&resource) {
+            return Ok(());
+        }
+        return Err("authorization url uses a loopback host for a remote resource".to_string());
+    }
+    if url.scheme() == "https" {
         return Ok(());
     }
     Err("authorization url is not https".to_string())
@@ -116,11 +127,25 @@ fn clear_chunks(server_id: &str, generation: Option<&str>, count: usize) -> Resu
     Ok(())
 }
 
-fn clear_orphan_chunks(server_id: &str) -> Result<(), String> {
+fn clear_generation_orphans(server_id: &str, generation: Option<&str>) -> Result<(), String> {
     for index in 0..1024 {
-        match crate::vault::read_secret(&chunk_key(server_id, None, index)) {
+        match crate::vault::read_secret(&chunk_key(server_id, generation, index)) {
             Ok(Some(_)) => {
-                crate::vault::delete_secret(&chunk_key(server_id, None, index))
+                crate::vault::delete_secret(&chunk_key(server_id, generation, index))
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(None) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn clear_generation_until_missing(server_id: &str, generation: Option<&str>) -> Result<(), String> {
+    for index in 0..1024 {
+        match crate::vault::read_secret(&chunk_key(server_id, generation, index)) {
+            Ok(Some(_)) => {
+                crate::vault::delete_secret(&chunk_key(server_id, generation, index))
                     .map_err(|e| e.to_string())?;
             }
             Ok(None) => return Ok(()),
@@ -128,6 +153,16 @@ fn clear_orphan_chunks(server_id: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn clear_orphan_chunks(server_id: &str) -> Result<(), String> {
+    clear_generation_orphans(server_id, None)?;
+    clear_generation_orphans(server_id, Some("0"))?;
+    clear_generation_orphans(server_id, Some("1"))
+}
+
+fn next_generation(previous: Option<&str>) -> &'static str {
+    if previous == Some("0") { "1" } else { "0" }
 }
 
 fn blob_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
@@ -141,7 +176,6 @@ fn save_blob(server_id: &str, bytes: &[u8]) -> Result<(), String> {
     let _guard = blob_lock()?;
     let encoded = BASE64.encode(bytes);
     let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(CHUNK_CHARS).collect();
-    let generation = uuid::Uuid::new_v4().simple().to_string();
     let previous = match read_manifest(server_id) {
         Ok(previous) => previous,
         Err(error) => {
@@ -152,17 +186,18 @@ fn save_blob(server_id: &str, bytes: &[u8]) -> Result<(), String> {
             None
         }
     };
+    let generation = next_generation(previous.as_ref().and_then(|m| m.generation.as_deref()));
     let write = (|| -> Result<(), String> {
         for (index, chunk) in chunks.iter().enumerate() {
             let text = std::str::from_utf8(chunk).map_err(|e| e.to_string())?;
-            crate::vault::set_secret(&chunk_key(server_id, Some(&generation), index), text)
+            crate::vault::set_secret(&chunk_key(server_id, Some(generation), index), text)
                 .map_err(|e| e.to_string())?;
         }
-        crate::vault::set_secret(&base_key(server_id), &manifest(&generation, chunks.len()))
+        crate::vault::set_secret(&base_key(server_id), &manifest(generation, chunks.len()))
             .map_err(|e| e.to_string())
     })();
     if let Err(error) = write {
-        if let Err(cleanup) = clear_chunks(server_id, Some(&generation), chunks.len()) {
+        if let Err(cleanup) = clear_chunks(server_id, Some(generation), chunks.len()) {
             eprintln!("mcp oauth: new credential cleanup failed: {cleanup}");
         }
         return Err(error);
@@ -209,6 +244,9 @@ fn clear_blob(server_id: &str) -> Result<(), String> {
             }
         }
     }
+    clear_generation_until_missing(server_id, None)?;
+    clear_generation_until_missing(server_id, Some("0"))?;
+    clear_generation_until_missing(server_id, Some("1"))?;
     crate::vault::delete_secret(&base_key(server_id)).map_err(|e| e.to_string())
 }
 
@@ -339,15 +377,34 @@ struct ActiveAuth {
     sender: oneshot::Sender<()>,
 }
 
-static CANCELS: OnceLock<tokio::sync::Mutex<HashMap<String, ActiveAuth>>> = OnceLock::new();
+struct CancelGuard {
+    server_id: String,
+    generation: u64,
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = cancels().lock()
+            && guard.get(&self.server_id).map(|active| active.generation) == Some(self.generation)
+        {
+            guard.remove(&self.server_id);
+        }
+    }
+}
+
+static CANCELS: OnceLock<Mutex<HashMap<String, ActiveAuth>>> = OnceLock::new();
 static NEXT_AUTH: AtomicU64 = AtomicU64::new(1);
 
-fn cancels() -> &'static tokio::sync::Mutex<HashMap<String, ActiveAuth>> {
-    CANCELS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+fn cancels() -> &'static Mutex<HashMap<String, ActiveAuth>> {
+    CANCELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub async fn cancel(server_id: &str) -> Result<(), String> {
-    if let Some(active) = cancels().lock().await.remove(server_id) {
+    let active = cancels()
+        .lock()
+        .map_err(|_| "oauth cancellation store is poisoned".to_string())?
+        .remove(server_id);
+    if let Some(active) = active {
         let _ = active.sender.send(());
     }
     Ok(())
@@ -364,8 +421,10 @@ pub async fn authorize(server_id: &str, url: &str) -> Result<(), String> {
     let redirect_uri = format!("http://127.0.0.1:{}/callback", addr.port());
     let generation = NEXT_AUTH.fetch_add(1, Ordering::Relaxed);
     let (cancel_tx, cancel_rx) = oneshot::channel();
-    {
-        let mut guard = cancels().lock().await;
+    let _cancel_guard = {
+        let mut guard = cancels()
+            .lock()
+            .map_err(|_| "oauth cancellation store is poisoned".to_string())?;
         if guard.contains_key(server_id) {
             return Err("authorization already in progress".to_string());
         }
@@ -376,8 +435,12 @@ pub async fn authorize(server_id: &str, url: &str) -> Result<(), String> {
                 sender: cancel_tx,
             },
         );
-    }
-    let result = tokio::select! {
+        CancelGuard {
+            server_id: server_id.to_string(),
+            generation,
+        }
+    };
+    tokio::select! {
         _ = cancel_rx => Err("authorization cancelled".to_string()),
         result = tokio::time::timeout(
             CALLBACK_TIMEOUT,
@@ -386,14 +449,7 @@ pub async fn authorize(server_id: &str, url: &str) -> Result<(), String> {
             Ok(result) => result,
             Err(_) => Err("timed out waiting for the browser".to_string()),
         },
-    };
-    {
-        let mut guard = cancels().lock().await;
-        if guard.get(server_id).map(|active| active.generation) == Some(generation) {
-            guard.remove(server_id);
-        }
     }
-    result
 }
 
 async fn probe_challenge(url: &str) -> Option<String> {
@@ -472,7 +528,7 @@ async fn run_authorization(
         .await
         .map_err(auth_error)?;
     let auth_url = state.get_authorization_url().await.map_err(auth_error)?;
-    validate_authorization_url(&auth_url)?;
+    validate_authorization_url(&auth_url, url)?;
     tauri_plugin_opener::open_url(&auth_url, None::<&str>)
         .map_err(|e| format!("could not open the browser: {e}"))?;
     let callback_url = wait_for_callback(listener, redirect_uri).await?;
@@ -504,25 +560,44 @@ async fn wait_for_callback(listener: TcpListener, redirect_uri: &str) -> Result<
         let target = {
             let mut reader = tokio::io::BufReader::new((&mut socket).take(8192));
             let mut line = String::new();
-            let read =
-                tokio::time::timeout(Duration::from_secs(10), reader.read_line(&mut line)).await;
-            match read {
-                Ok(Ok(read)) if read > 0 && line.ends_with('\n') => {
-                    line.split_whitespace().nth(1).unwrap_or("/").to_string()
-                }
-                Ok(Ok(_)) => {
-                    respond(&mut socket, 400, "Bad request").await;
-                    continue;
-                }
-                Ok(Err(error)) => {
-                    eprintln!("mcp oauth: callback read failed: {error}");
-                    continue;
-                }
-                Err(_) => {
-                    eprintln!("mcp oauth: callback read timed out");
-                    continue;
+            let mut target = None;
+            let mut complete = false;
+            let mut total = 0usize;
+            loop {
+                line.clear();
+                let read =
+                    tokio::time::timeout(Duration::from_secs(10), reader.read_line(&mut line))
+                        .await;
+                match read {
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(read)) => {
+                        total += read;
+                        if target.is_none() {
+                            target = line.split_whitespace().nth(1).map(str::to_string);
+                        }
+                        if line == "\r\n" || line == "\n" {
+                            complete = true;
+                            break;
+                        }
+                        if total >= 8192 {
+                            break;
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!("mcp oauth: callback read failed: {error}");
+                        break;
+                    }
+                    Err(_) => {
+                        eprintln!("mcp oauth: callback read timed out");
+                        break;
+                    }
                 }
             }
+            if complete { target } else { None }
+        };
+        let Some(target) = target else {
+            respond(&mut socket, 400, "Bad request").await;
+            continue;
         };
         if !target.starts_with("/callback") {
             respond(&mut socket, 404, "Not found").await;
@@ -562,7 +637,12 @@ fn callback_error(target: &str) -> Option<String> {
 }
 
 async fn respond(socket: &mut TcpStream, status: u16, message: &str) {
-    let reason = if status == 200 { "OK" } else { "Not Found" };
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "Error",
+    };
     let body = format!(
         "<!doctype html><html><body><p>{}</p></body></html>",
         html_escape(message)
@@ -637,11 +717,91 @@ mod tests {
 
     #[test]
     fn authorization_url_rejects_unsafe_schemes() {
-        assert!(validate_authorization_url("https://auth.example.com/authorize").is_ok());
-        assert!(validate_authorization_url("http://127.0.0.1:9000/authorize").is_ok());
-        assert!(validate_authorization_url("myagent://callback").is_err());
-        assert!(validate_authorization_url("file:///tmp/authorize").is_err());
-        assert!(validate_authorization_url("https://user:pass@auth.example.com").is_err());
+        assert!(
+            validate_authorization_url(
+                "https://auth.example.com/authorize",
+                "https://mcp.example.com/mcp"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_authorization_url(
+                "http://127.0.0.1:9000/authorize",
+                "http://127.0.0.1:8080/mcp"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_authorization_url(
+                "http://127.0.0.1:9000/authorize",
+                "https://mcp.example.com/mcp"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_authorization_url(
+                "https://127.0.0.1:9000/authorize",
+                "https://mcp.example.com/mcp"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_authorization_url("myagent://callback", "https://mcp.example.com/mcp")
+                .is_err()
+        );
+        assert!(
+            validate_authorization_url("file:///tmp/authorize", "https://mcp.example.com/mcp")
+                .is_err()
+        );
+        assert!(
+            validate_authorization_url("ftp://127.0.0.1/authorize", "http://127.0.0.1/mcp")
+                .is_err()
+        );
+        assert!(
+            validate_authorization_url(
+                "https://user:pass@auth.example.com",
+                "https://mcp.example.com/mcp"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn credential_generations_alternate() {
+        assert_eq!(next_generation(None), "0");
+        assert_eq!(next_generation(Some("0")), "1");
+        assert_eq!(next_generation(Some("1")), "0");
+        assert_eq!(next_generation(Some("abc123")), "0");
+    }
+
+    #[tokio::test]
+    async fn callback_reads_split_request_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("address");
+        let client = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(addr).await.expect("client");
+            stream
+                .write_all(b"GET /callback?code=abc HTTP/1.1\r\n")
+                .await
+                .expect("request line");
+            stream.flush().await.expect("flush");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            stream
+                .write_all(b"Host: 127.0.0.1\r\n\r\n")
+                .await
+                .expect("headers");
+            let mut response = String::new();
+            stream
+                .read_to_string(&mut response)
+                .await
+                .expect("response");
+            assert!(response.starts_with("HTTP/1.1 200 OK"));
+        });
+        let target = wait_for_callback(listener, "http://127.0.0.1:9999/callback")
+            .await
+            .expect("callback");
+        assert_eq!(target, "http://127.0.0.1:9999/callback?code=abc");
+        client.await.expect("client task");
     }
 
     #[test]

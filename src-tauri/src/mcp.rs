@@ -229,8 +229,22 @@ mod tests {
     #[test]
     fn validate_target_accepts_streamable_http() {
         assert!(validate_target("http", None, Some("https://example.com/mcp")).is_ok());
+        assert!(validate_target("http", None, Some("http://127.0.0.1:8080/mcp")).is_ok());
+        assert!(validate_target("http", None, Some("http://localhost:8080/mcp")).is_ok());
+        assert!(validate_target("http", None, Some("http://10.0.0.1/mcp")).is_err());
+        assert!(validate_target("http", None, Some("https://127.0.0.1/mcp")).is_err());
         assert!(validate_target("http", None, Some("file:///tmp/server")).is_err());
         assert!(validate_target("bogus", None, Some("https://example.com")).is_err());
+    }
+
+    #[test]
+    fn tool_errors_do_not_look_like_auth_failures() {
+        let tool = CallFailure::tool("session expired".to_string());
+        assert!(!tool.auth);
+        assert!(!tool.timeout);
+        let transport = CallFailure::transport("HTTP 401 Unauthorized".to_string());
+        assert!(transport.auth);
+        assert!(!transport.timeout);
     }
 
     #[test]
@@ -744,6 +758,14 @@ fn validate_auth_transport(auth_type: &str, transport: &str) -> Result<(), Strin
     Ok(())
 }
 
+fn validate_mcp_url(raw: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(raw).map_err(|e| e.to_string())?;
+    let allow_private = parsed.scheme() == "http" && crate::mcp_oauth::is_loopback_host(&parsed);
+    crate::webfetch::validate_url_opts(raw, true, allow_private)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Result<(), String> {
     if transport != "stdio" && transport != "http" && transport != "sse" {
         return Err("transport must be stdio, http or sse".to_string());
@@ -758,9 +780,7 @@ fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Res
     if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
         return Err(format!("{transport} servers need an http(s) url"));
     }
-    crate::webfetch::validate_url_opts(endpoint, true, false)
-        .map_err(|e| format!("{transport} url rejected: {e}"))
-        .map(|_| ())
+    validate_mcp_url(endpoint).map_err(|e| format!("{transport} url rejected: {e}"))
 }
 
 async fn server_row(pool: &sqlx::SqlitePool, id: &str) -> Result<McpServerRow, String> {
@@ -795,13 +815,8 @@ pub async fn mcp_update(
         .map_err(|e| e.to_string())?;
     let before = server_row(&pool, &id).await?;
     let target_changed = before.transport != transport || before.url != url;
-    if target_changed || auth_type != "bearer" {
-        crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
-    }
-    if target_changed || auth_type != "oauth" {
-        crate::mcp_oauth::clear_credentials(&id)?;
-    }
-    sqlx::query(
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    if let Err(error) = sqlx::query(
         "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ? WHERE id = ?",
     )
     .bind(&name)
@@ -810,9 +825,31 @@ pub async fn mcp_update(
     .bind(&cmd)
     .bind(&url)
     .bind(&id)
-    .execute(&pool)
+    .execute(&mut *tx)
     .await
-    .map_err(|e| e.to_string())?;
+    {
+        if let Err(rollback) = tx.rollback().await {
+            eprintln!("mcp: update rollback failed: {rollback}");
+        }
+        return Err(error.to_string());
+    }
+    if (target_changed || auth_type != "bearer")
+        && let Err(error) = crate::vault::delete_secret(&token_key(&id))
+    {
+        if let Err(rollback) = tx.rollback().await {
+            eprintln!("mcp: update rollback failed: {rollback}");
+        }
+        return Err(error.to_string());
+    }
+    if (target_changed || auth_type != "oauth")
+        && let Err(error) = crate::mcp_oauth::clear_credentials(&id)
+    {
+        if let Err(rollback) = tx.rollback().await {
+            eprintln!("mcp: update rollback failed: {rollback}");
+        }
+        return Err(error);
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
     let state = app.state::<McpState>();
     forget_probe(&state, &id);
     let row = server_row(&pool, &id).await?;
@@ -987,8 +1024,7 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
     }
     let transport = if config.transport == "sse" {
         let endpoint = config.url.as_deref().unwrap_or("");
-        crate::webfetch::validate_url_opts(endpoint, true, false)
-            .map_err(|e| format!("mcp url rejected: {e}"))?;
+        validate_mcp_url(endpoint).map_err(|e| format!("mcp url rejected: {e}"))?;
         McpTransport::LegacySse {
             url: endpoint.to_string(),
             auth_token,
@@ -1016,8 +1052,7 @@ async fn connect_rmcp(
     };
     if config.transport == "http" {
         let endpoint = config.url.as_deref().unwrap_or("");
-        crate::webfetch::validate_url_opts(endpoint, true, false)
-            .map_err(|e| format!("mcp url rejected: {e}"))?;
+        validate_mcp_url(endpoint).map_err(|e| format!("mcp url rejected: {e}"))?;
         let mut http = StreamableHttpClientTransportConfig::with_uri(endpoint);
         if let Some(token) = auth_token {
             http = http.auth_header(token);
@@ -1344,14 +1379,17 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
     let tools = match &mut session.transport {
         McpTransport::Rmcp(client) => list_rmcp_tools(client, &name, timeout).await?,
         McpTransport::LegacySse { url, auth_token } => {
-            let _ = sse_request(url, auth_token.as_deref(), &initialize_body(1), timeout).await?;
+            let _ = sse_request(url, auth_token.as_deref(), &initialize_body(1), timeout)
+                .await
+                .map_err(|failure| failure.message)?;
             let listed = sse_request(
                 url,
                 auth_token.as_deref(),
                 &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
                 timeout,
             )
-            .await?;
+            .await
+            .map_err(|failure| failure.message)?;
             parse_tools(&name, &listed)
         }
     };
@@ -1409,14 +1447,45 @@ async fn read_body_capped(
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
+struct CallFailure {
+    message: String,
+    auth: bool,
+    timeout: bool,
+}
+
+impl CallFailure {
+    fn timeout() -> Self {
+        Self {
+            message: "timeout".to_string(),
+            auth: false,
+            timeout: true,
+        }
+    }
+
+    fn transport(message: String) -> Self {
+        Self {
+            auth: looks_like_auth_error(&message),
+            timeout: message == "timeout",
+            message,
+        }
+    }
+
+    fn tool(message: String) -> Self {
+        Self {
+            message,
+            auth: false,
+            timeout: false,
+        }
+    }
+}
+
 async fn sse_request(
     url: &str,
     auth_token: Option<&str>,
     request: &Value,
     timeout: Duration,
-) -> Result<Value, String> {
-    crate::webfetch::validate_url_opts(url, true, false)
-        .map_err(|e| format!("mcp url rejected: {e}"))?;
+) -> Result<Value, CallFailure> {
+    validate_mcp_url(url).map_err(|e| CallFailure::transport(format!("mcp url rejected: {e}")))?;
     let client = reqwest::Client::new();
     let mut builder = client.post(url).json(request);
     if let Some(token) = auth_token {
@@ -1424,12 +1493,17 @@ async fn sse_request(
     }
     let response = tokio::time::timeout(timeout, builder.send())
         .await
-        .map_err(|_| "timeout".to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| CallFailure::timeout())?
+        .map_err(|e| CallFailure::transport(e.to_string()))?;
     if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
+        return Err(CallFailure::transport(format!(
+            "HTTP {}",
+            response.status()
+        )));
     }
-    let text = read_body_capped(response, timeout).await?;
+    let text = read_body_capped(response, timeout)
+        .await
+        .map_err(CallFailure::transport)?;
     let wanted = request.get("id").and_then(|v| v.as_u64());
     for chunk in text.split("data:") {
         let trimmed = chunk.trim();
@@ -1451,18 +1525,18 @@ async fn sse_request(
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("unknown server error");
-            return Err(message.to_string());
+            return Err(CallFailure::tool(message.to_string()));
         }
         return Ok(value);
     }
-    Err("no JSON-RPC response".to_string())
+    Err(CallFailure::transport("no JSON-RPC response".to_string()))
 }
 
 async fn call_on_session(
     session: &mut Session,
     tool: &str,
     args: &Value,
-) -> Result<String, String> {
+) -> Result<String, CallFailure> {
     let timeout = session.timeout();
     let result = match &mut session.transport {
         McpTransport::Rmcp(client) => {
@@ -1470,11 +1544,11 @@ async fn call_on_session(
             if let Some(arguments) = args.as_object() {
                 params = params.with_arguments(arguments.clone());
             }
-            tokio::time::timeout(timeout, client.call_tool(params))
-                .await
-                .map_err(|_| "timeout".to_string())?
-                .map(|result| rmcp_result_text(&result))
-                .map_err(|e| e.to_string())
+            match tokio::time::timeout(timeout, client.call_tool(params)).await {
+                Err(_) => Err(CallFailure::timeout()),
+                Ok(Err(error)) => Err(CallFailure::transport(error.to_string())),
+                Ok(Ok(result)) => Ok(rmcp_result_text(&result)),
+            }
         }
         McpTransport::LegacySse { url, auth_token } => sse_request(
             url,
@@ -1491,19 +1565,19 @@ async fn call_on_session(
     match result {
         Ok((is_error, text)) => {
             if is_error {
-                return Err(if text.is_empty() {
+                return Err(CallFailure::tool(if text.is_empty() {
                     "MCP tool returned an error".to_string()
                 } else {
                     text
-                });
+                }));
             }
             Ok(text)
         }
-        Err(error) => {
-            if error == "timeout" {
+        Err(failure) => {
+            if failure.timeout {
                 session.timeouts += 1;
             }
-            Err(error)
+            Err(failure)
         }
     }
 }
@@ -1611,26 +1685,35 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
 async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> Result<(), String> {
     let state = app.state::<McpState>();
     let configs = load_configs(app, project).await?;
-    let targets: Vec<String> = configs
+    let targets: Vec<&McpServerConfig> = configs
         .iter()
         .filter(|config| mcp_namespace(&config.name) == server)
-        .map(McpState::key)
         .collect();
-    let mut relisted = false;
-    for key in &targets {
-        let handle = state.sessions.lock().await.get(key).cloned();
+    if targets.is_empty() {
+        flush(app, project).await?;
+        return Ok(());
+    }
+    for config in targets {
+        let key = McpState::key(config);
+        let handle = state.sessions.lock().await.get(&key).cloned();
         let Some(handle) = handle else {
+            match connect_once(config).await {
+                Ok(session) => {
+                    cache_probe(&state, probe_connected(&config.id, &session.tools));
+                    let created = Arc::new(tokio::sync::Mutex::new(session));
+                    state.sessions.lock().await.insert(key, created);
+                }
+                Err(error) => {
+                    cache_probe(&state, probe_failed(&config.id, error.clone()));
+                    eprintln!("mcp: re-list {} failed: {error}", config.name);
+                }
+            }
             continue;
         };
         let mut session = handle.lock().await;
-        match initialize_session(&mut session).await {
-            Ok(()) => relisted = true,
-            Err(error) => eprintln!("mcp: re-list {} failed: {error}", session.config.name),
+        if let Err(error) = initialize_session(&mut session).await {
+            eprintln!("mcp: re-list {} failed: {error}", session.config.name);
         }
-    }
-    if !relisted {
-        flush(app, project).await?;
-        return Ok(());
     }
     let (_defs, catalog) = collect_catalog(&state, &configs).await;
     publish_catalog(&state, catalog);
@@ -1700,7 +1783,11 @@ pub async fn try_execute(
     let (key, tool) = resolved?;
     let mut handle = state.sessions.lock().await.get(&key).cloned();
     if handle.is_none() {
-        if let Err(error) = flush(app, project).await {
+        let refreshed = match server_namespace(name) {
+            Some(server) => relist_server(app, project, server).await,
+            None => flush(app, project).await.map(|_| ()),
+        };
+        if let Err(error) = refreshed {
             eprintln!("mcp: reconnect for {name} failed: {error}");
         }
         handle = state.sessions.lock().await.get(&key).cloned();
@@ -1730,8 +1817,13 @@ pub async fn try_execute(
                 artifact: None,
             }))
         }
-        Err(error) => {
-            if error == "timeout" {
+        Err(failure) => {
+            let CallFailure {
+                message,
+                auth,
+                timeout,
+            } = failure;
+            if timeout {
                 let dead = session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART;
                 drop(session);
                 if dead {
@@ -1739,11 +1831,11 @@ pub async fn try_execute(
                 }
                 return Some(Err(timed_out(name)));
             }
-            if session.config.auth_type == "oauth" && looks_like_auth_error(&error) {
+            if session.config.auth_type == "oauth" && auth {
                 drop(session);
                 state.sessions.lock().await.remove(&key);
             }
-            Some(Err(error))
+            Some(Err(message))
         }
     }
 }

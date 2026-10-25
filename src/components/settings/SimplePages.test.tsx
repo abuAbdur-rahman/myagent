@@ -213,4 +213,31 @@ describe("McpServerDialog oauth", () => {
     await waitFor(() => expect(mocks.mcpDisconnect).toHaveBeenCalledWith("s1"));
     expect(await screen.findByText("Disconnected.")).toBeTruthy();
   });
+
+  it("does not offer cancel while disconnecting", async () => {
+    let finish: (row: McpServerRow) => void = () => {};
+    mocks.mcpDisconnect.mockReturnValue(
+      new Promise<McpServerRow>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const stored = { ...oauthRow, has_token: true };
+    render(
+      <McpServerDialog
+        open
+        editing={stored}
+        seed={null}
+        servers={[stored]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() => expect(mocks.mcpDisconnect).toHaveBeenCalledWith("s1"));
+    expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+    finish({ ...oauthRow, has_token: false });
+  });
 });

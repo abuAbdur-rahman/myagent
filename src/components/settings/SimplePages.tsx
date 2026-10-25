@@ -863,6 +863,7 @@ interface McpBearerState {
 
 interface McpOAuthState {
   busy: boolean;
+  authorizing: boolean;
   message: McpAuthMessage | null;
   hasToken: boolean;
   connect: () => Promise<void>;
@@ -946,6 +947,7 @@ function useMcpOAuth(
   onChanged: () => void,
 ): McpOAuthState {
   const [busy, setBusy] = useState(false);
+  const [authorizing, setAuthorizing] = useState(false);
   const [message, setMessage] = useState<McpAuthMessage | null>(null);
   const { hasToken, setHasToken } = useMcpHasToken(open, editing, authType);
   const activeServer = useRef<string | null>(null);
@@ -965,6 +967,7 @@ function useMcpOAuth(
     activeServer.current = null;
     generation.current += 1;
     setBusy(false);
+    setAuthorizing(false);
     setMessage(null);
     stop(id);
   }, [open]);
@@ -975,6 +978,7 @@ function useMcpOAuth(
     activeServer.current = null;
     generation.current += 1;
     setBusy(false);
+    setAuthorizing(false);
     stop(id);
   }, [authType, open]);
 
@@ -985,12 +989,14 @@ function useMcpOAuth(
     activeServer.current = null;
     generation.current += 1;
     setBusy(false);
+    setAuthorizing(false);
     stop(id);
   }, [open, editing?.id]);
 
   useEffect(() => {
     if (!open) return;
     setBusy(false);
+    setAuthorizing(false);
     setMessage(null);
   }, [open, editing?.id]);
 
@@ -1001,6 +1007,7 @@ function useMcpOAuth(
     generation.current = run;
     activeServer.current = id;
     setBusy(true);
+    setAuthorizing(true);
     setMessage({ ok: true, text: "Waiting for the browser…" });
     try {
       const row = await api.mcpBeginAuth(id);
@@ -1019,16 +1026,18 @@ function useMcpOAuth(
       if (generation.current === run) {
         activeServer.current = null;
         setBusy(false);
+        setAuthorizing(false);
       }
     }
   };
 
   const cancel = async () => {
-    const id = activeServer.current ?? editing?.id ?? null;
+    const id = activeServer.current;
     if (!id) return;
     activeServer.current = null;
     generation.current += 1;
     setBusy(false);
+    setAuthorizing(false);
     try {
       await api.mcpCancelAuth(id);
     } catch (e) {
@@ -1057,7 +1066,7 @@ function useMcpOAuth(
     }
   };
 
-  return { busy, message, hasToken, connect, cancel, disconnect };
+  return { busy, authorizing, message, hasToken, connect, cancel, disconnect };
 }
 
 function McpBearerFields({
@@ -1159,9 +1168,9 @@ function McpOAuthFields({
           disabled={state.busy || blocked}
           onClick={() => void state.connect()}
         >
-          {state.busy ? <Spinner label="Waiting" /> : connectLabel}
+          {state.authorizing ? <Spinner label="Waiting" /> : connectLabel}
         </Button>
-        {state.busy && (
+        {state.authorizing && (
           <Button size="sm" variant="ghost" onClick={() => void state.cancel()}>
             Cancel
           </Button>

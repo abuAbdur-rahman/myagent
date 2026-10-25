@@ -883,7 +883,17 @@ fn caps_cache() -> &'static Mutex<HashMap<String, CapsEntry>> {
 }
 
 fn models_endpoint_unsupported(error: &AppError) -> bool {
-    matches!(error, AppError::Upstream(message) if message.starts_with("404") || message.starts_with("405"))
+    matches!(
+        error,
+        AppError::Upstream(message)
+            if ["400", "404", "405", "501"]
+                .iter()
+                .any(|code| message.starts_with(code))
+    )
+}
+
+fn should_fallback_to_ollama_tags(cloud: bool, error: &AppError) -> bool {
+    cloud && models_endpoint_unsupported(error)
 }
 
 async fn fetch_openai_caps(
@@ -963,7 +973,7 @@ async fn fetch_model_caps(
         Ok(_) if cloud => fetch_ollama_tags(client, key).await?,
         Ok(caps) => caps,
         Err(error) => {
-            if cloud && models_endpoint_unsupported(&error) {
+            if should_fallback_to_ollama_tags(cloud, &error) {
                 fetch_ollama_tags(client, key).await?
             } else if let Some((_, stale)) = caps_cache()
                 .lock()
@@ -1039,8 +1049,9 @@ pub async fn verify_provider(
 ) -> AppResult<usize> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
     let kind = connection_kind.as_deref();
+    let cloud = kind == Some("ollama-cloud");
     let key = read_key(&connection_id, kind)?;
-    if kind == Some("ollama-cloud") {
+    if cloud {
         let resp = client
             .get("https://ollama.com/api/balance")
             .bearer_auth(&key)
@@ -1061,10 +1072,10 @@ pub async fn verify_provider(
     }
     let caps = match fetch_openai_caps(&client, &base_url, &key, kind).await {
         Ok(caps) if !caps.is_empty() => caps,
-        Ok(_) if kind == Some("ollama-cloud") => fetch_ollama_tags(&client, &key).await?,
+        Ok(_) if cloud => fetch_ollama_tags(&client, &key).await?,
         Ok(caps) => caps,
         Err(error) => {
-            if kind == Some("ollama-cloud") && models_endpoint_unsupported(&error) {
+            if should_fallback_to_ollama_tags(cloud, &error) {
                 fetch_ollama_tags(&client, &key).await?
             } else {
                 return Err(error);
@@ -2931,6 +2942,29 @@ mod tests {
         let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
         assert_eq!(ids, vec!["llama3.2:latest", "qwen3:8b"]);
         assert!(caps.iter().all(|caps| caps.context_length.is_none()));
+    }
+
+    #[test]
+    fn ollama_cloud_falls_back_only_for_unsupported_model_endpoints() {
+        for message in [
+            "400 Bad Request",
+            "404 Not Found",
+            "405 Method Not Allowed",
+            "501",
+        ] {
+            assert!(should_fallback_to_ollama_tags(
+                true,
+                &AppError::Upstream(message.to_string())
+            ));
+        }
+        assert!(!should_fallback_to_ollama_tags(
+            true,
+            &AppError::Upstream("401 Unauthorized".to_string())
+        ));
+        assert!(!should_fallback_to_ollama_tags(
+            false,
+            &AppError::Upstream("404 Not Found".to_string())
+        ));
     }
 
     #[test]
