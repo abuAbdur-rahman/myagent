@@ -107,6 +107,15 @@ fn valid_bearer_token(token: &str) -> bool {
     !token.is_empty() && token.chars().all(|c| c.is_ascii_graphic())
 }
 
+fn looks_like_auth_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("authorization required")
+        || lower.contains("invalid_token")
+        || lower.contains("expired")
+}
+
 fn token_present(id: &str) -> bool {
     match crate::vault::read_secret(&token_key(id)) {
         Ok(secret) => secret.is_some(),
@@ -660,14 +669,14 @@ pub async fn mcp_begin_auth(app: AppHandle, id: String) -> Result<McpServerRow, 
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    let row = server_row(&pool, &id).await?;
-    if row.auth_type != "oauth" {
+    let before = server_row(&pool, &id).await?;
+    if before.auth_type != "oauth" {
         return Err("server auth mode is not oauth".to_string());
     }
-    if row.transport == "stdio" {
+    if before.transport == "stdio" {
         return Err("oauth requires an http or sse transport".to_string());
     }
-    let url = row.url.as_deref().unwrap_or("").trim();
+    let url = before.url.as_deref().unwrap_or("").trim();
     if url.is_empty() {
         return Err("oauth server needs a url".to_string());
     }
@@ -681,6 +690,15 @@ pub async fn mcp_begin_auth(app: AppHandle, id: String) -> Result<McpServerRow, 
             return Err(error);
         }
     };
+    if row.auth_type != before.auth_type
+        || row.transport != before.transport
+        || row.url != before.url
+    {
+        if let Err(cleanup) = crate::mcp_oauth::clear_credentials(&id) {
+            eprintln!("mcp oauth: cleanup after server change failed: {cleanup}");
+        }
+        return Err("server changed during authorization; try again".to_string());
+    }
     let state = app.state::<McpState>();
     forget_probe(&state, &id);
     let key = McpState::key(&McpServerConfig::from(&row));
@@ -777,6 +795,12 @@ pub async fn mcp_update(
         .map_err(|e| e.to_string())?;
     let before = server_row(&pool, &id).await?;
     let target_changed = before.transport != transport || before.url != url;
+    if target_changed || auth_type != "bearer" {
+        crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
+    }
+    if target_changed || auth_type != "oauth" {
+        crate::mcp_oauth::clear_credentials(&id)?;
+    }
     sqlx::query(
         "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ? WHERE id = ?",
     )
@@ -789,12 +813,6 @@ pub async fn mcp_update(
     .execute(&pool)
     .await
     .map_err(|e| e.to_string())?;
-    if target_changed || auth_type != "bearer" {
-        crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
-    }
-    if target_changed || auth_type != "oauth" {
-        crate::mcp_oauth::clear_credentials(&id)?;
-    }
     let state = app.state::<McpState>();
     forget_probe(&state, &id);
     let row = server_row(&pool, &id).await?;
@@ -1680,7 +1698,16 @@ pub async fn try_execute(
         resolved = resolve_catalog(&state, project, name);
     }
     let (key, tool) = resolved?;
-    let handle = state.sessions.lock().await.get(&key).cloned()?;
+    let mut handle = state.sessions.lock().await.get(&key).cloned();
+    if handle.is_none() {
+        if let Err(error) = flush(app, project).await {
+            eprintln!("mcp: reconnect for {name} failed: {error}");
+        }
+        handle = state.sessions.lock().await.get(&key).cloned();
+    }
+    let Some(handle) = handle else {
+        return Some(Err(unavailable(name)));
+    };
     let mut session = handle.lock().await;
     if session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART {
         drop(session);
@@ -1711,6 +1738,10 @@ pub async fn try_execute(
                     state.sessions.lock().await.remove(&key);
                 }
                 return Some(Err(timed_out(name)));
+            }
+            if session.config.auth_type == "oauth" && looks_like_auth_error(&error) {
+                drop(session);
+                state.sessions.lock().await.remove(&key);
             }
             Some(Err(error))
         }

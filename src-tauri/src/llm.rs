@@ -882,6 +882,10 @@ fn caps_cache() -> &'static Mutex<HashMap<String, CapsEntry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn models_endpoint_unsupported(error: &AppError) -> bool {
+    matches!(error, AppError::Upstream(message) if message.starts_with("404") || message.starts_with("405"))
+}
+
 async fn fetch_openai_caps(
     client: &reqwest::Client,
     base_url: &str,
@@ -959,7 +963,7 @@ async fn fetch_model_caps(
         Ok(_) if cloud => fetch_ollama_tags(client, key).await?,
         Ok(caps) => caps,
         Err(error) => {
-            if cloud {
+            if cloud && models_endpoint_unsupported(&error) {
                 fetch_ollama_tags(client, key).await?
             } else if let Some((_, stale)) = caps_cache()
                 .lock()
@@ -1042,11 +1046,17 @@ pub async fn verify_provider(
             .bearer_auth(&key)
             .send()
             .await?;
-        if !resp.status().is_success() {
-            return Err(AppError::Upstream(format!(
-                "HTTP {} — ollama.com rejected this key",
-                resp.status().as_u16()
-            )));
+        let status = resp.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AppError::Upstream(format!(
+                    "HTTP {} — ollama.com rejected this key",
+                    status.as_u16()
+                )));
+            }
+            return Err(AppError::Upstream(error_body(resp).await));
         }
     }
     let caps = match fetch_openai_caps(&client, &base_url, &key, kind).await {
@@ -1054,7 +1064,7 @@ pub async fn verify_provider(
         Ok(_) if kind == Some("ollama-cloud") => fetch_ollama_tags(&client, &key).await?,
         Ok(caps) => caps,
         Err(error) => {
-            if kind == Some("ollama-cloud") {
+            if kind == Some("ollama-cloud") && models_endpoint_unsupported(&error) {
                 fetch_ollama_tags(&client, &key).await?
             } else {
                 return Err(error);

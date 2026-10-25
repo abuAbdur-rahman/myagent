@@ -133,6 +133,67 @@ describe("McpServerDialog oauth", () => {
     expect(await screen.findByText("Connected.")).toBeTruthy();
   });
 
+  it("requires saving a changed target before connecting", () => {
+    render(
+      <McpServerDialog
+        open
+        editing={oauthRow}
+        seed={null}
+        servers={[oauthRow]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByDisplayValue("https://example.com/mcp"), {
+      target: { value: "https://other.example/mcp" },
+    });
+
+    expect(screen.getByText("Save the server before connecting.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("cancels a pending authorization when the dialog closes", async () => {
+    let finish: (row: McpServerRow) => void = () => {};
+    mocks.mcpBeginAuth.mockReturnValue(
+      new Promise<McpServerRow>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { rerender } = render(
+      <McpServerDialog
+        open
+        editing={oauthRow}
+        seed={null}
+        servers={[oauthRow]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(mocks.mcpBeginAuth).toHaveBeenCalledWith("s1"));
+
+    rerender(
+      <McpServerDialog
+        open={false}
+        editing={oauthRow}
+        seed={null}
+        servers={[oauthRow]}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(mocks.mcpCancelAuth).toHaveBeenCalledWith("s1"));
+    finish({ ...oauthRow, has_token: true });
+  });
+
   it("clears stored oauth credentials on disconnect", async () => {
     const stored = { ...oauthRow, has_token: true };
     render(
