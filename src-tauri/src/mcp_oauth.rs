@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -346,7 +346,7 @@ fn stored_access_token(server_id: &str) -> Result<Option<String>, String> {
         .unwrap_or(0);
     let fresh = match token.expires_in {
         Some(expires) => now.saturating_sub(received) + 30 < expires,
-        None => true,
+        None => false,
     };
     if fresh {
         Ok(Some(token.access_token))
@@ -355,9 +355,35 @@ fn stored_access_token(server_id: &str) -> Result<Option<String>, String> {
     }
 }
 
+static FORCE_REFRESH: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn force_refreshes() -> &'static Mutex<HashSet<String>> {
+    FORCE_REFRESH.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub(crate) fn force_refresh(server_id: &str) {
+    match force_refreshes().lock() {
+        Ok(mut guard) => {
+            guard.insert(server_id.to_string());
+        }
+        Err(error) => eprintln!("mcp oauth: force refresh store poisoned: {error}"),
+    }
+}
+
+fn take_force_refresh(server_id: &str) -> bool {
+    match force_refreshes().lock() {
+        Ok(mut guard) => guard.remove(server_id),
+        Err(error) => {
+            eprintln!("mcp oauth: force refresh store poisoned: {error}");
+            false
+        }
+    }
+}
+
 pub async fn access_token(server_id: &str, url: &str) -> Result<String, String> {
     validate_oauth_resource(url)?;
-    if let Some(token) = stored_access_token(server_id)? {
+    let force = take_force_refresh(server_id);
+    if !force && let Some(token) = stored_access_token(server_id)? {
         return Ok(token);
     }
     let mut manager = AuthorizationManager::new(url).await.map_err(auth_error)?;
@@ -365,7 +391,12 @@ pub async fn access_token(server_id: &str, url: &str) -> Result<String, String> 
     if !manager.initialize_from_store().await.map_err(auth_error)? {
         return Err("authorization required".to_string());
     }
-    let token = manager.get_access_token().await.map_err(auth_error)?;
+    let token = if force {
+        manager.refresh_token().await.map_err(auth_error)?;
+        manager.get_access_token().await.map_err(auth_error)?
+    } else {
+        manager.get_access_token().await.map_err(auth_error)?
+    };
     if token.is_empty() {
         return Err("authorization required".to_string());
     }
@@ -452,18 +483,27 @@ pub async fn authorize(server_id: &str, url: &str) -> Result<(), String> {
     }
 }
 
+fn challenge_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            match reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(15))
+                .build()
+            {
+                Ok(client) => Some(client),
+                Err(error) => {
+                    eprintln!("mcp oauth: challenge client failed: {error}");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
 async fn probe_challenge(url: &str) -> Option<String> {
-    let client = match reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("mcp oauth: challenge client failed: {error}");
-            return None;
-        }
-    };
+    let client = challenge_client()?;
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -772,6 +812,14 @@ mod tests {
         assert_eq!(next_generation(Some("0")), "1");
         assert_eq!(next_generation(Some("1")), "0");
         assert_eq!(next_generation(Some("abc123")), "0");
+    }
+
+    #[test]
+    fn force_refresh_is_consumed_once() {
+        let server = "force-refresh-test";
+        force_refresh(server);
+        assert!(take_force_refresh(server));
+        assert!(!take_force_refresh(server));
     }
 
     #[tokio::test]

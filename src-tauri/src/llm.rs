@@ -1059,9 +1059,7 @@ pub async fn verify_provider(
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
                 return Err(AppError::Upstream(format!(
                     "HTTP {} — ollama.com rejected this key",
                     status.as_u16()

@@ -305,7 +305,7 @@ interface AppContextValue {
   activeConnection: Connection | null;
   activeConnectionId: string | null;
   selectConnection: (id: string | null) => void;
-  refreshConnections: () => Promise<void>;
+  refreshConnections: (options?: { selectFirst?: boolean }) => Promise<void>;
   saveConnection: (
     input: ConnectionInput,
     id?: string,
@@ -667,13 +667,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingMemoriesRef.current = pendingMemories;
   }, [pendingMemories]);
 
-  const refreshConnections = useCallback(async () => {
-    const rows = await db.listConnections();
-    setConnections(rows);
-    setActiveConnectionId((prev) =>
-      prev && rows.some((row) => row.id === prev) ? prev : (rows[0]?.id ?? null),
-    );
-  }, []);
+  const refreshConnections = useCallback(
+    async (options?: { selectFirst?: boolean }) => {
+      const rows = await db.listConnections();
+      setConnections(rows);
+      setActiveConnectionId((prev) =>
+        prev && rows.some((row) => row.id === prev)
+          ? prev
+          : options?.selectFirst === false
+            ? null
+            : (rows[0]?.id ?? null),
+      );
+    },
+    [],
+  );
 
   const refreshProjects = useCallback(async () => {
     const rows = await db.listProjects();
@@ -1094,7 +1101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         saved = await db.createConnection(input);
         if (activate) setActiveConnectionId(saved.id);
       }
-      await refreshConnections();
+      await refreshConnections({ selectFirst: activate });
       return saved;
     },
     [connections, refreshConnections],

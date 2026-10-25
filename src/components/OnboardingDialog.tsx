@@ -14,6 +14,31 @@ const SUGGESTIONS = [
   "Plan a two-week learning roadmap",
 ];
 
+async function persistKeyFailure(
+  saved: Connection,
+  keyError: string,
+  created: boolean,
+  removeConnection: (id: string) => Promise<void>,
+): Promise<{ draftId: string | null; text: string }> {
+  if (!created) {
+    return {
+      draftId: saved.id,
+      text: `Couldn't save the key: ${keyError}. The provider was kept; fix the key and retry.`,
+    };
+  }
+  const rollbackError = await rollbackConnection(removeConnection, saved.id);
+  if (rollbackError) {
+    return {
+      draftId: saved.id,
+      text: `Couldn't save the key: ${keyError}. The provider row could not be removed: ${rollbackError}`,
+    };
+  }
+  return {
+    draftId: null,
+    text: `Couldn't save the key: ${keyError}. The provider was not added.`,
+  };
+}
+
 const PROVIDER_TILES: { id: ProviderKind; label: string; initials: string }[] = [
   { id: "openrouter", label: "OpenRouter", initials: "OR" },
   { id: "agentrouter", label: "Agent Router", initials: "AR" },
@@ -352,20 +377,24 @@ export function OnboardingDialog() {
     }
   };
 
-  const persistKey = async (saved: Connection, keyless: boolean): Promise<string | null> => {
+  const persistKey = async (
+    saved: Connection,
+    keyless: boolean,
+    created: boolean,
+  ): Promise<string | null> => {
     if (keyless) return null;
     try {
       await api.setApiKey(saved.id, key.trim());
       return null;
     } catch (e) {
-      const keyError = errorText(e);
-      const rollbackError = await rollbackConnection(removeConnection, saved.id);
-      if (rollbackError) {
-        setDraftId(saved.id);
-        return `Couldn't save the key: ${keyError}. The provider row could not be removed: ${rollbackError}`;
-      }
-      setDraftId(null);
-      return `Couldn't save the key: ${keyError}. The provider was not added.`;
+      const failure = await persistKeyFailure(
+        saved,
+        errorText(e),
+        created,
+        removeConnection,
+      );
+      setDraftId(failure.draftId);
+      return failure.text;
     }
   };
 
@@ -416,12 +445,13 @@ export function OnboardingDialog() {
     if (!prepared) return;
     setBusy(true);
     let saved: Connection | null = null;
+    const existing = draftId;
     try {
-      saved = await saveConnection(prepared.input, draftId ?? undefined, {
+      saved = await saveConnection(prepared.input, existing ?? undefined, {
         activate: false,
       });
       setDraftId(saved.id);
-      const keyError = await persistKey(saved, prepared.keyless);
+      const keyError = await persistKey(saved, prepared.keyless, !existing);
       if (keyError) {
         setStatus(keyError);
         return;
@@ -462,6 +492,7 @@ export function OnboardingDialog() {
               connected={connected}
               status={status}
               onPick={(next) => {
+                if (next !== kind) setDraftId(null);
                 setKind(next);
                 setBaseUrl(DEFAULT_BASE_URLS[next]);
                 setConnected(false);

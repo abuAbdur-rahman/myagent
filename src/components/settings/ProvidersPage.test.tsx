@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   saveConnection: vi.fn(),
@@ -56,6 +56,8 @@ beforeEach(() => {
   mocks.setApiKey.mockResolvedValue(undefined);
 });
 
+afterEach(cleanup);
+
 describe("ProviderDialog", () => {
   it("keeps a new provider when the model check fails", async () => {
     mocks.verifyProvider.mockRejectedValue({ Upstream: "HTTP 401 — invalid key" });
@@ -92,6 +94,77 @@ describe("ProviderDialog", () => {
     expect(onResult).toHaveBeenCalledWith(
       "conn-1",
       expect.objectContaining({ ok: false }),
+    );
+  });
+
+  it("keeps the saved draft after a successful test", async () => {
+    mocks.verifyProvider.mockResolvedValue(1);
+    const onClose = vi.fn();
+
+    render(
+      <ProviderDialog
+        open
+        connection={null}
+        onClose={onClose}
+        onResult={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), {
+      target: { value: "sk-test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connected · 1 models found/)).toBeTruthy();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.saveConnection).toHaveBeenCalledTimes(2);
+    expect(mocks.saveConnection.mock.calls[1]?.[1]).toBe("conn-1");
+  });
+
+  it("keeps an existing draft when a retry cannot save its key", async () => {
+    mocks.verifyProvider.mockRejectedValue(new Error("model check failed"));
+    mocks.setApiKey
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("vault down"));
+
+    render(
+      <ProviderDialog
+        open
+        connection={null}
+        onClose={vi.fn()}
+        onResult={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), {
+      target: { value: "sk-test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/model check failed/i)).toBeTruthy();
+    });
+    expect(mocks.removeConnection).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), {
+      target: { value: "sk-retry" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry test" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't save the key/i)).toBeTruthy();
+    });
+    expect(mocks.removeConnection).not.toHaveBeenCalled();
+    expect(mocks.saveConnection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: "openrouter" }),
+      "conn-1",
+      { activate: false },
     );
   });
 });

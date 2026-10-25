@@ -188,7 +188,10 @@ export function ProviderDialog({
     setNeedsAttention(false);
   }, [open, connection]);
 
-  const persistKey = async (saved: Connection): Promise<string | null> => {
+  const persistKey = async (
+    saved: Connection,
+    created: boolean,
+  ): Promise<string | null> => {
     if (!key.trim()) return null;
     try {
       await api.setApiKey(saved.id, key.trim());
@@ -196,24 +199,28 @@ export function ProviderDialog({
       return null;
     } catch (e) {
       const keyError = errorText(e);
-      const rollbackError = await rollbackConnection(
-        removeConnection,
-        isNew ? saved.id : null,
-      );
-      if (rollbackError) {
-        setDraftId(saved.id);
-        setNeedsAttention(true);
-        const text = `Couldn't save the key for ${saved.name}: ${keyError}. The provider row could not be removed: ${rollbackError}`;
+      if (created) {
+        const rollbackError = await rollbackConnection(removeConnection, saved.id);
+        if (rollbackError) {
+          setDraftId(saved.id);
+          setNeedsAttention(true);
+          const text = `Couldn't save the key for ${saved.name}: ${keyError}. The provider row could not be removed: ${rollbackError}`;
+          setStatus(text);
+          onResult(saved.id, { ok: false, text });
+          return text;
+        }
+        setDraftId(null);
+        const text = `Couldn't save the key for ${saved.name}: ${keyError}. The provider was not added.`;
         setStatus(text);
-        onResult(saved.id, { ok: false, text });
         return text;
       }
-      if (isNew) setDraftId(null);
-      const text = isNew
-        ? `Couldn't save the key for ${saved.name}: ${keyError}. The provider was not added.`
-        : `Couldn't save the key for ${saved.name}: ${keyError}`;
+      if (isNew) {
+        setDraftId(saved.id);
+        setNeedsAttention(true);
+      }
+      const text = `Couldn't save the key for ${saved.name}: ${keyError}`;
       setStatus(text);
-      if (!isNew) onResult(saved.id, { ok: false, text });
+      onResult(saved.id, { ok: false, text });
       return text;
     }
   };
@@ -258,14 +265,12 @@ export function ProviderDialog({
     setBusy(true);
     setNeedsAttention(false);
     let saved: Connection | null = null;
+    const existing = connection?.id ?? draftId ?? undefined;
+    const created = !existing;
     try {
-      saved = await saveConnection(
-        input,
-        connection?.id ?? draftId ?? undefined,
-        { activate: false },
-      );
+      saved = await saveConnection(input, existing, { activate: false });
       if (isNew) setDraftId(saved.id);
-      const keyError = await persistKey(saved);
+      const keyError = await persistKey(saved, created);
       if (keyError) {
         setStatus(keyError);
         return;
@@ -277,7 +282,7 @@ export function ProviderDialog({
       await db.markKeyTested(saved.id);
       await refreshConnections();
       selectConnection(saved.id);
-      setDraftId(null);
+      if (!testFirst) setDraftId(null);
       const text = `Connected · ${found} models found`;
       setStatus(text);
       onResult(saved.id, { ok: true, text });

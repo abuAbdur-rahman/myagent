@@ -16,6 +16,7 @@ pub const MAX_TIMEOUTS_BEFORE_RESTART: u32 = 3;
 const MCP_PREFIX: &str = "mcp__";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const MAX_MCP_TEXT_BYTES: usize = 64 * 1024;
+const MAX_TOOL_PAGES: usize = 64;
 
 pub fn mcp_namespace(server: &str) -> String {
     server
@@ -1038,7 +1039,12 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
         tools: Vec::new(),
         timeouts: 0,
     };
-    initialize_session(&mut session).await?;
+    if let Err(error) = initialize_session(&mut session).await {
+        if config.auth_type == "oauth" && looks_like_auth_error(&error) {
+            crate::mcp_oauth::force_refresh(&config.id);
+        }
+        return Err(error);
+    }
     Ok(session)
 }
 
@@ -1326,7 +1332,8 @@ async fn list_rmcp_tools(
 ) -> Result<Vec<McpToolDef>, String> {
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
-    loop {
+    let mut seen: HashSet<String> = HashSet::new();
+    for _ in 0..MAX_TOOL_PAGES {
         let params = cursor
             .take()
             .map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
@@ -1341,11 +1348,13 @@ async fn list_rmcp_tools(
                 .map(|tool| rmcp_tool_def(server, tool)),
         );
         match result.next_cursor {
-            Some(next) if !next.is_empty() => cursor = Some(next),
-            _ => break,
+            Some(next) if !next.is_empty() && seen.insert(next.clone()) => cursor = Some(next),
+            _ => return Ok(tools),
         }
     }
-    Ok(tools)
+    Err(format!(
+        "{server}: tools/list exceeded {MAX_TOOL_PAGES} pages"
+    ))
 }
 
 fn rmcp_result_text(result: &CallToolResult) -> (bool, String) {
@@ -1832,6 +1841,7 @@ pub async fn try_execute(
                 return Some(Err(timed_out(name)));
             }
             if session.config.auth_type == "oauth" && auth {
+                crate::mcp_oauth::force_refresh(&session.config.id);
                 drop(session);
                 state.sessions.lock().await.remove(&key);
             }
