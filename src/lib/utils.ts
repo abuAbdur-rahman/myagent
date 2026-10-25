@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { formatInvokeError } from "./api";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -10,10 +11,8 @@ export function newId() {
 }
 
 export function errorText(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  return "Something went wrong. Please try again.";
+  const text = formatInvokeError(error).trim();
+  return text.length > 0 ? text : "Something went wrong. Please try again.";
 }
 
 export function downloadText(filename: string, text: string, mime = "text/plain") {
@@ -40,11 +39,12 @@ export async function copyText(text: string): Promise<boolean> {
 export async function rollbackConnection(
   remove: (id: string) => Promise<void>,
   id: string | null,
-): Promise<void> {
-  if (!id) return;
+): Promise<string | null> {
+  if (!id) return null;
   try {
     await remove(id);
+    return null;
   } catch (cause) {
-    console.warn("provider rollback failed", cause);
+    return formatInvokeError(cause);
   }
 }

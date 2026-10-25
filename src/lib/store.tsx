@@ -305,8 +305,12 @@ interface AppContextValue {
   activeConnection: Connection | null;
   activeConnectionId: string | null;
   selectConnection: (id: string | null) => void;
-  refreshConnections: () => Promise<void>;
-  saveConnection: (input: ConnectionInput, id?: string) => Promise<Connection>;
+  refreshConnections: (options?: { selectFirst?: boolean }) => Promise<void>;
+  saveConnection: (
+    input: ConnectionInput,
+    id?: string,
+    options?: { activate?: boolean },
+  ) => Promise<Connection>;
   removeConnection: (id: string) => Promise<void>;
 
   models: string[];
@@ -663,13 +667,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingMemoriesRef.current = pendingMemories;
   }, [pendingMemories]);
 
-  const refreshConnections = useCallback(async () => {
-    const rows = await db.listConnections();
-    setConnections(rows);
-    setActiveConnectionId((prev) =>
-      prev && rows.some((row) => row.id === prev) ? prev : (rows[0]?.id ?? null),
-    );
-  }, []);
+  const refreshConnections = useCallback(
+    async (options?: { selectFirst?: boolean }) => {
+      const rows = await db.listConnections();
+      setConnections(rows);
+      setActiveConnectionId((prev) =>
+        prev && rows.some((row) => row.id === prev)
+          ? prev
+          : options?.selectFirst === false
+            ? null
+            : (rows[0]?.id ?? null),
+      );
+    },
+    [],
+  );
 
   const refreshProjects = useCallback(async () => {
     const rows = await db.listProjects();
@@ -1074,18 +1085,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveConnection = useCallback(
-    async (input: ConnectionInput, id?: string): Promise<Connection> => {
+    async (
+      input: ConnectionInput,
+      id?: string,
+      options?: { activate?: boolean },
+    ): Promise<Connection> => {
+      const activate = options?.activate ?? true;
       let saved: Connection;
       if (id) {
-        const existing = connections.find((c) => c.id === id);
+        const existing = connections.find((c) => c.id === id) ?? (await db.getConnection(id));
         if (!existing) throw new Error("Connection no longer exists");
         saved = { ...existing, ...input };
         await db.updateConnection(saved);
       } else {
         saved = await db.createConnection(input);
-        setActiveConnectionId(saved.id);
+        if (activate) setActiveConnectionId(saved.id);
       }
-      await refreshConnections();
+      await refreshConnections({ selectFirst: activate });
       return saved;
     },
     [connections, refreshConnections],

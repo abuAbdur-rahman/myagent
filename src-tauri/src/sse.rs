@@ -226,11 +226,11 @@ pub fn map_chunk(value: &Value) -> ChatChunk {
             chunk.text = text.to_string();
         }
         for key in ["reasoning_content", "reasoning", "thinking"] {
-            if let Some(text) = delta.get(key).and_then(|v| v.as_str()) {
-                if !text.is_empty() {
-                    chunk.reasoning = text.to_string();
-                    break;
-                }
+            if let Some(text) = delta.get(key).and_then(|v| v.as_str())
+                && !text.is_empty()
+            {
+                chunk.reasoning = text.to_string();
+                break;
             }
         }
         if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {

@@ -46,6 +46,12 @@ import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Connection, ExportScope, Memory } from "../../lib/types";
 import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
+  mcpDraftTarget,
+  mcpTargetArgs,
+  mcpTargetError,
+  type McpDraft,
+} from "../../lib/mcp-draft";
+import {
   auditCounts,
   auditCsv,
   auditDuration,
@@ -121,12 +127,14 @@ function SettingRow({
 
 const MCP_TARGET_HINTS: Record<string, { placeholder: string; label: string }> = {
   stdio: { placeholder: "npx my-server", label: "Command" },
+  http: { placeholder: "https://host:8000/mcp", label: "URL" },
   sse: { placeholder: "https://host:8000/sse", label: "URL" },
 };
 
 const MCP_TRANSPORTS = [
   { value: "stdio", label: "stdio (local command)" },
-  { value: "sse", label: "sse (remote URL)" },
+  { value: "http", label: "http (Streamable HTTP)" },
+  { value: "sse", label: "sse (legacy remote URL)" },
 ];
 
 interface McpPreset {
@@ -159,13 +167,6 @@ const MCP_PRESETS: McpPreset[] = [
 
 type McpDecision = "ask" | "allow" | "block";
 
-interface McpDraft {
-  name: string;
-  transport: string;
-  command: string;
-  url: string;
-}
-
 interface McpPolicy {
   ask: string[];
   allow: string[];
@@ -187,7 +188,19 @@ type McpState = { tone: PillTone; label: string };
 
 const CLOSED_MCP_DIALOG: McpDialogState = { open: false, editing: null, seed: null };
 
-const EMPTY_MCP_DRAFT: McpDraft = { name: "", transport: "stdio", command: "", url: "" };
+const EMPTY_MCP_DRAFT: McpDraft = {
+  name: "",
+  transport: "stdio",
+  authType: "none",
+  command: "",
+  url: "",
+};
+
+const MCP_AUTH_MODES: { value: string; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "bearer", label: "Bearer token" },
+  { value: "oauth", label: "OAuth 2.1" },
+];
 
 const MCP_MODES: { value: string; label: string }[] = [
   { value: "ask", label: "Ask" },
@@ -223,10 +236,6 @@ function mcpTargetText(server: api.McpServerRow): { text: string; title?: string
   return { text: raw || "No target set", title: raw || undefined };
 }
 
-function mcpDraftTarget(draft: McpDraft): string {
-  return draft.transport === "stdio" ? draft.command : draft.url;
-}
-
 function mcpDraftWithTarget(draft: McpDraft, value: string): McpDraft {
   return draft.transport === "stdio" ? { ...draft, command: value } : { ...draft, url: value };
 }
@@ -235,6 +244,7 @@ function mcpDraft(server: api.McpServerRow): McpDraft {
   return {
     name: server.name,
     transport: server.transport,
+    authType: server.auth_type,
     command: server.cmd ?? "",
     url: server.url ?? "",
   };
@@ -245,6 +255,7 @@ function mcpPresetDraft(preset: McpPreset): McpDraft {
   return {
     name: preset.id,
     transport: preset.transport,
+    authType: "none",
     command: stdio ? preset.target : "",
     url: stdio ? "" : preset.target,
   };
@@ -252,6 +263,12 @@ function mcpPresetDraft(preset: McpPreset): McpDraft {
 
 function mcpHint(transport: string) {
   return MCP_TARGET_HINTS[transport] ?? MCP_TARGET_HINTS.stdio;
+}
+
+function mcpAuthHint(authType: string): string {
+  if (authType === "bearer") return "Stored in Windows Credential Manager, never in SQLite.";
+  if (authType === "oauth") return "Browser sign-in runs after the server is saved.";
+  return "No authorization header is sent.";
 }
 
 function mcpPolicy(server: api.McpServerRow): McpPolicy {
@@ -323,17 +340,6 @@ function mcpNameError(
   if (format) return format;
   const clash = servers.some((server) => server.id !== editing && server.name === trimmed);
   return clash ? "Another server in this scope already uses this name." : null;
-}
-
-function mcpTargetMissingError(transport: string): string {
-  return transport === "stdio" ? "Command is required." : "URL is required.";
-}
-
-function mcpTargetError(draft: McpDraft): string | null {
-  const target = mcpDraftTarget(draft).trim();
-  if (!target) return mcpTargetMissingError(draft.transport);
-  if (draft.transport !== "sse") return null;
-  return /^https?:\/\//i.test(target) ? null : "URL must start with http:// or https://.";
 }
 
 function mcpErrors(
@@ -794,6 +800,14 @@ function McpDialogFields({
           options={MCP_TRANSPORTS}
         />
       </McpField>
+      <McpField label="Auth" hint={mcpAuthHint(draft.authType)}>
+        <Select
+          value={draft.authType}
+          onChange={(value) => setDraft({ ...draft, authType: value })}
+          aria-label="Auth"
+          options={MCP_AUTH_MODES}
+        />
+      </McpField>
       <McpField
         label={hint.label}
         hint={stdio ? MCP_COMMAND_HINT : MCP_URL_HINT}
@@ -816,30 +830,380 @@ function McpDialogFooter({
   editing,
   onClose,
   onSave,
+  saveDisabled,
 }: {
   editing: boolean;
   onClose: () => void;
   onSave: () => void;
+  saveDisabled?: boolean;
 }) {
   return (
     <div className="mt-4 flex justify-end gap-2">
       <Button variant="ghost" size="sm" onClick={onClose}>
         Cancel
       </Button>
-      <Button variant="primary" size="sm" onClick={onSave}>
+      <Button variant="primary" size="sm" onClick={onSave} disabled={saveDisabled}>
         {editing ? "Save" : "Add server"}
       </Button>
     </div>
   );
 }
 
-function McpServerDialog({
+type McpAuthMessage = { ok: boolean; text: string };
+
+interface McpBearerState {
+  token: string;
+  setToken: (value: string) => void;
+  busy: boolean;
+  message: McpAuthMessage | null;
+  hasToken: boolean;
+  save: () => Promise<void>;
+  clear: () => Promise<void>;
+}
+
+interface McpOAuthState {
+  busy: boolean;
+  authorizing: boolean;
+  message: McpAuthMessage | null;
+  hasToken: boolean;
+  connect: () => Promise<void>;
+  cancel: () => Promise<void>;
+  disconnect: () => Promise<void>;
+}
+
+function useMcpHasToken(
+  open: boolean,
+  editing: api.McpServerRow | null,
+  authType: string,
+) {
+  const [hasToken, setHasToken] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setHasToken(editing && editing.auth_type === authType ? editing.has_token : false);
+  }, [open, editing?.id, editing?.auth_type, editing?.has_token, authType]);
+  return { hasToken, setHasToken };
+}
+
+function useMcpBearer(
+  open: boolean,
+  editing: api.McpServerRow | null,
+  authType: string,
+  onChanged: () => void,
+): McpBearerState {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<McpAuthMessage | null>(null);
+  const { hasToken, setHasToken } = useMcpHasToken(open, editing, authType);
+
+  useEffect(() => {
+    if (!open) return;
+    setToken("");
+    setMessage(null);
+  }, [open, editing?.id]);
+
+  const save = async () => {
+    if (!editing) return;
+    const value = token.trim();
+    if (!value) {
+      setMessage({ ok: false, text: "Enter a token first." });
+      return;
+    }
+    setBusy(true);
+    try {
+      const row = await api.mcpSetToken(editing.id, value);
+      setHasToken(row.has_token);
+      setToken("");
+      setMessage({ ok: true, text: "Token saved. Reconnect to use it." });
+      onChanged();
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    if (!editing) return;
+    setBusy(true);
+    try {
+      const row = await api.mcpDeleteToken(editing.id);
+      setHasToken(row.has_token);
+      setMessage({ ok: true, text: "Token cleared." });
+      onChanged();
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return { token, setToken, busy, message, hasToken, save, clear };
+}
+
+function useMcpOAuth(
+  open: boolean,
+  editing: api.McpServerRow | null,
+  authType: string,
+  onChanged: () => void,
+): McpOAuthState {
+  const [busy, setBusy] = useState(false);
+  const [authorizing, setAuthorizing] = useState(false);
+  const [message, setMessage] = useState<McpAuthMessage | null>(null);
+  const { hasToken, setHasToken } = useMcpHasToken(open, editing, authType);
+  const activeServer = useRef<string | null>(null);
+  const generation = useRef(0);
+
+  const stop = (id: string | null) => {
+    if (id) {
+      void api.mcpCancelAuth(id).catch((e: unknown) => {
+        setMessage({ ok: false, text: errorText(e) });
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (open) return;
+    const id = activeServer.current;
+    activeServer.current = null;
+    generation.current += 1;
+    setBusy(false);
+    setAuthorizing(false);
+    setMessage(null);
+    stop(id);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || authType === "oauth") return;
+    const id = activeServer.current;
+    activeServer.current = null;
+    generation.current += 1;
+    setBusy(false);
+    setAuthorizing(false);
+    stop(id);
+  }, [authType, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = activeServer.current;
+    if (!id || id === editing?.id) return;
+    activeServer.current = null;
+    generation.current += 1;
+    setBusy(false);
+    setAuthorizing(false);
+    stop(id);
+  }, [open, editing?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    setBusy(false);
+    setAuthorizing(false);
+    setMessage(null);
+  }, [open, editing?.id]);
+
+  const connect = async () => {
+    if (!editing) return;
+    const id = editing.id;
+    const run = generation.current + 1;
+    generation.current = run;
+    activeServer.current = id;
+    setBusy(true);
+    setAuthorizing(true);
+    setMessage({ ok: true, text: "Waiting for the browser…" });
+    try {
+      const row = await api.mcpBeginAuth(id);
+      if (generation.current !== run) return;
+      setHasToken(row.has_token);
+      setMessage({
+        ok: row.has_token,
+        text: row.has_token ? "Connected." : "Authorization did not complete.",
+      });
+      onChanged();
+    } catch (e) {
+      if (generation.current === run) {
+        setMessage({ ok: false, text: errorText(e) });
+      }
+    } finally {
+      if (generation.current === run) {
+        activeServer.current = null;
+        setBusy(false);
+        setAuthorizing(false);
+      }
+    }
+  };
+
+  const cancel = async () => {
+    const id = activeServer.current;
+    if (!id) return;
+    activeServer.current = null;
+    generation.current += 1;
+    setBusy(false);
+    setAuthorizing(false);
+    try {
+      await api.mcpCancelAuth(id);
+    } catch (e) {
+      setMessage({ ok: false, text: errorText(e) });
+    }
+  };
+
+  const disconnect = async () => {
+    if (!editing) return;
+    const run = generation.current;
+    setBusy(true);
+    try {
+      const row = await api.mcpDisconnect(editing.id);
+      if (generation.current !== run) return;
+      setHasToken(row.has_token);
+      setMessage({ ok: true, text: "Disconnected." });
+      onChanged();
+    } catch (e) {
+      if (generation.current === run) {
+        setMessage({ ok: false, text: errorText(e) });
+      }
+    } finally {
+      if (generation.current === run) {
+        setBusy(false);
+      }
+    }
+  };
+
+  return { busy, authorizing, message, hasToken, connect, cancel, disconnect };
+}
+
+function McpBearerFields({
+  editing,
+  state,
+}: {
+  editing: api.McpServerRow | null;
+  state: McpBearerState;
+}) {
+  if (!editing || editing.auth_type !== "bearer") {
+    return (
+      <p className="mt-3 text-xs text-muted">
+        {editing
+          ? "Save the server with bearer auth first."
+          : "Save the server first, then add its bearer token."}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <McpField
+        label="Bearer token"
+        hint={
+          state.hasToken
+            ? "A token is stored. Enter a new one to replace it."
+            : "Stored in Windows Credential Manager, never in SQLite."
+        }
+      >
+        <Input
+          type="password"
+          value={state.token}
+          autoComplete="off"
+          placeholder={state.hasToken ? "••••••••" : "Paste token"}
+          onChange={(e) => state.setToken(e.target.value)}
+        />
+      </McpField>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={state.busy || !state.token.trim()}
+          onClick={() => void state.save()}
+        >
+          {state.busy ? <Spinner label="Saving" /> : "Save token"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={state.busy || !state.hasToken}
+          onClick={() => void state.clear()}
+        >
+          Clear token
+        </Button>
+        {state.message && (
+          <p
+            className={cn("text-xs", state.message.ok ? "text-muted" : "text-danger")}
+            role="status"
+          >
+            {state.message.text}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function McpOAuthFields({
+  editing,
+  state,
+  blocked,
+}: {
+  editing: api.McpServerRow | null;
+  state: McpOAuthState;
+  blocked: boolean;
+}) {
+  if (!editing || editing.auth_type !== "oauth") {
+    return (
+      <p className="mt-3 text-xs text-muted">
+        {editing
+          ? "Save the server with OAuth first."
+          : "Save the server first, then connect with OAuth."}
+      </p>
+    );
+  }
+  const connectLabel = state.hasToken ? "Reconnect" : "Connect";
+  let statusText = "Authorization required. Connect opens your browser.";
+  if (blocked) {
+    statusText = "Save the server before connecting.";
+  } else if (state.hasToken) {
+    statusText = "Authorized. Reconnect if the token expires.";
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <p className="text-xs text-muted">{statusText}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          disabled={state.busy || blocked}
+          onClick={() => void state.connect()}
+        >
+          {state.authorizing ? <Spinner label="Waiting" /> : connectLabel}
+        </Button>
+        {state.authorizing && (
+          <Button size="sm" variant="ghost" onClick={() => void state.cancel()}>
+            Cancel
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={state.busy || !state.hasToken}
+          onClick={() => void state.disconnect()}
+        >
+          Disconnect
+        </Button>
+        {state.message && (
+          <p
+            className={cn("text-xs", state.message.ok ? "text-muted" : "text-danger")}
+            role="status"
+          >
+            {state.message.text}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function McpServerDialog({
   open,
   editing,
   seed,
   servers,
   onClose,
   onSave,
+  onChanged,
 }: {
   open: boolean;
   editing: api.McpServerRow | null;
@@ -847,6 +1211,7 @@ function McpServerDialog({
   servers: api.McpServerRow[];
   onClose: () => void;
   onSave: (draft: McpDraft) => void;
+  onChanged: () => void;
 }) {
   const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP_DRAFT);
   const [errors, setErrors] = useState<McpErrors>({});
@@ -854,12 +1219,26 @@ function McpServerDialog({
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
+  const bearer = useMcpBearer(open, editing, draft.authType, onChanged);
+  const oauth = useMcpOAuth(open, editing, draft.authType, onChanged);
+  const savedTarget = editing
+    ? (editing.transport === "stdio" ? editing.cmd ?? "" : editing.url ?? "").trim()
+    : "";
+  const authBlocked =
+    editing !== null &&
+    (draft.transport !== editing.transport ||
+      draft.authType !== editing.auth_type ||
+      mcpDraftTarget(draft).trim() !== savedTarget);
+  const close = () => {
+    if (oauth.busy) void oauth.cancel();
+    onClose();
+  };
 
   useEffect(() => {
     if (!open) return;
     setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
     setErrors({});
-  }, [open, editing, seed]);
+  }, [open, editing?.id, seed]);
 
   useEffect(() => {
     setTest(null);
@@ -873,11 +1252,8 @@ function McpServerDialog({
     }
     setTesting(true);
     try {
-      const probe = await api.mcpTest(
-        draft.transport,
-        draft.transport === "stdio" ? target : null,
-        draft.transport === "sse" ? target : null,
-      );
+      const { cmd, url } = mcpTargetArgs(draft);
+      const probe = await api.mcpTest(draft.transport, draft.authType, cmd, url);
       setTest(
         probe.error
           ? { ok: false, text: probe.error }
@@ -896,6 +1272,7 @@ function McpServerDialog({
   };
 
   const submit = () => {
+    if (oauth.busy || bearer.busy) return;
     const found = mcpErrors(draft, servers, editing);
     setErrors(found);
     if (found.name) {
@@ -910,7 +1287,7 @@ function McpServerDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={mcpDialogTitle(editing)}>
+    <Dialog open={open} onClose={close} title={mcpDialogTitle(editing)}>
       <McpDialogFields
         draft={draft}
         setDraft={setDraft}
@@ -922,21 +1299,32 @@ function McpServerDialog({
         <Button
           size="sm"
           variant="default"
-          disabled={testing}
+          disabled={testing || draft.authType !== "none"}
           onClick={() => void probeDraft()}
         >
           {testing ? <Spinner label="Testing" /> : "Test connection"}
         </Button>
-        {test && (
-          <p className={cn("pt-1.5 text-xs", test.ok ? "text-muted" : "text-danger")} role="status">
-            {test.text}
+        {draft.authType !== "none" ? (
+          <p className="pt-1.5 text-xs text-muted">
+            Save the server and connect it to test with authorization.
           </p>
+        ) : (
+          test && (
+            <p className={cn("pt-1.5 text-xs", test.ok ? "text-muted" : "text-danger")} role="status">
+              {test.text}
+            </p>
+          )
         )}
       </div>
+      {draft.authType === "bearer" && <McpBearerFields editing={editing} state={bearer} />}
+      {draft.authType === "oauth" && (
+        <McpOAuthFields editing={editing} state={oauth} blocked={authBlocked} />
+      )}
       <McpDialogFooter
         editing={editing !== null}
-        onClose={onClose}
+        onClose={close}
         onSave={submit}
+        saveDisabled={oauth.busy || bearer.busy}
       />
     </Dialog>
   );
@@ -989,7 +1377,7 @@ function useMcpServers(projectId: string | null) {
       .finally(() => setProbing((current) => ({ ...current, [id]: false })));
   }, []);
 
-  return { servers, probes, probing, status, run, reconnect };
+  return { servers, probes, probing, status, run, reconnect, refresh: reload };
 }
 
 function AuditEntry({ row }: { row: AuditLog }) {
@@ -1188,21 +1576,29 @@ export function GeneralPage() {
 export function McpPage() {
   const { activeProject } = useApp();
   const projectId = mcpProjectId(activeProject);
-  const { servers, probes, probing, status, run, reconnect } = useMcpServers(projectId);
+  const { servers, probes, probing, status, run, reconnect, refresh } = useMcpServers(projectId);
   const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
+
+  useEffect(() => {
+    setDialog((current) => {
+      if (!current.editing) return current;
+      const id = current.editing.id;
+      const fresh = servers.find((server) => server.id === id);
+      if (!fresh || fresh === current.editing) return current;
+      return { ...current, editing: fresh };
+    });
+  }, [servers]);
 
   const save = (draft: McpDraft) => {
     const name = draft.name.trim();
-    const target = mcpDraftTarget(draft).trim();
-    const cmd = draft.transport === "stdio" ? target : null;
-    const url = draft.transport === "sse" ? target : null;
+    const { cmd, url } = mcpTargetArgs(draft);
     const current = dialog.editing;
     setDialog(CLOSED_MCP_DIALOG);
     void run(
       () =>
         current
-          ? api.mcpUpdate(current.id, name, draft.transport, cmd, url)
-          : api.mcpAdd(projectId, name, draft.transport, cmd, url),
+          ? api.mcpUpdate(current.id, name, draft.transport, draft.authType, cmd, url)
+          : api.mcpAdd(projectId, name, draft.transport, draft.authType, cmd, url),
       current ? "Server updated" : "Server added. It connects on the next send.",
     );
   };
@@ -1284,6 +1680,7 @@ export function McpPage() {
         servers={servers}
         onClose={close}
         onSave={save}
+        onChanged={() => void refresh()}
       />
     </div>
   );

@@ -7,6 +7,7 @@ mod inband;
 mod knowledge;
 mod llm;
 mod mcp;
+mod mcp_oauth;
 mod memory;
 mod permissions;
 mod research;
@@ -385,6 +386,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE pending_memories ADD COLUMN trust TEXT NOT NULL DEFAULT 'trusted';",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 30,
+            description: "add_mcp_auth_type",
+            sql: "ALTER TABLE mcp_servers ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'none';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -482,6 +489,11 @@ pub fn run() {
             mcp::mcp_update,
             mcp::mcp_set_policy,
             mcp::mcp_set_approval,
+            mcp::mcp_set_token,
+            mcp::mcp_delete_token,
+            mcp::mcp_begin_auth,
+            mcp::mcp_cancel_auth,
+            mcp::mcp_disconnect,
             mcp::mcp_status,
             mcp::mcp_probe,
             mcp::mcp_test,
@@ -853,7 +865,7 @@ mod migration_tests {
 
         apply_versions(&pool, |v| v > 16).await;
 
-        let row = sqlx::query("SELECT name, transport, cmd, allow_tools, timeout_ms, enabled, approval_mode, deny_tools, ask_tools FROM mcp_servers WHERE id = 's1'")
+        let row = sqlx::query("SELECT name, transport, cmd, allow_tools, timeout_ms, enabled, approval_mode, deny_tools, ask_tools, auth_type FROM mcp_servers WHERE id = 's1'")
             .fetch_one(&pool)
             .await
             .expect("server survives the upgrade");
@@ -870,6 +882,11 @@ mod migration_tests {
         );
         assert_eq!(row.get::<Option<String>, _>("deny_tools"), None);
         assert_eq!(row.get::<Option<String>, _>("ask_tools"), None);
+        assert_eq!(
+            row.get::<String, _>("auth_type"),
+            "none",
+            "existing rows keep the unauthenticated transport"
+        );
 
         let servers: i64 = sqlx::query("SELECT COUNT(*) AS c FROM mcp_servers")
             .fetch_one(&pool)

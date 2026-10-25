@@ -10,6 +10,7 @@ import {
   PROVIDER_LABELS,
   connectionInputSchema,
   type Connection,
+  type ConnectionInput,
   type ProviderKind,
 } from "../../lib/types";
 import { Button, Dialog, Input, Pill, Spinner, type PillTone } from "../ui";
@@ -49,16 +50,117 @@ function KeyPill({
   return <Pill tone={STATUS_TONE[status]}>{KEY_STATUS_TEXT[status]}</Pill>;
 }
 
-function ProviderDialog({
+function ProviderKeyField({
+  kind,
+  connection,
+  value,
+  showKey,
+  onChange,
+  onToggleShow,
+}: {
+  kind: ProviderKind;
+  connection: Connection | null;
+  value: string;
+  showKey: boolean;
+  onChange: (value: string) => void;
+  onToggleShow: () => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-xs text-muted">
+      API key
+      {KEYLESS_KINDS.has(kind) ? (
+        <span className="text-xs text-muted">
+          {PROVIDER_LABELS[kind]} needs no key.
+        </span>
+      ) : (
+        <span className="flex gap-1">
+          <Input
+            type={showKey ? "text" : "password"}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={connection ? "Leave blank to keep the stored key" : "sk-…"}
+            autoComplete="off"
+          />
+          <Button
+            variant="default"
+            size="icon"
+            aria-label={showKey ? "Hide key" : "Show key"}
+            onClick={onToggleShow}
+          >
+            {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+          </Button>
+        </span>
+      )}
+    </label>
+  );
+}
+
+function ProviderDialogActions({
+  isNew,
+  needsAttention,
+  draftId,
+  busy,
+  onDelete,
+  onClose,
+  onTest,
+  onSave,
+}: {
+  isNew: boolean;
+  needsAttention: boolean;
+  draftId: string | null;
+  busy: boolean;
+  onDelete: () => void;
+  onClose: () => void;
+  onTest: () => void;
+  onSave: () => void;
+}) {
+  if (isNew && needsAttention && draftId) {
+    return (
+      <div className="mt-1.5 flex justify-end gap-2">
+        <Button variant="default" disabled={busy} onClick={onDelete}>
+          Delete provider
+        </Button>
+        <Button variant="default" onClick={onClose}>
+          Keep provider
+        </Button>
+        <Button variant="primary" disabled={busy} onClick={onTest}>
+          {busy ? <Spinner label="Testing…" /> : "Retry test"}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1.5 flex justify-end gap-2">
+      <Button variant="default" onClick={onClose}>
+        Cancel
+      </Button>
+      <Button variant="default" disabled={busy} onClick={onTest}>
+        {busy ? <Spinner label="Testing…" /> : "Test connection"}
+      </Button>
+      <Button variant="primary" disabled={busy} onClick={onSave}>
+        Save
+      </Button>
+    </div>
+  );
+}
+
+export function ProviderDialog({
   open,
   connection,
   onClose,
+  onResult,
 }: {
   open: boolean;
   connection: Connection | null;
   onClose: () => void;
+  onResult: (id: string, result: TestState) => void;
 }) {
-  const { saveConnection, removeConnection, refreshConnections } = useApp();
+  const {
+    saveConnection,
+    removeConnection,
+    refreshConnections,
+    selectConnection,
+  } = useApp();
   const [kind, setKind] = useState<ProviderKind>(connection?.kind ?? "openrouter");
   const [name, setName] = useState(connection?.name ?? "OpenRouter");
   const [baseUrl, setBaseUrl] = useState(
@@ -69,6 +171,9 @@ function ProviderDialog({
   const [defaultModel, setDefaultModel] = useState(connection?.default_model ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [needsAttention, setNeedsAttention] = useState(false);
+  const isNew = !connection;
 
   useEffect(() => {
     if (!open) return;
@@ -79,9 +184,64 @@ function ProviderDialog({
     setShowKey(false);
     setDefaultModel(connection?.default_model ?? "");
     setStatus(null);
+    setDraftId(null);
+    setNeedsAttention(false);
   }, [open, connection]);
 
-  const save = async (testFirst: boolean) => {
+  const persistKey = async (
+    saved: Connection,
+    created: boolean,
+  ): Promise<string | null> => {
+    if (!key.trim()) return null;
+    try {
+      await api.setApiKey(saved.id, key.trim());
+      setKey("");
+      return null;
+    } catch (e) {
+      const keyError = errorText(e);
+      if (created) {
+        const rollbackError = await rollbackConnection(removeConnection, saved.id);
+        if (rollbackError) {
+          setDraftId(saved.id);
+          setNeedsAttention(true);
+          const text = `Couldn't save the key for ${saved.name}: ${keyError}. The provider row could not be removed: ${rollbackError}`;
+          setStatus(text);
+          onResult(saved.id, { ok: false, text });
+          return text;
+        }
+        setDraftId(null);
+        const text = `Couldn't save the key for ${saved.name}: ${keyError}. The provider was not added.`;
+        setStatus(text);
+        return text;
+      }
+      if (isNew) {
+        setDraftId(saved.id);
+        setNeedsAttention(true);
+      }
+      const text = `Couldn't save the key for ${saved.name}: ${keyError}`;
+      setStatus(text);
+      onResult(saved.id, { ok: false, text });
+      return text;
+    }
+  };
+
+  const reportSaveFailure = (error: unknown, saved: Connection | null) => {
+    const raw = errorText(error);
+    const { hint } = api.classifyStreamError(raw);
+    const message =
+      hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300);
+    if (saved) {
+      setDraftId(saved.id);
+      setNeedsAttention(true);
+      const text = `Saved ${saved.name} at ${saved.base_url}, but the model check failed. ${message}`;
+      setStatus(text);
+      onResult(saved.id, { ok: false, text });
+    } else {
+      setStatus(`Couldn't save the provider: ${message}`);
+    }
+  };
+
+  const prepareSave = (): ConnectionInput | null => {
     const parsed = connectionInputSchema.safeParse({
       name: name.trim(),
       kind,
@@ -90,21 +250,30 @@ function ProviderDialog({
     });
     if (!parsed.success) {
       setStatus(parsed.error.issues[0]?.message ?? "Invalid provider");
-      return;
+      return null;
     }
-    const isNew = !connection;
-    if (isNew && !key.trim() && !KEYLESS_KINDS.has(kind)) {
+    if (isNew && !draftId && !key.trim() && !KEYLESS_KINDS.has(kind)) {
       setStatus("Enter an API key to add a provider.");
-      return;
+      return null;
     }
+    return parsed.data;
+  };
+
+  const save = async (testFirst: boolean) => {
+    const input = prepareSave();
+    if (!input) return;
     setBusy(true);
-    let savedId: string | null = null;
+    setNeedsAttention(false);
+    let saved: Connection | null = null;
+    const existing = connection?.id ?? draftId ?? undefined;
+    const created = !existing;
     try {
-      const saved = await saveConnection(parsed.data, connection?.id);
-      savedId = saved.id;
-      if (key.trim()) {
-        await api.setApiKey(saved.id, key.trim());
-        setKey("");
+      saved = await saveConnection(input, existing, { activate: false });
+      if (isNew) setDraftId(saved.id);
+      const keyError = await persistKey(saved, created);
+      if (keyError) {
+        setStatus(keyError);
+        return;
       }
       const found = await api.verifyProvider(saved.id, saved.kind);
       if (found === 0) {
@@ -112,16 +281,31 @@ function ProviderDialog({
       }
       await db.markKeyTested(saved.id);
       await refreshConnections();
-      setStatus(`Connected · ${found} models found`);
+      selectConnection(saved.id);
+      if (!testFirst) setDraftId(null);
+      const text = `Connected · ${found} models found`;
+      setStatus(text);
+      onResult(saved.id, { ok: true, text });
       if (!testFirst) onClose();
     } catch (e) {
-      if (isNew) await rollbackConnection(removeConnection, savedId);
-      const raw = errorText(e);
-      const { hint } = api.classifyStreamError(raw);
-      setStatus(hint === "Provider error. Raw message below." ? raw : `${hint} ${raw}`.slice(0, 300));
+      reportSaveFailure(e, saved);
     } finally {
       setBusy(false);
     }
+  };
+
+  const deleteDraft = async () => {
+    if (!draftId) return;
+    setBusy(true);
+    const rollbackError = await rollbackConnection(removeConnection, draftId);
+    setBusy(false);
+    if (rollbackError) {
+      setStatus(`Couldn't delete the provider: ${rollbackError}`);
+      return;
+    }
+    setDraftId(null);
+    setNeedsAttention(false);
+    onClose();
   };
 
   return (
@@ -157,32 +341,14 @@ function ProviderDialog({
             placeholder="https://"
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs text-muted">
-          API key
-          {KEYLESS_KINDS.has(kind) ? (
-            <span className="text-xs text-muted">
-              {PROVIDER_LABELS[kind]} needs no key.
-            </span>
-          ) : (
-            <span className="flex gap-1">
-              <Input
-                type={showKey ? "text" : "password"}
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder={connection ? "Leave blank to keep the stored key" : "sk-…"}
-                autoComplete="off"
-              />
-              <Button
-                variant="default"
-                size="icon"
-                aria-label={showKey ? "Hide key" : "Show key"}
-                onClick={() => setShowKey((v) => !v)}
-              >
-                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </Button>
-            </span>
-          )}
-        </label>
+        <ProviderKeyField
+          kind={kind}
+          connection={connection}
+          value={key}
+          showKey={showKey}
+          onChange={setKey}
+          onToggleShow={() => setShowKey((v) => !v)}
+        />
         <label className="flex flex-col gap-1 text-xs text-muted">
           Default model <span className="text-muted">(optional)</span>
           <Input
@@ -196,17 +362,16 @@ function ProviderDialog({
             {status}
           </p>
         )}
-        <div className="mt-1.5 flex justify-end gap-2">
-          <Button variant="default" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="default" disabled={busy} onClick={() => void save(true)}>
-            {busy ? <Spinner label="Testing…" /> : "Test connection"}
-          </Button>
-          <Button variant="primary" disabled={busy} onClick={() => void save(false)}>
-            Save
-          </Button>
-        </div>
+        <ProviderDialogActions
+          isNew={isNew}
+          needsAttention={needsAttention}
+          draftId={draftId}
+          busy={busy}
+          onDelete={() => void deleteDraft()}
+          onClose={onClose}
+          onTest={() => void save(true)}
+          onSave={() => void save(false)}
+        />
       </div>
     </Dialog>
   );
@@ -554,6 +719,9 @@ export function ProvidersPage() {
         onClose={() => {
           setDialog({ open: false, connection: null });
           void reloadKeys();
+        }}
+        onResult={(id, result) => {
+          setTestState((prev) => ({ ...prev, [id]: result }));
         }}
       />
     </div>

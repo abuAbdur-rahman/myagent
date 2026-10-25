@@ -628,7 +628,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** A scheduled run produces a stored result.
 
 ## J12. MCP and skills
-- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated, streamableHTTP unsupported. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page. 0.6.0 planned: `rmcp` transports, OAuth 2.1 and bearer auth — see `docs/plan/v0.6.0-mcp-auth.md`)
+- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page. 0.6.0: `rmcp` stdio and Streamable HTTP, bearer tokens, and OAuth 2.1 with DCR, PKCE, a loopback callback and refresh; legacy `sse` retained. Pre-registered clients, custom-scheme callbacks and server-side revocation are not in 0.6.0 — see `docs/plan/v0.6.0-mcp-auth.md`)
 - **Ref:** † OpenCode and Claude Code both support MCP servers and skills (`SKILL.md`).
 - **Build:** Not before D4 and D5 are proven. Skills first (read a markdown file into context on demand), MCP second, every MCP tool going through the permission engine.
 - **Done:** An MCP tool cannot run without passing D4.

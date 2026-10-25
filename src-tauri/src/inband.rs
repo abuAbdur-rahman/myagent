@@ -150,10 +150,11 @@ fn find_close(buf: &str, name: &str) -> Option<(usize, usize)> {
             from = start + 1;
             continue;
         }
-        if let Some(tag) = decode(&buf[start..=end]) {
-            if tag.closing && tag.key == name {
-                return Some((start, end + 1));
-            }
+        if let Some(tag) = decode(&buf[start..=end])
+            && tag.closing
+            && tag.key == name
+        {
+            return Some((start, end + 1));
         }
         from = start + 1;
     }
@@ -224,12 +225,12 @@ impl DsmlScanner {
             return Taken::Need;
         };
         let start = usize::from(self.buf.starts_with('<'));
-        if let Some(next) = self.buf[start..].find('<').map(|i| i + start) {
-            if next < end {
-                let raw: String = self.buf[..next].to_string();
-                self.buf.drain(..next);
-                return Taken::Literal(raw);
-            }
+        if let Some(next) = self.buf[start..].find('<').map(|i| i + start)
+            && next < end
+        {
+            let raw: String = self.buf[..next].to_string();
+            self.buf.drain(..next);
+            return Taken::Literal(raw);
         }
         let raw: String = self.buf[..=end].to_string();
         self.buf.drain(..=end);

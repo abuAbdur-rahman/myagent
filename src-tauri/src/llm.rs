@@ -882,6 +882,20 @@ fn caps_cache() -> &'static Mutex<HashMap<String, CapsEntry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn models_endpoint_unsupported(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Upstream(message)
+            if ["400", "404", "405", "501"]
+                .iter()
+                .any(|code| message.starts_with(code))
+    )
+}
+
+fn should_fallback_to_ollama_tags(cloud: bool, error: &AppError) -> bool {
+    cloud && models_endpoint_unsupported(error)
+}
+
 async fn fetch_openai_caps(
     client: &reqwest::Client,
     base_url: &str,
@@ -959,7 +973,7 @@ async fn fetch_model_caps(
         Ok(_) if cloud => fetch_ollama_tags(client, key).await?,
         Ok(caps) => caps,
         Err(error) => {
-            if cloud {
+            if should_fallback_to_ollama_tags(cloud, &error) {
                 fetch_ollama_tags(client, key).await?
             } else if let Some((_, stale)) = caps_cache()
                 .lock()
@@ -1035,25 +1049,36 @@ pub async fn verify_provider(
 ) -> AppResult<usize> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
     let kind = connection_kind.as_deref();
+    let cloud = kind == Some("ollama-cloud");
     let key = read_key(&connection_id, kind)?;
-    if kind == Some("ollama-cloud") {
+    if cloud {
         let resp = client
-            .get("https://ollama.com/api/me")
+            .get("https://ollama.com/api/balance")
             .bearer_auth(&key)
             .send()
             .await?;
-        if !resp.status().is_success() {
-            return Err(AppError::Upstream(format!(
-                "HTTP {} — ollama.com rejected this key",
-                resp.status().as_u16()
-            )));
+        let status = resp.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(AppError::Upstream(format!(
+                    "HTTP {} — ollama.com rejected this key",
+                    status.as_u16()
+                )));
+            }
+            return Err(AppError::Upstream(error_body(resp).await));
         }
     }
     let caps = match fetch_openai_caps(&client, &base_url, &key, kind).await {
         Ok(caps) if !caps.is_empty() => caps,
-        Ok(_) if kind == Some("ollama-cloud") => fetch_ollama_tags(&client, &key).await?,
+        Ok(_) if cloud => fetch_ollama_tags(&client, &key).await?,
         Ok(caps) => caps,
-        Err(error) => return Err(error),
+        Err(error) => {
+            if should_fallback_to_ollama_tags(cloud, &error) {
+                fetch_ollama_tags(&client, &key).await?
+            } else {
+                return Err(error);
+            }
+        }
     };
     Ok(with_model_seeds(kind, caps).len())
 }
@@ -1457,14 +1482,14 @@ async fn log_decision(
 }
 
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
-    if name == "sandbox_run" {
-        if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
-            let segments = permissions::split_segments(command);
-            if !segments.is_empty() {
-                return segments;
-            }
-            return vec![command.trim().to_string()];
+    if name == "sandbox_run"
+        && let Some(command) = args.get("command").and_then(|v| v.as_str())
+    {
+        let segments = permissions::split_segments(command);
+        if !segments.is_empty() {
+            return segments;
         }
+        return vec![command.trim().to_string()];
     }
     if name.starts_with("sandbox_") {
         for key in ["path", "pattern"] {
@@ -1473,59 +1498,58 @@ fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
             }
         }
     }
-    if name == "run_powershell" {
-        if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
-            let segments = permissions::split_segments(command);
-            if !segments.is_empty() {
-                return segments;
-            }
-            return vec![command.to_string()];
+    if name == "run_powershell"
+        && let Some(command) = args.get("command").and_then(|v| v.as_str())
+    {
+        let segments = permissions::split_segments(command);
+        if !segments.is_empty() {
+            return segments;
         }
+        return vec![command.to_string()];
     }
-    if name == "web_fetch" {
-        if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
-            if let Ok(parsed) = reqwest::Url::parse(url.trim()) {
-                if let Some(host) = parsed.host_str() {
-                    let bare = host.trim_start_matches('[').trim_end_matches(']');
-                    return vec![bare.to_string()];
-                }
-            }
-            return vec![url.trim().to_string()];
+    if name == "web_fetch"
+        && let Some(url) = args.get("url").and_then(|v| v.as_str())
+    {
+        if let Ok(parsed) = reqwest::Url::parse(url.trim())
+            && let Some(host) = parsed.host_str()
+        {
+            let bare = host.trim_start_matches('[').trim_end_matches(']');
+            return vec![bare.to_string()];
         }
+        return vec![url.trim().to_string()];
     }
-    if name == "web_search" {
-        if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
-            return vec![query.trim().to_string()];
-        }
+    if name == "web_search"
+        && let Some(query) = args.get("query").and_then(|v| v.as_str())
+    {
+        return vec![query.trim().to_string()];
     }
-    if name == "research_run" {
-        if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
-            return vec![query.trim().to_string()];
-        }
+    if name == "research_run"
+        && let Some(query) = args.get("query").and_then(|v| v.as_str())
+    {
+        return vec![query.trim().to_string()];
     }
-    if name == "skill" {
-        if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
-            return vec![id.trim().to_string()];
-        }
+    if name == "skill"
+        && let Some(id) = args.get("id").and_then(|v| v.as_str())
+    {
+        return vec![id.trim().to_string()];
     }
-    if name == "describe_image" {
-        if let Some(index) = args.get("index").and_then(|v| v.as_u64()) {
-            return vec![format!("image#{index}")];
-        }
+    if name == "describe_image"
+        && let Some(index) = args.get("index").and_then(|v| v.as_u64())
+    {
+        return vec![format!("image#{index}")];
     }
-    if name == "read_document" {
-        if let Some(document) = args.get("name").and_then(|v| v.as_str()) {
-            return vec![document.trim().to_string()];
-        }
+    if name == "read_document"
+        && let Some(document) = args.get("name").and_then(|v| v.as_str())
+    {
+        return vec![document.trim().to_string()];
     }
-    if name == "update_memory" || name == "delete_memory" {
-        if let Some(id) = args
+    if (name == "update_memory" || name == "delete_memory")
+        && let Some(id) = args
             .get("id")
             .and_then(|v| v.as_str())
             .and_then(tools::canonical_memory_id)
-        {
-            return vec![id];
-        }
+    {
+        return vec![id];
     }
     vec![name.to_string()]
 }
@@ -2252,18 +2276,18 @@ impl ToolRunner for RealTools<'_> {
         } else {
             (None, false)
         };
-        if let Some(verdict) = &verdict {
-            if verdict.suggest_deny {
-                log_decision(
-                    self.app,
-                    self.req.conversation_id.as_deref(),
-                    &name,
-                    "screen(flag)",
-                    &format!("{} {:.3}", verdict.label, verdict.score),
-                    "screen",
-                )
-                .await;
-            }
+        if let Some(verdict) = &verdict
+            && verdict.suggest_deny
+        {
+            log_decision(
+                self.app,
+                self.req.conversation_id.as_deref(),
+                &name,
+                "screen(flag)",
+                &format!("{} {:.3}", verdict.label, verdict.score),
+                "screen",
+            )
+            .await;
         }
         if screen_failed {
             log_decision(
@@ -2633,15 +2657,15 @@ async fn run_agentic(
         .collect();
     history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
     let (removed, note) = route_vision(&mut history, req.vision_fallback_model.as_deref());
-    if removed > 0 {
-        if let Some(note) = note {
-            let at = history
-                .iter()
-                .position(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            history.insert(at, serde_json::json!({"role": "system", "content": note}));
-        }
+    if removed > 0
+        && let Some(note) = note
+    {
+        let at = history
+            .iter()
+            .position(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        history.insert(at, serde_json::json!({"role": "system", "content": note}));
     }
     let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
@@ -2681,11 +2705,11 @@ async fn run_agentic(
     let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
         .await
         .unwrap_or_default();
-    if !mcp_tools.is_empty() {
-        if let Some(specs) = model.tool_specs.as_array_mut() {
-            for def in &mcp_tools {
-                specs.push(crate::mcp::spec_for(def));
-            }
+    if !mcp_tools.is_empty()
+        && let Some(specs) = model.tool_specs.as_array_mut()
+    {
+        for def in &mcp_tools {
+            specs.push(crate::mcp::spec_for(def));
         }
     }
     let mut runner = RealTools {
@@ -2916,6 +2940,29 @@ mod tests {
         let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
         assert_eq!(ids, vec!["llama3.2:latest", "qwen3:8b"]);
         assert!(caps.iter().all(|caps| caps.context_length.is_none()));
+    }
+
+    #[test]
+    fn ollama_cloud_falls_back_only_for_unsupported_model_endpoints() {
+        for message in [
+            "400 Bad Request",
+            "404 Not Found",
+            "405 Method Not Allowed",
+            "501",
+        ] {
+            assert!(should_fallback_to_ollama_tags(
+                true,
+                &AppError::Upstream(message.to_string())
+            ));
+        }
+        assert!(!should_fallback_to_ollama_tags(
+            true,
+            &AppError::Upstream("401 Unauthorized".to_string())
+        ));
+        assert!(!should_fallback_to_ollama_tags(
+            false,
+            &AppError::Upstream("404 Not Found".to_string())
+        ));
     }
 
     #[test]
@@ -3377,10 +3424,10 @@ mod tests {
                     if trimmed.is_empty() {
                         break;
                     }
-                    if let Some((name, value)) = trimmed.split_once(':') {
-                        if name.eq_ignore_ascii_case("Content-Length") {
-                            content_length = value.trim().parse().unwrap_or(0);
-                        }
+                    if let Some((name, value)) = trimmed.split_once(':')
+                        && name.eq_ignore_ascii_case("Content-Length")
+                    {
+                        content_length = value.trim().parse().unwrap_or(0);
                     }
                 }
                 let mut body_buf = vec![0u8; content_length];
@@ -3408,12 +3455,11 @@ mod tests {
         let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         let channel = Channel::new(move |body: tauri::ipc::InvokeResponseBody| {
-            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
-                    if let Ok(mut guard) = sink.lock() {
-                        guard.push(value);
-                    }
-                }
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body
+                && let Ok(value) = serde_json::from_str::<serde_json::Value>(&json)
+                && let Ok(mut guard) = sink.lock()
+            {
+                guard.push(value);
             }
             Ok(())
         });
@@ -3465,10 +3511,10 @@ mod tests {
                 if trimmed.is_empty() {
                     break;
                 }
-                if let Some((name, value)) = trimmed.split_once(':') {
-                    if name.eq_ignore_ascii_case("Content-Length") {
-                        content_length = value.trim().parse().unwrap_or(0);
-                    }
+                if let Some((name, value)) = trimmed.split_once(':')
+                    && name.eq_ignore_ascii_case("Content-Length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
                 }
             }
             let mut request_body = vec![0u8; content_length];

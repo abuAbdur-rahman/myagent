@@ -281,6 +281,7 @@ export interface McpServerRow {
   project_id: string | null;
   name: string;
   transport: string;
+  auth_type: string;
   cmd: string | null;
   url: string | null;
   allow_tools: string | null;
@@ -289,6 +290,7 @@ export interface McpServerRow {
   approval_mode: string;
   timeout_ms: number | null;
   enabled: boolean;
+  has_token: boolean;
 }
 
 export function mcpList(projectId: string | null) {
@@ -322,20 +324,22 @@ export function mcpAdd(
   projectId: string | null,
   name: string,
   transport: string,
+  authType: string,
   cmd: string | null,
   url: string | null,
 ) {
-  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, cmd, url });
+  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, authType, cmd, url });
 }
 
 export function mcpUpdate(
   id: string,
   name: string,
   transport: string,
+  authType: string,
   cmd: string | null,
   url: string | null,
 ) {
-  return invoke<McpServerRow>("mcp_update", { id, name, transport, cmd, url });
+  return invoke<McpServerRow>("mcp_update", { id, name, transport, authType, cmd, url });
 }
 
 export function mcpSetPolicy(id: string, ask: string[], allow: string[], deny: string[]) {
@@ -346,6 +350,26 @@ export function mcpSetApproval(id: string, mode: string) {
   return invoke<McpServerRow>("mcp_set_approval", { id, mode });
 }
 
+export function mcpSetToken(id: string, token: string) {
+  return invoke<McpServerRow>("mcp_set_token", { id, token });
+}
+
+export function mcpDeleteToken(id: string) {
+  return invoke<McpServerRow>("mcp_delete_token", { id });
+}
+
+export function mcpBeginAuth(id: string) {
+  return invoke<McpServerRow>("mcp_begin_auth", { id });
+}
+
+export function mcpCancelAuth(id: string) {
+  return invoke<void>("mcp_cancel_auth", { id });
+}
+
+export function mcpDisconnect(id: string) {
+  return invoke<McpServerRow>("mcp_disconnect", { id });
+}
+
 export function mcpStatus() {
   return invoke<McpProbe[]>("mcp_status");
 }
@@ -354,8 +378,13 @@ export function mcpProbe(id: string) {
   return invoke<McpProbe>("mcp_probe", { id });
 }
 
-export function mcpTest(transport: string, cmd: string | null, url: string | null) {
-  return invoke<McpProbe>("mcp_test", { transport, cmd, url });
+export function mcpTest(
+  transport: string,
+  authType: string,
+  cmd: string | null,
+  url: string | null,
+) {
+  return invoke<McpProbe>("mcp_test", { transport, authType, cmd, url });
 }
 
 export function mcpRemove(id: string) {
