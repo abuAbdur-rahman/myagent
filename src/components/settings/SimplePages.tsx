@@ -2519,6 +2519,7 @@ export function ModelsPage() {
         activeConnectionId={activeConnectionId}
         busy={busy}
         onRefresh={async () => {
+          api.clearModelCache();
           await refreshModels();
           await reload();
         }}
@@ -3001,7 +3002,7 @@ export function MemoryPage() {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <KindChip kind={item.kind} />
                       {item.trust === "untrusted" && (
-                        <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                        <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[11px] font-medium text-warn">
                           Web or document
                         </span>
                       )}

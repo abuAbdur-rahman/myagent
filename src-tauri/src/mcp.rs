@@ -1,9 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
+use rmcp::ClientHandler;
 use rmcp::model::{CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion};
-use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RoleClient, RunningService};
+use rmcp::service::{
+    ClientLifecycleMode, ClientServiceExt, NotificationContext, RoleClient, RunningService,
+};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
 use serde_json::{Value, json};
@@ -17,6 +21,19 @@ const MCP_PREFIX: &str = "mcp__";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const MAX_MCP_TEXT_BYTES: usize = 64 * 1024;
 const MAX_TOOL_PAGES: usize = 64;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+const TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Clone, Default)]
+struct ToolChangeHandler {
+    dirty: Arc<AtomicBool>,
+}
+
+impl ClientHandler for ToolChangeHandler {
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+}
 
 pub fn mcp_namespace(server: &str) -> String {
     server
@@ -228,6 +245,34 @@ mod tests {
     }
 
     #[test]
+    fn rmcp_non_text_results_are_described() {
+        let result = CallToolResult::success(vec![
+            rmcp::model::ContentBlock::image("abc", "image/png"),
+            rmcp::model::ContentBlock::audio("abc", "audio/wav"),
+            rmcp::model::ContentBlock::embedded_text("file:///a", "body"),
+            rmcp::model::ContentBlock::resource_link(rmcp::model::Resource::new(
+                "https://example.com/r",
+                "example",
+            )),
+        ]);
+        let (is_error, text) = rmcp_result_text(&result);
+        assert!(!is_error);
+        assert!(text.contains("image/png"));
+        assert!(text.contains("audio/wav"));
+        assert!(text.contains("file:///a"));
+        assert!(text.contains("body"));
+        assert!(text.contains("https://example.com/r"));
+    }
+
+    #[test]
+    fn rmcp_structured_content_is_the_fallback() {
+        let mut result = CallToolResult::success(Vec::new());
+        result.structured_content = Some(json!({"answer": 42}));
+        let (_, text) = rmcp_result_text(&result);
+        assert!(text.contains("\"answer\":42"));
+    }
+
+    #[test]
     fn validate_target_accepts_streamable_http() {
         assert!(validate_target("http", None, Some("https://example.com/mcp")).is_ok());
         assert!(validate_target("http", None, Some("http://127.0.0.1:8080/mcp")).is_ok());
@@ -410,6 +455,45 @@ mod tests {
         assert_eq!(
             parse_tool_list(Some("[\"read\"]".to_string()), "allow_tools"),
             Some(vec!["read".to_string()])
+        );
+    }
+
+    #[test]
+    fn legacy_sse_parser_reads_endpoint_and_messages() {
+        let mut parser = LegacySseParser::default();
+        let first = parser.feed(b"event: endpoint\ndata: /messages?sessionId=abc\n\n");
+        assert_eq!(
+            first,
+            vec![LegacySseEvent::Endpoint(
+                "/messages?sessionId=abc".to_string()
+            )]
+        );
+        let second = parser.feed(
+            b": keepalive\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n",
+        );
+        assert_eq!(
+            second,
+            vec![LegacySseEvent::Message(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {},
+            }))]
+        );
+    }
+
+    #[test]
+    fn legacy_sse_parser_handles_split_chunks() {
+        let mut parser = LegacySseParser::default();
+        let mut events = Vec::new();
+        for chunk in b"event: message\ndata: {\"id\":2,\"result\":{\"tools\":[]}}\n\n".chunks(3) {
+            events.extend(parser.feed(chunk));
+        }
+        assert_eq!(
+            events,
+            vec![LegacySseEvent::Message(json!({
+                "id": 2,
+                "result": {"tools": []},
+            }))]
         );
     }
 
@@ -1023,21 +1107,31 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
     if config.transport == "stdio" && auth_token.is_some() {
         return Err("stdio servers do not use authorization".to_string());
     }
-    let transport = if config.transport == "sse" {
+    let (transport, tools_dirty) = if config.transport == "sse" {
         let endpoint = config.url.as_deref().unwrap_or("");
-        validate_mcp_url(endpoint).map_err(|e| format!("mcp url rejected: {e}"))?;
-        McpTransport::LegacySse {
-            url: endpoint.to_string(),
-            auth_token,
-        }
+        let timeout = Duration::from_millis(
+            config
+                .timeout_ms
+                .unwrap_or(DEFAULT_TIMEOUT_MS)
+                .clamp(1000, 300_000),
+        );
+        (
+            McpTransport::LegacySse(
+                connect_legacy_sse(endpoint, auth_token.as_deref(), timeout).await?,
+            ),
+            None,
+        )
     } else {
-        McpTransport::Rmcp(connect_rmcp(config, auth_token.as_deref()).await?)
+        let (service, dirty) = connect_rmcp(config, auth_token.as_deref()).await?;
+        (McpTransport::Rmcp(service), Some(dirty))
     };
     let mut session = Session {
         config: config.clone(),
         transport,
         tools: Vec::new(),
         timeouts: 0,
+        tools_dirty,
+        tools_checked: Instant::now(),
     };
     if let Err(error) = initialize_session(&mut session).await {
         if config.auth_type == "oauth" && looks_like_auth_error(&error) {
@@ -1051,10 +1145,20 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
 async fn connect_rmcp(
     config: &McpServerConfig,
     auth_token: Option<&str>,
-) -> Result<RunningService<RoleClient, ()>, String> {
+) -> Result<
+    (
+        RunningService<RoleClient, ToolChangeHandler>,
+        Arc<AtomicBool>,
+    ),
+    String,
+> {
     let lifecycle = ClientLifecycleMode::Auto {
         preferred_versions: ProtocolVersion::KNOWN_VERSIONS.to_vec(),
-        legacy_version: Some(ProtocolVersion::V_2024_11_05),
+        legacy_version: Some(ProtocolVersion::LATEST_WITH_INITIALIZE),
+    };
+    let dirty = Arc::new(AtomicBool::new(false));
+    let handler = ToolChangeHandler {
+        dirty: dirty.clone(),
     };
     if config.transport == "http" {
         let endpoint = config.url.as_deref().unwrap_or("");
@@ -1063,13 +1167,15 @@ async fn connect_rmcp(
         if let Some(token) = auth_token {
             http = http.auth_header(token);
         }
-        return ()
-            .serve_with_lifecycle(
-                StreamableHttpClientTransport::from_config(http),
-                lifecycle,
-            )
-            .await
-            .map_err(|e| e.to_string());
+        let service = tokio::time::timeout(
+            STARTUP_TIMEOUT,
+            handler
+                .serve_with_lifecycle(StreamableHttpClientTransport::from_config(http), lifecycle),
+        )
+        .await
+        .map_err(|_| "initialize timeout".to_string())?
+        .map_err(|e| e.to_string())?;
+        return Ok((service, dirty));
     }
     let cmd = config.cmd.as_deref().unwrap_or("").trim();
     if cmd.is_empty() {
@@ -1087,9 +1193,14 @@ async fn connect_rmcp(
                 .kill_on_drop(true);
         }))
         .map_err(|e| format!("spawn failed: {e}"))?;
-    ().serve_with_lifecycle(transport, lifecycle)
-        .await
-        .map_err(|e| e.to_string())
+    let service = tokio::time::timeout(
+        STARTUP_TIMEOUT,
+        handler.serve_with_lifecycle(transport, lifecycle),
+    )
+    .await
+    .map_err(|_| "initialize timeout".to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok((service, dirty))
 }
 
 struct Session {
@@ -1097,14 +1208,74 @@ struct Session {
     transport: McpTransport,
     tools: Vec<McpToolDef>,
     timeouts: u32,
+    tools_dirty: Option<Arc<AtomicBool>>,
+    tools_checked: Instant,
 }
 
 enum McpTransport {
-    Rmcp(RunningService<RoleClient, ()>),
-    LegacySse {
-        url: String,
-        auth_token: Option<String>,
-    },
+    Rmcp(RunningService<RoleClient, ToolChangeHandler>),
+    LegacySse(LegacySseSession),
+}
+
+struct LegacySseSession {
+    client: reqwest::Client,
+    post_url: String,
+    auth_token: Option<String>,
+    events: tokio::sync::mpsc::UnboundedReceiver<Result<Value, String>>,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for LegacySseSession {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum LegacySseEvent {
+    Endpoint(String),
+    Message(Value),
+}
+
+#[derive(Default)]
+struct LegacySseParser {
+    buf: Vec<u8>,
+    event: String,
+    data: Vec<String>,
+}
+
+impl LegacySseParser {
+    fn feed(&mut self, bytes: &[u8]) -> Vec<LegacySseEvent> {
+        self.buf.extend_from_slice(bytes);
+        let mut out = Vec::new();
+        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+            let raw: Vec<u8> = self.buf.drain(..=pos).collect();
+            let mut line = String::from_utf8_lossy(&raw).into_owned();
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            if line.is_empty() {
+                if !self.data.is_empty() {
+                    let payload = std::mem::take(&mut self.data).join("\n");
+                    if self.event == "endpoint" {
+                        out.push(LegacySseEvent::Endpoint(payload));
+                    } else if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+                        out.push(LegacySseEvent::Message(value));
+                    }
+                }
+                self.event.clear();
+            } else if line.starts_with(':') {
+                continue;
+            } else if let Some(rest) = line.strip_prefix("event:") {
+                self.event = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                self.data
+                    .push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
+            }
+        }
+        out
+    }
 }
 
 impl Session {
@@ -1115,6 +1286,24 @@ impl Session {
                 .unwrap_or(DEFAULT_TIMEOUT_MS)
                 .clamp(1000, 300_000),
         )
+    }
+
+    fn is_rmcp(&self) -> bool {
+        matches!(self.transport, McpTransport::Rmcp(_))
+    }
+
+    fn should_refresh_tools(&self) -> bool {
+        if self.tools.is_empty() {
+            return true;
+        }
+        if !self.is_rmcp() {
+            return false;
+        }
+        let dirty = self
+            .tools_dirty
+            .as_ref()
+            .is_some_and(|flag| flag.swap(false, Ordering::Relaxed));
+        dirty || self.tools_checked.elapsed() >= TOOL_REFRESH_INTERVAL
     }
 }
 
@@ -1326,7 +1515,7 @@ fn rmcp_tool_def(server: &str, tool: rmcp::model::Tool) -> McpToolDef {
 }
 
 async fn list_rmcp_tools(
-    client: &RunningService<RoleClient, ()>,
+    client: &RunningService<RoleClient, ToolChangeHandler>,
     server: &str,
     timeout: Duration,
 ) -> Result<Vec<McpToolDef>, String> {
@@ -1359,14 +1548,35 @@ async fn list_rmcp_tools(
 
 fn rmcp_result_text(result: &CallToolResult) -> (bool, String) {
     let is_error = result.is_error.unwrap_or(false);
-    let text = result
-        .content
-        .iter()
-        .filter_map(|block| block.as_text())
-        .map(|text| text.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    (is_error, text)
+    let mut parts = Vec::new();
+    for block in &result.content {
+        if let Some(text) = block.as_text() {
+            parts.push(text.text.clone());
+        } else if let Some(image) = block.as_image() {
+            parts.push(format!("[image omitted: {}]", image.mime_type));
+        } else if let Some(audio) = block.as_audio() {
+            parts.push(format!("[audio omitted: {}]", audio.mime_type));
+        } else if let Some(resource) = block.as_resource() {
+            match &resource.resource {
+                rmcp::model::ResourceContents::TextResourceContents { uri, text, .. } => {
+                    parts.push(format!("[resource: {uri}]\n{text}"));
+                }
+                rmcp::model::ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
+                    let kind = mime_type.as_deref().unwrap_or("application/octet-stream");
+                    parts.push(format!("[resource: {uri} ({kind})]"));
+                }
+                _ => parts.push("[resource: unsupported content]".to_string()),
+            }
+        } else if let Some(link) = block.as_resource_link() {
+            parts.push(format!("[resource: {}] {}", link.uri, link.name));
+        }
+    }
+    if parts.is_empty()
+        && let Some(structured) = &result.structured_content
+    {
+        parts.push(serde_json::to_string(structured).unwrap_or_else(|_| structured.to_string()));
+    }
+    (is_error, parts.join("\n"))
 }
 
 fn initialize_body(id: u64) -> Value {
@@ -1387,22 +1597,29 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
     let name = session.config.name.clone();
     let tools = match &mut session.transport {
         McpTransport::Rmcp(client) => list_rmcp_tools(client, &name, timeout).await?,
-        McpTransport::LegacySse { url, auth_token } => {
-            let _ = sse_request(url, auth_token.as_deref(), &initialize_body(1), timeout)
+        McpTransport::LegacySse(sse) => {
+            let _ = sse
+                .request(&initialize_body(1), timeout)
                 .await
                 .map_err(|failure| failure.message)?;
-            let listed = sse_request(
-                url,
-                auth_token.as_deref(),
-                &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+            sse.notify(
+                &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
                 timeout,
             )
             .await
             .map_err(|failure| failure.message)?;
+            let listed = sse
+                .request(
+                    &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+                    timeout,
+                )
+                .await
+                .map_err(|failure| failure.message)?;
             parse_tools(&name, &listed)
         }
     };
     session.tools = tools;
+    session.tools_checked = Instant::now();
     Ok(())
 }
 
@@ -1488,57 +1705,197 @@ impl CallFailure {
     }
 }
 
-async fn sse_request(
+async fn connect_legacy_sse(
     url: &str,
     auth_token: Option<&str>,
-    request: &Value,
     timeout: Duration,
-) -> Result<Value, CallFailure> {
-    validate_mcp_url(url).map_err(|e| CallFailure::transport(format!("mcp url rejected: {e}")))?;
+) -> Result<LegacySseSession, String> {
+    validate_mcp_url(url).map_err(|e| format!("mcp url rejected: {e}"))?;
     let client = reqwest::Client::new();
-    let mut builder = client.post(url).json(request);
+    let mut builder = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache");
     if let Some(token) = auth_token {
         builder = builder.bearer_auth(token);
     }
     let response = tokio::time::timeout(timeout, builder.send())
         .await
-        .map_err(|_| CallFailure::timeout())?
-        .map_err(|e| CallFailure::transport(e.to_string()))?;
+        .map_err(|_| "timeout".to_string())?
+        .map_err(|e| e.to_string())?;
     if !response.status().is_success() {
-        return Err(CallFailure::transport(format!(
-            "HTTP {}",
-            response.status()
-        )));
+        let status = response.status();
+        let body = read_body_capped(response, timeout)
+            .await
+            .unwrap_or_default();
+        let detail = body.trim();
+        return Err(if detail.is_empty() {
+            format!("HTTP {status}")
+        } else {
+            format!("HTTP {status}: {detail}")
+        });
     }
-    let text = read_body_capped(response, timeout)
+    let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let (endpoint_tx, endpoint_rx) = tokio::sync::oneshot::channel();
+    let reader = tokio::spawn(run_legacy_stream(response, events_tx, endpoint_tx));
+    let endpoint = tokio::time::timeout(timeout, endpoint_rx)
         .await
-        .map_err(CallFailure::transport)?;
-    let wanted = request.get("id").and_then(|v| v.as_u64());
-    for chunk in text.split("data:") {
-        let trimmed = chunk.trim();
-        if trimmed.is_empty() || trimmed == "[DONE]" {
-            continue;
+        .map_err(|_| "timeout waiting for legacy SSE endpoint".to_string())?
+        .map_err(|_| "legacy SSE stream closed before endpoint".to_string())??;
+    let base = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+    let post_url = base
+        .join(&endpoint)
+        .map_err(|e| format!("legacy SSE endpoint rejected: {e}"))?;
+    validate_mcp_url(post_url.as_str())
+        .map_err(|e| format!("legacy SSE endpoint rejected: {e}"))?;
+    Ok(LegacySseSession {
+        client,
+        post_url: post_url.to_string(),
+        auth_token: auth_token.map(str::to_string),
+        events,
+        reader,
+    })
+}
+
+async fn run_legacy_stream(
+    mut response: reqwest::Response,
+    events: tokio::sync::mpsc::UnboundedSender<Result<Value, String>>,
+    endpoint: tokio::sync::oneshot::Sender<Result<String, String>>,
+) {
+    let mut parser = LegacySseParser::default();
+    let mut endpoint = Some(endpoint);
+    loop {
+        match response.chunk().await {
+            Ok(Some(bytes)) => {
+                for event in parser.feed(&bytes) {
+                    match event {
+                        LegacySseEvent::Endpoint(url) => {
+                            if let Some(sender) = endpoint.take() {
+                                let _ = sender.send(Ok(url));
+                            }
+                        }
+                        LegacySseEvent::Message(value) => {
+                            let _ = events.send(Ok(value));
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                let message = "legacy SSE stream closed".to_string();
+                if let Some(sender) = endpoint.take() {
+                    let _ = sender.send(Err(message.clone()));
+                }
+                let _ = events.send(Err(message));
+                return;
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if let Some(sender) = endpoint.take() {
+                    let _ = sender.send(Err(message.clone()));
+                }
+                let _ = events.send(Err(message));
+                return;
+            }
         }
-        let end = trimmed
-            .find("\n\n")
-            .or_else(|| trimmed.find('\n'))
-            .unwrap_or(trimmed.len());
-        let Ok(value) = serde_json::from_str::<Value>(trimmed[..end].trim()) else {
-            continue;
-        };
-        if wanted.is_some_and(|id| value.get("id").and_then(|v| v.as_u64()) != Some(id)) {
-            continue;
-        }
-        if let Some(error) = value.get("error") {
-            let message = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown server error");
-            return Err(CallFailure::tool(message.to_string()));
-        }
-        return Ok(value);
     }
-    Err(CallFailure::transport("no JSON-RPC response".to_string()))
+}
+
+fn legacy_response(value: Value) -> Result<Value, CallFailure> {
+    if let Some(error) = value.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown server error");
+        return Err(CallFailure::tool(message.to_string()));
+    }
+    Ok(value)
+}
+
+impl LegacySseSession {
+    async fn request(&mut self, request: &Value, timeout: Duration) -> Result<Value, CallFailure> {
+        let mut builder = self.client.post(&self.post_url).json(request);
+        if let Some(token) = self.auth_token.as_deref() {
+            builder = builder.bearer_auth(token);
+        }
+        let response = tokio::time::timeout(timeout, builder.send())
+            .await
+            .map_err(|_| CallFailure::timeout())?
+            .map_err(|e| CallFailure::transport(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = read_body_capped(response, timeout)
+                .await
+                .unwrap_or_default();
+            let detail = body.trim();
+            return Err(CallFailure::transport(if detail.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {detail}")
+            }));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if content_type.contains("application/json") {
+            let text = read_body_capped(response, timeout)
+                .await
+                .map_err(CallFailure::transport)?;
+            if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                return legacy_response(value);
+            }
+        }
+        let wanted = request.get("id").and_then(|v| v.as_u64());
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            let event = tokio::select! {
+                event = self.events.recv() => event,
+                _ = &mut deadline => return Err(CallFailure::timeout()),
+            };
+            match event {
+                Some(Ok(value)) => {
+                    if wanted.is_some_and(|id| value.get("id").and_then(|v| v.as_u64()) != Some(id))
+                    {
+                        continue;
+                    }
+                    return legacy_response(value);
+                }
+                Some(Err(message)) => return Err(CallFailure::transport(message)),
+                None => {
+                    return Err(CallFailure::transport(
+                        "legacy SSE stream closed".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn notify(&self, notification: &Value, timeout: Duration) -> Result<(), CallFailure> {
+        let mut builder = self.client.post(&self.post_url).json(notification);
+        if let Some(token) = self.auth_token.as_deref() {
+            builder = builder.bearer_auth(token);
+        }
+        let response = tokio::time::timeout(timeout, builder.send())
+            .await
+            .map_err(|_| CallFailure::timeout())?
+            .map_err(|e| CallFailure::transport(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = read_body_capped(response, timeout)
+                .await
+                .unwrap_or_default();
+            let detail = body.trim();
+            return Err(CallFailure::transport(if detail.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {detail}")
+            }));
+        }
+        Ok(())
+    }
 }
 
 async fn call_on_session(
@@ -1559,17 +1916,16 @@ async fn call_on_session(
                 Ok(Ok(result)) => Ok(rmcp_result_text(&result)),
             }
         }
-        McpTransport::LegacySse { url, auth_token } => sse_request(
-            url,
-            auth_token.as_deref(),
-            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
-            timeout,
-        )
-        .await
-        .map(|value| {
-            let result = value.get("result").cloned().unwrap_or(Value::Null);
-            result_text(&result)
-        }),
+        McpTransport::LegacySse(sse) => sse
+            .request(
+                &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}),
+                timeout,
+            )
+            .await
+            .map(|value| {
+                let result = value.get("result").cloned().unwrap_or(Value::Null);
+                result_text(&result)
+            }),
     };
     match result {
         Ok((is_error, text)) => {
@@ -1677,7 +2033,7 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
             }
         };
         let mut session = handle.lock().await;
-        if session.tools.is_empty() {
+        if session.should_refresh_tools() {
             if let Err(error) = initialize_session(&mut session).await {
                 eprintln!("mcp: initialize {} failed: {error}", session.config.name);
                 cache_probe(&state, probe_failed(&config.id, error));

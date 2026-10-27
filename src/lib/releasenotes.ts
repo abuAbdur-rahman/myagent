@@ -22,6 +22,54 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.6.0",
+    date: "2026-10-26",
+    summary:
+      "Online MCP servers now work without a bridge: Streamable HTTP, OAuth 2.1 with a loopback sign-in, bearer tokens in the Windows Credential Manager, and a tool list that stays current. This release also rotates up to ten provider keys on quota errors, caches model lists for ten hours, retries AgentRouter's gateway block with a clear message, and turns first-run setup into four short steps.",
+    changes: [
+      {
+        kind: "new",
+        text: "MCP servers can use Streamable HTTP as well as stdio and the legacy SSE transport. Initialize, protocol-version and session headers, initialized notifications, JSON or SSE responses, and the legacy handshake are handled by the official Rust SDK.",
+      },
+      {
+        kind: "new",
+        text: "OAuth 2.1 servers sign in through protected-resource discovery, authorization-server metadata, dynamic client registration, PKCE S256 and a 127.0.0.1 loopback callback. Tokens refresh and disconnect locally; the custom myagent:// callback is deferred.",
+      },
+      {
+        kind: "new",
+        text: "Bearer-token servers use a write-only token field. Bearer and OAuth credentials live in the Windows Credential Manager, chunked when needed, and never enter the webview or SQLite.",
+      },
+      {
+        kind: "improved",
+        text: "Connected MCP servers honour tools/list_changed and re-list after five minutes. Non-text tool results are described instead of becoming empty, and a handshake now has a 20-second deadline so a dead server cannot block the first send.",
+      },
+      {
+        kind: "new",
+        text: "A provider connection can hold up to ten keys. A quota or billing rejection skips to the next key and cools the rejected key for ten minutes; plain rate limits keep the existing backoff. Providers lists each key, shows a cooling key, and can remove one or all keys.",
+      },
+      {
+        kind: "improved",
+        text: "AgentRouter's content-blocked gateway response is retried twice and then reported as an AgentRouter moderation block, not a model decline. The error names the gateway and suggests rephrasing or starting a new chat.",
+      },
+      {
+        kind: "improved",
+        text: "Model lists are cached for ten hours in the backend and in the picker, so reopening the picker does not wait on every provider. Refresh on Models, saving or deleting a provider, and a successful provider test clear the cache.",
+      },
+      {
+        kind: "improved",
+        text: "First-run onboarding is four steps: welcome and display name, provider, model, and search/suggestions. A failed first model check keeps the provider row and explains the key, base URL or network error so setup can be retried.",
+      },
+      {
+        kind: "improved",
+        text: "Ollama Cloud verification uses the documented /api/balance bearer check, and model listing falls back to /api/tags when /v1/models is unavailable.",
+      },
+      {
+        kind: "fixed",
+        text: "The hold-to-talk mic sits beside Send instead of at the far left of the composer toolbar.",
+      },
+    ],
+  },
+  {
     version: "0.5.1",
     date: "2026-10-24",
     summary:

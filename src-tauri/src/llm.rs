@@ -18,6 +18,21 @@ use crate::state::{PendingApproval, StreamState};
 use crate::tools;
 use crate::vault;
 
+#[derive(Clone, Copy)]
+pub(crate) struct ProviderRoute<'a> {
+    pub kind: Option<&'a str>,
+    pub connection_id: Option<&'a str>,
+}
+
+impl<'a> ProviderRoute<'a> {
+    pub(crate) fn new(kind: Option<&'a str>, connection_id: Option<&'a str>) -> Self {
+        Self {
+            kind,
+            connection_id,
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
@@ -356,6 +371,7 @@ pub(crate) struct TextCompletion<'a> {
     pub user: &'a str,
     pub cancel: &'a Notify,
     pub connection_kind: Option<&'a str>,
+    pub connection_id: Option<&'a str>,
 }
 
 pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<String> {
@@ -368,6 +384,7 @@ pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<Stri
         user,
         cancel,
         connection_kind,
+        connection_id,
     } = request;
     let history = vec![
         serde_json::json!({ "role": "system", "content": system }),
@@ -382,6 +399,7 @@ pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<Stri
             history: &history,
             cancel,
             kind: connection_kind,
+            connection_id,
             max_output_tokens: None,
         })
         .await;
@@ -400,7 +418,7 @@ pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<Stri
             &body,
             cancel,
             None,
-            connection_kind,
+            ProviderRoute::new(connection_kind, connection_id),
         ) => resp,
         _ = cancel.notified() => return Err(AppError::Cancelled),
     };
@@ -416,6 +434,7 @@ pub(crate) async fn complete_text(request: TextCompletion<'_>) -> AppResult<Stri
                 history: &history,
                 cancel,
                 kind: connection_kind,
+                connection_id,
                 max_output_tokens: None,
             })
             .await;
@@ -441,6 +460,7 @@ async fn post_responses_text(request: ResponsesText<'_>) -> AppResult<String> {
         history,
         cancel,
         kind,
+        connection_id,
         max_output_tokens,
     } = request;
     let mut body = responses::body(model, history, None, None, false);
@@ -456,7 +476,7 @@ async fn post_responses_text(request: ResponsesText<'_>) -> AppResult<String> {
             &body,
             cancel,
             None,
-            kind,
+            ProviderRoute::new(kind, connection_id),
         ) => resp?,
         _ = cancel.notified() => return Err(AppError::Cancelled),
     };
@@ -493,6 +513,7 @@ struct ResponsesText<'a> {
     history: &'a [serde_json::Value],
     cancel: &'a Notify,
     kind: Option<&'a str>,
+    connection_id: Option<&'a str>,
     max_output_tokens: Option<u32>,
 }
 
@@ -619,11 +640,18 @@ fn content_blocked_request_id(message: &str) -> Option<String> {
 fn describe_content_blocked(message: &str) -> String {
     match content_blocked_request_id(message) {
         Some(id) => format!(
-            "DeepSeek declined the prompt (content-blocked, request {id}). Rephrase the first message in plain English and retry."
+            "AgentRouter blocked the request (content-blocked, request {id}). This is the gateway's moderation filter; rephrase the message or start a new chat."
         ),
-        None => "DeepSeek declined the prompt (content-blocked). Rephrase the first message in plain English and retry."
+        None => "AgentRouter blocked the request (content-blocked). This is the gateway's moderation filter; rephrase the message or start a new chat."
             .to_string(),
     }
+}
+
+const CONTENT_BLOCKED_RETRIES: u32 = 2;
+const CONTENT_BLOCKED_BACKOFF_MS: u64 = if cfg!(test) { 10 } else { 1_500 };
+
+fn content_blocked_backoff(retry: u32) -> Duration {
+    Duration::from_millis(CONTENT_BLOCKED_BACKOFF_MS * 2u64.pow(retry.saturating_sub(1).min(3)))
 }
 
 fn replace_unprefixed(text: &str, needle: &str, prefix: &str, replacement: &str) -> String {
@@ -873,7 +901,7 @@ fn parse_models_caps(value: &serde_json::Value) -> Vec<ModelCaps> {
     caps
 }
 
-const CAPS_TTL: Duration = Duration::from_secs(86_400);
+const CAPS_TTL: Duration = Duration::from_secs(10 * 60 * 60);
 
 type CapsEntry = (Instant, Vec<ModelCaps>);
 
@@ -995,9 +1023,15 @@ async fn fetch_model_caps(
 }
 
 fn read_key(connection_id: &str, kind: Option<&str>) -> AppResult<String> {
-    match vault::get_api_key(connection_id) {
-        Ok(key) => Ok(key),
-        Err(_) if kind == Some("ollama") => Ok(String::new()),
+    match vault::first_available_provider_key(connection_id) {
+        Ok(Some(key)) => Ok(key),
+        Ok(None) if kind == Some("ollama") => Ok(String::new()),
+        Ok(None) => match vault::earliest_provider_key_cooldown(connection_id)? {
+            Some(secs) => Err(AppError::Upstream(format!(
+                "all provider keys are cooling down; retry in {secs}s"
+            ))),
+            None => Err(AppError::Vault("no API key stored".to_string())),
+        },
         Err(error) => Err(error),
     }
 }
@@ -1154,6 +1188,7 @@ pub async fn summarize(
             history: &history,
             cancel: &cancel,
             kind: req.connection_kind.as_deref(),
+            connection_id: Some(&req.connection_id),
             max_output_tokens: Some(500),
         })
         .await?;
@@ -1166,7 +1201,7 @@ pub async fn summarize(
         &body,
         &cancel,
         None,
-        req.connection_kind.as_deref(),
+        ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
     .await;
     let resp = match resp {
@@ -1181,6 +1216,7 @@ pub async fn summarize(
                 history: &history,
                 cancel: &cancel,
                 kind: req.connection_kind.as_deref(),
+                connection_id: Some(&req.connection_id),
                 max_output_tokens: Some(500),
             })
             .await?;
@@ -1263,6 +1299,7 @@ pub async fn suggest_title(
             history: &history,
             cancel: &cancel,
             kind: req.connection_kind.as_deref(),
+            connection_id: Some(&req.connection_id),
             max_output_tokens: Some(2048),
         })
         .await?;
@@ -1288,7 +1325,7 @@ pub async fn suggest_title(
         &body,
         &cancel,
         None,
-        req.connection_kind.as_deref(),
+        ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
     .await;
     let resp = match resp {
@@ -1303,6 +1340,7 @@ pub async fn suggest_title(
                 history: &history,
                 cancel: &cancel,
                 kind: req.connection_kind.as_deref(),
+                connection_id: Some(&req.connection_id),
                 max_output_tokens: Some(2048),
             })
             .await?;
@@ -1355,9 +1393,20 @@ pub async fn chat_stream(
 }
 
 const MAX_ATTEMPTS: u32 = 10;
+const KEY_COOLDOWN_SECS: u64 = 10 * 60;
 
 fn retryable_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+fn is_quota_message(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("quota")
+        || lower.contains("insufficient")
+        || lower.contains("credit")
+        || lower.contains("billing")
+        || lower.contains("exhausted")
+        || lower.contains("payment required")
 }
 
 fn retry_after_secs(resp: &reqwest::Response) -> Option<u64> {
@@ -1393,30 +1442,93 @@ async fn post_with_retry(
     body: &serde_json::Value,
     cancel: &Notify,
     on_event: Option<&dyn EventSink>,
-    kind: Option<&str>,
+    route: ProviderRoute<'_>,
 ) -> AppResult<reqwest::Response> {
     if pace_agentrouter(url, cancel).await {
         return Err(AppError::Cancelled);
     }
+    let mut active_key = key.to_string();
     let mut last_error: Option<AppError> = None;
+    let mut content_blocked_retries = 0u32;
     for attempt in 0..MAX_ATTEMPTS {
-        let request = agentrouter_headers(client.post(url).bearer_auth(key), kind, url);
+        let request =
+            agentrouter_headers(client.post(url).bearer_auth(&active_key), route.kind, url);
         match request.json(body).send().await {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
                     return Ok(resp);
                 }
+                let retry_after = retry_after_secs(&resp);
+                let message = error_body(resp).await;
                 if status == reqwest::StatusCode::BAD_REQUEST {
-                    let message = error_body(resp).await;
                     if is_content_blocked_message(&message) {
+                        if is_agentrouter(route.kind, url)
+                            && content_blocked_retries < CONTENT_BLOCKED_RETRIES
+                        {
+                            content_blocked_retries += 1;
+                            if let Some(ch) = on_event {
+                                ch.send(StreamEvent::Retrying {
+                                    attempt: attempt.saturating_add(2).min(MAX_ATTEMPTS),
+                                    max: MAX_ATTEMPTS,
+                                });
+                            }
+                            if sleep_or_cancel(
+                                content_blocked_backoff(content_blocked_retries),
+                                cancel,
+                            )
+                            .await
+                            {
+                                return Err(AppError::Cancelled);
+                            }
+                            continue;
+                        }
                         return Err(AppError::Upstream(describe_content_blocked(&message)));
                     }
                     return Err(AppError::Upstream(message));
                 }
+                if status == reqwest::StatusCode::PAYMENT_REQUIRED
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                {
+                    let quota = status == reqwest::StatusCode::PAYMENT_REQUIRED
+                        || is_quota_message(&message);
+                    if quota && let Some(connection_id) = route.connection_id {
+                        vault::mark_provider_key_exhausted(connection_id, &active_key);
+                        if let Some(next) = vault::next_provider_key(connection_id, &active_key)? {
+                            active_key = next;
+                            if let Some(ch) = on_event {
+                                ch.send(StreamEvent::Retrying {
+                                    attempt: attempt + 2,
+                                    max: MAX_ATTEMPTS,
+                                });
+                            }
+                            continue;
+                        }
+                        let wait = vault::earliest_provider_key_cooldown(connection_id)?
+                            .unwrap_or(KEY_COOLDOWN_SECS);
+                        return Err(AppError::Upstream(format!(
+                            "all provider keys are cooling down; retry in {wait}s"
+                        )));
+                    }
+                    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                        && attempt + 1 < MAX_ATTEMPTS
+                    {
+                        last_error = Some(AppError::Upstream(message));
+                        if let Some(ch) = on_event {
+                            ch.send(StreamEvent::Retrying {
+                                attempt: attempt + 2,
+                                max: MAX_ATTEMPTS,
+                            });
+                        }
+                        if sleep_or_cancel(backoff_delay(attempt, retry_after), cancel).await {
+                            return Err(AppError::Cancelled);
+                        }
+                        continue;
+                    }
+                    return Err(AppError::Upstream(message));
+                }
                 if retryable_status(status) && attempt + 1 < MAX_ATTEMPTS {
-                    let wait = backoff_delay(attempt, retry_after_secs(&resp));
-                    drop(resp);
+                    let wait = backoff_delay(attempt, retry_after);
                     if let Some(ch) = on_event {
                         ch.send(StreamEvent::Retrying {
                             attempt: attempt + 2,
@@ -1428,7 +1540,7 @@ async fn post_with_retry(
                     }
                     continue;
                 }
-                return Err(AppError::Upstream(error_body(resp).await));
+                return Err(AppError::Upstream(message));
             }
             Err(error) => {
                 last_error = Some(AppError::from(error));
@@ -1757,9 +1869,9 @@ async fn stream_agentic_iteration(
     body: &serde_json::Value,
     cancel: &Notify,
     on_event: &dyn EventSink,
-    kind: Option<&str>,
+    route: ProviderRoute<'_>,
 ) -> AppResult<Option<Iteration>> {
-    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event), kind).await {
+    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event), route).await {
         Ok(resp) => resp,
         Err(error) if is_cancel_shutdown(&error) => return Ok(None),
         Err(error) => return Err(error),
@@ -1952,7 +2064,10 @@ impl ModelClient for RealModel<'_> {
                 &body,
                 self.cancel,
                 self.on_event,
-                self.req.connection_kind.as_deref(),
+                ProviderRoute::new(
+                    self.req.connection_kind.as_deref(),
+                    Some(&self.req.connection_id),
+                ),
             )
             .await;
         }
@@ -1974,7 +2089,10 @@ impl ModelClient for RealModel<'_> {
             &body,
             self.cancel,
             &observed,
-            self.req.connection_kind.as_deref(),
+            ProviderRoute::new(
+                self.req.connection_kind.as_deref(),
+                Some(&self.req.connection_id),
+            ),
         )
         .await
         {
@@ -1996,7 +2114,10 @@ impl ModelClient for RealModel<'_> {
                     &body,
                     self.cancel,
                     self.on_event,
-                    self.req.connection_kind.as_deref(),
+                    ProviderRoute::new(
+                        self.req.connection_kind.as_deref(),
+                        Some(&self.req.connection_id),
+                    ),
                 )
                 .await
             }
@@ -2500,6 +2621,7 @@ impl ToolRunner for RealTools<'_> {
                     key: self.key,
                     model: &self.req.model,
                     connection_kind: self.req.connection_kind.as_deref(),
+                    connection_id: &self.req.connection_id,
                     backend: self.req.search_backend.as_deref(),
                     endpoint: self.req.search_endpoint.as_deref(),
                     query,
@@ -2757,7 +2879,7 @@ async fn stream_completion(
         &body,
         cancel,
         Some(on_event),
-        req.connection_kind.as_deref(),
+        ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
     .await
     {
@@ -2858,7 +2980,7 @@ async fn stream_responses_completion(
         &body,
         cancel,
         on_event,
-        req.connection_kind.as_deref(),
+        ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
     .await
     .map(|_| ())
@@ -2883,6 +3005,14 @@ mod tests {
         );
         assert_eq!(clean_title("Plain title"), "Plain title");
         assert_eq!(clean_title("  \n \n"), "");
+    }
+
+    #[test]
+    fn quota_errors_are_distinguished_from_plain_rate_limits() {
+        assert!(is_quota_message("insufficient credits"));
+        assert!(is_quota_message("quota exceeded"));
+        assert!(is_quota_message("billing hard limit reached"));
+        assert!(!is_quota_message("rate limit exceeded, retry later"));
     }
 
     #[test]
@@ -3571,9 +3701,17 @@ mod tests {
             ("200 OK", "", r#"{"choices":[]}"#),
         ]);
         let cancel = Notify::new();
-        let resp = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None, None)
-            .await
-            .expect("retry should succeed");
+        let resp = post_with_retry(
+            &test_client(),
+            &url,
+            "key",
+            &body(),
+            &cancel,
+            None,
+            ProviderRoute::new(None, None),
+        )
+        .await
+        .expect("retry should succeed");
         assert!(resp.status().is_success());
         let value: serde_json::Value = resp.json().await.expect("json body");
         assert_eq!(value, serde_json::json!({"choices":[]}));
@@ -3583,9 +3721,17 @@ mod tests {
     async fn does_not_retry_400() {
         let url = serve_script(vec![("400 Bad Request", "", r#"{"error":"bad"}"#)]);
         let cancel = Notify::new();
-        let error = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None, None)
-            .await
-            .expect_err("400 must not retry");
+        let error = post_with_retry(
+            &test_client(),
+            &url,
+            "key",
+            &body(),
+            &cancel,
+            None,
+            ProviderRoute::new(None, None),
+        )
+        .await
+        .expect_err("400 must not retry");
         assert!(matches!(error, AppError::Upstream(_)));
     }
 
@@ -3597,11 +3743,69 @@ mod tests {
             r#"{"error":"content-blocked agent_router_api_error request id:abc"}"#,
         )]);
         let cancel = Notify::new();
-        let error = post_with_retry(&test_client(), &url, "key", &body(), &cancel, None, None)
-            .await
-            .expect_err("content-blocked 400 must not retry");
+        let error = post_with_retry(
+            &test_client(),
+            &url,
+            "key",
+            &body(),
+            &cancel,
+            None,
+            ProviderRoute::new(None, None),
+        )
+        .await
+        .expect_err("content-blocked 400 must not retry");
         assert!(
-            matches!(error, AppError::Upstream(message) if message.contains("content-blocked"))
+            matches!(error, AppError::Upstream(message) if message.contains("AgentRouter blocked"))
+        );
+    }
+
+    #[tokio::test]
+    async fn agentrouter_content_blocked_retries_then_succeeds() {
+        let url = serve_script(vec![
+            (
+                "400 Bad Request",
+                "",
+                r#"{"error":{"code":"content-blocked","message":"content-blocked (request id: abc)","type":"agent_router_api_error"}}"#,
+            ),
+            ("200 OK", "", r#"{"choices":[]}"#),
+        ]);
+        let cancel = Notify::new();
+        let resp = post_with_retry(
+            &test_client(),
+            &url,
+            "key",
+            &body(),
+            &cancel,
+            None,
+            ProviderRoute::new(Some("agentrouter"), None),
+        )
+        .await
+        .expect("agentrouter content-blocked should retry");
+        assert!(resp.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn agentrouter_content_blocked_stops_after_two_retries() {
+        let blocked = (
+            "400 Bad Request",
+            "",
+            r#"{"error":{"code":"content-blocked","message":"content-blocked (request id: abc)","type":"agent_router_api_error"}}"#,
+        );
+        let url = serve_script(vec![blocked, blocked, blocked]);
+        let cancel = Notify::new();
+        let error = post_with_retry(
+            &test_client(),
+            &url,
+            "key",
+            &body(),
+            &cancel,
+            None,
+            ProviderRoute::new(Some("agentrouter"), None),
+        )
+        .await
+        .expect_err("agentrouter content-blocked must stop after two retries");
+        assert!(
+            matches!(error, AppError::Upstream(message) if message.contains("AgentRouter blocked"))
         );
     }
 
@@ -3912,6 +4116,8 @@ mod tests {
             Some("2026101600292781111551vqnnmUltoGkF6".to_string())
         );
         assert!(describe_content_blocked(blocked).contains("2026101600292781111551vqnnmUltoGkF6"));
+        assert!(describe_content_blocked(blocked).contains("AgentRouter"));
+        assert!(!describe_content_blocked(blocked).contains("DeepSeek"));
         assert!(!is_content_blocked_message("400 Bad Request: bad input"));
         assert!(!is_content_blocked_error(&AppError::Upstream(
             "500 Internal Server Error: boom".to_string()
@@ -4256,7 +4462,7 @@ mod tests {
             &body,
             &cancel,
             None,
-            Some("agentrouter"),
+            ProviderRoute::new(Some("agentrouter"), None),
         )
         .await
         .expect("title request");
@@ -4293,7 +4499,7 @@ mod tests {
             &body,
             &cancel,
             None,
-            Some("agentrouter"),
+            ProviderRoute::new(Some("agentrouter"), None),
         )
         .await
         .expect("chat request");

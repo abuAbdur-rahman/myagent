@@ -1101,6 +1101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         saved = await db.createConnection(input);
         if (activate) setActiveConnectionId(saved.id);
       }
+      api.clearModelCache(saved.id);
       await refreshConnections({ selectFirst: activate });
       return saved;
     },
@@ -1111,6 +1112,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       await api.deleteApiKey(id).catch(() => undefined);
       await db.deleteConnection(id);
+      api.clearModelCache(id);
       if (activeConnectionId === id) setActiveConnectionId(null);
       await refreshConnections();
     },
