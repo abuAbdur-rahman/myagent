@@ -160,7 +160,7 @@ Exit: compaction runs once at the threshold and the model still recalls an early
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | C3 | Model catalogue and capabilities | Partial | M | none |
+| [ ] | C3 | Model catalogue and capabilities | Have (0.6.0: ten-hour cache; 0.6.1: forced refresh) | M | none |
 | [ ] | C4 | Reasoning effort control | Partial | S | C3 |
 | [ ] | C5 | Usage and cost (real usage) | Partial | S | A3 |
 | [ ] | C6 | Context meter | Partial | S | C3, C5 |
@@ -198,7 +198,7 @@ Exit: the app is comfortable to use daily.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | C1 | Provider and API key storage (verify first) | Unknown | S | none |
+| [ ] | C1 | Provider and API key storage (verify first) | Partial (0.6.0: ten keys + rotation) | S | none |
 | [ ] | C2 | Model picker polish | Have | S | C3 |
 | [ ] | G3 | Settings page | Unknown | M | C1, D4 |
 | [ ] | G1 | Slash commands | Have (0.2.0) | M | C9, B9 |
@@ -220,7 +220,7 @@ Exit: each added one at a time with its own tests.
 | [ ] | D14 | Web fetch | Have (0.2.0) | M | D4, D5 |
 | [ ] | D15 | Web search | Have (0.2.0) | M | D14 |
 | [ ] | F3 | Attachments + project knowledge (text, docs) | Missing | M | F2 |
-| [ ] | F4 | Image input (vision) | Missing | S | C3, F3 |
+| [ ] | F4 | Image input (vision) | Have (0.6.1: clipboard images) | S | C3, F3 |
 | [ ] | F5 | Mermaid and LaTeX | Missing | M | A9 |
 | [ ] | G7 | Auto-update | Missing | M | none |
 | [ ] | D18 | Subagents | Missing | L | D1-D17 |
@@ -237,13 +237,13 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J5 | Cheap-model routing | Missing | S | A13, C8 |
 | [ ] | J4 | Local models | Missing | S | C1, C3 |
 | [ ] | J3 | Side-by-side compare | Missing | M | B2, C3 |
-| [ ] | J8 | Action audit log | Missing | S | D5 |
+| [ ] | J8 | Action audit log | Have (0.3.0: audit log; 0.5.0: columns) | S | D5 |
 | [ ] | J7 | Branch tree view | Missing | M | B2 |
 | [ ] | J9 | Prompt and command files | Missing | M | G1 |
 | [ ] | J10 | Artifact export | Missing | S | F1 |
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
 | [ ] | J11 | Scheduled runs | Missing | L | B8 |
-| [ ] | J12 | MCP and skills | Missing | L | D4, D5 |
+| [ ] | J12 | MCP and skills | Partial (0.6.0: auth/HTTP; 0.7.0 setup UX remains) | L | D4, D5 |
 
 ---
 
@@ -284,28 +284,13 @@ Owner decisions on 2026-10-22: these do not ship with the memory file release.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | — | Provider key rotation: several keys per connection, skip the exhausted one, retry after 10 min, per-key list in Providers | Have (0.6.0: up to ten keys per connection, quota errors cool a key down for 10 minutes, per-key list and remove controls in Providers) | M | C1 |
 | [ ] | — | Generic sandbox permissions: one Read / Write / Bash / Host category instead of per-path and per-command rules | Missing | M | D4 |
 | [ ] | — | YOLO mode: no prompts, explicit Deny still wins; toggles in the composer and on the Sandbox page | Missing | S | D4, generic permissions |
 | [ ] | — | Recent models in the picker: top 3 used, filtered against what the provider still offers | Missing | S | C2 |
 | [ ] | — | OpenCode provider: its free models through an OpenCode container with an OpenAI-compatible `/v1` shim | Missing | L | C1, S1 |
 
-The 0.6.0 judge model stays in `docs/plan/v0.5.0-memory-file.md`; it is the only
-part of the memory design that is deliberately late.
-
----
-
-## Planned for 0.5.1 and 0.6.0
-
-| Do | ID | Feature | Status | Size | Depends |
-|---|---|---|---|---|---|
-| [ ] | — | Responses API fallback for OpenAI-compatible providers that reject `/v1/chat/completions` (0.5.1) | Plan: `docs/plan/v0.5.1-responses.md` | M | C1, D1 |
-| [x] | — | Provider add recovery: keep the row and show the exact error when verification fails (0.6.0) | Done: `docs/plan/v0.6.0-provider-add.md` | S | C1 |
-| [x] | — | Composer: move the hold-to-talk mic beside Send (0.6.0) | Done | S | — |
-| [ ] | J12 | MCP authorization and Streamable HTTP via `rmcp` (0.6.0) | Plan: `docs/plan/v0.6.0-mcp-auth.md` | L | D4, D5 |
-
-`mcp-remote` remains a stopgap for online MCP servers until the 0.6.0 client lands;
-it is a third-party npm bridge and is not part of the product.
+The 0.6.0 judge model is still unimplemented; it is the only part of the memory
+design that is deliberately late. See E6 in `features.md`.
 
 ---
 
