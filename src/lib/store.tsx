@@ -315,7 +315,7 @@ interface AppContextValue {
 
   models: string[];
   loadingModels: boolean;
-  refreshModels: () => Promise<void>;
+  refreshModels: (force?: boolean) => Promise<void>;
   hiddenModels: string[];
   catalog: ModelCapabilities[] | null;
   toggleModelVisibility: (connectionId: string, modelId: string, hidden: boolean) => Promise<void>;
@@ -993,7 +993,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setPanelTab = useCallback((tab: PanelTab) => setPanelTabState(tab), []);
   const [settingsPage, setSettingsPage] = useState<string | null>(null);
 
-  const refreshModels = useCallback(async () => {
+  const refreshModels = useCallback(async (force = false) => {
     const connection = connRef.current;
     if (!connection) {
       setModels([]);
@@ -1008,7 +1008,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       setLoadingModels(true);
       const [list, hidden] = await Promise.all([
-        api.listModels(connection.id, connection.kind),
+        api.listModels(connection.id, connection.kind, force),
         db.listHiddenModels(connection.id),
       ]);
       const hiddenSet = new Set(hidden);

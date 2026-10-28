@@ -20,6 +20,8 @@ pub const MAX_TIMEOUTS_BEFORE_RESTART: u32 = 3;
 const MCP_PREFIX: &str = "mcp__";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const MAX_MCP_TEXT_BYTES: usize = 64 * 1024;
+const MAX_LEGACY_SSE_LINE_BYTES: usize = 64 * 1024;
+const MAX_LEGACY_SSE_EVENT_BYTES: usize = 1024 * 1024;
 const MAX_TOOL_PAGES: usize = 64;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -495,6 +497,53 @@ mod tests {
                 "result": {"tools": []},
             }))]
         );
+    }
+
+    #[test]
+    fn legacy_sse_parser_drops_oversized_lines() {
+        let mut parser = LegacySseParser::default();
+        let huge = vec![b'x'; MAX_LEGACY_SSE_LINE_BYTES + 1];
+        assert!(parser.feed(&huge).is_empty());
+        assert!(parser.buf.len() <= MAX_LEGACY_SSE_LINE_BYTES);
+        assert!(parser.data.is_empty());
+    }
+
+    #[test]
+    fn legacy_sse_parser_bounds_accumulated_event_data() {
+        let mut parser = LegacySseParser::default();
+        let line = format!("data: {}\n", "x".repeat(64 * 1024));
+        let count = MAX_LEGACY_SSE_EVENT_BYTES / (64 * 1024) + 2;
+        for _ in 0..count {
+            assert!(parser.feed(line.as_bytes()).is_empty());
+        }
+        assert!(parser.data_bytes <= MAX_LEGACY_SSE_EVENT_BYTES);
+    }
+
+    #[test]
+    fn legacy_response_matching_ignores_server_requests() {
+        assert!(matches_legacy_response(
+            &json!({"id": 1, "result": {}}),
+            Some(1)
+        ));
+        assert!(!matches_legacy_response(
+            &json!({"id": 1, "method": "ping"}),
+            Some(1)
+        ));
+        assert!(!matches_legacy_response(
+            &json!({"id": 2, "result": {}}),
+            Some(1)
+        ));
+    }
+
+    #[test]
+    fn legacy_sse_bearer_requires_the_same_origin() {
+        let base = reqwest::Url::parse("https://mcp.example.com/sse").expect("base url");
+        let same = reqwest::Url::parse("https://mcp.example.com/messages").expect("same url");
+        let other = reqwest::Url::parse("https://evil.example.com/messages").expect("other url");
+        let port = reqwest::Url::parse("https://mcp.example.com:444/messages").expect("port url");
+        assert!(same_origin(&base, &same));
+        assert!(!same_origin(&base, &other));
+        assert!(!same_origin(&base, &port));
     }
 
     #[tokio::test]
@@ -1223,6 +1272,7 @@ struct LegacySseSession {
     auth_token: Option<String>,
     events: tokio::sync::mpsc::UnboundedReceiver<Result<Value, String>>,
     reader: tokio::task::JoinHandle<()>,
+    next_id: u64,
 }
 
 impl Drop for LegacySseSession {
@@ -1242,6 +1292,7 @@ struct LegacySseParser {
     buf: Vec<u8>,
     event: String,
     data: Vec<String>,
+    data_bytes: usize,
 }
 
 impl LegacySseParser {
@@ -1255,9 +1306,16 @@ impl LegacySseParser {
             if line.ends_with('\r') {
                 line.pop();
             }
+            if line.len() > MAX_LEGACY_SSE_LINE_BYTES {
+                self.event.clear();
+                self.data.clear();
+                self.data_bytes = 0;
+                continue;
+            }
             if line.is_empty() {
                 if !self.data.is_empty() {
                     let payload = std::mem::take(&mut self.data).join("\n");
+                    self.data_bytes = 0;
                     if self.event == "endpoint" {
                         out.push(LegacySseEvent::Endpoint(payload));
                     } else if let Ok(value) = serde_json::from_str::<Value>(&payload) {
@@ -1270,9 +1328,22 @@ impl LegacySseParser {
             } else if let Some(rest) = line.strip_prefix("event:") {
                 self.event = rest.trim().to_string();
             } else if let Some(rest) = line.strip_prefix("data:") {
-                self.data
-                    .push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
+                let data = rest.strip_prefix(' ').unwrap_or(rest);
+                self.data_bytes = self.data_bytes.saturating_add(data.len());
+                if self.data_bytes > MAX_LEGACY_SSE_EVENT_BYTES {
+                    self.event.clear();
+                    self.data.clear();
+                    self.data_bytes = 0;
+                    continue;
+                }
+                self.data.push(data.to_string());
             }
+        }
+        if self.buf.len() > MAX_LEGACY_SSE_LINE_BYTES {
+            self.buf.clear();
+            self.event.clear();
+            self.data.clear();
+            self.data_bytes = 0;
         }
         out
     }
@@ -1290,6 +1361,10 @@ impl Session {
 
     fn is_rmcp(&self) -> bool {
         matches!(self.transport, McpTransport::Rmcp(_))
+    }
+
+    fn is_closed(&self) -> bool {
+        matches!(&self.transport, McpTransport::LegacySse(sse) if sse.reader.is_finished())
     }
 
     fn should_refresh_tools(&self) -> bool {
@@ -1445,6 +1520,22 @@ impl McpState {
             config.project_id.as_deref().unwrap_or(""),
             config.id
         )
+    }
+
+    async fn session(&self, key: &str) -> Option<Arc<tokio::sync::Mutex<Session>>> {
+        let handle = self.sessions.lock().await.get(key).cloned()?;
+        let closed = handle.try_lock().is_ok_and(|session| session.is_closed());
+        if closed {
+            let mut guard = self.sessions.lock().await;
+            if guard
+                .get(key)
+                .is_some_and(|current| Arc::ptr_eq(current, &handle))
+            {
+                guard.remove(key);
+            }
+            return None;
+        }
+        Some(handle)
     }
 }
 
@@ -1746,6 +1837,9 @@ async fn connect_legacy_sse(
     let post_url = base
         .join(&endpoint)
         .map_err(|e| format!("legacy SSE endpoint rejected: {e}"))?;
+    if auth_token.is_some() && !same_origin(&base, &post_url) {
+        return Err("legacy SSE endpoint must use the same origin with bearer auth".to_string());
+    }
     validate_mcp_url(post_url.as_str())
         .map_err(|e| format!("legacy SSE endpoint rejected: {e}"))?;
     Ok(LegacySseSession {
@@ -1754,6 +1848,7 @@ async fn connect_legacy_sse(
         auth_token: auth_token.map(str::to_string),
         events,
         reader,
+        next_id: 0,
     })
 }
 
@@ -1800,6 +1895,17 @@ async fn run_legacy_stream(
     }
 }
 
+fn same_origin(base: &reqwest::Url, other: &reqwest::Url) -> bool {
+    base.scheme() == other.scheme()
+        && base.host_str() == other.host_str()
+        && base.port_or_known_default() == other.port_or_known_default()
+}
+
+fn matches_legacy_response(value: &Value, wanted: Option<u64>) -> bool {
+    value.get("method").is_none()
+        && wanted.is_none_or(|id| value.get("id").and_then(Value::as_u64) == Some(id))
+}
+
 fn legacy_response(value: Value) -> Result<Value, CallFailure> {
     if let Some(error) = value.get("error") {
         let message = error
@@ -1813,7 +1919,10 @@ fn legacy_response(value: Value) -> Result<Value, CallFailure> {
 
 impl LegacySseSession {
     async fn request(&mut self, request: &Value, timeout: Duration) -> Result<Value, CallFailure> {
-        let mut builder = self.client.post(&self.post_url).json(request);
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let mut request = request.clone();
+        request["id"] = json!(self.next_id);
+        let mut builder = self.client.post(&self.post_url).json(&request);
         if let Some(token) = self.auth_token.as_deref() {
             builder = builder.bearer_auth(token);
         }
@@ -1857,8 +1966,7 @@ impl LegacySseSession {
             };
             match event {
                 Some(Ok(value)) => {
-                    if wanted.is_some_and(|id| value.get("id").and_then(|v| v.as_u64()) != Some(id))
-                    {
+                    if !matches_legacy_response(&value, wanted) {
                         continue;
                     }
                     return legacy_response(value);
@@ -2010,7 +2118,7 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
     }
     for config in &configs {
         let key = McpState::key(config);
-        let existing = state.sessions.lock().await.get(&key).cloned();
+        let existing = state.session(&key).await;
         let handle = match existing {
             Some(handle) => handle,
             None => {
@@ -2060,7 +2168,7 @@ async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> 
     }
     for config in targets {
         let key = McpState::key(config);
-        let handle = state.sessions.lock().await.get(&key).cloned();
+        let handle = state.session(&key).await;
         let Some(handle) = handle else {
             match connect_once(config).await {
                 Ok(session) => {
@@ -2146,7 +2254,7 @@ pub async fn try_execute(
         resolved = resolve_catalog(&state, project, name);
     }
     let (key, tool) = resolved?;
-    let mut handle = state.sessions.lock().await.get(&key).cloned();
+    let mut handle = state.session(&key).await;
     if handle.is_none() {
         let refreshed = match server_namespace(name) {
             Some(server) => relist_server(app, project, server).await,
@@ -2155,7 +2263,7 @@ pub async fn try_execute(
         if let Err(error) = refreshed {
             eprintln!("mcp: reconnect for {name} failed: {error}");
         }
-        handle = state.sessions.lock().await.get(&key).cloned();
+        handle = state.session(&key).await;
     }
     let Some(handle) = handle else {
         return Some(Err(unavailable(name)));

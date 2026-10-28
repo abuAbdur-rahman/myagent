@@ -282,10 +282,16 @@ async fn apply_optional_params(
     else {
         return;
     };
-    let caps = fetch_model_caps(client, &req.base_url, key, req.connection_kind.as_deref())
-        .await
-        .ok()
-        .and_then(|entries| entries.into_iter().find(|entry| entry.id == req.model));
+    let caps = fetch_model_caps(
+        client,
+        &req.base_url,
+        key,
+        req.connection_kind.as_deref(),
+        false,
+    )
+    .await
+    .ok()
+    .and_then(|entries| entries.into_iter().find(|entry| entry.id == req.model));
     if !effort_allowed(caps.as_ref(), effort) {
         return;
     }
@@ -301,14 +307,21 @@ async fn responses_effort(
         .reasoning_effort
         .as_deref()
         .filter(|value| !value.is_empty() && *value != "none")?;
-    let caps =
-        match fetch_model_caps(client, &req.base_url, key, req.connection_kind.as_deref()).await {
-            Ok(entries) => entries.into_iter().find(|entry| entry.id == req.model),
-            Err(error) => {
-                eprintln!("llm: model caps lookup failed for {}: {error}", req.model);
-                None
-            }
-        };
+    let caps = match fetch_model_caps(
+        client,
+        &req.base_url,
+        key,
+        req.connection_kind.as_deref(),
+        false,
+    )
+    .await
+    {
+        Ok(entries) => entries.into_iter().find(|entry| entry.id == req.model),
+        Err(error) => {
+            eprintln!("llm: model caps lookup failed for {}: {error}", req.model);
+            None
+        }
+    };
     effort_allowed(caps.as_ref(), effort).then(|| effort.to_string())
 }
 
@@ -985,13 +998,18 @@ async fn fetch_model_caps(
     base_url: &str,
     key: &str,
     kind: Option<&str>,
+    force: bool,
 ) -> AppResult<Vec<ModelCaps>> {
-    let fresh = caps_cache()
-        .lock()
-        .expect("caps cache lock")
-        .get(base_url)
-        .filter(|(at, _)| at.elapsed() < CAPS_TTL)
-        .map(|(_, caps)| caps.clone());
+    let fresh = if force {
+        None
+    } else {
+        caps_cache()
+            .lock()
+            .expect("caps cache lock")
+            .get(base_url)
+            .filter(|(at, _)| at.elapsed() < CAPS_TTL)
+            .map(|(_, caps)| caps.clone())
+    };
     if let Some(caps) = fresh {
         return Ok(caps);
     }
@@ -1070,7 +1088,8 @@ pub async fn list_model_caps(
 ) -> AppResult<Vec<ModelCaps>> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
     let key = read_key(&connection_id, connection_kind.as_deref())?;
-    let caps = fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await?;
+    let caps =
+        fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref(), false).await?;
     Ok(with_model_seeds(connection_kind.as_deref(), caps))
 }
 
@@ -1122,11 +1141,13 @@ pub async fn list_models(
     app: AppHandle,
     connection_id: String,
     connection_kind: Option<String>,
+    force: bool,
     client: State<'_, reqwest::Client>,
 ) -> AppResult<Vec<String>> {
     let base_url = connections::base_url_for(&app, &connection_id).await?;
     let key = read_key(&connection_id, connection_kind.as_deref())?;
-    let caps = fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref()).await?;
+    let caps =
+        fetch_model_caps(&client, &base_url, &key, connection_kind.as_deref(), force).await?;
     Ok(with_model_seeds(connection_kind.as_deref(), caps)
         .into_iter()
         .map(|caps| caps.id)
@@ -1447,7 +1468,12 @@ async fn post_with_retry(
     if pace_agentrouter(url, cancel).await {
         return Err(AppError::Cancelled);
     }
-    let mut active_key = key.to_string();
+    let mut active_key = match route.connection_id {
+        Some(connection_id) => {
+            vault::first_available_provider_key(connection_id)?.unwrap_or_else(|| key.to_string())
+        }
+        None => key.to_string(),
+    };
     let mut last_error: Option<AppError> = None;
     let mut content_blocked_retries = 0u32;
     for attempt in 0..MAX_ATTEMPTS {
@@ -1493,8 +1519,8 @@ async fn post_with_retry(
                     let quota = status == reqwest::StatusCode::PAYMENT_REQUIRED
                         || is_quota_message(&message);
                     if quota && let Some(connection_id) = route.connection_id {
-                        vault::mark_provider_key_exhausted(connection_id, &active_key);
                         if let Some(next) = vault::next_provider_key(connection_id, &active_key)? {
+                            vault::mark_provider_key_exhausted(connection_id, &active_key);
                             active_key = next;
                             if let Some(ch) = on_event {
                                 ch.send(StreamEvent::Retrying {
@@ -1504,11 +1530,14 @@ async fn post_with_retry(
                             }
                             continue;
                         }
-                        let wait = vault::earliest_provider_key_cooldown(connection_id)?
-                            .unwrap_or(KEY_COOLDOWN_SECS);
-                        return Err(AppError::Upstream(format!(
-                            "all provider keys are cooling down; retry in {wait}s"
-                        )));
+                        if status == reqwest::StatusCode::PAYMENT_REQUIRED {
+                            vault::mark_provider_key_exhausted(connection_id, &active_key);
+                            let wait = vault::earliest_provider_key_cooldown(connection_id)?
+                                .unwrap_or(KEY_COOLDOWN_SECS);
+                            return Err(AppError::Upstream(format!(
+                                "all provider keys are cooling down; retry in {wait}s"
+                            )));
+                        }
                     }
                     if status == reqwest::StatusCode::TOO_MANY_REQUESTS
                         && attempt + 1 < MAX_ATTEMPTS

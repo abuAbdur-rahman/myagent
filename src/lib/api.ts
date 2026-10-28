@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { z } from "zod";
 import type { FileCommand, StreamEvent } from "./types";
 import { parseBackendCaps, type ModelCapabilities } from "./catalog";
 import type { StorageUsage } from "./storage";
@@ -88,26 +89,22 @@ export function removeSearchKey(index: number) {
 const MODEL_CACHE_KEY = "myagent.model-cache.v1";
 const MODEL_CACHE_TTL_MS = 10 * 60 * 60 * 1000;
 
-interface ModelCacheEntry {
-  at: number;
-  models: string[];
-}
+const modelCacheSchema = z.record(z.string(), z.unknown());
+const modelCacheEntrySchema = z.object({ at: z.number(), models: z.array(z.string()) });
 
-type ModelCache = Record<string, ModelCacheEntry>;
+type ModelCache = Record<string, z.infer<typeof modelCacheEntrySchema>>;
+let modelCacheGeneration = 0;
 
 function readModelCache(): ModelCache {
   try {
     const raw = localStorage.getItem(MODEL_CACHE_KEY);
     if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const parsed = modelCacheSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return {};
     const cache: ModelCache = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!value || typeof value !== "object") continue;
-      const entry = value as { at?: unknown; models?: unknown };
-      if (typeof entry.at !== "number" || !Array.isArray(entry.models)) continue;
-      if (!entry.models.every((model): model is string => typeof model === "string")) continue;
-      cache[key] = { at: entry.at, models: entry.models };
+    for (const [key, value] of Object.entries(parsed.data)) {
+      const entry = modelCacheEntrySchema.safeParse(value);
+      if (entry.success) cache[key] = entry.data;
     }
     return cache;
   } catch {
@@ -128,6 +125,7 @@ function modelCacheKey(connectionId: string, connectionKind?: string) {
 }
 
 export function clearModelCache(connectionId?: string) {
+  modelCacheGeneration += 1;
   try {
     if (!connectionId) {
       localStorage.removeItem(MODEL_CACHE_KEY);
@@ -153,14 +151,22 @@ export async function listModels(
   force = false,
 ) {
   const key = modelCacheKey(connectionId, connectionKind);
+  const generation = modelCacheGeneration;
   if (!force) {
     const hit = readModelCache()[key];
     if (hit && Date.now() - hit.at < MODEL_CACHE_TTL_MS) return hit.models;
   }
-  const models = await invoke<string[]>("list_models", { connectionId, connectionKind });
-  const cache = readModelCache();
-  cache[key] = { at: Date.now(), models };
-  writeModelCache(cache);
+  const models = await invoke<string[]>("list_models", {
+    connectionId,
+    connectionKind,
+    force,
+  });
+  if (generation === modelCacheGeneration) {
+    const cache = readModelCache();
+    if (models.length > 0) cache[key] = { at: Date.now(), models };
+    else delete cache[key];
+    writeModelCache(cache);
+  }
   return models;
 }
 
