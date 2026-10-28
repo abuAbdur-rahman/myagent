@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -22,8 +24,11 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 const MAX_MCP_TEXT_BYTES: usize = 64 * 1024;
 const MAX_LEGACY_SSE_LINE_BYTES: usize = 64 * 1024;
 const MAX_LEGACY_SSE_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_LEGACY_SSE_DATA_LINES: usize = 1024;
 const MAX_TOOL_PAGES: usize = 64;
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Default)]
@@ -109,6 +114,142 @@ fn split_command(cmd: &str) -> Vec<String> {
         parts.push(current);
     }
     parts
+}
+
+fn expand_env(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let name = &after[..end];
+        if let Some(replacement) = std::env::var_os(name) {
+            out.push_str(&replacement.to_string_lossy());
+        } else {
+            out.push('%');
+            out.push_str(name);
+            out.push('%');
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(windows)]
+fn windows_registry_path() -> Option<OsString> {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+
+    let mut parts: Vec<String> = Vec::new();
+    for (root, subkey) in [
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+        (HKEY_CURRENT_USER, "Environment"),
+    ] {
+        let Ok(key) = RegKey::predef(root).open_subkey_with_flags(subkey, KEY_READ) else {
+            continue;
+        };
+        let Ok(path) = key.get_value::<String, _>("Path") else {
+            continue;
+        };
+        parts.push(expand_env(&path));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";").into())
+    }
+}
+
+fn child_path() -> OsString {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    #[cfg(windows)]
+    {
+        for (base, suffix) in [
+            ("APPDATA", "npm"),
+            ("ProgramFiles", "nodejs"),
+            ("USERPROFILE", r".cargo\bin"),
+            ("USERPROFILE", r".local\bin"),
+            ("USERPROFILE", r"scoop\shims"),
+            ("ProgramData", r"chocolatey\bin"),
+            ("LOCALAPPDATA", "pnpm"),
+            ("USERPROFILE", r".bun\bin"),
+            ("USERPROFILE", r".deno\bin"),
+        ] {
+            if let Some(base) = std::env::var_os(base) {
+                let candidate = PathBuf::from(base).join(suffix);
+                if candidate.is_dir() {
+                    dirs.push(candidate);
+                }
+            }
+        }
+        if let Some(registry) = windows_registry_path() {
+            dirs.extend(std::env::split_paths(&registry));
+        }
+    }
+    let mut seen = HashSet::new();
+    dirs.retain(|dir| seen.insert(dir.to_string_lossy().to_ascii_lowercase()));
+    std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+fn resolve_program(program: &str, path: &OsStr) -> Option<PathBuf> {
+    let candidate = Path::new(program);
+    if candidate.is_absolute() || candidate.components().count() > 1 {
+        return candidate.is_file().then(|| candidate.to_path_buf());
+    }
+    for dir in std::env::split_paths(path) {
+        let direct = dir.join(program);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        #[cfg(windows)]
+        for extension in [".exe", ".cmd", ".bat", ".com"] {
+            let with_extension = dir.join(format!("{program}{extension}"));
+            if with_extension.is_file() {
+                return Some(with_extension);
+            }
+        }
+    }
+    None
+}
+
+fn normalize_command(program: &Path, args: &[String]) -> (OsString, Vec<OsString>) {
+    #[cfg(windows)]
+    {
+        let extension = program
+            .extension()
+            .and_then(OsStr::to_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if extension == "cmd" || extension == "bat" {
+            let mut wrapped = vec![OsString::from("/C"), program.as_os_str().to_os_string()];
+            wrapped.extend(args.iter().map(OsString::from));
+            return (OsString::from("cmd.exe"), wrapped);
+        }
+    }
+    (
+        program.as_os_str().to_os_string(),
+        args.iter().map(OsString::from).collect(),
+    )
+}
+
+fn resolve_command(parts: &[String]) -> Result<(OsString, Vec<OsString>, OsString), String> {
+    let program = parts.first().ok_or_else(|| "empty command".to_string())?;
+    let path = child_path();
+    let resolved = resolve_program(program, &path)
+        .ok_or_else(|| format!("command not found: {program}. Install it or use the full path."))?;
+    let (program, args) = normalize_command(&resolved, &parts[1..]);
+    Ok((program, args, path))
 }
 
 pub fn unavailable(server: &str) -> String {
@@ -214,6 +355,52 @@ mod tests {
             vec![r"C:\Program Files\srv.exe", "--port", "1"]
         );
         assert_eq!(split_command("  "), Vec::<String>::new());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalizes_cmd_shims_through_cmd() {
+        let (program, args) = normalize_command(
+            Path::new(r"C:\tools\npx.cmd"),
+            &["-y".to_string(), "server".to_string()],
+        );
+        assert_eq!(program, OsString::from("cmd.exe"));
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("/C"),
+                OsString::from(r"C:\tools\npx.cmd"),
+                OsString::from("-y"),
+                OsString::from("server"),
+            ]
+        );
+    }
+
+    #[test]
+    fn leaves_exe_commands_unwrapped() {
+        let (program, args) =
+            normalize_command(Path::new(r"C:\tools\server.exe"), &["--port".to_string()]);
+        assert_eq!(program, OsString::from(r"C:\tools\server.exe"));
+        assert_eq!(args, vec![OsString::from("--port")]);
+    }
+
+    #[test]
+    fn missing_commands_have_actionable_error() {
+        let error = resolve_command(&["myagent-no-such-command".to_string()])
+            .expect_err("missing command must fail");
+        assert!(error.contains("command not found"));
+    }
+
+    #[test]
+    fn expands_environment_placeholders() {
+        assert_eq!(expand_env("plain"), "plain");
+        assert_eq!(expand_env("%%"), "%%");
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            assert_eq!(
+                expand_env(r"%SystemRoot%\System32"),
+                format!(r"{}\System32", root.to_string_lossy())
+            );
+        }
     }
 
     #[test]
@@ -517,6 +704,17 @@ mod tests {
             assert!(parser.feed(line.as_bytes()).is_empty());
         }
         assert!(parser.data_bytes <= MAX_LEGACY_SSE_EVENT_BYTES);
+    }
+
+    #[test]
+    fn legacy_sse_parser_bounds_empty_data_lines() {
+        let mut parser = LegacySseParser::default();
+        for _ in 0..=MAX_LEGACY_SSE_DATA_LINES {
+            assert!(parser.feed(b"data:\n").is_empty());
+        }
+        assert!(parser.data.len() <= MAX_LEGACY_SSE_DATA_LINES);
+        assert_eq!(parser.data_bytes, 0);
+        assert_eq!(parser.data_lines, 0);
     }
 
     #[test]
@@ -1231,15 +1429,18 @@ async fn connect_rmcp(
         return Err("stdio server needs a command".to_string());
     }
     let parts = split_command(cmd);
-    let program = parts.first().ok_or_else(|| "empty command".to_string())?;
+    let (program, args, path) = resolve_command(&parts)?;
     let transport =
         TokioChildProcess::new(tokio::process::Command::new(program).configure(|command| {
             command
-                .args(&parts[1..])
+                .args(&args)
+                .env("PATH", &path)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .kill_on_drop(true);
+            #[cfg(windows)]
+            command.creation_flags(CREATE_NO_WINDOW);
         }))
         .map_err(|e| format!("spawn failed: {e}"))?;
     let service = tokio::time::timeout(
@@ -1293,6 +1494,7 @@ struct LegacySseParser {
     event: String,
     data: Vec<String>,
     data_bytes: usize,
+    data_lines: usize,
 }
 
 impl LegacySseParser {
@@ -1310,12 +1512,14 @@ impl LegacySseParser {
                 self.event.clear();
                 self.data.clear();
                 self.data_bytes = 0;
+                self.data_lines = 0;
                 continue;
             }
             if line.is_empty() {
                 if !self.data.is_empty() {
                     let payload = std::mem::take(&mut self.data).join("\n");
                     self.data_bytes = 0;
+                    self.data_lines = 0;
                     if self.event == "endpoint" {
                         out.push(LegacySseEvent::Endpoint(payload));
                     } else if let Ok(value) = serde_json::from_str::<Value>(&payload) {
@@ -1330,10 +1534,14 @@ impl LegacySseParser {
             } else if let Some(rest) = line.strip_prefix("data:") {
                 let data = rest.strip_prefix(' ').unwrap_or(rest);
                 self.data_bytes = self.data_bytes.saturating_add(data.len());
-                if self.data_bytes > MAX_LEGACY_SSE_EVENT_BYTES {
+                self.data_lines = self.data_lines.saturating_add(1);
+                if self.data_bytes > MAX_LEGACY_SSE_EVENT_BYTES
+                    || self.data_lines > MAX_LEGACY_SSE_DATA_LINES
+                {
                     self.event.clear();
                     self.data.clear();
                     self.data_bytes = 0;
+                    self.data_lines = 0;
                     continue;
                 }
                 self.data.push(data.to_string());
@@ -1344,6 +1552,7 @@ impl LegacySseParser {
             self.event.clear();
             self.data.clear();
             self.data_bytes = 0;
+            self.data_lines = 0;
         }
         out
     }
@@ -1829,19 +2038,43 @@ async fn connect_legacy_sse(
     let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
     let (endpoint_tx, endpoint_rx) = tokio::sync::oneshot::channel();
     let reader = tokio::spawn(run_legacy_stream(response, events_tx, endpoint_tx));
-    let endpoint = tokio::time::timeout(timeout, endpoint_rx)
-        .await
-        .map_err(|_| "timeout waiting for legacy SSE endpoint".to_string())?
-        .map_err(|_| "legacy SSE stream closed before endpoint".to_string())??;
-    let base = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
-    let post_url = base
-        .join(&endpoint)
-        .map_err(|e| format!("legacy SSE endpoint rejected: {e}"))?;
+    let endpoint = match tokio::time::timeout(timeout, endpoint_rx).await {
+        Ok(Ok(Ok(endpoint))) => endpoint,
+        Ok(Ok(Err(error))) => {
+            reader.abort();
+            return Err(error);
+        }
+        Ok(Err(_)) => {
+            reader.abort();
+            return Err("legacy SSE stream closed before endpoint".to_string());
+        }
+        Err(_) => {
+            reader.abort();
+            return Err("timeout waiting for legacy SSE endpoint".to_string());
+        }
+    };
+    let base = match reqwest::Url::parse(url) {
+        Ok(base) => base,
+        Err(error) => {
+            reader.abort();
+            return Err(error.to_string());
+        }
+    };
+    let post_url = match base.join(&endpoint) {
+        Ok(post_url) => post_url,
+        Err(error) => {
+            reader.abort();
+            return Err(format!("legacy SSE endpoint rejected: {error}"));
+        }
+    };
     if auth_token.is_some() && !same_origin(&base, &post_url) {
+        reader.abort();
         return Err("legacy SSE endpoint must use the same origin with bearer auth".to_string());
     }
-    validate_mcp_url(post_url.as_str())
-        .map_err(|e| format!("legacy SSE endpoint rejected: {e}"))?;
+    if let Err(error) = validate_mcp_url(post_url.as_str()) {
+        reader.abort();
+        return Err(format!("legacy SSE endpoint rejected: {error}"));
+    }
     Ok(LegacySseSession {
         client,
         post_url: post_url.to_string(),

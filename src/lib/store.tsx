@@ -1011,12 +1011,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api.listModels(connection.id, connection.kind, force),
         db.listHiddenModels(connection.id),
       ]);
+      if (connRef.current?.id !== connection.id) return;
       const hiddenSet = new Set(hidden);
       const visible = list.filter((id) => !hiddenSet.has(id));
       setHiddenModels(hidden);
       setModels(visible);
       if (!modelRef.current && visible.length > 0) {
         setModelState(visible[0]);
+      }
+      if (force) {
+        const caps = await api
+          .listModelCaps(connection.id, connection.kind)
+          .catch(() => null);
+        if (caps && connRef.current?.id === connection.id) setCatalog(caps);
       }
     } catch (e) {
       setModels([]);

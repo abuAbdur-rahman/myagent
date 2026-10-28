@@ -50,6 +50,9 @@ transcribe-rs = { path = "vendor/transcribe-rs", features = ["onnx"] }
 sha2 = "0.10"
 rmcp = { version = "3.7.0", default-features = false, features = ["client", "auth", "reqwest", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 

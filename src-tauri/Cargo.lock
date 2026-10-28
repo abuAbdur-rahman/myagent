@@ -3155,6 +3155,7 @@ dependencies = [
  "transcribe-rs",
  "url",
  "uuid",
+ "winreg",
 ]
 
 [[package]]

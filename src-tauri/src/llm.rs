@@ -993,6 +993,17 @@ fn parse_ollama_tags(value: &serde_json::Value) -> Vec<ModelCaps> {
         .unwrap_or_default()
 }
 
+fn stale_model_caps(
+    force: bool,
+    stale: Option<Vec<ModelCaps>>,
+    error: AppError,
+) -> AppResult<Vec<ModelCaps>> {
+    if force {
+        return Err(error);
+    }
+    stale.ok_or(error)
+}
+
 async fn fetch_model_caps(
     client: &reqwest::Client,
     base_url: &str,
@@ -1021,15 +1032,18 @@ async fn fetch_model_caps(
         Err(error) => {
             if should_fallback_to_ollama_tags(cloud, &error) {
                 fetch_ollama_tags(client, key).await?
-            } else if let Some((_, stale)) = caps_cache()
-                .lock()
-                .expect("caps cache lock")
-                .get(base_url)
-                .cloned()
-            {
-                stale
             } else {
-                return Err(error);
+                let stale = if force {
+                    None
+                } else {
+                    caps_cache()
+                        .lock()
+                        .expect("caps cache lock")
+                        .get(base_url)
+                        .cloned()
+                        .map(|(_, caps)| caps)
+                };
+                stale_model_caps(force, stale, error)?
             }
         }
     };
@@ -3042,6 +3056,22 @@ mod tests {
         assert!(is_quota_message("quota exceeded"));
         assert!(is_quota_message("billing hard limit reached"));
         assert!(!is_quota_message("rate limit exceeded, retry later"));
+    }
+
+    #[test]
+    fn forced_model_refresh_does_not_use_stale_caps() {
+        let error = AppError::Upstream("fetch failed".to_string());
+        assert!(stale_model_caps(true, Some(Vec::new()), error).is_err());
+        let stale = stale_model_caps(
+            false,
+            Some(Vec::new()),
+            AppError::Upstream("fetch failed".to_string()),
+        )
+        .expect("non-forced refresh keeps stale caps");
+        assert!(stale.is_empty());
+        assert!(
+            stale_model_caps(false, None, AppError::Upstream("fetch failed".to_string())).is_err()
+        );
     }
 
     #[test]

@@ -2624,9 +2624,11 @@ function ModelCapabilityTable({
   const refresh = async () => {
     setRefreshing(true);
     try {
+      const ids = connection
+        ? await api.listModels(connection.id, connection.kind, true)
+        : null;
       await onRefresh();
-      if (connection) {
-        const ids = await api.listModels(connection.id, connection.kind, true);
+      if (connection && ids) {
         const [caps, hidden] = await Promise.all([
           api.listModelCaps(connection.id, connection.kind),
           db.listHiddenModels(connection.id),

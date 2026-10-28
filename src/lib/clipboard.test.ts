@@ -8,32 +8,47 @@ function file(name: string, type: string): File {
 }
 
 describe("clipboardFiles", () => {
-  it("keeps files already exposed by the clipboard", () => {
+  it("keeps files already exposed by the clipboard", async () => {
     const image = file("photo.png", "image/png");
-    expect(clipboardFiles({ files: [image], items: [] })).toEqual([image]);
+    expect(await clipboardFiles({ files: [image], items: [] })).toEqual([image]);
   });
 
-  it("falls back to image items when the clipboard exposes no files", () => {
+  it("falls back to image items when the clipboard exposes no files", async () => {
     const image = file("", "image/png");
     const item = { kind: "file", type: "image/png", getAsFile: () => image };
-    expect(clipboardFiles({ files: [], items: [item] })).toEqual([image]);
+    expect(await clipboardFiles({ files: [], items: [item] })).toEqual([image]);
   });
 
-  it("prefers a typed image item when the clipboard file has no type", () => {
+  it("sniffs an image item with no MIME type", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const image = new File([bytes], "", { type: "" });
+    const item = { kind: "file", type: "", getAsFile: () => image };
+    const [typed] = await clipboardFiles({ files: [], items: [item] });
+    expect(typed.type).toBe("image/png");
+  });
+
+  it("prefers a typed image item when the clipboard file has no type", async () => {
     const untyped = file("", "");
     const image = file("", "image/png");
     const item = { kind: "file", type: "image/png", getAsFile: () => image };
-    expect(clipboardFiles({ files: [untyped], items: [item] })).toEqual([image]);
+    expect(await clipboardFiles({ files: [untyped], items: [item] })).toEqual([image]);
   });
 
-  it("ignores text and non-image items", () => {
+  it("keeps a document and adds an image item", async () => {
+    const doc = file("a.pdf", "application/pdf");
+    const image = file("", "image/png");
+    const item = { kind: "file", type: "image/png", getAsFile: () => image };
+    expect(await clipboardFiles({ files: [doc], items: [item] })).toEqual([doc, image]);
+  });
+
+  it("ignores text and non-image items", async () => {
     const text = { kind: "string", type: "text/plain", getAsFile: () => null };
     const doc = {
       kind: "file",
       type: "application/pdf",
       getAsFile: () => file("a.pdf", "application/pdf"),
     };
-    expect(clipboardFiles({ files: [], items: [text, doc] })).toEqual([]);
+    expect(await clipboardFiles({ files: [], items: [text, doc] })).toEqual([]);
   });
 });
 

@@ -25,11 +25,15 @@ export const RELEASES: readonly Release[] = [
     version: "0.6.1",
     date: "2026-10-28",
     summary:
-      "A review-fix patch for 0.6.0: legacy MCP SSE sessions reconnect cleanly, provider keys rotate from the first available key, model-list Refresh bypasses the backend cache, and raw clipboard screenshots paste into the composer.",
+      "A review-fix patch for 0.6.0: legacy MCP SSE sessions reconnect cleanly, Windows stdio MCP servers launch through cmd shims, provider keys rotate from the first available key, model-list Refresh bypasses the backend cache, and raw clipboard screenshots paste into the composer.",
     changes: [
       {
         kind: "fixed",
         text: "A closed legacy SSE stream is evicted and reconnected. Requests use unique JSON-RPC ids, server-initiated requests are ignored, framing buffers are bounded, and a bearer token is only sent to the same origin as the SSE endpoint.",
+      },
+      {
+        kind: "fixed",
+        text: "Windows stdio MCP servers now launch reliably: npx/npm/pnpm/yarn/uvx shims run through cmd /c, PATH includes the registry and common tool directories, children run without a console window, and a cold install gets 60 seconds instead of 20.",
       },
       {
         kind: "fixed",

@@ -533,12 +533,20 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         event.preventDefault();
         void attachFiles([...event.dataTransfer.files]);
       }}
-      onPaste={(event) => {
-        const files = clipboardFiles(event.clipboardData);
-        if (files.length > 0) {
-          event.preventDefault();
-          void attachFiles(files);
+      onPasteCapture={(event) => {
+        const data = event.clipboardData;
+        let hasFile = data.files.length > 0;
+        for (let index = 0; !hasFile && index < data.items.length; index += 1) {
+          hasFile = data.items[index].kind === "file";
         }
+        if (!hasFile) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void clipboardFiles(data)
+          .then((files) => {
+            if (files.length > 0) void attachFiles(files);
+          })
+          .catch(() => toast("Couldn't read the pasted image."));
       }}
     >
       <div className="composer relative rounded-composer border border-border bg-surface-2 px-2.5 pb-2 pt-2 focus-within:border-accent/70">

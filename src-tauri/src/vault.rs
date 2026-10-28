@@ -117,6 +117,9 @@ fn next_available_key(
         .unwrap_or(0);
     for offset in 0..keys.len() {
         let key = &keys[(start + offset) % keys.len()];
+        if key == current {
+            continue;
+        }
         if available(key) {
             return Some(key.clone());
         }
@@ -289,5 +292,18 @@ mod tests {
             Some("sk-three".to_string())
         );
         assert_eq!(next_available_key(&keys, "sk-one", |_| false), None);
+    }
+
+    #[test]
+    fn rotation_never_returns_the_active_key() {
+        let keys = vec!["sk-one".to_string(), "sk-two".to_string()];
+        assert_eq!(
+            next_available_key(&keys, "sk-one", |key| key == "sk-one"),
+            None
+        );
+        assert_eq!(
+            next_available_key(&keys, "sk-one", |_| true),
+            Some("sk-two".to_string())
+        );
     }
 }
