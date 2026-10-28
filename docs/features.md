@@ -34,7 +34,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Fixtures give identical events however the bytes are chopped (1 byte, random, whole).
 
 ## A4. Retry with backoff
-- **Status:** Have (0.3.3 verified on the plain stream path: 429, 5xx and network errors met while opening the stream retry inside 10 attempts, counting the first, with jittered backoff and Retry-After; a 400 never retries, and anything after the response begins, including a body-read failure, is surfaced without retrying. Retries show a transient Retrying (n/10) toast. The agentic path can still re-issue one no-tools fallback request on a tools error)
+- **Status:** Have (0.3.3 verified on the plain stream path: 429, 5xx and network errors met while opening the stream retry inside 10 attempts, counting the first, with jittered backoff and Retry-After; a 400 never retries, and anything after the response begins, including a body-read failure, is surfaced without retrying. Retries show a transient Retrying (n/10) toast. The agentic path can still re-issue one no-tools fallback request on a tools error. 0.6.0: an AgentRouter gateway content-blocked 400 is retried twice with backoff and then reported as an AgentRouter moderation block, not a model refusal)
 - **Ref:** † OpenRouter: pre-stream errors are normal HTTP errors; mid-stream errors arrive as SSE with HTTP 200. Claude Code and OpenCode retry transient failures.
 - **Build:** Retry only on 429, 5xx and network errors, and only if no token was received. Exponential backoff with jitter, max 10 attempts, honor `Retry-After`. Show "Retrying (2/10)" in the UI.
 - **Not:** Provider fallbacks, circuit breakers.
@@ -79,7 +79,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Copy output equals the fenced source exactly.
 
 ## A11. Composer (input)
-- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; the composer acceptance list is still unverified)
+- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; the composer acceptance list is still unverified; 0.6.0: the hold-to-talk mic sits beside Send)
 - **Ref:** Claude Code: multiline input, history with Up arrow, Esc Esc for rewind. Claude app: rich input with shortcuts.
 - **Build:** Rich-text editor serializing to markdown. Single focus ring on the container. Clear immediately on send. History on ArrowUp at doc start, ArrowDown at doc end. Lists continue with Shift+Enter. "```lang" plus Space or Shift+Enter makes a code block. Enter sends outside code blocks.
 - **Done:** The acceptance list from the composer spec passes.
@@ -91,11 +91,18 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Edit never removes the old version.
 
 ## A13. Auto titles
-- **Status:** Have (0.2.1: AI title hardened — bigger token budget, string-or-parts content, DB-authoritative guard, clean fallback)
+- **Status:** Have (0.2.1: AI title hardened — bigger token budget, string-or-parts content, DB-authoritative guard, clean fallback. 0.5.0: markdown is stripped before storage and again on read so old rows render. 0.5.1: generated titles keep double underscores such as __init__)
 - **Ref:** † OpenWebUI generates titles (and tags) with a task model, without bumping the chat's activity time.
 - **Build:** After the first assistant reply, ask a cheap model for a 3-6 word title. Fall back to the first line of the user message. Never block the UI.
 - **Not:** Tags and follow-up suggestions (see B7).
 - **Done:** Title appears without delaying the reply; failure keeps the fallback.
+
+## A14. Responses API fallback
+- **Status:** Have (0.5.1: when a provider rejects `/v1/chat/completions` with the "use `/v1/responses`" marker, the adapter retries once against `/v1/responses` and remembers the `base_url|model` pair for the process; a restart re-probes once. Chat, tools, titles and summaries share the adapter. No setting, schema change or persisted marker)
+- **Ref:** AgentRouter's GPT catalogue (`gpt-5.6-sol`, `gpt-6-astra`, `gpt-6.1-sol`) rejects Chat Completions; OpenAI's Responses API is the compatible shape.
+- **Build:** Convert messages to `input[]`, flatten tools, send `store:false`, omit `temperature`, map `max_tokens` to `max_output_tokens`, and request encrypted reasoning only when an effort is sent. Stream text, refusals, reasoning summaries, function calls, usage and finish reasons onto the existing events. Replay sanitized reasoning, message and function-call items on the next tool turn; fill items the provider omitted from the Chat-shaped history. Non-stream titles and summaries read `output[].content[].output_text`.
+- **Not:** A per-connection API-mode setting, `previous_response_id` or stored responses, built-in OpenAI tools, a persistent marker, or a live AgentRouter test in CI.
+- **Done:** AgentRouter GPT chat, tool call, title and summary work; OpenRouter and DeepSeek still use Chat Completions; a 401/403 stays an auth error; a second 400 surfaces without looping; a marker after visible bytes is not retried; partial tool calls never execute.
 
 ---
 
@@ -185,7 +192,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it. 0.6.0: up to ten keys per connection; a quota error skips to the next key and cools the rejected one down for 10 minutes; Providers lists each key and can remove one key or all keys)
+- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it. 0.6.0: up to ten keys per connection; Providers lists each key and can remove one key or all keys. 0.6.1: every request starts with the first key not cooling down; a quota-flavoured 429 or 402 marks the active key exhausted and moves to another key when one is available, otherwise reports the cooldown; a plain 429 keeps normal backoff; retrying a draft provider replaces its draft key)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
@@ -197,7 +204,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Switching mid-chat applies to the next turn only.
 
 ## C3. Model catalogue and capabilities
-- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider. 0.4.1: the Models page is a capability table per connection; DeepSeek seeds `deepseek-chat` and `deepseek-reasoner` with an unknown window and no vision, and Ollama Cloud falls back from `/v1/models` to `/api/tags`)
+- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider. 0.4.1: the Models page is a capability table per connection; DeepSeek seeds `deepseek-chat` and `deepseek-reasoner` with an unknown window and no vision, and Ollama Cloud falls back from `/v1/models` to `/api/tags`. 0.5.0: DeepSeek seeds a cited context window instead of unknown. 0.6.0: the backend catalogue and picker caches are ten hours; Refresh on Models, saving/deleting a provider or a successful test invalidates. 0.6.1: Refresh bypasses the backend cache, empty lists are not cached, a request that finishes after invalidation cannot repopulate the cache, and stored entries are Zod-validated)
 - **Ref:** † OpenRouter's models list includes context length and supported parameters.
 - **Build:** Fetch, cache with a TTL, and read: context length, supports reasoning, supports tools. Disable UI that a model cannot use. Fall back to safe defaults when unknown, to a known-family table for image support, and to a per-model override when the user knows better.
 - **Done:** A model without tool support never gets tools in its request.
@@ -238,6 +245,13 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Ref:** † OpenCode has auto and manual compaction, and an option to disable auto. Claude Code has `/compact` and auto-compact near the limit.
 - **Build:** `/compact` command, plus auto at about 80% of context using real usage. A setting to turn auto off. Run between turns only.
 - **Done:** Crossing the threshold triggers exactly one compaction.
+
+## C10. Provider add recovery
+- **Status:** Have (0.6.0: adding a provider persists the row and key first; a failed model check keeps the row and the dialog open with the step, HTTP status and raw provider message; Retry test, Keep provider and Delete. Only an insert or key-write failure rolls back. The active connection switches only after success. Ollama Cloud verifies with `GET https://ollama.com/api/balance` and lists models through `/v1/models` then `/api/tags`. 0.6.1: retrying a draft provider replaces its draft key instead of appending another)
+- **Ref:** Provider setup should be a diagnostic, not a save gate; a transient network, 401, 404 or empty model list must not delete a valid row.
+- **Build:** Save the row and key, verify non-destructively, keep the previous active connection until verification succeeds, format Tauri `AppError` objects with the existing `formatInvokeError`, and surface rollback failures instead of swallowing them. Keep the last test result on the provider card. A provider without `/models` can still be kept for chat-only use.
+- **Not:** A provider that disappears unless the user deletes it or the database insert fails; treating an empty model list as proof the key is invalid.
+- **Done:** A 401, 404, network timeout or empty model list leaves the row and dialog in place with the exact message; an insert or keyring failure is explicit; Ollama Cloud never calls `/api/me`; a successful add switches the active connection only after the check passes.
 
 ---
 
@@ -417,7 +431,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A test sends an unrelated memory plus a matching one; only the matching one is in the prompt.
 
 ## E2. Secret refusal in memory
-- **Status:** Have (0.5.0: `memory::looks_secret` runs before checked file writes, every assistant proposal and every manual edit. Key shapes, private-key headers and `password=`/`token=`/`Bearer` are refused with a reason. The one exception is the legacy migration: existing `memories` rows are copied into `MEMORY.md` without this screen so the upgrade does not lose notes. A note proposed after a web, shell, sandbox, document, image or MCP tool is tagged untrusted in the inbox and in the file; filters can only drop, never approve. Editing an existing note asks first)
+- **Status:** Have (0.5.0: `memory::looks_secret` runs before checked file writes, every assistant proposal and every manual edit. Key shapes, private-key headers and `password=`/`token=`/`Bearer` are refused with a reason. The one exception is the legacy migration: existing `memories` rows are copied into `MEMORY.md` without this screen so the upgrade does not lose notes. A note proposed after a web, shell, sandbox, document, image, MCP or subagent tool is tagged untrusted in the inbox and in the file; filters can only drop, never approve. Editing an existing note asks first)
 - **Ref:** Claude does not store credentials in memory.
 - **Build:** Pure function `looks_secret(&str) -> bool`: API key shapes (`sk-`, `ghp_`, `AKIA`, long hex/base64), private key headers, `password=`, `token=`, `Bearer`. Runs before every new memory write; legacy migration copies existing rows without this screen. Tell the user when blocked. Panic-free.
 - **Not:** Entropy scanning of all chat.
@@ -452,9 +466,16 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 ## E7. Memory file (`MEMORY.md`)
 - **Status:** Have (0.5.0: one `MEMORY.md` plus `projects/<id>.md`, four headings - User, Preferences, Project, Decisions - and an id/date comment on every bullet. 0.4.1 rows migrate once at boot into the files, with a full JSON backup under `memory/legacy/`, an unassigned queue for notes whose project was deleted, and the `memories` table frozen rather than dropped. The raw editor rejects a save when the file changed on disk. A failed migration keeps the database path and shows a banner)
 - **Ref:** † Claude Code `/memory` edits markdown; † OpenCode reads `AGENTS.md`.
-- **Build:** The file is the source of truth; SQLite is only the migration source and the fallback. Writes are atomic (temp file, backup swap) and serialised. Outside text and unknown comments are preserved. Notes cap at 2000 characters; the send budget, not the write, keeps the file small.
+- **Build:** The file is the source of truth; SQLite is only the migration source and the fallback. Writes are atomic (temp file then rename) and serialised. Outside text and unknown comments are preserved. Notes cap at 2000 characters; the send budget, not the write, keeps the file small.
 - **Not:** Syncing the file with the database after migration, or editing project files from the global page.
 - **Done:** File tests cover round-trip, CRLF/BOM, escaped comment markers, unknown text, duplicate ids and the sent budget. Migration tests cover an empty DB, an old row, an unknown kind, a deleted project, an existing file and a lost marker.
+
+## E8. Memory migration and rollback
+- **Status:** Have (0.5.0: one-time, idempotent migration from `memories` to `MEMORY.md`; full JSON backup under `memory/legacy/` before any file write; atomic rename; file existence is the idempotency key, not the marker; orphan project notes go to `legacy/unassigned.json`; `memories` stays frozen as the rollback snapshot; `pending_memories` is untouched. 0.5.1: a lost marker keeps notes the user deleted deleted, atomic saves no longer rotate a `.bak` first, manual dates must be `YYYY-MM-DD`, and late rows from a downgrade merge automatically)
+- **Ref:** A migration that cannot lose a note; the file is the source of truth and SQLite is only the migration source and fallback.
+- **Build:** Backup every row verbatim with schema version, counts and app version, then `fsync` it before writing files. Never `UPDATE`, `DELETE` or `DROP` `memories`. Write each file through `.tmp` then rename. If migration fails, keep reading `memories` and show a compatibility banner. Re-upgrade compares `memories` with the marker's known IDs and appends only unknown rows; IDs already known stay deleted. Downgrading to 0.4.1 shows memory as of the upgrade; a 0.5.0 export re-imports newer notes by ID without duplicates.
+- **Not:** A file watcher, automatic near-duplicate consolidation, semantic retrieval, per-workspace memory folders, or a supported downgrade path.
+- **Done:** A fixture covering long, multi-line, duplicate, unknown-kind and orphan rows imports with matching IDs and text; a second launch is a no-op; killing the app mid-migration loses nothing; a lost marker does not re-import deleted notes; a read-only file fails loudly; invalid manual dates are refused.
 
 ---
 
@@ -543,6 +564,16 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Build:** A settings page placed before About in the nav. An installed-version card with **Check for updates** (spinner, then a confirmation), then releases newest first. Each release header shows version, a Current pill, date and change count, and expands to a one-line summary and its changes; each change carries a New / Improved / Fixed label. The latest release is open, older ones collapsed. A type filter opens every release that matches and hides the rest. Reachable from Settings, About, the profile menu ("What's new") and the command palette
 - **Done:** The page lists the installed version and every stored release note; the filter hides non-matching releases; it opens from all four entry points
 
+## G9. First-run onboarding
+- **Status:** Have (0.6.0: four steps — welcome and display name, provider, model, search/suggestions. Each step can be skipped; the provider step keeps the row when the first model check fails so the key can be corrected)
+- **Build:** A short first-run flow that stores the display name, adds a provider through C10, picks a model, and optionally configures web search. Skipping a step must not block the app or lose an already-saved provider.
+- **Done:** A fresh profile reaches the chat screen after all four steps; every step can be skipped; a failed provider check leaves the row and the dialog available for correction.
+
+## G10. Jump to latest and activity status
+- **Status:** Have (0.5.0: jump-to-latest is a sibling of the scroller, 16 px above the chat area, and holds at every scroll offset; exactly one `role="status"` activity pill is mounted — centered while the transcript is empty, inline above the composer afterwards)
+- **Build:** Keep the jump control outside the scrolling content so it never scrolls away. Render one activity pill per state, not both placements at once.
+- **Done:** The jump button holds its position at every scroll offset; one turn produces one `role="status"` node per state.
+
 ---
 
 # H. Quality
@@ -606,7 +637,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Switching from the tree matches switching with the arrows.
 
 ## J8. Action audit log
-- **Status:** Have (0.3.0: deny-rule/deny-user/once/always rows + Settings Audit page, search, clear-all; included in delete-all)
+- **Status:** Have (0.3.0: deny-rule/deny-user/once/always rows + Settings Audit page, search, clear-all; included in delete-all. 0.5.0: migration 27 adds duration, exit code and source columns; the row expands to show them and old rows still render)
 - **Build:** An append-only table of tool calls, approvals, denials and "always allow" rule changes with timestamp, chat and exact command. Searchable list in settings; included in delete-all (B11).
 - **Done:** Every approval creates exactly one log row.
 
@@ -628,9 +659,10 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** A scheduled run produces a stored result.
 
 ## J12. MCP and skills
-- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page. 0.6.0: `rmcp` stdio and Streamable HTTP, bearer tokens, and OAuth 2.1 with DCR, PKCE, a loopback callback and refresh; legacy `sse` retained. 0.6.1: legacy SSE session eviction, unique request ids, bounded framing, same-origin bearer endpoints, and provider-key/model-cache review fixes. 0.7.0 plan: Rust-owned server state machine, standard `mcpServers` import/export, Windows spawn/PATH/job-object handling, server logs, tool-hash re-approval and `server/discover` fallback — see `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`. Pre-registered clients, custom-scheme callbacks and server-side revocation are not in 0.6.0 — see `docs/plan/v0.6.0-mcp-auth.md`)
+- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page. 0.6.0: `rmcp` 3.7.0 replaces the hand-rolled client; stdio, Streamable HTTP and legacy `sse`; bearer tokens; OAuth 2.1 with RFC 9728 discovery, DCR, PKCE S256, a `127.0.0.1` loopback callback, refresh and local disconnect; tokens live in Windows Credential Manager (chunked when oversized), never SQLite, JS or logs; migration 30 adds `auth_type` default `none`; auth states are not checked, connecting, waiting for browser, connected, authorization required, expired and failed; non-text tool results are described, `notifications/tools/list_changed` re-lists after five minutes, a handshake has a 20-second deadline and the protocol negotiates down. 0.6.1: legacy SSE session eviction, unique request ids, bounded framing, same-origin bearer endpoints, and Windows `.cmd` shim/PATH/`CREATE_NO_WINDOW` launch with a 60-second cold start. 0.7.0 plan: Rust-owned server state machine, standard `mcpServers` import/export, Job Object process lifetime, server logs, tool-hash re-approval and `server/discover` fallback — see `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`)
 - **Ref:** † OpenCode and Claude Code both support MCP servers and skills (`SKILL.md`).
 - **Build:** Not before D4 and D5 are proven. Skills first (read a markdown file into context on demand), MCP second, every MCP tool going through the permission engine.
+- **Not:** MCP server mode, enterprise SSO or device flow, pre-registered OAuth client fields, a hosted CIMD document, custom-scheme callbacks, server-side revocation, per-tool OAuth scopes, custom headers beyond a bearer token, and non-Windows platforms. Disconnect clears the local credential only.
 - **Done:** An MCP tool cannot run without passing D4.
 
 ## J13. Windows computer use
