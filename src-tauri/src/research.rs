@@ -33,6 +33,7 @@ pub struct ResearchRequest<'a> {
     pub key: &'a str,
     pub model: &'a str,
     pub connection_kind: Option<&'a str>,
+    pub connection_id: &'a str,
     pub backend: Option<&'a str>,
     pub endpoint: Option<&'a str>,
     pub query: &'a str,
@@ -57,6 +58,7 @@ pub async fn run(
         key,
         model,
         connection_kind,
+        connection_id,
         backend,
         endpoint,
         query,
@@ -74,7 +76,7 @@ pub async fn run(
         base_url,
         key,
         model,
-        connection_kind,
+        llm::ProviderRoute::new(connection_kind, Some(connection_id)),
         cancel,
         &query,
     )
@@ -164,6 +166,7 @@ pub async fn run(
         user: &prompt,
         cancel,
         connection_kind,
+        connection_id: Some(connection_id),
     });
     let memo = match tokio::time::timeout(SYNTH_BUDGET, completion).await {
         Ok(Ok(text)) => cap_memo(text),
@@ -185,7 +188,7 @@ async fn plan_queries(
     base_url: &str,
     key: &str,
     model: &str,
-    connection_kind: Option<&str>,
+    route: llm::ProviderRoute<'_>,
     cancel: &Notify,
     query: &str,
 ) -> AppResult<(Vec<String>, bool)> {
@@ -198,7 +201,8 @@ async fn plan_queries(
         system: PLAN_SYSTEM,
         user: &prompt,
         cancel,
-        connection_kind,
+        connection_kind: route.kind,
+        connection_id: route.connection_id,
     });
     match tokio::time::timeout(PLAN_BUDGET, completion).await {
         Ok(Ok(text)) => Ok((parse_queries(&text, query), true)),

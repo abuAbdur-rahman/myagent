@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   refreshConnections: vi.fn(),
   selectConnection: vi.fn(),
   setApiKey: vi.fn(),
+  addProviderKey: vi.fn(),
   verifyProvider: vi.fn(),
 }));
 
@@ -22,6 +23,7 @@ vi.mock("../../lib/store", () => ({
 
 vi.mock("../../lib/api", () => ({
   setApiKey: mocks.setApiKey,
+  addProviderKey: mocks.addProviderKey,
   verifyProvider: mocks.verifyProvider,
   classifyStreamError: () => ({ hint: "Provider error. Raw message below." }),
   formatInvokeError: (error: unknown) => {
@@ -54,6 +56,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.saveConnection.mockResolvedValue(savedConnection);
   mocks.setApiKey.mockResolvedValue(undefined);
+  mocks.addProviderKey.mockResolvedValue(1);
 });
 
 afterEach(cleanup);
@@ -97,6 +100,27 @@ describe("ProviderDialog", () => {
     );
   });
 
+  it("adds another key when editing an existing provider", async () => {
+    mocks.verifyProvider.mockResolvedValue(1);
+
+    render(
+      <ProviderDialog
+        open
+        connection={savedConnection}
+        onClose={vi.fn()}
+        onResult={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Leave blank, or add another key"), {
+      target: { value: "sk-second" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(mocks.addProviderKey).toHaveBeenCalledWith("conn-1", "sk-second"));
+    expect(mocks.setApiKey).not.toHaveBeenCalled();
+  });
+
   it("keeps the saved draft after a successful test", async () => {
     mocks.verifyProvider.mockResolvedValue(1);
     const onClose = vi.fn();
@@ -129,9 +153,7 @@ describe("ProviderDialog", () => {
 
   it("keeps an existing draft when a retry cannot save its key", async () => {
     mocks.verifyProvider.mockRejectedValue(new Error("model check failed"));
-    mocks.setApiKey
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("vault down"));
+    mocks.addProviderKey.mockRejectedValueOnce(new Error("vault down"));
 
     render(
       <ProviderDialog

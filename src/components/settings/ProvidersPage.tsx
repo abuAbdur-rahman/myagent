@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, Eye, EyeOff, PlugZap, Plus, RotateCcw } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, PlugZap, Plus, RotateCcw, X } from "lucide-react";
 import { useApp } from "../../lib/store";
 import * as api from "../../lib/api";
 import * as db from "../../lib/db";
@@ -21,7 +21,11 @@ import { errorText, rollbackConnection } from "../../lib/utils";
 import { timeAgo } from "../../lib/grouping";
 import { KEY_STATUS_TEXT, keyStatus, type KeyStatus } from "../../lib/providers";
 
-type KeyState = { hint: string | null; error: string | null };
+type KeyState = {
+  hint: string | null;
+  error: string | null;
+  keys: api.ProviderKeyInfo[];
+};
 type TestState = { ok: boolean; text: string };
 
 const STATUS_TONE: Record<KeyStatus, PillTone> = {
@@ -78,7 +82,7 @@ function ProviderKeyField({
             type={showKey ? "text" : "password"}
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder={connection ? "Leave blank to keep the stored key" : "sk-…"}
+            placeholder={connection ? "Leave blank, or add another key" : "sk-…"}
             autoComplete="off"
           />
           <Button
@@ -194,7 +198,11 @@ export function ProviderDialog({
   ): Promise<string | null> => {
     if (!key.trim()) return null;
     try {
-      await api.setApiKey(saved.id, key.trim());
+      if (created) {
+        await api.setApiKey(saved.id, key.trim());
+      } else {
+        await api.addProviderKey(saved.id, key.trim());
+      }
       setKey("");
       return null;
     } catch (e) {
@@ -541,9 +549,10 @@ export function ProvidersPage() {
     const entries = await Promise.all(
       connections.map(async (c) => {
         try {
-          return [c.id, { hint: await api.apiKeyHint(c.id), error: null }] as const;
+          const keys = await api.providerKeyHints(c.id);
+          return [c.id, { hint: keys[0]?.hint ?? null, error: null, keys }] as const;
         } catch (e) {
-          return [c.id, { hint: null, error: errorText(e) }] as const;
+          return [c.id, { hint: null, error: errorText(e), keys: [] }] as const;
         }
       }),
     );
@@ -562,6 +571,7 @@ export function ProvidersPage() {
         throw new Error("No models found. Check the API key and base URL.");
       }
       await db.markKeyTested(connection.id);
+      api.clearModelCache(connection.id);
       await refreshConnections();
       setTestState((prev) => ({
         ...prev,
@@ -593,6 +603,26 @@ export function ProvidersPage() {
     try {
       await api.deleteApiKey(connection.id);
       await db.clearKeyTested(connection.id);
+      await refreshConnections();
+      await reloadKeys();
+      toast("Key removed");
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
+
+  const removeOneKey = async (connection: Connection, index: number) => {
+    const key = keyState[connection.id]?.keys.find((entry) => entry.index === index);
+    const confirmed = await confirmDialog({
+      title: "Remove this key?",
+      body: `${connection.name} keeps its other keys.${key ? ` The key ending ${key.hint.slice(-4)} stops being used.` : ""}`,
+      danger: true,
+      ok: "Remove key",
+    });
+    if (!confirmed) return;
+    try {
+      const remaining = await api.removeProviderKey(connection.id, index);
+      if (remaining === 0) await db.clearKeyTested(connection.id);
       await refreshConnections();
       await reloadKeys();
       toast("Key removed");
@@ -651,6 +681,7 @@ export function ProvidersPage() {
                   <div className="truncate font-mono text-xs text-muted">{connection.base_url}</div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
                     {state?.hint && <span className="font-mono">{state.hint}</span>}
+                    {state && state.keys.length > 1 && <span>{state.keys.length} keys</span>}
                     {state?.error && <span className="text-danger">{state.error}</span>}
                     {tested ? (
                       <span>Tested {timeAgo(tested)}</span>
@@ -668,12 +699,12 @@ export function ProvidersPage() {
                 >
                   {testingId === connection.id ? <Spinner label="Testing…" /> : "Test"}
                 </Button>
-                {state?.hint && (
+                {state && state.keys.length > 0 && (
                   <Button
                     variant="ghost"
                     size="sm"
-                    aria-label={`Remove the stored key for ${connection.name}`}
-                    title="Remove the stored key"
+                    aria-label={`Remove all stored keys for ${connection.name}`}
+                    title="Remove all stored keys"
                     onClick={() => void removeKey(connection)}
                   >
                     <RotateCcw size={14} />
@@ -690,6 +721,32 @@ export function ProvidersPage() {
                   Delete
                 </Button>
               </div>
+              {state && state.keys.length > 0 && (
+                <div className="mt-2 flex flex-col gap-1 border-t border-border pt-2">
+                  {state.keys.map((key) => (
+                    <div
+                      key={key.index}
+                      className="flex items-center gap-2 text-xs text-muted"
+                    >
+                      <span className="font-mono">{key.hint}</span>
+                      {key.cooldown_secs !== null && (
+                        <span className="text-warn">
+                          Cooling down {Math.ceil(key.cooldown_secs / 60)} min
+                        </span>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Remove key ${key.hint} for ${connection.name}`}
+                        title="Remove this key"
+                        onClick={() => void removeOneKey(connection, key.index)}
+                      >
+                        <X size={12} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {testState[connection.id] && (
                 <p
                   className={
@@ -710,7 +767,8 @@ export function ProvidersPage() {
 
       <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
         Keys are stored in the Windows Credential Manager on this device only. The page shows the
-        last four characters, never the key.
+        last four characters, never the key. Add up to ten keys per provider; a key that reports a
+        quota error cools down for ten minutes before it is tried again.
       </p>
 
       <ProviderDialog

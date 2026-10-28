@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 
 use super::{
-    EventSink, Iteration, StreamEvent, finish_iteration_parts, is_cancel_shutdown, message_text,
-    post_with_retry,
+    EventSink, Iteration, ProviderRoute, StreamEvent, finish_iteration_parts, is_cancel_shutdown,
+    message_text, post_with_retry,
 };
 use crate::error::{AppError, AppResult};
 use crate::sse::{self, SseItem};
@@ -898,9 +898,9 @@ pub(super) async fn stream_iteration(
     body: &Value,
     cancel: &Notify,
     on_event: &dyn EventSink,
-    kind: Option<&str>,
+    route: ProviderRoute<'_>,
 ) -> AppResult<Option<Iteration>> {
-    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event), kind).await {
+    let resp = match post_with_retry(client, url, key, body, cancel, Some(on_event), route).await {
         Ok(resp) => resp,
         Err(error) if is_cancel_shutdown(&error) => return Ok(None),
         Err(error) => return Err(error),

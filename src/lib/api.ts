@@ -9,12 +9,26 @@ export function setApiKey(connectionId: string, apiKey: string) {
   return invoke<void>("set_api_key", { connectionId, apiKey });
 }
 
-export function hasApiKey(connectionId: string) {
-  return invoke<boolean>("has_api_key", { connectionId });
+export interface ProviderKeyInfo {
+  index: number;
+  hint: string;
+  cooldown_secs: number | null;
 }
 
-export function apiKeyHint(connectionId: string) {
-  return invoke<string | null>("api_key_hint", { connectionId });
+export function addProviderKey(connectionId: string, apiKey: string) {
+  return invoke<number>("add_provider_key", { connectionId, apiKey });
+}
+
+export function removeProviderKey(connectionId: string, index: number) {
+  return invoke<number>("remove_provider_key", { connectionId, index });
+}
+
+export function providerKeyHints(connectionId: string) {
+  return invoke<ProviderKeyInfo[]>("provider_key_hints", { connectionId });
+}
+
+export function hasApiKey(connectionId: string) {
+  return invoke<boolean>("has_api_key", { connectionId });
 }
 
 export function deleteApiKey(connectionId: string) {
@@ -71,8 +85,83 @@ export function removeSearchKey(index: number) {
   return invoke<number>("search_key_remove", { index });
 }
 
-export function listModels(connectionId: string, connectionKind?: string) {
-  return invoke<string[]>("list_models", { connectionId, connectionKind });
+const MODEL_CACHE_KEY = "myagent.model-cache.v1";
+const MODEL_CACHE_TTL_MS = 10 * 60 * 60 * 1000;
+
+interface ModelCacheEntry {
+  at: number;
+  models: string[];
+}
+
+type ModelCache = Record<string, ModelCacheEntry>;
+
+function readModelCache(): ModelCache {
+  try {
+    const raw = localStorage.getItem(MODEL_CACHE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const cache: ModelCache = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== "object") continue;
+      const entry = value as { at?: unknown; models?: unknown };
+      if (typeof entry.at !== "number" || !Array.isArray(entry.models)) continue;
+      if (!entry.models.every((model): model is string => typeof model === "string")) continue;
+      cache[key] = { at: entry.at, models: entry.models };
+    }
+    return cache;
+  } catch {
+    return {};
+  }
+}
+
+function writeModelCache(cache: ModelCache) {
+  try {
+    localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // A full or unavailable store must not break the picker.
+  }
+}
+
+function modelCacheKey(connectionId: string, connectionKind?: string) {
+  return `${connectionId}|${connectionKind ?? ""}`;
+}
+
+export function clearModelCache(connectionId?: string) {
+  try {
+    if (!connectionId) {
+      localStorage.removeItem(MODEL_CACHE_KEY);
+      return;
+    }
+    const cache = readModelCache();
+    const prefix = `${connectionId}|`;
+    let changed = false;
+    for (const key of Object.keys(cache)) {
+      if (!key.startsWith(prefix)) continue;
+      delete cache[key];
+      changed = true;
+    }
+    if (changed) writeModelCache(cache);
+  } catch {
+    // Cache invalidation is best-effort.
+  }
+}
+
+export async function listModels(
+  connectionId: string,
+  connectionKind?: string,
+  force = false,
+) {
+  const key = modelCacheKey(connectionId, connectionKind);
+  if (!force) {
+    const hit = readModelCache()[key];
+    if (hit && Date.now() - hit.at < MODEL_CACHE_TTL_MS) return hit.models;
+  }
+  const models = await invoke<string[]>("list_models", { connectionId, connectionKind });
+  const cache = readModelCache();
+  cache[key] = { at: Date.now(), models };
+  writeModelCache(cache);
+  return models;
 }
 
 export function verifyProvider(connectionId: string, connectionKind?: string) {

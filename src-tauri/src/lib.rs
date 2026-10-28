@@ -438,6 +438,9 @@ pub fn run() {
         .manage(state::StreamState::default())
         .invoke_handler(tauri::generate_handler![
             vault::set_api_key,
+            vault::add_provider_key,
+            vault::remove_provider_key,
+            vault::provider_key_hints,
             vault::has_api_key,
             vault::api_key_hint,
             vault::delete_api_key,

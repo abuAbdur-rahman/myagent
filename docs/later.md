@@ -284,7 +284,7 @@ Owner decisions on 2026-10-22: these do not ship with the memory file release.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | — | Provider key rotation: several keys per connection, skip the exhausted one, retry after 10 min, per-key list in Providers | Missing (promised in 0.4.1 S8, moved to 0.6.0) | M | C1 |
+| [x] | — | Provider key rotation: several keys per connection, skip the exhausted one, retry after 10 min, per-key list in Providers | Have (0.6.0: up to ten keys per connection, quota errors cool a key down for 10 minutes, per-key list and remove controls in Providers) | M | C1 |
 | [ ] | — | Generic sandbox permissions: one Read / Write / Bash / Host category instead of per-path and per-command rules | Missing | M | D4 |
 | [ ] | — | YOLO mode: no prompts, explicit Deny still wins; toggles in the composer and on the Sandbox page | Missing | S | D4, generic permissions |
 | [ ] | — | Recent models in the picker: top 3 used, filtered against what the provider still offers | Missing | S | C2 |
