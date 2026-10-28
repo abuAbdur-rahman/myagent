@@ -309,6 +309,21 @@ it is a third-party npm bridge and is not part of the product.
 
 ---
 
+## Planned for 0.7.0 to 1.0.0
+
+Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`. The research behind it is
+dated 2026-10-27; verify protocol and crate details before starting an item.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [x] | F4 | Composer: paste raw clipboard images (screenshots that arrive as clipboard items) | Done (0.6.1) | S | F4 |
+| [ ] | J12 | MCP setup UX: Rust-owned state machine, standard `mcpServers` import/export, Windows spawn/PATH/job-object handling, server logs, tool-hash re-approval, `server/discover` fallback (0.7.0) | Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md` | L | J12, D4, D5 |
+| [ ] | J13 | Windows computer use, observe-only: UIA tree first, screenshot fallback, per-app View tier, audit log (0.8.0) | Plan: same | L | J12, D4 |
+| [ ] | J13 | Windows computer use, act and safety: invoke/click/type/keys, per-app tiers, hard denies, kill switch, overlay, dry-run (0.9.0) | Plan: same | L | 0.8.0 |
+| [ ] | — | 1.0.0 integration: MCP + computer-use polish, clean-machine eval, security review | Plan: same | M | 0.7.0–0.9.0 |
+
+---
+
 ## Not now
 
 | ID | Feature | Reason |

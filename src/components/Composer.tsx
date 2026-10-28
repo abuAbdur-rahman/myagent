@@ -27,6 +27,7 @@ import {
   MAX_DOC_BYTES,
   type ChatDocument,
 } from "../lib/chat-docs";
+import { clipboardFiles, pastedImageName } from "../lib/clipboard";
 import { downscaleImage, isSupportedImage } from "../lib/image";
 import { useVoiceInput } from "./composer/useVoiceInput";
 import type { FileCommand } from "../lib/types";
@@ -124,8 +125,9 @@ function expandCommandText(
 }
 
 async function buildImageChip(file: File, index: number): Promise<ImageChip | null> {
+  const name = pastedImageName(file, index);
   if (file.size > MAX_IMAGE_BYTES) {
-    toast(`"${file.name}": over ${formatBytes(MAX_IMAGE_BYTES)}, skipped.`);
+    toast(`"${name}": over ${formatBytes(MAX_IMAGE_BYTES)}, skipped.`);
     return null;
   }
   try {
@@ -133,12 +135,12 @@ async function buildImageChip(file: File, index: number): Promise<ImageChip | nu
     return {
       key: `img-${index}-${Date.now()}`,
       kind: "image",
-      name: file.name,
+      name,
       detail: formatBytes(file.size),
       dataUrl: downscaled.dataUrl,
     };
   } catch {
-    toast(`"${file.name}": couldn't read as image.`);
+    toast(`"${name}": couldn't read as image.`);
     return null;
   }
 }
@@ -532,7 +534,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         void attachFiles([...event.dataTransfer.files]);
       }}
       onPaste={(event) => {
-        const files = [...event.clipboardData.files];
+        const files = clipboardFiles(event.clipboardData);
         if (files.length > 0) {
           event.preventDefault();
           void attachFiles(files);

@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.6.1",
+    date: "2026-10-28",
+    summary:
+      "A review-fix patch for 0.6.0: legacy MCP SSE sessions reconnect cleanly, provider keys rotate from the first available key, model-list Refresh bypasses the backend cache, and raw clipboard screenshots paste into the composer.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "A closed legacy SSE stream is evicted and reconnected. Requests use unique JSON-RPC ids, server-initiated requests are ignored, framing buffers are bounded, and a bearer token is only sent to the same origin as the SSE endpoint.",
+      },
+      {
+        kind: "fixed",
+        text: "Provider key rotation starts with the first key that is not cooling down. A quota-flavoured 429 only marks a key exhausted when another key is available; a lone key keeps the normal rate-limit backoff.",
+      },
+      {
+        kind: "fixed",
+        text: "Refresh on Models bypasses the backend ten-hour model cache as well as the picker cache. Empty lists are not cached, and an in-flight request cannot repopulate a cache that was just invalidated.",
+      },
+      {
+        kind: "fixed",
+        text: "Retrying a draft provider replaces its key instead of adding a second key. Stored model-cache entries are validated with Zod.",
+      },
+      {
+        kind: "fixed",
+        text: "Pasting a screenshot works when the clipboard exposes the image as a clipboard item rather than a file. Unnamed pasted images get a generated name.",
+      },
+    ],
+  },
+  {
     version: "0.6.0",
     date: "2026-10-26",
     summary:

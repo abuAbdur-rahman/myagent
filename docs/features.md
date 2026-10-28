@@ -482,7 +482,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Text excerpt of an attached project doc reaches the next turn's context.
 
 ## F4. Image input (vision)
-- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts. 0.3.2: sent images are stored on the message, survive regenerate and edit-resubmit, and render after reload. 0.3.4: image support is tri-state — a provider that reports no modality reads unknown and is treated as able to see, a known-family table answers in between, a per-model override in Settings → Models wins over both; only a model that cannot see is routed to the fallback and offered describe_image, which now runs on the fallback model's own provider)
+- **Status:** Have (0.3.0: paste/attach + downscale, blind models route to vision fallback tool, non-vision never gets image parts. 0.3.2: sent images are stored on the message, survive regenerate and edit-resubmit, and render after reload. 0.3.4: image support is tri-state — a provider that reports no modality reads unknown and is treated as able to see, a known-family table answers in between, a per-model override in Settings → Models wins over both; only a model that cannot see is routed to the fallback and offered describe_image, which now runs on the fallback model's own provider. 0.6.1: raw clipboard images that arrive as clipboard items, not files, paste as attachments; unnamed screenshots get a generated name)
 - **Ref:** Claude and OpenWebUI accept pasted images for vision models.
 - **Build:** Paste or attach, downscale to a max edge, send as a content part unless the model is known not to see (C3), with a per-model override in Settings → Models.
 - **Done:** A non-vision model never receives an image part.
@@ -628,10 +628,16 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** A scheduled run produces a stored result.
 
 ## J12. MCP and skills
-- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page. 0.6.0: `rmcp` stdio and Streamable HTTP, bearer tokens, and OAuth 2.1 with DCR, PKCE, a loopback callback and refresh; legacy `sse` retained. Pre-registered clients, custom-scheme callbacks and server-side revocation are not in 0.6.0 — see `docs/plan/v0.6.0-mcp-auth.md`)
+- **Status:** Have (0.3.0: skills index + `skill` tool + `@mention`; MCP stdio+sse, namespaced tools, permission-gated. 0.3.2: migrations for `approval_mode`, `deny_tools`, `ask_tools` + rebuilt MCP page. 0.6.0: `rmcp` stdio and Streamable HTTP, bearer tokens, and OAuth 2.1 with DCR, PKCE, a loopback callback and refresh; legacy `sse` retained. 0.6.1: legacy SSE session eviction, unique request ids, bounded framing, same-origin bearer endpoints, and provider-key/model-cache review fixes. 0.7.0 plan: Rust-owned server state machine, standard `mcpServers` import/export, Windows spawn/PATH/job-object handling, server logs, tool-hash re-approval and `server/discover` fallback — see `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`. Pre-registered clients, custom-scheme callbacks and server-side revocation are not in 0.6.0 — see `docs/plan/v0.6.0-mcp-auth.md`)
 - **Ref:** † OpenCode and Claude Code both support MCP servers and skills (`SKILL.md`).
 - **Build:** Not before D4 and D5 are proven. Skills first (read a markdown file into context on demand), MCP second, every MCP tool going through the permission engine.
 - **Done:** An MCP tool cannot run without passing D4.
+
+## J13. Windows computer use
+- **Status:** Planned (0.8.0 observe-only, 0.9.0 actions and safety; 1.0.0 integration. Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`)
+- **Ref:** Codex/Claude computer use, Windows-MCP, and the Rust UIA/capture/input ecosystem. Research date 2026-10-27; verify crate and API details before starting.
+- **Build:** A separate Rust stdio MCP server bundled with the app. UI Automation tree first, screenshots as fallback; observe tools first, then semantic actions; per-app approval by executable and publisher, `View`/`Interact`/`Full` tiers, hard denies, kill switch, always-on control indicator, yield-to-user, audit and dry-run. Windows-only, no elevated agent, no raw shell.
+- **Done:** The agent completes a scripted Windows eval set inside approved apps, and every mutating action is auditable and interruptible.
 
 # I. Skipped for now
 
