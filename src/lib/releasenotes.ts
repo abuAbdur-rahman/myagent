@@ -25,7 +25,7 @@ export const RELEASES: readonly Release[] = [
     version: "0.6.1",
     date: "2026-10-28",
     summary:
-      "A review-fix patch for 0.6.0: legacy MCP SSE sessions reconnect cleanly, Windows stdio MCP servers launch through cmd shims, provider keys rotate from the first available key, model-list Refresh bypasses the backend cache, and raw clipboard screenshots paste into the composer.",
+      "A review-fix patch for 0.6.0: legacy MCP SSE sessions reconnect cleanly, Windows stdio MCP servers resolve their .cmd shims, provider keys rotate from the first available key, model-list Refresh bypasses the backend cache, and raw clipboard screenshots paste into the composer.",
     changes: [
       {
         kind: "fixed",
@@ -37,7 +37,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "Provider key rotation starts with the first key that is not cooling down. A quota-flavoured 429 only marks a key exhausted when another key is available; a lone key keeps the normal rate-limit backoff.",
+        text: "Provider key rotation starts with the first key that is not cooling down. A quota-flavoured 429 or payment-required response marks the active key exhausted; with another key the request moves on, otherwise the error reports the cooldown. A plain 429 keeps the normal rate-limit backoff.",
       },
       {
         kind: "fixed",
