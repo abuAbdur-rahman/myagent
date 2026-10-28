@@ -33,7 +33,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "Windows stdio MCP servers now launch reliably: npx/npm/pnpm/yarn/uvx shims run through cmd /c, PATH includes the registry and common tool directories, children run without a console window, and a cold install gets 60 seconds instead of 20.",
+        text: "Windows stdio MCP servers now launch reliably: npx/npm/pnpm/yarn/uvx shims resolve to their .cmd files with Rust's batch escaping, PATH includes the registry and common tool directories, children run without a console window, and a cold install gets 60 seconds instead of 20.",
       },
       {
         kind: "fixed",

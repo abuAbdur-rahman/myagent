@@ -1544,14 +1544,12 @@ async fn post_with_retry(
                             }
                             continue;
                         }
-                        if status == reqwest::StatusCode::PAYMENT_REQUIRED {
-                            vault::mark_provider_key_exhausted(connection_id, &active_key);
-                            let wait = vault::earliest_provider_key_cooldown(connection_id)?
-                                .unwrap_or(KEY_COOLDOWN_SECS);
-                            return Err(AppError::Upstream(format!(
-                                "all provider keys are cooling down; retry in {wait}s"
-                            )));
-                        }
+                        vault::mark_provider_key_exhausted(connection_id, &active_key);
+                        let wait = vault::earliest_provider_key_cooldown(connection_id)?
+                            .unwrap_or(KEY_COOLDOWN_SECS);
+                        return Err(AppError::Upstream(format!(
+                            "all provider keys are cooling down; retry in {wait}s"
+                        )));
                     }
                     if status == reqwest::StatusCode::TOO_MANY_REQUESTS
                         && attempt + 1 < MAX_ATTEMPTS

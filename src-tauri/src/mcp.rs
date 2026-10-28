@@ -205,42 +205,48 @@ fn child_path() -> OsString {
 fn resolve_program(program: &str, path: &OsStr) -> Option<PathBuf> {
     let candidate = Path::new(program);
     if candidate.is_absolute() || candidate.components().count() > 1 {
-        return candidate.is_file().then(|| candidate.to_path_buf());
+        return (spawnable(candidate) && candidate.is_file()).then(|| candidate.to_path_buf());
     }
     for dir in std::env::split_paths(path) {
-        let direct = dir.join(program);
-        if direct.is_file() {
-            return Some(direct);
-        }
         #[cfg(windows)]
-        for extension in [".exe", ".cmd", ".bat", ".com"] {
-            let with_extension = dir.join(format!("{program}{extension}"));
-            if with_extension.is_file() {
-                return Some(with_extension);
+        {
+            for extension in [".exe", ".cmd", ".bat", ".com"] {
+                let with_extension = dir.join(format!("{program}{extension}"));
+                if with_extension.is_file() {
+                    return Some(with_extension);
+                }
+            }
+            let direct = dir.join(program);
+            if spawnable(&direct) && direct.is_file() {
+                return Some(direct);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let direct = dir.join(program);
+            if direct.is_file() {
+                return Some(direct);
             }
         }
     }
     None
 }
 
-fn normalize_command(program: &Path, args: &[String]) -> (OsString, Vec<OsString>) {
+fn spawnable(path: &Path) -> bool {
     #[cfg(windows)]
     {
-        let extension = program
-            .extension()
+        path.extension()
             .and_then(OsStr::to_str)
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if extension == "cmd" || extension == "bat" {
-            let mut wrapped = vec![OsString::from("/C"), program.as_os_str().to_os_string()];
-            wrapped.extend(args.iter().map(OsString::from));
-            return (OsString::from("cmd.exe"), wrapped);
-        }
+            .is_some_and(|extension| {
+                ["exe", "cmd", "bat", "com"]
+                    .iter()
+                    .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+            })
     }
-    (
-        program.as_os_str().to_os_string(),
-        args.iter().map(OsString::from).collect(),
-    )
+    #[cfg(not(windows))]
+    {
+        path.is_file()
+    }
 }
 
 fn resolve_command(parts: &[String]) -> Result<(OsString, Vec<OsString>, OsString), String> {
@@ -248,8 +254,11 @@ fn resolve_command(parts: &[String]) -> Result<(OsString, Vec<OsString>, OsStrin
     let path = child_path();
     let resolved = resolve_program(program, &path)
         .ok_or_else(|| format!("command not found: {program}. Install it or use the full path."))?;
-    let (program, args) = normalize_command(&resolved, &parts[1..]);
-    Ok((program, args, path))
+    Ok((
+        resolved.into_os_string(),
+        parts[1..].iter().map(OsString::from).collect(),
+        path,
+    ))
 }
 
 pub fn unavailable(server: &str) -> String {
@@ -359,29 +368,36 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn normalizes_cmd_shims_through_cmd() {
-        let (program, args) = normalize_command(
-            Path::new(r"C:\tools\npx.cmd"),
-            &["-y".to_string(), "server".to_string()],
-        );
-        assert_eq!(program, OsString::from("cmd.exe"));
-        assert_eq!(
-            args,
-            vec![
-                OsString::from("/C"),
-                OsString::from(r"C:\tools\npx.cmd"),
-                OsString::from("-y"),
-                OsString::from("server"),
-            ]
-        );
+    fn resolves_cmd_shim_before_extensionless_script() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let dir = std::env::temp_dir().join(format!(
+            "myagent-mcp-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let shim = dir.join("npx.cmd");
+        let shell = dir.join("npx");
+        std::fs::write(&shim, "@echo off").expect("shim");
+        std::fs::write(&shell, "#!/bin/sh").expect("shell");
+        assert_eq!(resolve_program("npx", dir.as_os_str()), Some(shim.clone()));
+        let (program, args, _) =
+            resolve_command(&[shim.to_string_lossy().into_owned(), "-y".to_string()])
+                .expect("resolved command");
+        assert_eq!(program, shim.into_os_string());
+        assert_eq!(args, vec![OsString::from("-y")]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn leaves_exe_commands_unwrapped() {
-        let (program, args) =
-            normalize_command(Path::new(r"C:\tools\server.exe"), &["--port".to_string()]);
-        assert_eq!(program, OsString::from(r"C:\tools\server.exe"));
-        assert_eq!(args, vec![OsString::from("--port")]);
+    fn rejects_interpreter_only_extensions() {
+        assert!(!spawnable(Path::new(r"C:\tools\server.ps1")));
+        assert!(spawnable(Path::new(r"C:\tools\server.CMD")));
     }
 
     #[test]

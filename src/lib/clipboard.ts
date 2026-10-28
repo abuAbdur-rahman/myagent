@@ -14,23 +14,29 @@ export async function clipboardFiles(data: ClipboardDataLike): Promise<File[]> {
   for (let index = 0; index < data.files.length; index += 1) {
     files.push(data.files[index]);
   }
-  const images: File[] = [];
+  const itemFiles: File[] = [];
   for (let index = 0; index < data.items.length; index += 1) {
     const item = data.items[index];
     if (item.kind !== "file") continue;
     const file = item.getAsFile();
-    if (!file) continue;
-    const typed = await ensureImageType(file);
-    if (typed.type.startsWith("image/")) images.push(typed);
+    if (file) itemFiles.push(file);
   }
-  if (images.length === 0) return files;
-  if (files.some((file) => file.type.startsWith("image/"))) return files;
-  const typedByKey = new Map(images.map((image) => [fileKey(image), image]));
-  const merged = files.map((file) => typedByKey.get(fileKey(file)) ?? file);
+  const normalizedFiles = await Promise.all(files.map(ensureImageType));
+  const normalizedItems = await Promise.all(itemFiles.map(ensureImageType));
+  const images = normalizedItems.filter((file) => file.type.startsWith("image/"));
+  if (images.length === 0) return normalizedFiles;
+  const merged = normalizedFiles.slice();
+  const matched = new Set<number>();
   for (const image of images) {
-    if (!merged.some((file) => fileKey(file) === fileKey(image))) {
+    const index = merged.findIndex(
+      (file, fileIndex) => !matched.has(fileIndex) && sameFile(file, image),
+    );
+    if (index < 0) {
       merged.push(image);
+      continue;
     }
+    matched.add(index);
+    merged[index] = image;
   }
   return merged;
 }
@@ -42,8 +48,8 @@ export function pastedImageName(file: File, index: number): string {
   return `pasted-image-${index + 1}.${extension}`;
 }
 
-function fileKey(file: File): string {
-  return `${file.name}\u0000${file.size}`;
+function sameFile(left: File, right: File): boolean {
+  return left.name === right.name && left.size === right.size && left.type === right.type;
 }
 
 async function ensureImageType(file: File): Promise<File> {

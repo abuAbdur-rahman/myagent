@@ -28,10 +28,33 @@ describe("clipboardFiles", () => {
   });
 
   it("prefers a typed image item when the clipboard file has no type", async () => {
-    const untyped = file("", "");
-    const image = file("", "image/png");
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const untyped = new File([bytes], "", { type: "" });
+    const image = new File([bytes], "", { type: "image/png" });
     const item = { kind: "file", type: "image/png", getAsFile: () => image };
-    expect(await clipboardFiles({ files: [untyped], items: [item] })).toEqual([image]);
+    const result = await clipboardFiles({ files: [untyped], items: [item] });
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("image/png");
+  });
+
+  it("normalizes every image in the file list", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const typed = new File([bytes], "a.png", { type: "image/png" });
+    const untyped = new File([bytes], "b", { type: "" });
+    const result = await clipboardFiles({ files: [typed, untyped], items: [] });
+    expect(result.map((item) => item.type)).toEqual(["image/png", "image/png"]);
+  });
+
+  it("keeps distinct images with the same name and size", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const first = new File([bytes], "", { type: "image/png" });
+    const second = new File([bytes], "", { type: "image/png" });
+    const item = (file: File) => ({ kind: "file", type: file.type, getAsFile: () => file });
+    const result = await clipboardFiles({
+      files: [first],
+      items: [item(first), item(second)],
+    });
+    expect(result).toHaveLength(2);
   });
 
   it("keeps a document and adds an image item", async () => {
