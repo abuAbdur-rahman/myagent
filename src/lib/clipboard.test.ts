@@ -1,0 +1,87 @@
+// @vitest-environment jsdom
+import { describe, expect, it } from "vitest";
+
+import { clipboardFiles, pastedImageName } from "./clipboard";
+
+function file(name: string, type: string): File {
+  return new File(["x"], name, { type });
+}
+
+describe("clipboardFiles", () => {
+  it("keeps files already exposed by the clipboard", async () => {
+    const image = file("photo.png", "image/png");
+    expect(await clipboardFiles({ files: [image], items: [] })).toEqual([image]);
+  });
+
+  it("falls back to image items when the clipboard exposes no files", async () => {
+    const image = file("", "image/png");
+    const item = { kind: "file", type: "image/png", getAsFile: () => image };
+    expect(await clipboardFiles({ files: [], items: [item] })).toEqual([image]);
+  });
+
+  it("sniffs an image item with no MIME type", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const image = new File([bytes], "", { type: "" });
+    const item = { kind: "file", type: "", getAsFile: () => image };
+    const [typed] = await clipboardFiles({ files: [], items: [item] });
+    expect(typed.type).toBe("image/png");
+  });
+
+  it("prefers a typed image item when the clipboard file has no type", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const untyped = new File([bytes], "", { type: "" });
+    const image = new File([bytes], "", { type: "image/png" });
+    const item = { kind: "file", type: "image/png", getAsFile: () => image };
+    const result = await clipboardFiles({ files: [untyped], items: [item] });
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("image/png");
+  });
+
+  it("normalizes every image in the file list", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const typed = new File([bytes], "a.png", { type: "image/png" });
+    const untyped = new File([bytes], "b", { type: "" });
+    const result = await clipboardFiles({ files: [typed, untyped], items: [] });
+    expect(result.map((item) => item.type)).toEqual(["image/png", "image/png"]);
+  });
+
+  it("keeps distinct images with the same name and size", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const first = new File([bytes], "", { type: "image/png" });
+    const second = new File([bytes], "", { type: "image/png" });
+    const item = (file: File) => ({ kind: "file", type: file.type, getAsFile: () => file });
+    const result = await clipboardFiles({
+      files: [first],
+      items: [item(first), item(second)],
+    });
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps a document and adds an image item", async () => {
+    const doc = file("a.pdf", "application/pdf");
+    const image = file("", "image/png");
+    const item = { kind: "file", type: "image/png", getAsFile: () => image };
+    expect(await clipboardFiles({ files: [doc], items: [item] })).toEqual([doc, image]);
+  });
+
+  it("ignores text and non-image items", async () => {
+    const text = { kind: "string", type: "text/plain", getAsFile: () => null };
+    const doc = {
+      kind: "file",
+      type: "application/pdf",
+      getAsFile: () => file("a.pdf", "application/pdf"),
+    };
+    expect(await clipboardFiles({ files: [], items: [text, doc] })).toEqual([]);
+  });
+});
+
+describe("pastedImageName", () => {
+  it("names an unnamed pasted image", () => {
+    expect(pastedImageName(file("", "image/png"), 0)).toBe("pasted-image-1.png");
+    expect(pastedImageName(file("", "image/jpeg"), 1)).toBe("pasted-image-2.jpg");
+  });
+
+  it("keeps the original name when there is one", () => {
+    expect(pastedImageName(file("shot.png", "image/png"), 0)).toBe("shot.png");
+  });
+});

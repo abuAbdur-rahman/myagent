@@ -151,9 +151,11 @@ describe("ProviderDialog", () => {
     expect(mocks.saveConnection.mock.calls[1]?.[1]).toBe("conn-1");
   });
 
-  it("keeps an existing draft when a retry cannot save its key", async () => {
+  it("replaces a draft key on retry and keeps the row when that save fails", async () => {
     mocks.verifyProvider.mockRejectedValue(new Error("model check failed"));
-    mocks.addProviderKey.mockRejectedValueOnce(new Error("vault down"));
+    mocks.setApiKey
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("vault down"));
 
     render(
       <ProviderDialog
@@ -183,6 +185,8 @@ describe("ProviderDialog", () => {
       expect(screen.getByText(/Couldn't save the key/i)).toBeTruthy();
     });
     expect(mocks.removeConnection).not.toHaveBeenCalled();
+    expect(mocks.addProviderKey).not.toHaveBeenCalled();
+    expect(mocks.setApiKey).toHaveBeenLastCalledWith("conn-1", "sk-retry");
     expect(mocks.saveConnection).toHaveBeenLastCalledWith(
       expect.objectContaining({ kind: "openrouter" }),
       "conn-1",

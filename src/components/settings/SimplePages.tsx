@@ -2520,7 +2520,7 @@ export function ModelsPage() {
         busy={busy}
         onRefresh={async () => {
           api.clearModelCache();
-          await refreshModels();
+          await refreshModels(true);
           await reload();
         }}
       />
@@ -2624,10 +2624,12 @@ function ModelCapabilityTable({
   const refresh = async () => {
     setRefreshing(true);
     try {
+      const ids = connection
+        ? await api.listModels(connection.id, connection.kind, true)
+        : null;
       await onRefresh();
-      if (connection) {
-        const [ids, caps, hidden] = await Promise.all([
-          api.listModels(connection.id, connection.kind),
+      if (connection && ids) {
+        const [caps, hidden] = await Promise.all([
           api.listModelCaps(connection.id, connection.kind),
           db.listHiddenModels(connection.id),
         ]);

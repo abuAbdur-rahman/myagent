@@ -198,7 +198,7 @@ export function ProviderDialog({
   ): Promise<string | null> => {
     if (!key.trim()) return null;
     try {
-      if (created) {
+      if (isNew) {
         await api.setApiKey(saved.id, key.trim());
       } else {
         await api.addProviderKey(saved.id, key.trim());
