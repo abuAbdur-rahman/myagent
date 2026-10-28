@@ -297,16 +297,18 @@ design that is deliberately late. See E6 in `features.md`.
 ## Planned for 0.7.0 to 1.0.0
 
 Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`. The research behind it is
-dated 2026-10-27; verify protocol and crate details before starting an item.
+dated 2026-10-27/28; verify protocol, crate, `jev` binary and `/v1/systemone`
+details before starting an item.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
 | [x] | — | Windows stdio MCP launch: `.cmd` shim resolution, registry PATH, `CREATE_NO_WINDOW`, 60s startup (0.6.1) | Done (0.6.1) | S | — |
 | [x] | F4 | Composer: paste raw clipboard images (screenshots that arrive as clipboard items) | Done (0.6.1) | S | — |
 | [ ] | J12 | MCP setup UX: Rust-owned state machine, standard `mcpServers` import/export, Job Object process lifetime, server logs, tool-hash re-approval, `server/discover` fallback (0.7.0) | Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md` | L | D4, D5 |
-| [ ] | J13 | Windows computer use, observe-only: UIA tree first, screenshot fallback, per-app View tier, audit log (0.8.0) | Plan: same | L | J12, D4 |
-| [ ] | J13 | Windows computer use, act and safety: invoke/click/type/keys, per-app tiers, hard denies, kill switch, overlay, dry-run (0.9.0) | Plan: same | L | 0.8.0 |
-| [ ] | — | 1.0.0 integration: MCP + computer-use polish, clean-machine eval, security review | Plan: same | M | 0.7.0–0.9.0 |
+| [ ] | J13 | Windows computer use: UIA tree first, screenshot fallback, observe and act, per-app tiers, hard denies, kill switch, overlay, audit, dry-run (0.7.0) | Plan: same | XL | J12, D4 |
+| [ ] | — | 0.8.0 hardening: lazy Chromium, DPI/multi-monitor, orphan cleanup, eval, security review | Plan: same | M | 0.7.0 |
+| [ ] | J14 | Local navigator: optional CPU tier-2 verifier, jevos-v5, shadow mode, benchmark gates (0.8.0) | Plan: same | M | J13 |
+| [ ] | — | 1.0.0 integration: MCP + computer-use polish, clean-machine eval, security review | Plan: same | M | 0.7.0–0.8.0 |
 
 ---
 

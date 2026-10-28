@@ -666,10 +666,16 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** An MCP tool cannot run without passing D4.
 
 ## J13. Windows computer use
-- **Status:** Planned (0.8.0 observe-only, 0.9.0 actions and safety; 1.0.0 integration. Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`)
+- **Status:** Planned (0.7.0 observe and actions with safety; 0.8.0 hardening/eval and optional J14 local navigator; 1.0.0 integration. Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`)
 - **Ref:** Codex/Claude computer use, Windows-MCP, and the Rust UIA/capture/input ecosystem. Research date 2026-10-27; verify crate and API details before starting.
 - **Build:** A separate Rust stdio MCP server bundled with the app. UI Automation tree first, screenshots as fallback; observe tools first, then semantic actions; per-app approval by executable and publisher, `View`/`Interact`/`Full` tiers, hard denies, kill switch, always-on control indicator, yield-to-user, audit and dry-run. Windows-only, no elevated agent, no raw shell.
 - **Done:** The agent completes a scripted Windows eval set inside approved apps, and every mutating action is auditable and interruptible.
+
+## J14. Local navigator
+- **Status:** Planned (0.8.0 experiment; ship only if the benchmark gates pass. Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`)
+- **Ref:** Research 2026-10-27/28, jevos-v5 and the local navigator doc. Verify the Windows binary, `/v1/systemone` shape and CPU timings before building.
+- **Build:** Optional tier-2 verifier for computer use. The cloud planner plans; Rust name/role matching is tier 1; `jev.exe` OpenVINO INT8 answers one yes/no question per top candidate; the cloud model is tier 3. Act only on calibrated best `>= 0.80` with runner-up `< 0.50`. Spawn as a sidecar with `CREATE_NO_WINDOW`, Job Object, random localhost port and API key, idle stop and below-normal priority. Shadow mode first, off by default, no local vision. Settings: toggle, status, disk size, delete model, benchmark and audit columns.
+- **Done:** On the target laptop, p50 `<= 3 s` plugged in / `<= 5 s` on battery, `>= 90%` top-1 on calibrated `p >= 0.80`, `>= 60%` of steps without the cloud, and no bypass of app tiers, hard denies or approval.
 
 # I. Skipped for now
 
