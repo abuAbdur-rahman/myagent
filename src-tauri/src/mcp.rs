@@ -1452,7 +1452,7 @@ fn cleanup_removed_secrets(
     target: &BTreeMap<String, String>,
 ) {
     for (key, value) in existing {
-        if target.contains_key(key) {
+        if target.get(key) == Some(value) {
             continue;
         }
         let Some(name) = secret_name(value) else {

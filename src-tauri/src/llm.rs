@@ -1493,7 +1493,13 @@ async fn post_with_retry(
     for attempt in 0..MAX_ATTEMPTS {
         let request =
             agentrouter_headers(client.post(url).bearer_auth(&active_key), route.kind, url);
-        match request.json(body).send().await {
+        let notified = cancel.notified();
+        tokio::pin!(notified);
+        let response = tokio::select! {
+            _ = &mut notified => return Err(AppError::Cancelled),
+            response = request.json(body).send() => response,
+        };
+        match response {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
@@ -2101,13 +2107,14 @@ impl ModelClient for RealModel<'_> {
                 true,
                 replay_reasoning_items,
             );
+            let observed = ObservedSink::new(self.on_event);
             let result = responses::stream_iteration(
                 self.client,
                 &endpoint(&self.req.base_url, "responses"),
                 &self.key,
                 &body,
                 self.cancel,
-                self.on_event,
+                &observed,
                 ProviderRoute::new(
                     self.req.connection_kind.as_deref(),
                     Some(&self.req.connection_id),
@@ -2115,6 +2122,7 @@ impl ModelClient for RealModel<'_> {
             )
             .await;
             if replay_reasoning_items
+                && !observed.seen()
                 && result
                     .as_ref()
                     .err()
@@ -2134,7 +2142,7 @@ impl ModelClient for RealModel<'_> {
                     &self.key,
                     &body,
                     self.cancel,
-                    self.on_event,
+                    &observed,
                     ProviderRoute::new(
                         self.req.connection_kind.as_deref(),
                         Some(&self.req.connection_id),
@@ -2183,13 +2191,14 @@ impl ModelClient for RealModel<'_> {
                     true,
                     replay_reasoning_items,
                 );
+                let responses_observed = ObservedSink::new(self.on_event);
                 let result = responses::stream_iteration(
                     self.client,
                     &endpoint(&self.req.base_url, "responses"),
                     &self.key,
                     &body,
                     self.cancel,
-                    self.on_event,
+                    &responses_observed,
                     ProviderRoute::new(
                         self.req.connection_kind.as_deref(),
                         Some(&self.req.connection_id),
@@ -2197,6 +2206,7 @@ impl ModelClient for RealModel<'_> {
                 )
                 .await;
                 if replay_reasoning_items
+                    && !responses_observed.seen()
                     && result
                         .as_ref()
                         .err()
@@ -2216,7 +2226,7 @@ impl ModelClient for RealModel<'_> {
                         &self.key,
                         &body,
                         self.cancel,
-                        self.on_event,
+                        &responses_observed,
                         ProviderRoute::new(
                             self.req.connection_kind.as_deref(),
                             Some(&self.req.connection_id),
@@ -3086,17 +3096,19 @@ async fn stream_responses_completion(
         true,
         replay_reasoning_items,
     );
+    let observed = ObservedSink::new(on_event);
     let result = responses::stream_iteration(
         client,
         &endpoint(&req.base_url, "responses"),
         key,
         &body,
         cancel,
-        on_event,
+        &observed,
         ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
     .await;
     if replay_reasoning_items
+        && !observed.seen()
         && result
             .as_ref()
             .err()
@@ -3116,7 +3128,7 @@ async fn stream_responses_completion(
             key,
             &body,
             cancel,
-            on_event,
+            &observed,
             ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
         )
         .await

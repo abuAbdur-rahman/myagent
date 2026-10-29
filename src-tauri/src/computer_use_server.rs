@@ -893,6 +893,12 @@ impl ComputerUseServer {
         if !metadata.is_file() {
             return Err("invalid_path: path is not a file".to_string());
         }
+        let is_exe = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
+        if !is_exe {
+            return Err("invalid_path: launch_app only starts .exe files".to_string());
+        }
         let name = path
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
@@ -2005,21 +2011,22 @@ fn validate_keys(keys: &str, confirmed: bool) -> Result<(), String> {
         .filter(|token| !token.is_empty())
         .collect();
     let has_token = |needle: &str| tokens.contains(&needle);
+    let ctrl = has("ctrl") || has_token("control");
     if has("win") || has("super") || has("meta") || has("oskey") {
         return Err(format!(
             "hard_denied: {keys} uses the Windows key and can leave the allowlisted app"
         ));
     }
-    if has("ctrl") && has("alt") && (has("delete") || has("del")) {
+    if ctrl && has("alt") && (has("delete") || has("del")) {
         return Err("hard_denied: Ctrl+Alt+Del is reserved for the secure desktop".to_string());
     }
-    if has("ctrl") && has("shift") && (has("esc") || has("escape")) {
+    if ctrl && has("shift") && (has("esc") || has("escape")) {
         return Err("hard_denied: Ctrl+Shift+Esc opens Task Manager".to_string());
     }
-    if has("ctrl") && (has("esc") || has("escape")) {
+    if ctrl && (has("esc") || has("escape")) {
         return Err("hard_denied: Ctrl+Esc opens the Start menu".to_string());
     }
-    if has("ctrl") && has("shift") && (has("enter") || has("return")) {
+    if ctrl && has("shift") && (has("enter") || has("return")) {
         return Err("hard_denied: Ctrl+Shift+Enter requests elevation".to_string());
     }
     if has("alt") && (has("tab") || has("esc") || has("escape")) {
@@ -2033,7 +2040,7 @@ fn validate_keys(keys: &str, confirmed: bool) -> Result<(), String> {
         || compact.contains("controlx")
         || has_token("c")
         || has_token("x");
-    if has("tab") && has("ctrl") && clipboard {
+    if has("tab") && ctrl && clipboard {
         return Err(
             "hard_denied: do not combine Tab with a clipboard shortcut in one key sequence"
                 .to_string(),
@@ -2389,6 +2396,7 @@ mod tests {
         assert!(validate_keys("{ctrl}{tab}{c}", false).is_err());
         assert!(validate_keys("{ctrl}{shift}{esc}", true).is_err());
         assert!(validate_keys("{ctrl}{esc}", true).is_err());
+        assert!(validate_keys("{control}{esc}", true).is_err());
         assert!(validate_keys("{ctrl}{shift}{enter}", true).is_err());
         assert!(validate_keys("{alt}{f4}", false).is_err());
         assert!(validate_keys("{alt}{f4}", true).is_ok());

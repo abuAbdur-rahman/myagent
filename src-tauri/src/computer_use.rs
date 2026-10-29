@@ -326,6 +326,19 @@ fn trim_audit(path: &std::path::Path) {
     };
     let lines: Vec<&str> = raw.lines().collect();
     let start = lines.len().saturating_sub(5_000);
+    if let Ok(dir) = audit_dir() {
+        for dropped in &lines[..start] {
+            let Ok(entry) = serde_json::from_str::<AuditEntry>(dropped) else {
+                continue;
+            };
+            for name in [entry.before, entry.after].into_iter().flatten() {
+                let Some(name) = std::path::Path::new(&name).file_name() else {
+                    continue;
+                };
+                let _ = std::fs::remove_file(dir.join(name));
+            }
+        }
+    }
     let mut kept = lines[start..].join("\n");
     kept.push('\n');
     if let Err(error) = std::fs::write(path, kept) {
