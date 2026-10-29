@@ -476,7 +476,7 @@ async fn post_responses_text(request: ResponsesText<'_>) -> AppResult<String> {
         connection_id,
         max_output_tokens,
     } = request;
-    let mut body = responses::body(model, history, None, None, false);
+    let mut body = responses::body(model, history, None, None, false, true);
     if let Some(max_output_tokens) = max_output_tokens {
         body["max_output_tokens"] = serde_json::json!(max_output_tokens);
     }
@@ -2091,14 +2091,17 @@ impl ModelClient for RealModel<'_> {
         }
         if responses::only(&self.req.base_url, &self.req.model) {
             let effort = responses_effort(self.client, self.req, &self.key).await;
+            let replay_reasoning_items =
+                !is_agentrouter(self.req.connection_kind.as_deref(), &self.req.base_url);
             let body = responses::body(
                 &self.req.model,
                 &prune_tool_history(messages),
                 Some(&self.tool_specs),
                 effort.as_deref(),
                 true,
+                replay_reasoning_items,
             );
-            return responses::stream_iteration(
+            let result = responses::stream_iteration(
                 self.client,
                 &endpoint(&self.req.base_url, "responses"),
                 &self.key,
@@ -2111,6 +2114,35 @@ impl ModelClient for RealModel<'_> {
                 ),
             )
             .await;
+            if replay_reasoning_items
+                && result
+                    .as_ref()
+                    .err()
+                    .is_some_and(responses::is_cross_resource_error)
+            {
+                let body = responses::body(
+                    &self.req.model,
+                    &prune_tool_history(messages),
+                    Some(&self.tool_specs),
+                    effort.as_deref(),
+                    true,
+                    false,
+                );
+                return responses::stream_iteration(
+                    self.client,
+                    &endpoint(&self.req.base_url, "responses"),
+                    &self.key,
+                    &body,
+                    self.cancel,
+                    self.on_event,
+                    ProviderRoute::new(
+                        self.req.connection_kind.as_deref(),
+                        Some(&self.req.connection_id),
+                    ),
+                )
+                .await;
+            }
+            return result;
         }
         let mut body = serde_json::json!({
             "model": self.req.model,
@@ -2141,14 +2173,17 @@ impl ModelClient for RealModel<'_> {
             Err(error) if responses::requires_responses(&error) && !observed.seen() => {
                 responses::mark(&self.req.base_url, &self.req.model);
                 let effort = responses_effort(self.client, self.req, &self.key).await;
+                let replay_reasoning_items =
+                    !is_agentrouter(self.req.connection_kind.as_deref(), &self.req.base_url);
                 let body = responses::body(
                     &self.req.model,
                     &prune_tool_history(messages),
                     Some(&self.tool_specs),
                     effort.as_deref(),
                     true,
+                    replay_reasoning_items,
                 );
-                responses::stream_iteration(
+                let result = responses::stream_iteration(
                     self.client,
                     &endpoint(&self.req.base_url, "responses"),
                     &self.key,
@@ -2160,7 +2195,36 @@ impl ModelClient for RealModel<'_> {
                         Some(&self.req.connection_id),
                     ),
                 )
-                .await
+                .await;
+                if replay_reasoning_items
+                    && result
+                        .as_ref()
+                        .err()
+                        .is_some_and(responses::is_cross_resource_error)
+                {
+                    let body = responses::body(
+                        &self.req.model,
+                        &prune_tool_history(messages),
+                        Some(&self.tool_specs),
+                        effort.as_deref(),
+                        true,
+                        false,
+                    );
+                    return responses::stream_iteration(
+                        self.client,
+                        &endpoint(&self.req.base_url, "responses"),
+                        &self.key,
+                        &body,
+                        self.cancel,
+                        self.on_event,
+                        ProviderRoute::new(
+                            self.req.connection_kind.as_deref(),
+                            Some(&self.req.connection_id),
+                        ),
+                    )
+                    .await;
+                }
+                result
             }
             Err(error) => Err(error),
         }
@@ -3013,7 +3077,14 @@ async fn stream_responses_completion(
 ) -> AppResult<()> {
     let effort = responses_effort(client, req, key).await;
     let history = prune_tool_history(history);
-    let body = responses::body(req.model.as_str(), &history, None, effort.as_deref(), true);
+    let body = responses::body(
+        req.model.as_str(),
+        &history,
+        None,
+        effort.as_deref(),
+        true,
+        !is_agentrouter(req.connection_kind.as_deref(), &req.base_url),
+    );
     responses::stream_iteration(
         client,
         &endpoint(&req.base_url, "responses"),

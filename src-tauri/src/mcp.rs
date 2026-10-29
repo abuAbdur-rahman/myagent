@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +25,11 @@ const MAX_MCP_TEXT_BYTES: usize = 64 * 1024;
 const MAX_LEGACY_SSE_LINE_BYTES: usize = 64 * 1024;
 const MAX_LEGACY_SSE_EVENT_BYTES: usize = 1024 * 1024;
 const MAX_LEGACY_SSE_DATA_LINES: usize = 1024;
+const MAX_MCP_ARGS: usize = 64;
+const MAX_MCP_ENV: usize = 64;
+const MAX_MCP_HEADERS: usize = 32;
+const MAX_MCP_VALUE_BYTES: usize = 8 * 1024;
+const MAX_MCP_CONFIG_BYTES: usize = 32 * 1024;
 const MAX_TOOL_PAGES: usize = 64;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(windows)]
@@ -489,6 +494,45 @@ mod tests {
     }
 
     #[test]
+    fn structured_config_splits_target_and_keeps_env() {
+        let mut row = row(None, [None, None, None], "ask");
+        row.config_json = Some(
+            r#"{"command":"npx","args":["-y","srv"],"env":{"A":"B"},"timeoutMs":5000}"#.to_string(),
+        );
+        let config = McpServerConfig::from(&row);
+        assert_eq!(config.cmd.as_deref(), Some("npx"));
+        assert_eq!(config.args, vec!["-y".to_string(), "srv".to_string()]);
+        assert_eq!(config.env.get("A").map(String::as_str), Some("B"));
+        assert_eq!(config.timeout_ms, Some(5_000));
+    }
+
+    #[test]
+    fn structured_config_rejects_two_targets() {
+        let config = McpConfig {
+            command: Some("npx".to_string()),
+            url: Some("https://example.com/mcp".to_string()),
+            ..McpConfig::default()
+        };
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn structured_config_rejects_bad_headers_and_timeouts() {
+        let config = McpConfig {
+            url: Some("https://example.com/mcp".to_string()),
+            headers: BTreeMap::from([("bad header".to_string(), "value".to_string())]),
+            ..McpConfig::default()
+        };
+        assert!(validate_config(&config).is_err());
+        let config = McpConfig {
+            command: Some("npx".to_string()),
+            timeout_ms: Some(10),
+            ..McpConfig::default()
+        };
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
     fn tool_errors_do_not_look_like_auth_failures() {
         let tool = CallFailure::tool("session expired".to_string());
         assert!(!tool.auth);
@@ -532,7 +576,11 @@ mod tests {
             transport: "stdio".to_string(),
             auth_type: "none".to_string(),
             cmd: Some("npx srv".to_string()),
+            args: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
             url: None,
+            headers: BTreeMap::new(),
             deny_tools: deny.map(|list| list.into_iter().map(String::from).collect()),
             timeout_ms: None,
             _enabled: true,
@@ -555,6 +603,7 @@ mod tests {
             approval_mode: mode.to_string(),
             timeout_ms: None,
             enabled: true,
+            config_json: None,
             has_token: false,
         }
     }
@@ -828,6 +877,19 @@ impl ApprovalMode {
     }
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub url: Option<String>,
+    pub headers: BTreeMap<String, String>,
+    #[serde(alias = "timeoutMs")]
+    pub timeout_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
     pub id: String,
@@ -836,24 +898,41 @@ pub struct McpServerConfig {
     pub transport: String,
     pub auth_type: String,
     pub cmd: Option<String>,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: BTreeMap<String, String>,
     pub url: Option<String>,
+    pub headers: BTreeMap<String, String>,
     pub deny_tools: Option<Vec<String>>,
     pub timeout_ms: Option<u64>,
     pub _enabled: bool,
 }
 
+fn parse_config_json(value: Option<&str>) -> McpConfig {
+    value
+        .and_then(|raw| serde_json::from_str::<McpConfig>(raw).ok())
+        .unwrap_or_default()
+}
+
 impl From<&McpServerRow> for McpServerConfig {
     fn from(row: &McpServerRow) -> McpServerConfig {
+        let config = parse_config_json(row.config_json.as_deref());
         McpServerConfig {
             id: row.id.clone(),
             project_id: row.project_id.clone(),
             name: row.name.clone(),
             transport: row.transport.clone(),
             auth_type: row.auth_type.clone(),
-            cmd: row.cmd.clone(),
-            url: row.url.clone(),
+            cmd: config.command.or_else(|| row.cmd.clone()),
+            args: config.args,
+            cwd: config.cwd,
+            env: config.env,
+            url: config.url.or_else(|| row.url.clone()),
+            headers: config.headers,
             deny_tools: parse_tool_list(row.deny_tools.clone(), "deny_tools"),
-            timeout_ms: row.timeout_ms.map(|v| v as u64),
+            timeout_ms: config
+                .timeout_ms
+                .or_else(|| row.timeout_ms.map(|v| v as u64)),
             _enabled: row.enabled,
         }
     }
@@ -874,12 +953,14 @@ pub struct McpServerRow {
     pub approval_mode: String,
     pub timeout_ms: Option<i64>,
     pub enabled: bool,
+    #[serde(skip)]
+    pub config_json: Option<String>,
     #[sqlx(default)]
     #[serde(default)]
     pub has_token: bool,
 }
 
-const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode FROM mcp_servers";
+const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode, config_json FROM mcp_servers";
 
 fn valid_server_name(name: &str) -> bool {
     !name.trim().is_empty()
@@ -1131,6 +1212,79 @@ fn validate_target(transport: &str, cmd: Option<&str>, url: Option<&str>) -> Res
     validate_mcp_url(endpoint).map_err(|e| format!("{transport} url rejected: {e}"))
 }
 
+fn validate_config_value(value: &str, label: &str) -> Result<(), String> {
+    if value.len() > MAX_MCP_VALUE_BYTES {
+        return Err(format!("{label} is too long"));
+    }
+    if value.contains('\0') {
+        return Err(format!("{label} contains a NUL byte"));
+    }
+    Ok(())
+}
+
+fn validate_config(config: &McpConfig) -> Result<(), String> {
+    let command = config.command.as_deref().map(str::trim).unwrap_or("");
+    let url = config.url.as_deref().map(str::trim).unwrap_or("");
+    if command.is_empty() && url.is_empty() {
+        return Err("config needs a command or url".to_string());
+    }
+    if !command.is_empty() && !url.is_empty() {
+        return Err("config cannot have both command and url".to_string());
+    }
+    if !command.is_empty() {
+        validate_config_value(command, "command")?;
+        if config.args.len() > MAX_MCP_ARGS {
+            return Err(format!("config has more than {MAX_MCP_ARGS} args"));
+        }
+        for arg in &config.args {
+            validate_config_value(arg, "arg")?;
+        }
+        if let Some(cwd) = config.cwd.as_deref() {
+            validate_config_value(cwd, "cwd")?;
+        }
+    }
+    if config.env.len() > MAX_MCP_ENV {
+        return Err(format!("config has more than {MAX_MCP_ENV} env vars"));
+    }
+    for (key, value) in &config.env {
+        if key.is_empty() || key.contains('=') {
+            return Err("env names must be non-empty and must not contain =".to_string());
+        }
+        validate_config_value(key, "env name")?;
+        validate_config_value(value, "env value")?;
+    }
+    if !url.is_empty() {
+        validate_mcp_url(url).map_err(|e| format!("url rejected: {e}"))?;
+    }
+    if config.headers.len() > MAX_MCP_HEADERS {
+        return Err(format!("config has more than {MAX_MCP_HEADERS} headers"));
+    }
+    for (key, value) in &config.headers {
+        reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|_| format!("invalid header name: {key}"))?;
+        reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+            .map_err(|_| format!("invalid header value for {key}"))?;
+    }
+    if let Some(timeout) = config.timeout_ms
+        && !(1_000..=600_000).contains(&timeout)
+    {
+        return Err("timeout must be between 1000 and 600000 ms".to_string());
+    }
+    Ok(())
+}
+
+fn config_headers(config: &McpServerConfig) -> Result<reqwest::header::HeaderMap, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (key, value) in &config.headers {
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|_| format!("invalid header name: {key}"))?;
+        let value = reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+            .map_err(|_| format!("invalid header value for {key}"))?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
+}
+
 async fn server_row(pool: &sqlx::SqlitePool, id: &str) -> Result<McpServerRow, String> {
     let mut row: McpServerRow = sqlx::query_as(&format!("{SERVER_SELECT} WHERE id = ?"))
         .bind(id)
@@ -1165,7 +1319,7 @@ pub async fn mcp_update(
     let target_changed = before.transport != transport || before.url != url;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     if let Err(error) = sqlx::query(
-        "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ? WHERE id = ?",
+        "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ?, config_json = NULL WHERE id = ?",
     )
     .bind(&name)
     .bind(&transport)
@@ -1194,6 +1348,78 @@ pub async fn mcp_update(
     {
         if let Err(rollback) = tx.rollback().await {
             eprintln!("mcp: update rollback failed: {rollback}");
+        }
+        return Err(error);
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let row = server_row(&pool, &id).await?;
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn mcp_set_config(
+    app: AppHandle,
+    id: String,
+    config: McpConfig,
+) -> Result<McpServerRow, String> {
+    validate_config(&config)?;
+    let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    if config_json.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("MCP config is too large".to_string());
+    }
+    let transport = if config
+        .command
+        .as_deref()
+        .is_some_and(|command| !command.trim().is_empty())
+    {
+        "stdio"
+    } else {
+        "http"
+    };
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    let before = server_row(&pool, &id).await?;
+    validate_auth_transport(&before.auth_type, transport)?;
+    let target_changed =
+        before.transport != transport || before.url != config.url || before.cmd != config.command;
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    if let Err(error) = sqlx::query(
+        "UPDATE mcp_servers SET transport = ?, cmd = ?, url = ?, config_json = ?, timeout_ms = ? WHERE id = ?",
+    )
+    .bind(transport)
+    .bind(&config.command)
+    .bind(&config.url)
+    .bind(&config_json)
+    .bind(config.timeout_ms.map(|value| value as i64))
+    .bind(&id)
+    .execute(&mut *tx)
+    .await
+    {
+        if let Err(rollback) = tx.rollback().await {
+            eprintln!("mcp: config update rollback failed: {rollback}");
+        }
+        return Err(error.to_string());
+    }
+    if target_changed
+        && before.auth_type == "bearer"
+        && let Err(error) = crate::vault::delete_secret(&token_key(&id))
+    {
+        if let Err(rollback) = tx.rollback().await {
+            eprintln!("mcp: config update rollback failed: {rollback}");
+        }
+        return Err(error.to_string());
+    }
+    if target_changed
+        && before.auth_type == "oauth"
+        && let Err(error) = crate::mcp_oauth::clear_credentials(&id)
+    {
+        if let Err(rollback) = tx.rollback().await {
+            eprintln!("mcp: config update rollback failed: {rollback}");
         }
         return Err(error);
     }
@@ -1318,7 +1544,11 @@ pub async fn mcp_test(
         transport,
         auth_type,
         cmd,
+        args: Vec::new(),
+        cwd: None,
+        env: BTreeMap::new(),
         url,
+        headers: BTreeMap::new(),
         deny_tools: None,
         timeout_ms: None,
         _enabled: true,
@@ -1371,7 +1601,6 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
         return Err("stdio servers do not use authorization".to_string());
     }
     let (transport, tools_dirty) = if config.transport == "sse" {
-        let endpoint = config.url.as_deref().unwrap_or("");
         let timeout = Duration::from_millis(
             config
                 .timeout_ms
@@ -1380,7 +1609,7 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
         );
         (
             McpTransport::LegacySse(
-                connect_legacy_sse(endpoint, auth_token.as_deref(), timeout).await?,
+                connect_legacy_sse(config, auth_token.as_deref(), timeout).await?,
             ),
             None,
         )
@@ -1430,6 +1659,14 @@ async fn connect_rmcp(
         if let Some(token) = auth_token {
             http = http.auth_header(token);
         }
+        if !config.headers.is_empty() {
+            http = http.custom_headers(
+                config_headers(config)?
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
+            );
+        }
         let service = tokio::time::timeout(
             STARTUP_TIMEOUT,
             handler
@@ -1444,17 +1681,22 @@ async fn connect_rmcp(
     if cmd.is_empty() {
         return Err("stdio server needs a command".to_string());
     }
-    let parts = split_command(cmd);
+    let mut parts = split_command(cmd);
+    parts.extend(config.args.iter().cloned());
     let (program, args, path) = resolve_command(&parts)?;
     let transport =
         TokioChildProcess::new(tokio::process::Command::new(program).configure(|command| {
             command
                 .args(&args)
                 .env("PATH", &path)
+                .envs(&config.env)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .kill_on_drop(true);
+            if let Some(cwd) = config.cwd.as_deref() {
+                command.current_dir(cwd);
+            }
             #[cfg(windows)]
             command.creation_flags(CREATE_NO_WINDOW);
         }))
@@ -1487,6 +1729,7 @@ struct LegacySseSession {
     client: reqwest::Client,
     post_url: String,
     auth_token: Option<String>,
+    headers: reqwest::header::HeaderMap,
     events: tokio::sync::mpsc::UnboundedReceiver<Result<Value, String>>,
     reader: tokio::task::JoinHandle<()>,
     next_id: u64,
@@ -2022,16 +2265,19 @@ impl CallFailure {
 }
 
 async fn connect_legacy_sse(
-    url: &str,
+    config: &McpServerConfig,
     auth_token: Option<&str>,
     timeout: Duration,
 ) -> Result<LegacySseSession, String> {
+    let url = config.url.as_deref().unwrap_or("");
     validate_mcp_url(url).map_err(|e| format!("mcp url rejected: {e}"))?;
+    let headers = config_headers(config)?;
     let client = reqwest::Client::new();
     let mut builder = client
         .get(url)
         .header(reqwest::header::ACCEPT, "text/event-stream")
-        .header(reqwest::header::CACHE_CONTROL, "no-cache");
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .headers(headers.clone());
     if let Some(token) = auth_token {
         builder = builder.bearer_auth(token);
     }
@@ -2095,6 +2341,7 @@ async fn connect_legacy_sse(
         client,
         post_url: post_url.to_string(),
         auth_token: auth_token.map(str::to_string),
+        headers,
         events,
         reader,
         next_id: 0,
@@ -2171,7 +2418,11 @@ impl LegacySseSession {
         self.next_id = self.next_id.wrapping_add(1).max(1);
         let mut request = request.clone();
         request["id"] = json!(self.next_id);
-        let mut builder = self.client.post(&self.post_url).json(&request);
+        let mut builder = self
+            .client
+            .post(&self.post_url)
+            .headers(self.headers.clone())
+            .json(&request);
         if let Some(token) = self.auth_token.as_deref() {
             builder = builder.bearer_auth(token);
         }
@@ -2231,7 +2482,11 @@ impl LegacySseSession {
     }
 
     async fn notify(&self, notification: &Value, timeout: Duration) -> Result<(), CallFailure> {
-        let mut builder = self.client.post(&self.post_url).json(notification);
+        let mut builder = self
+            .client
+            .post(&self.post_url)
+            .headers(self.headers.clone())
+            .json(notification);
         if let Some(token) = self.auth_token.as_deref() {
             builder = builder.bearer_auth(token);
         }

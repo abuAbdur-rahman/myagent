@@ -392,6 +392,15 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE mcp_servers ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'none';",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 31,
+            description: "add_mcp_structured_config",
+            sql: "
+                ALTER TABLE mcp_servers ADD COLUMN config_json TEXT;
+                ALTER TABLE mcp_servers ADD COLUMN tool_hash TEXT;
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -490,6 +499,7 @@ pub fn run() {
             mcp::mcp_remove,
             mcp::mcp_toggle,
             mcp::mcp_update,
+            mcp::mcp_set_config,
             mcp::mcp_set_policy,
             mcp::mcp_set_approval,
             mcp::mcp_set_token,
