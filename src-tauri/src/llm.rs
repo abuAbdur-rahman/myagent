@@ -185,6 +185,8 @@ pub struct ImageUrl {
 pub struct ChatMessage {
     pub role: String,
     pub content: MessageContent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -255,6 +257,26 @@ fn provider_takes_effort(kind: Option<&str>) -> bool {
     !matches!(kind, Some("deepseek" | "ollama" | "ollama-cloud"))
 }
 
+fn is_deepseek_v4_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.contains("deepseek-flash") || lower.contains("deepseek-v4")
+}
+
+fn attach_deepseek_effort(body: &mut serde_json::Value, effort: &str) {
+    if effort == "none" {
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+        return;
+    }
+    let level = match effort {
+        "minimal" | "low" => "low",
+        "medium" | "high" | "xhigh" => "high",
+        "max" | "ultra" => "max",
+        other => other,
+    };
+    body["thinking"] = serde_json::json!({ "type": "enabled" });
+    body["reasoning_effort"] = serde_json::json!(level);
+}
+
 fn attach_effort(body: &mut serde_json::Value, kind: Option<&str>, effort: &str) {
     if !provider_takes_effort(kind) {
         return;
@@ -275,11 +297,17 @@ async fn apply_optional_params(
     if let Some(temperature) = req.temperature {
         body["temperature"] = serde_json::json!(temperature);
     }
-    let Some(effort) = req
+    let effort = req
         .reasoning_effort
         .as_deref()
-        .filter(|e| !e.is_empty() && *e != "none")
-    else {
+        .filter(|effort| !effort.is_empty());
+    if req.connection_kind.as_deref() == Some("deepseek") && is_deepseek_v4_model(&req.model) {
+        if let Some(effort) = effort {
+            attach_deepseek_effort(body, effort);
+        }
+        return;
+    }
+    let Some(effort) = effort.filter(|effort| *effort != "none") else {
         return;
     };
     let caps = fetch_model_caps(
@@ -1070,23 +1098,29 @@ fn read_key(connection_id: &str, kind: Option<&str>) -> AppResult<String> {
 
 fn model_seeds(kind: Option<&str>) -> &'static [&'static str] {
     match kind {
-        Some("deepseek") => &["deepseek-chat", "deepseek-reasoner"],
+        Some("deepseek") => &["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
         _ => &[],
     }
 }
 
 fn with_model_seeds(kind: Option<&str>, mut caps: Vec<ModelCaps>) -> Vec<ModelCaps> {
+    let deepseek = kind == Some("deepseek");
     for seed in model_seeds(kind) {
         if caps.iter().any(|caps| caps.id == *seed) {
             continue;
         }
         caps.push(ModelCaps {
             id: (*seed).to_string(),
-            context_length: None,
+            context_length: deepseek.then_some(1_000_000),
             supports_tools: Some(true),
-            supports_reasoning: Some(*seed == "deepseek-reasoner"),
-            supports_vision: Some(false),
-            efforts: None,
+            supports_reasoning: deepseek.then_some(true),
+            supports_vision: deepseek.then_some(true),
+            efforts: deepseek.then(|| {
+                ["none", "low", "high", "max"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            }),
             mandatory: false,
         });
     }
@@ -1734,6 +1768,27 @@ fn assistant_tool_message(
     message
 }
 
+fn chat_history(
+    messages: &[ChatMessage],
+    replay_reasoning: bool,
+    tools: bool,
+) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|message| {
+            let mut value = serde_json::json!({
+                "role": message.role,
+                "content": message.content,
+            });
+            if replay_reasoning && tools && message.role == "assistant" {
+                value["reasoning_content"] =
+                    serde_json::json!(message.reasoning.clone().unwrap_or_default());
+            }
+            value
+        })
+        .collect()
+}
+
 fn tool_text_message(id: &str, text: &str) -> serde_json::Value {
     serde_json::json!({
         "role": "tool",
@@ -2300,10 +2355,12 @@ impl RealTools<'_> {
                 ChatMessage {
                     role: "system".to_string(),
                     content: MessageContent::Text(truncate_chars(system, 8000)),
+                    reasoning: None,
                 },
                 ChatMessage {
                     role: "user".to_string(),
                     content: MessageContent::Text(truncate_chars(task, 8000)),
+                    reasoning: None,
                 },
             ],
             temperature: None,
@@ -2887,11 +2944,8 @@ async fn run_agentic(
     state: &StreamState,
 ) -> AppResult<String> {
     let url = endpoint(&req.base_url, "chat/completions");
-    let mut history: Vec<serde_json::Value> = req
-        .messages
-        .iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-        .collect();
+    let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
+    let mut history = chat_history(&req.messages, replay_reasoning, req.enable_tools);
     history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
     let (removed, note) = route_vision(&mut history, req.vision_fallback_model.as_deref());
     if removed > 0
@@ -2904,7 +2958,6 @@ async fn run_agentic(
             .unwrap_or(0);
         history.insert(at, serde_json::json!({"role": "system", "content": note}));
     }
-    let replay_reasoning = uses_deepseek_reasoning_replay(&req.model);
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
     let blind_model = req
         .vision_fallback_model
@@ -3183,24 +3236,38 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_seeds_fill_an_empty_catalog_without_inventing_a_window() {
+    fn deepseek_seeds_fill_an_empty_catalog_with_current_models() {
         let caps = with_model_seeds(Some("deepseek"), Vec::new());
         let ids: Vec<&str> = caps.iter().map(|caps| caps.id.as_str()).collect();
-        assert_eq!(ids, vec!["deepseek-chat", "deepseek-reasoner"]);
-        assert!(caps.iter().all(|caps| caps.context_length.is_none()));
-        assert!(caps.iter().all(|caps| caps.supports_vision == Some(false)));
         assert_eq!(
+            ids,
+            vec!["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]
+        );
+        assert!(
             caps.iter()
-                .find(|caps| caps.id == "deepseek-reasoner")
-                .and_then(|caps| caps.supports_reasoning),
-            Some(true)
+                .all(|caps| caps.context_length == Some(1_000_000))
+        );
+        assert!(caps.iter().all(|caps| caps.supports_vision == Some(true)));
+        assert!(
+            caps.iter()
+                .all(|caps| caps.supports_reasoning == Some(true))
+        );
+        let expected = vec![
+            "none".to_string(),
+            "low".to_string(),
+            "high".to_string(),
+            "max".to_string(),
+        ];
+        assert!(
+            caps.iter()
+                .all(|caps| caps.efforts.as_ref() == Some(&expected))
         );
     }
 
     #[test]
     fn a_fetched_seed_is_not_duplicated() {
         let fetched = vec![ModelCaps {
-            id: "deepseek-chat".to_string(),
+            id: "deepseek-flash".to_string(),
             context_length: Some(128_000),
             supports_tools: Some(true),
             supports_reasoning: Some(false),
@@ -3211,13 +3278,13 @@ mod tests {
         let caps = with_model_seeds(Some("deepseek"), fetched);
         assert_eq!(
             caps.iter()
-                .filter(|caps| caps.id == "deepseek-chat")
+                .filter(|caps| caps.id == "deepseek-flash")
                 .count(),
             1
         );
         assert_eq!(
             caps.iter()
-                .find(|caps| caps.id == "deepseek-chat")
+                .find(|caps| caps.id == "deepseek-flash")
                 .and_then(|caps| caps.context_length),
             Some(128_000)
         );
@@ -3493,6 +3560,7 @@ mod tests {
                     },
                 },
             ]),
+            reasoning: None,
         };
         let value = serde_json::to_value(&msg).expect("serializes");
         assert_eq!(
@@ -4093,6 +4161,61 @@ mod tests {
         assert!(uses_deepseek_reasoning_replay("openrouter/deepseek-v3"));
         assert!(!uses_deepseek_reasoning_replay("my-deepseek-clone"));
         assert!(!uses_deepseek_reasoning_replay("gpt-4o"));
+    }
+
+    #[test]
+    fn deepseek_effort_sets_thinking_and_level() {
+        assert!(is_deepseek_v4_model("deepseek-flash"));
+        assert!(is_deepseek_v4_model("deepseek-v4-flash"));
+        assert!(!is_deepseek_v4_model("deepseek-chat"));
+
+        let mut body = serde_json::json!({});
+        attach_deepseek_effort(&mut body, "none");
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("reasoning_effort").is_none());
+
+        attach_deepseek_effort(&mut body, "low");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "low");
+
+        attach_deepseek_effort(&mut body, "medium");
+        assert_eq!(body["reasoning_effort"], "high");
+
+        attach_deepseek_effort(&mut body, "max");
+        assert_eq!(body["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn deepseek_chat_history_replays_reasoning_only_with_tools() {
+        let messages = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+                reasoning: Some("hidden steps".to_string()),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: MessageContent::Text("again".to_string()),
+                reasoning: None,
+            },
+        ];
+        let history = chat_history(&messages, true, true);
+        assert_eq!(history[0]["reasoning_content"], "hidden steps");
+        assert!(history[1].get("reasoning_content").is_none());
+
+        let without_tools = chat_history(&messages, true, false);
+        assert!(without_tools[0].get("reasoning_content").is_none());
+
+        let other_model = chat_history(&messages, false, true);
+        assert!(other_model[0].get("reasoning_content").is_none());
+
+        let missing = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Text("hello".to_string()),
+            reasoning: None,
+        }];
+        let history = chat_history(&missing, true, true);
+        assert_eq!(history[0]["reasoning_content"], "");
     }
 
     enum FakeStep {

@@ -198,6 +198,12 @@ export type ThemeMode = "system" | "light" | "dark";
 
 type ToolEntry = ToolLogEntry;
 
+type PayloadTurn = {
+  role: string;
+  content: string | api.ChatContentPart[];
+  reasoning?: string | null;
+};
+
 const MEMORY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "remember",
   "update_memory",
@@ -1209,7 +1215,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     contextLimitRef.current = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
   }, [modelContextLimit]);
 
-  const lastPayloadRef = useRef<{ role: string; content: string | api.ChatContentPart[] }[] | null>(null);
+  const lastPayloadRef = useRef<PayloadTurn[] | null>(null);
   const knowledgeBlockRef = useRef("");
   const skillIndexRef = useRef("");
   const pendingVisionFallbackRef = useRef<VisionFallback | null>(null);
@@ -1269,9 +1275,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const resolveEffort = useCallback((): string | null => {
     const selected = reasoningEffortRef.current;
-    if (!selected || selected === "none") return null;
+    if (!selected) return null;
     const supported = supportedEffortsRef.current;
-    if (supported && !supported.includes(selected)) return null;
+    if (!supported || !supported.includes(selected)) return null;
     return selected;
   }, []);
 
@@ -1595,7 +1601,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const withSystem = useCallback(
-    (turns: { role: string; content: string | api.ChatContentPart[] }[], summary: string | null = null) => {
+    (turns: PayloadTurn[], summary: string | null = null) => {
       const system = systemPromptFromRefs();
       return [
         ...(system ? [{ role: "system", content: system }] : []),
@@ -1611,7 +1617,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       conversationId: string,
       connection: Connection,
       modelName: string,
-      payload: { role: string; content: string | api.ChatContentPart[] }[],
+      payload: PayloadTurn[],
       assistantMsg: Message,
       keepSeed?: boolean,
     ): Promise<void> => {
@@ -1938,7 +1944,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resolveCompact = useCallback(
-    (conversationId: string | null, turns: { role: string; content: string | api.ChatContentPart[] }[]) => {
+    (conversationId: string | null, turns: PayloadTurn[]) => {
       const conversation = conversationId
         ? conversationsRef.current.find((c) => c.id === conversationId)
         : undefined;
@@ -2058,7 +2064,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [setCompacted]);
 
   const buildPayload = useCallback(
-    (conversationId: string | null, turns: { role: string; content: string | api.ChatContentPart[]; attachments?: string | null; created_at?: number }[]) => {
+    (conversationId: string | null, turns: (PayloadTurn & { attachments?: string | null; created_at?: number })[]) => {
       const { summary, through } = summaryFor(conversationId);
       const windowed = summary
         ? applySummaryWindow(turns, { summary, through })
@@ -2067,9 +2073,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         canSeeImages(connRef.current?.id ?? null, modelRef.current) ||
         (knownVisionFallback(visionFallbackRef.current, connections) !== null && resolveTools());
       const shaped = activeModelSees ? withFinalTurnImages(windowed) : windowed;
-      const slim = shaped.map((turn) => ({
+      const deepseek =
+        connRef.current?.kind === "deepseek" || /deepseek/i.test(modelRef.current ?? "");
+      const slim: PayloadTurn[] = shaped.map((turn) => ({
         role: turn.role,
         content: turn.content,
+        ...(turn.role === "assistant" && deepseek ? { reasoning: turn.reasoning ?? "" } : {}),
       }));
       return withSystem(slim, summary);
     },
@@ -2158,7 +2167,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const outgoing: { role: string; content: string | api.ChatContentPart[] }[] = [
+      const outgoing: PayloadTurn[] = [
         ...history,
       ];
       let skillBlock = "";

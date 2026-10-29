@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   knownModelVision,
   lookupContextLength,
+  lookupEfforts,
   lookupSupportsTools,
   lookupVisionSupport,
   modelCanSeeImages,
@@ -63,6 +64,57 @@ describe("catalog smoke", () => {
     expect(lookupContextLength(null, "deepseek-v3.2")).toBe(128_000);
     expect(lookupContextLength(null, "deepseek-r1-0528")).toBe(128_000);
     expect(lookupContextLength(null, "deepseek-ai/DeepSeek-V3")).toBe(128_000);
+    expect(lookupContextLength(null, "deepseek-flash")).toBe(1_000_000);
+    expect(lookupContextLength(null, "deepseek-v4-flash")).toBe(1_000_000);
+    expect(lookupContextLength(null, "deepseek-ai/DeepSeek-V4.1-Flash")).toBe(1_000_000);
+  });
+
+  it("shows thinking levels for DeepSeek V4 and hides them for legacy chat", () => {
+    expect(lookupEfforts(null, "deepseek-flash", "deepseek")).toEqual([
+      "none",
+      "low",
+      "high",
+      "max",
+    ]);
+    expect(lookupEfforts(null, "deepseek-v4-flash", "deepseek")).toEqual([
+      "none",
+      "low",
+      "high",
+      "max",
+    ]);
+    expect(lookupEfforts(null, "deepseek-chat", "deepseek")).toBeNull();
+    expect(
+      lookupEfforts(
+        [
+          {
+            id: "deepseek-flash",
+            contextLength: null,
+            supportsTools: null,
+            supportsVision: null,
+            reasoningEfforts: null,
+            reasoningMandatory: false,
+          },
+        ],
+        "deepseek-flash",
+        "deepseek",
+      ),
+    ).toEqual(["none", "low", "high", "max"]);
+    expect(
+      lookupEfforts(
+        [
+          {
+            id: "deepseek-flash",
+            contextLength: null,
+            supportsTools: null,
+            supportsVision: null,
+            reasoningEfforts: ["low", "high"],
+            reasoningMandatory: false,
+          },
+        ],
+        "deepseek-flash",
+        "deepseek",
+      ),
+    ).toEqual(["none", "low", "high", "max"]);
   });
 
   it("keeps unknown models unknown and prefers what the provider reported", () => {

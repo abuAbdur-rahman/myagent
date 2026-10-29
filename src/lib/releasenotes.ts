@@ -22,6 +22,22 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.7.1",
+    date: "2026-10-29",
+    summary:
+      "DeepSeek V4 now exposes thinking levels, sends the right thinking controls, and keeps reasoning across tool turns.",
+    changes: [
+      {
+        kind: "new",
+        text: "DeepSeek V4 models show No reasoning, Low, High and Max. The selector sends DeepSeek's thinking toggle and reasoning_effort, and No reasoning disables thinking instead of being ignored.",
+      },
+      {
+        kind: "fixed",
+        text: "DeepSeek V4 seeds use deepseek-flash, deepseek-v4-flash and deepseek-v4-pro with a 1M context, and reasoning_content is replayed on earlier assistant turns when tools are on.",
+      },
+    ],
+  },
+  {
     version: "0.7.0",
     date: "2026-10-29",
     summary:
