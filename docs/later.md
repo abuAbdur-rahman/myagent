@@ -278,9 +278,9 @@ Exit: the agent can read, search, edit and undo inside a project and nothing esc
 
 ---
 
-## Deferred from 0.5.0
+## Deferred backlog
 
-Owner decisions on 2026-10-22: these do not ship with the memory file release.
+Owner decisions from earlier releases that are still open.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
@@ -289,22 +289,20 @@ Owner decisions on 2026-10-22: these do not ship with the memory file release.
 | [ ] | — | Recent models in the picker: top 3 used, filtered against what the provider still offers | Missing | S | C2 |
 | [ ] | — | OpenCode provider: its free models through an OpenCode container with an OpenAI-compatible `/v1` shim | Missing | L | C1, S1 |
 
-The 0.6.0 judge model is still unimplemented; it is the only part of the memory
+The local judge model is still unimplemented; it is the only part of the memory
 design that is deliberately late. See E6 in `features.md`.
 
 ---
 
 ## Planned for 0.7.0 to 1.0.0
 
-Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md`. The research behind it is
+Plan: `docs/plan/v0.7.0-mcp-computer-use.md`. The research behind it is
 dated 2026-10-27/28; verify protocol, crate, `jev` binary and `/v1/systemone`
 details before starting an item.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | — | Windows stdio MCP launch: `.cmd` shim resolution, registry PATH, `CREATE_NO_WINDOW`, 60s startup (0.6.1) | Done (0.6.1) | S | — |
-| [x] | F4 | Composer: paste raw clipboard images (screenshots that arrive as clipboard items) | Done (0.6.1) | S | — |
-| [ ] | J12 | MCP setup UX: Rust-owned state machine, standard `mcpServers` import/export, Job Object process lifetime, server logs, tool-hash re-approval, `server/discover` fallback (0.7.0) | Plan: `docs/plan/v0.7.0-to-v1.0.0-mcp-computer-use.md` | L | D4, D5 |
+| [ ] | J12 | MCP setup UX: Rust-owned state machine, standard `mcpServers` import/export, Job Object process lifetime, server logs, tool-hash re-approval, `server/discover` fallback (0.7.0) | Plan: `docs/plan/v0.7.0-mcp-computer-use.md` | L | D4, D5 |
 | [ ] | J13 | Windows computer use: UIA tree first, screenshot fallback, observe and act, per-app tiers, hard denies, kill switch, overlay, audit, dry-run (0.7.0) | Plan: same | XL | J12, D4 |
 | [ ] | — | 0.8.0 hardening: lazy Chromium, DPI/multi-monitor, orphan cleanup, eval, security review | Plan: same | M | 0.7.0 |
 | [ ] | J14 | Local navigator: optional CPU tier-2 verifier, jevos-v5, shadow mode, benchmark gates (0.8.0) | Plan: same | M | J13 |
