@@ -1,4 +1,9 @@
 mod commands;
+mod computer_use;
+#[cfg(windows)]
+mod computer_use_hotkey;
+#[cfg(windows)]
+mod computer_use_server;
 mod connections;
 mod documents;
 mod error;
@@ -404,6 +409,17 @@ pub(crate) fn migrations() -> Vec<Migration> {
     ]
 }
 
+#[cfg(windows)]
+pub fn run_computer_use_server() {
+    computer_use_server::run();
+}
+
+#[cfg(not(windows))]
+pub fn run_computer_use_server() {
+    eprintln!("computer-use is only available on Windows");
+    std::process::exit(1);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let pending = migrations();
@@ -429,6 +445,11 @@ pub fn run() {
         )
         .setup(|app| {
             crate::screen::init_for_app(app.handle());
+            #[cfg(windows)]
+            {
+                crate::computer_use_hotkey::start(app.handle().clone());
+                crate::computer_use::sync_overlay_startup(app.handle());
+            }
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = crate::sandbox::reap_orphans().await {
                     eprintln!("sandbox: reaping orphans failed: {error}");
@@ -495,11 +516,12 @@ pub fn run() {
             skills::skill_index,
             skills::skill_read,
             mcp::mcp_list,
-            mcp::mcp_add,
+            mcp::mcp_save,
+            mcp::mcp_import,
+            mcp::mcp_export,
             mcp::mcp_remove,
             mcp::mcp_toggle,
-            mcp::mcp_update,
-            mcp::mcp_set_config,
+            mcp::mcp_config,
             mcp::mcp_set_policy,
             mcp::mcp_set_approval,
             mcp::mcp_set_token,
@@ -508,8 +530,18 @@ pub fn run() {
             mcp::mcp_cancel_auth,
             mcp::mcp_disconnect,
             mcp::mcp_status,
+            mcp::mcp_logs_for,
             mcp::mcp_probe,
-            mcp::mcp_test,
+            mcp::mcp_approve_tools,
+            mcp::mcp_test_config,
+            computer_use::computer_use_config,
+            computer_use::computer_use_set_config,
+            computer_use::computer_use_set_paused,
+            computer_use::computer_use_set_overlay,
+            computer_use::computer_use_audit,
+            computer_use::computer_use_clear_audit,
+            computer_use::computer_use_hard_denies,
+            computer_use::computer_use_audit_image,
             commands::list_commands_cmd,
             permissions::approval_reply,
             permissions::question_answer,

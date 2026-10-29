@@ -15,6 +15,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { useApp, type ThemeMode } from "../../lib/store";
 import type { VisionOverride } from "../../lib/catalog";
 import { applyVisionOverride, type ConnectionModelOption, type VisionFallback } from "../../lib/vision";
@@ -46,8 +47,9 @@ import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Connection, ExportScope, Memory } from "../../lib/types";
 import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
+  mcpConfigFromDraft,
+  mcpDraftFromConfig,
   mcpDraftTarget,
-  mcpTargetArgs,
   mcpTargetError,
   type McpDraft,
 } from "../../lib/mcp-draft";
@@ -182,6 +184,7 @@ interface McpDialogState {
 interface McpErrors {
   name?: string;
   target?: string;
+  advanced?: string;
 }
 
 type McpState = { tone: PillTone; label: string };
@@ -194,6 +197,11 @@ const EMPTY_MCP_DRAFT: McpDraft = {
   authType: "none",
   command: "",
   url: "",
+  args: "",
+  cwd: "",
+  env: "",
+  headers: "",
+  timeoutMs: "",
 };
 
 const MCP_AUTH_MODES: { value: string; label: string }[] = [
@@ -247,15 +255,20 @@ function mcpDraft(server: api.McpServerRow): McpDraft {
     authType: server.auth_type,
     command: server.cmd ?? "",
     url: server.url ?? "",
+    args: "",
+    cwd: "",
+    env: "",
+    headers: "",
+    timeoutMs: server.timeout_ms === null ? "" : String(server.timeout_ms),
   };
 }
 
 function mcpPresetDraft(preset: McpPreset): McpDraft {
   const stdio = preset.transport === "stdio";
   return {
+    ...EMPTY_MCP_DRAFT,
     name: preset.id,
     transport: preset.transport,
-    authType: "none",
     command: stdio ? preset.target : "",
     url: stdio ? "" : preset.target,
   };
@@ -356,9 +369,23 @@ function mcpInvalid(error: string | undefined): boolean | undefined {
   return error ? true : undefined;
 }
 
+function mcpAuthBlocked(
+  draft: McpDraft,
+  editing: api.McpServerRow | null,
+  savedTarget: string,
+): boolean {
+  if (!editing) return false;
+  return (
+    draft.transport !== editing.transport ||
+    draft.authType !== editing.auth_type ||
+    mcpDraftTarget(draft).trim() !== savedTarget
+  );
+}
+
 function mcpProbeState(probe: api.McpProbe | undefined, probing: boolean): McpState {
   if (probing) return { tone: "accent", label: "Connecting" };
   if (!probe) return { tone: "neutral", label: "Not checked" };
+  if (probe.status === "needs_review") return { tone: "warn", label: "Review needed" };
   return probe.status === "connected"
     ? { tone: "success", label: "Connected" }
     : { tone: "danger", label: "Failed" };
@@ -395,14 +422,20 @@ function McpPageHeader({
   scope,
   summary,
   reconnecting,
+  importing,
   onReconnectAll,
   onAdd,
+  onImport,
+  onExport,
 }: {
   scope: string;
   summary: McpSummary;
   reconnecting: boolean;
+  importing: boolean;
   onReconnectAll: () => void;
   onAdd: () => void;
+  onImport: () => void;
+  onExport: () => void;
 }) {
   return (
     <div className="flex items-start justify-between gap-4 px-2">
@@ -422,6 +455,24 @@ function McpPageHeader({
           <RefreshCw size={14} />
           Reconnect all
         </Button>
+        <DropdownMenu
+          align="end"
+          aria-label="MCP config actions"
+          items={[
+            {
+              id: "import",
+              label: importing ? "Importing…" : "Import JSON",
+              disabled: importing,
+              onSelect: onImport,
+            },
+            { id: "export", label: "Export JSON", onSelect: onExport },
+          ]}
+          trigger={
+            <Button size="sm" variant="default" aria-label="MCP config actions">
+              <MoreHorizontal size={14} />
+            </Button>
+          }
+        />
         <Button variant="primary" size="sm" onClick={onAdd}>
           <Plus size={14} />
           Add server
@@ -544,15 +595,18 @@ function McpIdentity({
   state,
   onReconnect,
   onEdit,
+  onApprove,
 }: {
   server: api.McpServerRow;
   probe: api.McpProbe | undefined;
   state: McpState;
   onReconnect: (id: string) => void;
   onEdit: () => void;
+  onApprove: (id: string) => void;
 }) {
   const { text, title } = mcpTargetText(server);
   const failed = state.label === "Failed";
+  const review = state.label === "Review needed";
   return (
     <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -571,6 +625,19 @@ function McpIdentity({
           onEdit={onEdit}
         />
       )}
+      {review && (
+        <div className="mt-1.5 flex items-start gap-1.5 text-xs text-warn">
+          <TriangleAlert size={13} className="mt-0.5 flex-none" aria-hidden />
+          <span className="min-w-0 break-words">{mcpProbeError(probe)}</span>
+          <button
+            type="button"
+            className="flex-none underline hover:no-underline"
+            onClick={() => onApprove(server.id)}
+          >
+            Approve tools
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -582,6 +649,7 @@ function mcpServerMenu(
     onEdit: (server: api.McpServerRow) => void;
     onRemove: (server: api.McpServerRow) => void;
     onReconnect: (id: string) => void;
+    onLogs: (server: api.McpServerRow) => void;
   },
 ): MenuEntry[] {
   return [
@@ -590,6 +658,11 @@ function mcpServerMenu(
       label: "Edit",
       icon: <Pencil size={15} />,
       onSelect: () => handlers.onEdit(server),
+    },
+    {
+      id: "logs",
+      label: "Logs",
+      onSelect: () => handlers.onLogs(server),
     },
     {
       id: "reconnect",
@@ -653,6 +726,8 @@ function McpServerCard({
   onEdit,
   onRemove,
   onReconnect,
+  onLogs,
+  onApprove,
   onDecision,
   onApproval,
 }: {
@@ -664,13 +739,15 @@ function McpServerCard({
   onEdit: (server: api.McpServerRow) => void;
   onRemove: (server: api.McpServerRow) => void;
   onReconnect: (id: string) => void;
+  onLogs: (server: api.McpServerRow) => void;
+  onApprove: (id: string) => void;
   onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
   onApproval: (id: string, mode: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const tools = mcpServerTools(probe);
   const state = mcpStatus(server, probe, probing);
-  const menu = mcpServerMenu(server, probing, { onEdit, onRemove, onReconnect });
+  const menu = mcpServerMenu(server, probing, { onEdit, onRemove, onReconnect, onLogs });
 
   return (
     <div
@@ -689,6 +766,7 @@ function McpServerCard({
           state={state}
           onReconnect={onReconnect}
           onEdit={() => onEdit(server)}
+          onApprove={onApprove}
         />
         <Toggle
           checked={server.enabled}
@@ -822,6 +900,71 @@ function McpDialogFields({
           onChange={(e) => setDraft(mcpDraftWithTarget(draft, e.target.value))}
         />
       </McpField>
+      <details className="rounded-card border border-border px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium">Advanced</summary>
+        <div className="mt-3 flex flex-col gap-3">
+          {stdio && (
+            <>
+              <McpField
+                label="Arguments"
+                hint="One argument per line. They are appended to the command."
+              >
+                <Textarea
+                  rows={3}
+                  value={draft.args}
+                  autoComplete="off"
+                  placeholder={"--root\n."}
+                  onChange={(e) => setDraft({ ...draft, args: e.target.value })}
+                />
+              </McpField>
+              <McpField label="Working directory" hint="Optional. Defaults to the app directory.">
+                <Input
+                  value={draft.cwd}
+                  autoComplete="off"
+                  placeholder="C:\\work\\project"
+                  onChange={(e) => setDraft({ ...draft, cwd: e.target.value })}
+                />
+              </McpField>
+              <McpField
+                label="Environment"
+                hint="KEY=VALUE per line. Custom values stay in Credential Manager; a blank value keeps the stored value."
+              >
+                <Textarea
+                  rows={3}
+                  value={draft.env}
+                  autoComplete="off"
+                  placeholder={"NODE_ENV=production\nAPI_KEY="}
+                  onChange={(e) => setDraft({ ...draft, env: e.target.value })}
+                />
+              </McpField>
+            </>
+          )}
+          {!stdio && (
+            <McpField
+              label="Headers"
+              hint="KEY=VALUE per line. Custom headers stay in Credential Manager; a blank value keeps the stored value."
+            >
+              <Textarea
+                rows={3}
+                value={draft.headers}
+                autoComplete="off"
+                placeholder={"Authorization=\nX-Client=myagent"}
+                onChange={(e) => setDraft({ ...draft, headers: e.target.value })}
+              />
+            </McpField>
+          )}
+          <McpField label="Timeout" hint="Optional. 1000-600000 ms. Defaults to 60000.">
+            <Input
+              value={draft.timeoutMs}
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="60000"
+              onChange={(e) => setDraft({ ...draft, timeoutMs: e.target.value })}
+            />
+          </McpField>
+          {errors.advanced && <p className="text-xs text-danger">{errors.advanced}</p>}
+        </div>
+      </details>
     </div>
   );
 }
@@ -1210,12 +1353,13 @@ export function McpServerDialog({
   seed: McpDraft | null;
   servers: api.McpServerRow[];
   onClose: () => void;
-  onSave: (draft: McpDraft) => void;
+  onSave: (draft: McpDraft, config: api.McpConfig) => void;
   onChanged: () => void;
 }) {
   const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP_DRAFT);
   const [errors, setErrors] = useState<McpErrors>({});
   const [testing, setTesting] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(true);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
@@ -1224,11 +1368,7 @@ export function McpServerDialog({
   const savedTarget = editing
     ? (editing.transport === "stdio" ? editing.cmd ?? "" : editing.url ?? "").trim()
     : "";
-  const authBlocked =
-    editing !== null &&
-    (draft.transport !== editing.transport ||
-      draft.authType !== editing.auth_type ||
-      mcpDraftTarget(draft).trim() !== savedTarget);
+  const authBlocked = mcpAuthBlocked(draft, editing, savedTarget);
   const close = () => {
     if (oauth.busy) void oauth.cancel();
     onClose();
@@ -1236,8 +1376,29 @@ export function McpServerDialog({
 
   useEffect(() => {
     if (!open) return;
-    setDraft(editing ? mcpDraft(editing) : (seed ?? EMPTY_MCP_DRAFT));
     setErrors({});
+    setConfigLoaded(!editing);
+    if (!editing) {
+      setDraft(seed ?? EMPTY_MCP_DRAFT);
+      return;
+    }
+    let cancelled = false;
+    const base = mcpDraft(editing);
+    setDraft(base);
+    void api
+      .mcpConfig(editing.id)
+      .then((config) => {
+        if (!cancelled) {
+          setDraft(mcpDraftFromConfig(base, config));
+          setConfigLoaded(true);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setTest({ ok: false, text: errorText(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, editing?.id, seed]);
 
   useEffect(() => {
@@ -1252,8 +1413,8 @@ export function McpServerDialog({
     }
     setTesting(true);
     try {
-      const { cmd, url } = mcpTargetArgs(draft);
-      const probe = await api.mcpTest(draft.transport, draft.authType, cmd, url);
+      const config = mcpConfigFromDraft(draft);
+      const probe = await api.mcpTestConfig(draft.authType, config, editing?.id ?? null);
       setTest(
         probe.error
           ? { ok: false, text: probe.error }
@@ -1273,6 +1434,10 @@ export function McpServerDialog({
 
   const submit = () => {
     if (oauth.busy || bearer.busy) return;
+    if (editing && !configLoaded) {
+      setTest({ ok: false, text: "Wait for the advanced configuration to load." });
+      return;
+    }
     const found = mcpErrors(draft, servers, editing);
     setErrors(found);
     if (found.name) {
@@ -1283,7 +1448,14 @@ export function McpServerDialog({
       targetRef.current?.focus();
       return;
     }
-    onSave(draft);
+    let config: api.McpConfig;
+    try {
+      config = mcpConfigFromDraft(draft);
+    } catch (e) {
+      setErrors({ ...found, advanced: errorText(e) });
+      return;
+    }
+    onSave(draft, config);
   };
 
   return (
@@ -1324,7 +1496,7 @@ export function McpServerDialog({
         editing={editing !== null}
         onClose={close}
         onSave={submit}
-        saveDisabled={oauth.busy || bearer.busy}
+        saveDisabled={oauth.busy || bearer.busy || (editing !== null && !configLoaded)}
       />
     </Dialog>
   );
@@ -1573,11 +1745,56 @@ export function GeneralPage() {
   );
 }
 
+function McpLogsDialog({
+  server,
+  logs,
+  loading,
+  onClose,
+  onRefresh,
+}: {
+  server: api.McpServerRow | null;
+  logs: string[];
+  loading: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <Dialog
+      open={server !== null}
+      onClose={onClose}
+      title={server ? `Logs · ${server.name}` : "Logs"}
+    >
+      <div className="flex flex-col gap-2">
+        <p className="m-0 text-xs text-muted">
+          Bounded stderr from the last run. This is process output, not a redacted audit log.
+        </p>
+        <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-card border border-border bg-surface p-3 font-mono text-xs">
+          {logs.length > 0 ? logs.join("\n") : loading ? "Loading…" : "No log lines yet."}
+        </pre>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" disabled={loading} onClick={onRefresh}>
+            <RefreshCw size={14} />
+            Refresh
+          </Button>
+          <Button size="sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 export function McpPage() {
   const { activeProject } = useApp();
   const projectId = mcpProjectId(activeProject);
   const { servers, probes, probing, status, run, reconnect, refresh } = useMcpServers(projectId);
   const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
+  const [importing, setImporting] = useState(false);
+  const [logsFor, setLogsFor] = useState<api.McpServerRow | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDialog((current) => {
@@ -1589,18 +1806,56 @@ export function McpPage() {
     });
   }, [servers]);
 
-  const save = (draft: McpDraft) => {
+  const save = (draft: McpDraft, config: api.McpConfig) => {
     const name = draft.name.trim();
-    const { cmd, url } = mcpTargetArgs(draft);
     const current = dialog.editing;
     setDialog(CLOSED_MCP_DIALOG);
     void run(
       () =>
-        current
-          ? api.mcpUpdate(current.id, name, draft.transport, draft.authType, cmd, url)
-          : api.mcpAdd(projectId, name, draft.transport, draft.authType, cmd, url),
+        api.mcpSave(
+          current?.id ?? null,
+          projectId,
+          name,
+          draft.transport,
+          draft.authType,
+          config,
+        ),
       current ? "Server updated" : "Server added. It connects on the next send.",
     );
+  };
+
+  const importFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const rows = await api.mcpImport(projectId, await file.text());
+      await refresh();
+      toast(`Imported ${rows.length} ${rows.length === 1 ? "server" : "servers"}`);
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const exportFile = async () => {
+    try {
+      downloadText("mcp-servers.json", await api.mcpExport(projectId), "application/json");
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
+
+  const openLogs = async (server: api.McpServerRow) => {
+    setLogsFor(server);
+    setLogsLoading(true);
+    try {
+      setLogs(await api.mcpLogs(server.id));
+    } catch (e) {
+      toast(errorText(e));
+      setLogs([]);
+    } finally {
+      setLogsLoading(false);
+    }
   };
 
   const remove = async (server: api.McpServerRow) => {
@@ -1629,12 +1884,27 @@ export function McpPage() {
         scope={mcpScope(activeProject)}
         summary={summary}
         reconnecting={reconnecting}
+        importing={importing}
         onReconnectAll={() => {
           for (const server of servers) {
             if (server.enabled) reconnect(server.id);
           }
         }}
         onAdd={() => setDialog({ open: true, editing: null, seed: null })}
+        onImport={() => importRef.current?.click()}
+        onExport={() => void exportFile()}
+      />
+      <input
+        ref={importRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        aria-label="Import MCP servers"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void importFile(file);
+        }}
       />
       <Callout>
         Every tool call asks first until you decide otherwise. Allow runs a tool without asking,
@@ -1662,6 +1932,10 @@ export function McpPage() {
               onEdit={(target) => setDialog({ open: true, editing: target, seed: null })}
               onRemove={(target) => void remove(target)}
               onReconnect={reconnect}
+              onLogs={(target) => void openLogs(target)}
+              onApprove={(id) =>
+                void run(() => api.mcpApproveTools(id), "Tool definitions approved")
+              }
               onDecision={decide}
               onApproval={(id, mode) => void run(() => api.mcpSetApproval(id, mode))}
             />
@@ -1681,6 +1955,575 @@ export function McpPage() {
         onClose={close}
         onSave={save}
         onChanged={() => void refresh()}
+      />
+      <McpLogsDialog
+        server={logsFor}
+        logs={logs}
+        loading={logsLoading}
+        onClose={() => setLogsFor(null)}
+        onRefresh={() => {
+          if (logsFor) void openLogs(logsFor);
+        }}
+      />
+    </div>
+  );
+}
+
+const COMPUTER_USE_TIERS = [
+  { value: "view" as const, label: "View" },
+  { value: "interact" as const, label: "Interact" },
+  { value: "full" as const, label: "Full" },
+];
+
+function computerUseTierTone(tier: api.ComputerUseTier): PillTone {
+  if (tier === "full") return "danger";
+  if (tier === "interact") return "warn";
+  return "accent";
+}
+
+function ComputerUseAllowlist({
+  config,
+  hardDenies,
+  update,
+  setStatus,
+}: {
+  config: api.ComputerUseConfig;
+  hardDenies: string[];
+  update: (patch: Partial<api.ComputerUseConfig>) => void;
+  setStatus: (value: string | null) => void;
+}) {
+  const [newPath, setNewPath] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newTier, setNewTier] = useState<api.ComputerUseTier>("view");
+  const [newDeny, setNewDeny] = useState("");
+  const [showDenies, setShowDenies] = useState(false);
+
+  const addPolicy = () => {
+    const path = newPath.trim();
+    const name = newName.trim();
+    if (!path && !name) {
+      setStatus("Enter an executable path or a process name.");
+      return;
+    }
+    const duplicate = config.allow.some(
+      (policy) =>
+        (path && policy.path.toLowerCase() === path.toLowerCase()) ||
+        (name && policy.name.toLowerCase() === name.toLowerCase()),
+    );
+    if (duplicate) {
+      setStatus("That app is already in the allowlist.");
+      return;
+    }
+    update({
+      allow: [...config.allow, { path, name, tier: newTier, publisher: null }],
+    });
+    setNewPath("");
+    setNewName("");
+    setNewTier("view");
+    setStatus(null);
+  };
+
+  const setPolicyTier = (index: number, tier: api.ComputerUseTier) => {
+    update({
+      allow: config.allow.map((policy, position) =>
+        position === index ? { ...policy, tier } : policy,
+      ),
+    });
+  };
+
+  const removePolicy = (index: number) => {
+    update({ allow: config.allow.filter((_, position) => position !== index) });
+  };
+
+  const addDeny = () => {
+    const rule = newDeny.trim().toLowerCase();
+    if (!rule) return;
+    if (config.deny.includes(rule)) {
+      setStatus("That deny rule already exists.");
+      return;
+    }
+    update({ deny: [...config.deny, rule] });
+    setNewDeny("");
+    setStatus(null);
+  };
+
+  const removeDeny = (rule: string) => {
+    update({ deny: config.deny.filter((item) => item !== rule) });
+  };
+
+  return (
+    <>
+      <div className="mx-2 overflow-hidden rounded-card border border-border">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+          <div>
+            <div className="text-sm font-medium">Allowed apps</div>
+            <div className="text-xs text-muted">
+              Each app needs a tier. Unlisted apps are refused.
+            </div>
+          </div>
+          <Badge>{config.allow.length} apps</Badge>
+        </div>
+        {config.allow.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-muted">No apps allowed yet.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {config.allow.map((policy, index) => (
+              <div
+                key={`${policy.path}:${policy.name}:${index}`}
+                className="flex flex-wrap items-center gap-2 px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm">{policy.name || policy.path}</div>
+                  <div className="truncate text-xs text-muted">{policy.path || "process name"}</div>
+                </div>
+                <Pill tone={computerUseTierTone(policy.tier)}>{policy.tier}</Pill>
+                <Segmented
+                  value={policy.tier}
+                  options={COMPUTER_USE_TIERS}
+                  onChange={(tier) => setPolicyTier(index, tier)}
+                  label={`Tier for ${policy.name || policy.path}`}
+                />
+                <IconButton
+                  label={`Remove ${policy.name || policy.path}`}
+                  onClick={() => removePolicy(index)}
+                >
+                  <Trash2 size={14} />
+                </IconButton>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2 border-t border-border bg-surface-2 px-3 py-2">
+          <Input
+            className="min-w-[220px] flex-1"
+            placeholder="C:\\Windows\\System32\\notepad.exe"
+            value={newPath}
+            onChange={(event) => setNewPath(event.target.value)}
+            aria-label="App executable path"
+          />
+          <Input
+            className="w-[150px]"
+            placeholder="notepad.exe"
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            aria-label="App process name"
+          />
+          <Segmented
+            value={newTier}
+            options={COMPUTER_USE_TIERS}
+            onChange={setNewTier}
+            label="Tier for the new app"
+          />
+          <Button size="sm" onClick={addPolicy}>
+            <Plus size={14} />
+            Add
+          </Button>
+        </div>
+      </div>
+
+      <div className="mx-2 overflow-hidden rounded-card border border-border">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+          <div>
+            <div className="text-sm font-medium">User deny rules</div>
+            <div className="text-xs text-muted">
+              Process names, path suffixes or window-title text. Deny wins over allow.
+            </div>
+          </div>
+          <Badge>{config.deny.length} rules</Badge>
+        </div>
+        {config.deny.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-3 py-2">
+            {config.deny.map((rule) => (
+              <button
+                key={rule}
+                type="button"
+                onClick={() => removeDeny(rule)}
+                className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted hover:bg-hover hover:text-text"
+                aria-label={`Remove deny rule ${rule}`}
+              >
+                {rule}
+                <span aria-hidden>x</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-2 border-t border-border bg-surface-2 px-3 py-2">
+          <Input
+            placeholder="example.exe"
+            value={newDeny}
+            onChange={(event) => setNewDeny(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") addDeny();
+            }}
+            aria-label="New deny rule"
+          />
+          <Button size="sm" onClick={addDeny}>
+            <Plus size={14} />
+            Add rule
+          </Button>
+        </div>
+      </div>
+
+      <div className="mx-2 rounded-card border border-border">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+          onClick={() => setShowDenies((value) => !value)}
+          aria-expanded={showDenies}
+        >
+          <span>
+            <span className="block text-sm font-medium">Always blocked</span>
+            <span className="block text-xs text-muted">
+              Enforced in the server, even if an allow rule matches.
+            </span>
+          </span>
+          <Badge>{hardDenies.length} apps</Badge>
+        </button>
+        {showDenies && (
+          <div className="flex flex-wrap gap-1.5 border-t border-border px-3 py-2">
+            {hardDenies.map((name) => (
+              <Badge key={name}>{name}</Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ComputerUseAudit({
+  audit,
+  onReload,
+  onClear,
+  onError,
+}: {
+  audit: api.ComputerUseAuditEntry[];
+  onReload: () => Promise<void>;
+  onClear: () => Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const [thumb, setThumb] = useState<{ name: string; data: string } | null>(null);
+
+  const openThumb = async (name: string) => {
+    try {
+      setThumb({ name, data: await api.computerUseAuditImage(name) });
+    } catch (e) {
+      onError(errorText(e));
+    }
+  };
+
+  return (
+    <>
+      <div className="mx-2 overflow-hidden rounded-card border border-border">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+          <div>
+            <div className="text-sm font-medium">Audit</div>
+            <div className="text-xs text-muted">Newest first. Denied attempts are logged too.</div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button size="sm" variant="ghost" onClick={() => void onReload()}>
+              <RefreshCw size={14} />
+              Refresh
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={audit.length === 0}
+              onClick={() => void onClear()}
+            >
+              <Trash2 size={14} />
+              Clear
+            </Button>
+          </div>
+        </div>
+        {audit.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-muted">No computer-use actions yet.</p>
+        ) : (
+          <div className="max-h-[360px] overflow-auto">
+            <table className="w-full border-collapse text-xs">
+              <thead className="sticky top-0 bg-surface-2 text-left text-muted">
+                <tr>
+                  <th className="px-3 py-1.5 font-medium">Time</th>
+                  <th className="px-3 py-1.5 font-medium">Action</th>
+                  <th className="px-3 py-1.5 font-medium">App</th>
+                  <th className="px-3 py-1.5 font-medium">Result</th>
+                  <th className="px-3 py-1.5 font-medium">Detail</th>
+                  <th className="px-3 py-1.5 font-medium">Thumbs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.map((entry, index) => (
+                  <tr key={`${entry.at}:${index}`} className="border-t border-border">
+                    <td className="whitespace-nowrap px-3 py-1.5 text-muted">
+                      {new Date(entry.at).toLocaleString()}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-1.5">{entry.action}</td>
+                    <td className="max-w-[180px] truncate px-3 py-1.5" title={entry.app ?? ""}>
+                      {entry.app ?? "-"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-1.5">
+                      <Pill tone={entry.ok ? "success" : "danger"}>
+                        {entry.ok ? "ok" : "denied"}
+                      </Pill>
+                      {entry.dry_run && <Pill tone="warn">dry run</Pill>}
+                    </td>
+                    <td className="max-w-[320px] truncate px-3 py-1.5 text-muted" title={entry.detail}>
+                      {entry.detail}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-1.5">
+                      {entry.before && (
+                        <button
+                          type="button"
+                          className="mr-2 text-accent hover:underline"
+                          onClick={() => void openThumb(entry.before!)}
+                        >
+                          before
+                        </button>
+                      )}
+                      {entry.after && (
+                        <button
+                          type="button"
+                          className="text-accent hover:underline"
+                          onClick={() => void openThumb(entry.after!)}
+                        >
+                          after
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <Dialog open={thumb !== null} onClose={() => setThumb(null)} title="Audit thumbnail" wide>
+        {thumb && (
+          <img
+            src={`data:image/png;base64,${thumb.data}`}
+            alt={thumb.name}
+            className="max-h-[70vh] w-full object-contain"
+          />
+        )}
+      </Dialog>
+    </>
+  );
+}
+
+export function ComputerUsePage() {
+  const [config, setConfig] = useState<api.ComputerUseConfig | null>(null);
+  const [saved, setSaved] = useState<api.ComputerUseConfig | null>(null);
+  const [hardDenies, setHardDenies] = useState<string[]>([]);
+  const [audit, setAudit] = useState<api.ComputerUseAuditEntry[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const reloadAudit = useCallback(async () => {
+    try {
+      setAudit(await api.computerUseAudit(200));
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const [next, denies] = await Promise.all([
+        api.computerUseConfig(),
+        api.computerUseHardDenies(),
+      ]);
+      setConfig(next);
+      setSaved(next);
+      setHardDenies(denies);
+      await reloadAudit();
+      setStatus(null);
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  }, [reloadAudit]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const unlistenPaused = await listen<boolean>("computer-use-paused", (event) => {
+          setConfig((current) => (current ? { ...current, paused: event.payload } : current));
+          setSaved((current) => (current ? { ...current, paused: event.payload } : current));
+        });
+        const unlistenOverlay = await listen<boolean>("computer-use-overlay", (event) => {
+          setConfig((current) => (current ? { ...current, overlay: event.payload } : current));
+          setSaved((current) => (current ? { ...current, overlay: event.payload } : current));
+        });
+        if (cancelled) {
+          unlistenPaused();
+          unlistenOverlay();
+        } else {
+          dispose = () => {
+            unlistenPaused();
+            unlistenOverlay();
+          };
+        }
+      } catch (error) {
+        console.warn("computer-use: pause events unavailable", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
+
+  const dirty = config !== null && JSON.stringify(config) !== JSON.stringify(saved);
+
+  const update = (patch: Partial<api.ComputerUseConfig>) => {
+    setConfig((current) => (current ? { ...current, ...patch } : current));
+  };
+
+  const save = async () => {
+    if (!config) return;
+    setBusy(true);
+    try {
+      const next = await api.computerUseSetConfig(config);
+      setConfig(next);
+      setSaved(next);
+      setStatus(null);
+      toast("Computer use settings saved");
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearAudit = async () => {
+    const confirmed = await confirmDialog({
+      title: "Clear computer-use audit?",
+      body: "The action log and thumbnail files are removed. This cannot be undone.",
+      danger: true,
+      ok: "Clear",
+    });
+    if (!confirmed) return;
+    try {
+      await api.computerUseClearAudit();
+      setAudit([]);
+      toast("Computer-use audit cleared");
+    } catch (e) {
+      setStatus(errorText(e));
+    }
+  };
+
+  if (!config) {
+    return (
+      <p className="px-2 text-xs text-muted" role="status">
+        {status ?? "Loading computer use settings."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3 pb-2">
+      <Callout>
+        Computer use is off by default. View only observes. Interact adds clicks, typing and keys.
+        Full adds launch and clipboard write. Terminals, password managers, elevation prompts and
+        the secure desktop are always blocked. Every action is written to the audit log.
+      </Callout>
+
+      <SettingRow label="Computer use" description="Allow the bundled MCP server to observe and act">
+        <Pill tone={config.enabled ? "success" : "neutral"}>
+          {config.enabled ? "On" : "Off"}
+        </Pill>
+        <Toggle
+          checked={config.enabled}
+          onChange={(enabled) => update({ enabled })}
+          label="Enable computer use"
+        />
+      </SettingRow>
+      <SettingRow
+        label="Pause"
+        description="Stop observation and actions without changing the allowlist"
+      >
+        <Toggle
+          checked={config.paused}
+          onChange={(paused) => update({ paused })}
+          label="Pause computer use"
+          disabled={!config.enabled}
+        />
+      </SettingRow>
+      <SettingRow label="Dry run" description="Log the plan and skip the actual action">
+        <Toggle
+          checked={config.dry_run}
+          onChange={(dry_run) => update({ dry_run })}
+          label="Dry run"
+          disabled={!config.enabled}
+        />
+      </SettingRow>
+      <SettingRow label="Audit thumbnails" description="Save a PNG before and after each action">
+        <Toggle
+          checked={config.audit_thumbnails}
+          onChange={(audit_thumbnails) => update({ audit_thumbnails })}
+          label="Audit thumbnails"
+          disabled={!config.enabled}
+        />
+      </SettingRow>
+      <SettingRow label="Overlay" description="Show the on-screen status overlay">
+        <Toggle
+          checked={config.overlay}
+          onChange={(overlay) => update({ overlay })}
+          label="Overlay"
+          disabled={!config.enabled}
+        />
+      </SettingRow>
+      <SettingRow label="Kill switch hotkey" description="Pause computer use from anywhere">
+        <Input
+          value={config.hotkey}
+          maxLength={64}
+          disabled={!config.enabled}
+          onChange={(event) => update({ hotkey: event.target.value })}
+          aria-label="Kill switch hotkey"
+        />
+      </SettingRow>
+      <SettingRow label="Actions per run" description="Budget for one MCP server process">
+        <Input
+          type="number"
+          min={1}
+          max={1000}
+          value={config.max_actions_per_run}
+          disabled={!config.enabled}
+          onChange={(event) =>
+            update({ max_actions_per_run: Number(event.target.value) || 1 })
+          }
+          aria-label="Maximum actions per run"
+        />
+      </SettingRow>
+
+      <div className="flex items-center justify-between gap-3 px-2">
+        <span className="text-xs text-muted">
+          {dirty ? "Unsaved changes" : "Saved"}
+          {status ? ` - ${status}` : ""}
+        </span>
+        <Button variant="primary" size="sm" disabled={!dirty || busy} onClick={() => void save()}>
+          {busy ? <Spinner label="Saving" /> : <Check size={14} />}
+          Save
+        </Button>
+      </div>
+
+      <ComputerUseAllowlist
+        config={config}
+        hardDenies={hardDenies}
+        update={update}
+        setStatus={setStatus}
+      />
+      <ComputerUseAudit
+        audit={audit}
+        onReload={reloadAudit}
+        onClear={clearAudit}
+        onError={(message) => setStatus(message)}
       />
     </div>
   );

@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rmcp::ClientHandler;
@@ -13,6 +13,7 @@ use rmcp::service::{
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::permissions::Effect;
@@ -30,6 +31,165 @@ const MAX_MCP_ENV: usize = 64;
 const MAX_MCP_HEADERS: usize = 32;
 const MAX_MCP_VALUE_BYTES: usize = 8 * 1024;
 const MAX_MCP_CONFIG_BYTES: usize = 32 * 1024;
+const MAX_MCP_IMPORT_BYTES: usize = 1024 * 1024;
+const MAX_MCP_IMPORT_SERVERS: usize = 50;
+const SECRET_PREFIX: &str = "${secret:";
+const SECRET_SUFFIX: char = '}';
+const MAX_MCP_LOG_LINES: usize = 200;
+const MAX_MCP_LOG_LINE_BYTES: usize = 2_000;
+
+static MCP_LOGS: OnceLock<Mutex<HashMap<String, VecDeque<String>>>> = OnceLock::new();
+
+fn mcp_logs() -> &'static Mutex<HashMap<String, VecDeque<String>>> {
+    MCP_LOGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn redact_log_line(line: &str, secrets: &[String]) -> String {
+    let mut out = line.to_string();
+    for secret in secrets {
+        if secret.len() >= 6 && out.contains(secret) {
+            out = out.replace(secret, "[redacted]");
+        }
+    }
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)(token|secret|password|authorization|bearer|api[_-]?key)\s*[:=]\s*.*$",
+        )
+        .expect("valid log redaction regex")
+    });
+    pattern.replace_all(&out, "$1=[redacted]").to_string()
+}
+
+fn push_log(id: &str, line: &str, secrets: &[String]) {
+    let line = redact_log_line(line, secrets);
+    let line = if line.len() > MAX_MCP_LOG_LINE_BYTES {
+        let mut end = MAX_MCP_LOG_LINE_BYTES;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line[..end].to_string()
+    } else {
+        line
+    };
+    let Ok(mut guard) = mcp_logs().lock() else {
+        return;
+    };
+    let lines = guard.entry(id.to_string()).or_default();
+    if lines.len() >= MAX_MCP_LOG_LINES {
+        lines.pop_front();
+    }
+    lines.push_back(line);
+}
+
+fn clear_logs(id: &str) {
+    if let Ok(mut guard) = mcp_logs().lock() {
+        guard.remove(id);
+    }
+}
+
+fn spawn_stderr_reader(id: String, stderr: tokio::process::ChildStderr, secrets: Vec<String>) {
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            push_log(&id, &line, &secrets);
+        }
+    });
+}
+
+#[tauri::command]
+pub fn mcp_logs_for(id: String) -> Vec<String> {
+    mcp_logs()
+        .lock()
+        .map(|guard| {
+            guard
+                .get(&id)
+                .map(|lines| lines.iter().cloned().collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(windows)]
+struct JobHandle {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+unsafe impl Send for JobHandle {}
+#[cfg(windows)]
+unsafe impl Sync for JobHandle {}
+
+#[cfg(windows)]
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.handle);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn assign_to_job(pid: u32) -> Result<JobHandle, String> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return Err(format!(
+                "could not create MCP job object: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(format!("could not configure MCP job object: {error}"));
+        }
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, pid);
+        if process.is_null() {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(format!("could not open MCP process {pid}: {error}"));
+        }
+        if AssignProcessToJobObject(job, process) == 0 {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(process);
+            CloseHandle(job);
+            return Err(format!(
+                "could not assign MCP process {pid} to job: {error}"
+            ));
+        }
+        CloseHandle(process);
+        Ok(JobHandle { handle: job })
+    }
+}
+
+#[cfg(not(windows))]
+struct JobHandle;
+
+#[cfg(not(windows))]
+fn assign_to_job(_pid: u32) -> Result<JobHandle, String> {
+    Ok(JobHandle)
+}
 const MAX_TOOL_PAGES: usize = 64;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(windows)]
@@ -86,6 +246,9 @@ fn cap_mcp_text(text: String) -> String {
 }
 
 fn split_command(cmd: &str) -> Vec<String> {
+    if Path::new(cmd).is_file() {
+        return vec![cmd.to_string()];
+    }
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
@@ -507,6 +670,109 @@ mod tests {
     }
 
     #[test]
+    fn blank_structured_values_keep_stored_values() {
+        let mut target = BTreeMap::from([
+            ("TOKEN".to_string(), String::new()),
+            ("NODE_ENV".to_string(), "production".to_string()),
+        ]);
+        let existing = BTreeMap::from([
+            ("TOKEN".to_string(), "stored".to_string()),
+            ("OLD".to_string(), "gone".to_string()),
+        ]);
+        merge_blank_values(&mut target, &existing);
+        assert_eq!(target.get("TOKEN").map(String::as_str), Some("stored"));
+        assert_eq!(
+            target.get("NODE_ENV").map(String::as_str),
+            Some("production")
+        );
+        assert!(!target.contains_key("OLD"));
+    }
+
+    #[test]
+    fn tool_hash_is_stable_and_order_independent() {
+        let tool = |name: &str, description: &str| McpToolDef {
+            server: "srv".to_string(),
+            tool: name.to_string(),
+            description: description.to_string(),
+            input_schema: json!({"type": "object"}),
+        };
+        let a = tools_hash(&[tool("read", "Read a file"), tool("write", "Write a file")]);
+        let b = tools_hash(&[tool("write", "Write a file"), tool("read", "Read a file")]);
+        let c = tools_hash(&[tool("read", "Read a file"), tool("write", "Changed")]);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn secret_refs_are_detected_and_secret_keys_are_redacted() {
+        assert_eq!(
+            secret_name("${secret:mcp:s1:env:TOKEN}"),
+            Some("mcp:s1:env:TOKEN")
+        );
+        assert_eq!(secret_name("literal"), None);
+        assert_eq!(secret_name("${secret:}"), Some(""));
+        assert!(looks_secret_key("GITHUB_TOKEN"));
+        assert!(looks_secret_key("Authorization"));
+        assert!(!looks_secret_key("NODE_ENV"));
+    }
+
+    #[test]
+    fn log_lines_redact_secret_values() {
+        assert_eq!(
+            redact_log_line("Authorization: Bearer abc", &[]),
+            "Authorization=[redacted]"
+        );
+        assert_eq!(redact_log_line("TOKEN=abc", &[]), "TOKEN=[redacted]");
+        assert_eq!(
+            redact_log_line("value supersecret", &["supersecret".to_string()]),
+            "value [redacted]"
+        );
+    }
+
+    #[test]
+    fn secret_values_and_headers_are_detected() {
+        assert!(looks_secret_value("postgres://admin:hunter2@db.local/app"));
+        assert!(looks_secret_value("Bearer abcdef"));
+        assert!(!looks_secret_value("production"));
+        assert!(is_sensitive("env", "DATABASE_URL", "postgres://u:p@h/db"));
+        assert!(is_sensitive("header", "X-Api-Key", "abc"));
+        assert!(!is_sensitive("header", "Accept", "application/json"));
+        assert!(is_sensitive("env", "GITHUB_TOKEN", "abc"));
+    }
+
+    #[test]
+    fn unowned_secret_refs_are_rejected() {
+        let mut env = BTreeMap::from([(
+            "TOKEN".to_string(),
+            "${secret:mcp:other:env:TOKEN}".to_string(),
+        )]);
+        assert!(protect_map("mine", "env", &mut env).is_err());
+        assert!(resolve_map(&mut env, "environment", Some("mine")).is_err());
+    }
+
+    #[test]
+    fn portable_names_are_sanitized_and_unique() {
+        assert_eq!(portable_name("my server!"), "my-server");
+        assert_eq!(portable_name("  "), "server");
+        let mut used = HashSet::from(["fs".to_string(), "fs-2".to_string()]);
+        assert_eq!(unique_portable_name("fs", &mut used), "fs-3");
+    }
+
+    #[test]
+    fn portable_transport_prefers_an_explicit_type() {
+        let server = PortableServer {
+            kind: Some("sse".to_string()),
+            ..PortableServer::default()
+        };
+        assert_eq!(portable_transport(&server), "sse");
+        let server = PortableServer {
+            command: Some("npx".to_string()),
+            ..PortableServer::default()
+        };
+        assert_eq!(portable_transport(&server), "stdio");
+    }
+
+    #[test]
     fn structured_config_rejects_two_targets() {
         let config = McpConfig {
             command: Some("npx".to_string()),
@@ -583,6 +849,7 @@ mod tests {
             headers: BTreeMap::new(),
             deny_tools: deny.map(|list| list.into_iter().map(String::from).collect()),
             timeout_ms: None,
+            tool_hash: None,
             _enabled: true,
         }
     }
@@ -604,6 +871,7 @@ mod tests {
             timeout_ms: None,
             enabled: true,
             config_json: None,
+            tool_hash: None,
             has_token: false,
         }
     }
@@ -852,6 +1120,27 @@ pub struct McpToolDef {
     pub input_schema: Value,
 }
 
+fn tools_hash(tools: &[McpToolDef]) -> String {
+    let mut entries: Vec<String> = tools
+        .iter()
+        .map(|tool| {
+            format!(
+                "{}\u{1f}{}\u{1f}{}",
+                tool.tool,
+                tool.description,
+                serde_json::to_string(&tool.input_schema).unwrap_or_default()
+            )
+        })
+        .collect();
+    entries.sort();
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(entry.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalMode {
     Ask,
@@ -890,6 +1179,27 @@ pub struct McpConfig {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct PortableServer {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    command: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env: BTreeMap<String, String>,
+    url: Option<String>,
+    headers: BTreeMap<String, String>,
+    #[serde(alias = "timeoutMs")]
+    timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PortableFile {
+    #[serde(rename = "mcpServers", alias = "servers")]
+    servers: BTreeMap<String, PortableServer>,
+}
+
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
     pub id: String,
@@ -905,18 +1215,260 @@ pub struct McpServerConfig {
     pub headers: BTreeMap<String, String>,
     pub deny_tools: Option<Vec<String>>,
     pub timeout_ms: Option<u64>,
+    pub tool_hash: Option<String>,
     pub _enabled: bool,
 }
 
 fn parse_config_json(value: Option<&str>) -> McpConfig {
+    let Some(raw) = value else {
+        return McpConfig::default();
+    };
+    match serde_json::from_str::<McpConfig>(raw) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!(
+                "mcp: stored config_json is invalid; falling back to legacy columns: {error}"
+            );
+            McpConfig::default()
+        }
+    }
+}
+
+fn config_from_row(row: &McpServerRow) -> McpConfig {
+    let mut config = parse_config_json(row.config_json.as_deref());
+    if config.command.is_none() {
+        config.command = row.cmd.clone();
+    }
+    if config.url.is_none() {
+        config.url = row.url.clone();
+    }
+    if config.timeout_ms.is_none() {
+        config.timeout_ms = row.timeout_ms.map(|value| value as u64);
+    }
+    config
+}
+
+fn secret_name(value: &str) -> Option<&str> {
     value
-        .and_then(|raw| serde_json::from_str::<McpConfig>(raw).ok())
-        .unwrap_or_default()
+        .strip_prefix(SECRET_PREFIX)?
+        .strip_suffix(SECRET_SUFFIX)
+}
+
+fn secret_ref(name: &str) -> String {
+    format!("{SECRET_PREFIX}{name}{SECRET_SUFFIX}")
+}
+
+fn looks_secret_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    [
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASS",
+        "AUTH",
+        "CREDENTIAL",
+        "COOKIE",
+        "SESSION",
+        "PRIVATE",
+    ]
+    .iter()
+    .any(|needle| upper.contains(needle))
+}
+
+fn looks_secret_value(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("bearer ") || lower.starts_with("basic ") || lower.starts_with("token ") {
+        return true;
+    }
+    if value.contains("://") {
+        let authority = value.split("://").nth(1).unwrap_or("");
+        let authority = authority.split('/').next().unwrap_or("");
+        if authority.contains('@') {
+            return true;
+        }
+    }
+    if [
+        "password=",
+        "passwd=",
+        "secret=",
+        "token=",
+        "api_key=",
+        "apikey=",
+        "access_key=",
+        "client_secret=",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        return true;
+    }
+    let long = value.len() >= 32;
+    let has_digit = value.chars().any(|ch| ch.is_ascii_digit());
+    let has_alpha = value.chars().any(|ch| ch.is_ascii_alphabetic());
+    let has_symbol = value.chars().any(|ch| !ch.is_ascii_alphanumeric());
+    long && has_digit && has_alpha && has_symbol && !value.contains('\\') && !value.contains('/')
+}
+
+fn safe_env_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_uppercase().as_str(),
+        "PATH"
+            | "PATHEXT"
+            | "NODE_ENV"
+            | "LOG_LEVEL"
+            | "DEBUG"
+            | "LANG"
+            | "LC_ALL"
+            | "TZ"
+            | "HOME"
+            | "USERPROFILE"
+            | "TEMP"
+            | "TMP"
+            | "PYTHONPATH"
+            | "NODE_PATH"
+            | "HOST"
+            | "PORT"
+    )
+}
+
+fn safe_header(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "accept" | "content-type" | "user-agent"
+    )
+}
+
+fn is_sensitive(field: &str, key: &str, value: &str) -> bool {
+    if field == "env" {
+        return !safe_env_key(key) || looks_secret_key(key) || looks_secret_value(value);
+    }
+    if field == "header" {
+        return !safe_header(key) || looks_secret_key(key) || looks_secret_value(value);
+    }
+    false
+}
+
+fn owned_secret_prefix(id: &str) -> String {
+    format!("mcp:{id}:")
+}
+
+fn secret_entry_name(id: &str, field: &str, key: &str) -> String {
+    format!("mcp:{id}:{field}:{key}")
+}
+
+fn protect_map(id: &str, field: &str, map: &mut BTreeMap<String, String>) -> Result<(), String> {
+    let prefix = owned_secret_prefix(id);
+    for (key, value) in map.iter_mut() {
+        if value.is_empty() {
+            continue;
+        }
+        if let Some(name) = secret_name(value) {
+            if !name.starts_with(&prefix) {
+                return Err(format!(
+                    "{field} {key} references a secret that is not owned by this server; re-enter the value"
+                ));
+            }
+            continue;
+        }
+        if is_sensitive(field, key, value) {
+            let name = secret_entry_name(id, field, key);
+            crate::vault::set_secret(&name, value).map_err(|e| e.to_string())?;
+            *value = secret_ref(&name);
+        }
+    }
+    Ok(())
+}
+
+fn protect_config_secrets(id: &str, config: &mut McpConfig) -> Result<(), String> {
+    protect_map(id, "env", &mut config.env)?;
+    protect_map(id, "header", &mut config.headers)?;
+    Ok(())
+}
+
+fn resolve_map(
+    map: &mut BTreeMap<String, String>,
+    label: &str,
+    owner: Option<&str>,
+) -> Result<(), String> {
+    for (key, value) in map.iter_mut() {
+        let Some(name) = secret_name(value) else {
+            continue;
+        };
+        if name.is_empty() {
+            return Err(format!("{label} {key} has an empty secret reference"));
+        }
+        let Some(owner) = owner else {
+            return Err(format!(
+                "{label} {key} uses a secret reference; save the server before testing it"
+            ));
+        };
+        if !name.starts_with(&owned_secret_prefix(owner)) {
+            return Err(format!(
+                "{label} {key} references a secret that is not owned by this server"
+            ));
+        }
+        let secret = crate::vault::read_secret(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("{label} {key} references a missing secret: {name}"))?;
+        *value = secret;
+    }
+    Ok(())
+}
+
+fn resolve_config_secrets(config: &mut McpConfig, owner: Option<&str>) -> Result<(), String> {
+    resolve_map(&mut config.env, "environment", owner)?;
+    resolve_map(&mut config.headers, "header", owner)?;
+    Ok(())
+}
+
+fn redact_map(map: &mut BTreeMap<String, String>, field: &str) {
+    for (key, value) in map.iter_mut() {
+        if secret_name(value).is_some() || is_sensitive(field, key, value) {
+            value.clear();
+        }
+    }
+}
+
+fn delete_owned_secrets(id: &str, config: &McpConfig) {
+    let prefix = owned_secret_prefix(id);
+    for value in config.env.values().chain(config.headers.values()) {
+        let Some(name) = secret_name(value) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        if let Err(error) = crate::vault::delete_secret(name) {
+            eprintln!("mcp: failed to delete secret {name}: {error}");
+        }
+    }
+}
+
+fn cleanup_removed_secrets(
+    id: &str,
+    field: &str,
+    existing: &BTreeMap<String, String>,
+    target: &BTreeMap<String, String>,
+) {
+    for (key, value) in existing {
+        if target.contains_key(key) {
+            continue;
+        }
+        let Some(name) = secret_name(value) else {
+            continue;
+        };
+        if name == secret_entry_name(id, field, key)
+            && let Err(error) = crate::vault::delete_secret(name)
+        {
+            eprintln!("mcp: failed to delete secret {name}: {error}");
+        }
+    }
 }
 
 impl From<&McpServerRow> for McpServerConfig {
     fn from(row: &McpServerRow) -> McpServerConfig {
-        let config = parse_config_json(row.config_json.as_deref());
+        let config = config_from_row(row);
         McpServerConfig {
             id: row.id.clone(),
             project_id: row.project_id.clone(),
@@ -933,6 +1485,7 @@ impl From<&McpServerRow> for McpServerConfig {
             timeout_ms: config
                 .timeout_ms
                 .or_else(|| row.timeout_ms.map(|v| v as u64)),
+            tool_hash: row.tool_hash.clone(),
             _enabled: row.enabled,
         }
     }
@@ -955,12 +1508,14 @@ pub struct McpServerRow {
     pub enabled: bool,
     #[serde(skip)]
     pub config_json: Option<String>,
+    #[serde(skip)]
+    pub tool_hash: Option<String>,
     #[sqlx(default)]
     #[serde(default)]
     pub has_token: bool,
 }
 
-const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode, config_json FROM mcp_servers";
+const SERVER_SELECT: &str = "SELECT id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, deny_tools, ask_tools, approval_mode, config_json, tool_hash FROM mcp_servers";
 
 fn valid_server_name(name: &str) -> bool {
     !name.trim().is_empty()
@@ -975,6 +1530,9 @@ pub async fn mcp_list(
     app: AppHandle,
     project_id: Option<String>,
 ) -> Result<Vec<McpServerRow>, String> {
+    if let Err(error) = crate::computer_use::ensure_builtin(&app).await {
+        eprintln!("mcp: builtin server seed failed: {error}");
+    }
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
@@ -992,58 +1550,22 @@ pub async fn mcp_list(
 }
 
 #[tauri::command]
-pub async fn mcp_add(
-    app: AppHandle,
-    project_id: Option<String>,
-    name: String,
-    transport: String,
-    auth_type: String,
-    cmd: Option<String>,
-    url: Option<String>,
-) -> Result<McpServerRow, String> {
-    let name = name.trim().to_string();
-    if !valid_server_name(&name) {
-        return Err("server name must be 1-64 chars: letters, digits, - or _".to_string());
-    }
-    validate_target(&transport, cmd.as_deref(), url.as_deref())?;
-    validate_auth_type(&auth_type)?;
-    validate_auth_transport(&auth_type, &transport)?;
-    let pool = crate::tools::memory_pool(&app)
-        .await
-        .map_err(|e| e.to_string())?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    sqlx::query("INSERT INTO mcp_servers (id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?)")
-        .bind(&id)
-        .bind(&project_id)
-        .bind(&name)
-        .bind(&transport)
-        .bind(&auth_type)
-        .bind(&cmd)
-        .bind(&url)
-        .bind(now)
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-    server_row(&pool, &id).await
-}
-
-#[tauri::command]
 pub async fn mcp_remove(app: AppHandle, id: String) -> Result<(), String> {
     crate::mcp_oauth::clear_credentials(&id)?;
     crate::vault::delete_secret(&token_key(&id)).map_err(|e| e.to_string())?;
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
+    if let Ok(row) = server_row(&pool, &id).await {
+        delete_owned_secrets(&id, &config_from_row(&row));
+    }
     sqlx::query("DELETE FROM mcp_servers WHERE id = ?")
         .bind(&id)
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
     forget_probe(&app.state::<McpState>(), &id);
+    clear_logs(&id);
     Ok(())
 }
 
@@ -1295,141 +1817,384 @@ async fn server_row(pool: &sqlx::SqlitePool, id: &str) -> Result<McpServerRow, S
     Ok(row)
 }
 
+async fn ensure_unique_server_name(
+    pool: &sqlx::SqlitePool,
+    project_id: Option<&str>,
+    name: &str,
+    exclude: Option<&str>,
+) -> Result<(), String> {
+    let duplicate: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM mcp_servers WHERE project_id IS ? AND name = ? AND (? IS NULL OR id != ?) LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(name)
+    .bind(exclude)
+    .bind(exclude)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if duplicate.is_some() {
+        return Err(format!(
+            "a server named {name:?} already exists in this scope"
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn mcp_update(
+pub async fn mcp_save(
     app: AppHandle,
-    id: String,
+    id: Option<String>,
+    project_id: Option<String>,
     name: String,
     transport: String,
     auth_type: String,
-    cmd: Option<String>,
-    url: Option<String>,
+    mut config: McpConfig,
 ) -> Result<McpServerRow, String> {
     let name = name.trim().to_string();
     if !valid_server_name(&name) {
         return Err("server name must be 1-64 chars: letters, digits, - or _".to_string());
     }
-    validate_target(&transport, cmd.as_deref(), url.as_deref())?;
     validate_auth_type(&auth_type)?;
     validate_auth_transport(&auth_type, &transport)?;
+    config.command = config
+        .command
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    config.url = config
+        .url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    config.cwd = config
+        .cwd
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if transport == "stdio" {
+        config.url = None;
+        config.headers.clear();
+    } else {
+        config.command = None;
+        config.args.clear();
+        config.cwd = None;
+        config.env.clear();
+    }
+    let cmd = config.command.clone();
+    let url = config.url.clone();
+    validate_target(&transport, cmd.as_deref(), url.as_deref())?;
+    validate_config(&config)?;
+
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    let before = server_row(&pool, &id).await?;
-    let target_changed = before.transport != transport || before.url != url;
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    if let Err(error) = sqlx::query(
-        "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ?, config_json = NULL WHERE id = ?",
+    if let Some(id) = id {
+        let before = server_row(&pool, &id).await?;
+        ensure_unique_server_name(&pool, before.project_id.as_deref(), &name, Some(&id)).await?;
+        let existing = config_from_row(&before);
+        merge_blank_values(&mut config.env, &existing.env);
+        merge_blank_values(&mut config.headers, &existing.headers);
+        protect_config_secrets(&id, &mut config)?;
+        let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        if config_json.len() > MAX_MCP_CONFIG_BYTES {
+            return Err("MCP config is too large".to_string());
+        }
+        let target_changed =
+            before.transport != transport || before.url != url || before.cmd != cmd;
+        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+        if let Err(error) = sqlx::query(
+            "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ?, config_json = ?, timeout_ms = ? WHERE id = ?",
+        )
+        .bind(&name)
+        .bind(&transport)
+        .bind(&auth_type)
+        .bind(&cmd)
+        .bind(&url)
+        .bind(&config_json)
+        .bind(config.timeout_ms.map(|value| value as i64))
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        {
+            if let Err(rollback) = tx.rollback().await {
+                eprintln!("mcp: save rollback failed: {rollback}");
+            }
+            return Err(error.to_string());
+        }
+        if (target_changed || auth_type != "bearer")
+            && let Err(error) = crate::vault::delete_secret(&token_key(&id))
+        {
+            if let Err(rollback) = tx.rollback().await {
+                eprintln!("mcp: save rollback failed: {rollback}");
+            }
+            return Err(error.to_string());
+        }
+        if (target_changed || auth_type != "oauth")
+            && let Err(error) = crate::mcp_oauth::clear_credentials(&id)
+        {
+            if let Err(rollback) = tx.rollback().await {
+                eprintln!("mcp: save rollback failed: {rollback}");
+            }
+            return Err(error);
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+        cleanup_removed_secrets(&id, "env", &existing.env, &config.env);
+        cleanup_removed_secrets(&id, "header", &existing.headers, &config.headers);
+        let state = app.state::<McpState>();
+        forget_probe(&state, &id);
+        let row = server_row(&pool, &id).await?;
+        let key = McpState::key(&McpServerConfig::from(&row));
+        state.sessions.lock().await.remove(&key);
+        return Ok(row);
+    }
+
+    ensure_unique_server_name(&pool, project_id.as_deref(), &name, None).await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    protect_config_secrets(&id, &mut config)?;
+    let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    if config_json.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("MCP config is too large".to_string());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    sqlx::query(
+        "INSERT INTO mcp_servers (id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, created_at, config_json) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?)",
     )
+    .bind(&id)
+    .bind(&project_id)
     .bind(&name)
     .bind(&transport)
     .bind(&auth_type)
     .bind(&cmd)
     .bind(&url)
-    .bind(&id)
-    .execute(&mut *tx)
+    .bind(config.timeout_ms.map(|value| value as i64))
+    .bind(now)
+    .bind(&config_json)
+    .execute(&pool)
     .await
-    {
-        if let Err(rollback) = tx.rollback().await {
-            eprintln!("mcp: update rollback failed: {rollback}");
+    .map_err(|e| e.to_string())?;
+    server_row(&pool, &id).await
+}
+
+fn portable_name(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else if !out.ends_with('-') {
+            out.push('-');
         }
-        return Err(error.to_string());
     }
-    if (target_changed || auth_type != "bearer")
-        && let Err(error) = crate::vault::delete_secret(&token_key(&id))
-    {
-        if let Err(rollback) = tx.rollback().await {
-            eprintln!("mcp: update rollback failed: {rollback}");
+    let out = out.trim_matches('-');
+    let out: String = out.chars().take(64).collect();
+    if out.is_empty() {
+        "server".to_string()
+    } else {
+        out
+    }
+}
+
+fn unique_portable_name(raw: &str, used: &mut HashSet<String>) -> String {
+    let base = portable_name(raw);
+    if used.insert(base.clone()) {
+        return base;
+    }
+    for index in 2.. {
+        let suffix = format!("-{index}");
+        let keep = 64usize.saturating_sub(suffix.len());
+        let stem: String = base.chars().take(keep).collect();
+        let candidate = format!("{stem}{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
         }
-        return Err(error.to_string());
     }
-    if (target_changed || auth_type != "oauth")
-        && let Err(error) = crate::mcp_oauth::clear_credentials(&id)
+    unreachable!("name suffixes are unbounded")
+}
+
+fn portable_transport(server: &PortableServer) -> &'static str {
+    match server
+        .kind
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
     {
-        if let Err(rollback) = tx.rollback().await {
-            eprintln!("mcp: update rollback failed: {rollback}");
+        "stdio" => "stdio",
+        "http" | "streamable-http" | "streamable_http" => "http",
+        "sse" | "legacy-sse" | "legacy_sse" => "sse",
+        _ if server
+            .command
+            .as_deref()
+            .is_some_and(|command| !command.trim().is_empty()) =>
+        {
+            "stdio"
         }
-        return Err(error);
+        _ => "http",
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
-    let state = app.state::<McpState>();
-    forget_probe(&state, &id);
-    let row = server_row(&pool, &id).await?;
-    let key = McpState::key(&McpServerConfig::from(&row));
-    state.sessions.lock().await.remove(&key);
-    Ok(row)
 }
 
 #[tauri::command]
-pub async fn mcp_set_config(
+pub async fn mcp_import(
     app: AppHandle,
-    id: String,
-    config: McpConfig,
-) -> Result<McpServerRow, String> {
-    validate_config(&config)?;
-    let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
-    if config_json.len() > MAX_MCP_CONFIG_BYTES {
-        return Err("MCP config is too large".to_string());
+    project_id: Option<String>,
+    json: String,
+) -> Result<Vec<McpServerRow>, String> {
+    if json.len() > MAX_MCP_IMPORT_BYTES {
+        return Err("MCP import file is too large".to_string());
     }
-    let transport = if config
-        .command
-        .as_deref()
-        .is_some_and(|command| !command.trim().is_empty())
-    {
-        "stdio"
-    } else {
-        "http"
-    };
+    let file: PortableFile =
+        serde_json::from_str(&json).map_err(|e| format!("invalid MCP config: {e}"))?;
+    if file.servers.is_empty() {
+        return Err("MCP config has no servers".to_string());
+    }
+    if file.servers.len() > MAX_MCP_IMPORT_SERVERS {
+        return Err(format!(
+            "MCP config has more than {MAX_MCP_IMPORT_SERVERS} servers"
+        ));
+    }
     let pool = crate::tools::memory_pool(&app)
         .await
         .map_err(|e| e.to_string())?;
-    let before = server_row(&pool, &id).await?;
-    validate_auth_transport(&before.auth_type, transport)?;
-    let target_changed =
-        before.transport != transport || before.url != config.url || before.cmd != config.command;
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    if let Err(error) = sqlx::query(
-        "UPDATE mcp_servers SET transport = ?, cmd = ?, url = ?, config_json = ?, timeout_ms = ? WHERE id = ?",
-    )
-    .bind(transport)
-    .bind(&config.command)
-    .bind(&config.url)
-    .bind(&config_json)
-    .bind(config.timeout_ms.map(|value| value as i64))
-    .bind(&id)
-    .execute(&mut *tx)
+    let existing: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM mcp_servers WHERE project_id IS ?")
+            .bind(&project_id)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    let mut used: HashSet<String> = existing.into_iter().collect();
+    let mut imported = Vec::new();
+    for (raw_name, server) in file.servers {
+        let name = unique_portable_name(&raw_name, &mut used);
+        let transport = portable_transport(&server);
+        let mut env = server.env;
+        let mut headers = server.headers;
+        for value in env.values_mut().chain(headers.values_mut()) {
+            if secret_name(value).is_some() {
+                value.clear();
+            }
+        }
+        let config = McpConfig {
+            command: server.command,
+            args: server.args,
+            cwd: server.cwd,
+            env,
+            url: server.url,
+            headers,
+            timeout_ms: server.timeout,
+        };
+        match mcp_save(
+            app.clone(),
+            None,
+            project_id.clone(),
+            name.clone(),
+            transport.to_string(),
+            "none".to_string(),
+            config,
+        )
+        .await
+        {
+            Ok(mut row) => {
+                if let Err(error) = sqlx::query("UPDATE mcp_servers SET enabled = 0 WHERE id = ?")
+                    .bind(&row.id)
+                    .execute(&pool)
+                    .await
+                {
+                    return Err(format!(
+                        "imported {} server(s); could not disable '{name}': {error}",
+                        imported.len()
+                    ));
+                }
+                row.enabled = false;
+                imported.push(row);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "imported {} server(s); failed on '{name}': {error}",
+                    imported.len()
+                ));
+            }
+        }
+    }
+    Ok(imported)
+}
+
+#[tauri::command]
+pub async fn mcp_export(app: AppHandle, project_id: Option<String>) -> Result<String, String> {
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<McpServerRow> = sqlx::query_as(&format!(
+        "{SERVER_SELECT} WHERE project_id IS ? ORDER BY name ASC"
+    ))
+    .bind(&project_id)
+    .fetch_all(&pool)
     .await
-    {
-        if let Err(rollback) = tx.rollback().await {
-            eprintln!("mcp: config update rollback failed: {rollback}");
+    .map_err(|e| e.to_string())?;
+    let mut servers = serde_json::Map::new();
+    for row in rows {
+        if row.name == crate::computer_use::BUILTIN_SERVER_NAME {
+            continue;
         }
-        return Err(error.to_string());
-    }
-    if target_changed
-        && before.auth_type == "bearer"
-        && let Err(error) = crate::vault::delete_secret(&token_key(&id))
-    {
-        if let Err(rollback) = tx.rollback().await {
-            eprintln!("mcp: config update rollback failed: {rollback}");
+        let mut config = config_from_row(&row);
+        for (key, value) in config.env.iter_mut() {
+            if secret_name(value).is_some() || is_sensitive("env", key, value) {
+                value.clear();
+            }
         }
-        return Err(error.to_string());
-    }
-    if target_changed
-        && before.auth_type == "oauth"
-        && let Err(error) = crate::mcp_oauth::clear_credentials(&id)
-    {
-        if let Err(rollback) = tx.rollback().await {
-            eprintln!("mcp: config update rollback failed: {rollback}");
+        for (key, value) in config.headers.iter_mut() {
+            if secret_name(value).is_some() || is_sensitive("header", key, value) {
+                value.clear();
+            }
         }
-        return Err(error);
+        let mut entry = serde_json::Map::new();
+        entry.insert("type".to_string(), json!(row.transport));
+        if let Some(command) = config.command {
+            entry.insert("command".to_string(), json!(command));
+        }
+        if !config.args.is_empty() {
+            entry.insert("args".to_string(), json!(config.args));
+        }
+        if let Some(cwd) = config.cwd {
+            entry.insert("cwd".to_string(), json!(cwd));
+        }
+        if !config.env.is_empty() {
+            entry.insert("env".to_string(), json!(config.env));
+        }
+        if let Some(url) = config.url {
+            entry.insert("url".to_string(), json!(url));
+        }
+        if !config.headers.is_empty() {
+            entry.insert("headers".to_string(), json!(config.headers));
+        }
+        if let Some(timeout) = config.timeout_ms {
+            entry.insert("timeout".to_string(), json!(timeout));
+        }
+        servers.insert(row.name, Value::Object(entry));
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
-    let state = app.state::<McpState>();
-    forget_probe(&state, &id);
+    serde_json::to_string_pretty(&json!({ "mcpServers": servers })).map_err(|e| e.to_string())
+}
+
+fn merge_blank_values(target: &mut BTreeMap<String, String>, existing: &BTreeMap<String, String>) {
+    for (key, value) in target {
+        if value.is_empty()
+            && let Some(previous) = existing.get(key)
+        {
+            *value = previous.clone();
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn mcp_config(app: AppHandle, id: String) -> Result<McpConfig, String> {
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
     let row = server_row(&pool, &id).await?;
-    let key = McpState::key(&McpServerConfig::from(&row));
-    state.sessions.lock().await.remove(&key);
-    Ok(row)
+    let mut config = config_from_row(&row);
+    redact_map(&mut config.env, "env");
+    redact_map(&mut config.headers, "header");
+    Ok(config)
 }
 
 #[tauri::command]
@@ -1513,8 +2278,9 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
     let key = McpState::key(&config);
     state.sessions.lock().await.remove(&key);
     let report = match connect_once(&config).await {
-        Ok(session) => {
-            let report = probe_connected(&id, &session.tools);
+        Ok(mut session) => {
+            persist_initial_tool_hash(&app, &id, &mut session).await;
+            let report = probe_session(&id, &session);
             state
                 .sessions
                 .lock()
@@ -1529,28 +2295,88 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
 }
 
 #[tauri::command]
-pub async fn mcp_test(
-    transport: String,
+pub async fn mcp_approve_tools(app: AppHandle, id: String) -> Result<McpServerRow, String> {
+    let pool = crate::tools::memory_pool(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    let row = server_row(&pool, &id).await?;
+    let config = McpServerConfig::from(&row);
+    let key = McpState::key(&config);
+    let state = app.state::<McpState>();
+    let handle = state
+        .session(&key)
+        .await
+        .ok_or_else(|| "connect the server before approving its tools".to_string())?;
+    let hash = {
+        let session = handle.lock().await;
+        session
+            .tool_hash
+            .clone()
+            .ok_or_else(|| "connect the server before approving its tools".to_string())?
+    };
+    sqlx::query("UPDATE mcp_servers SET tool_hash = ? WHERE id = ?")
+        .bind(&hash)
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    {
+        let mut session = handle.lock().await;
+        session.needs_review = false;
+        session.config.tool_hash = Some(hash);
+    }
+    forget_probe(&state, &id);
+    if let Err(error) = mcp_probe(app.clone(), id.clone()).await {
+        eprintln!("mcp: post-approval probe failed: {error}");
+    }
+    server_row(&pool, &id).await
+}
+
+#[tauri::command]
+pub async fn mcp_test_config(
+    app: AppHandle,
     auth_type: String,
-    cmd: Option<String>,
-    url: Option<String>,
+    mut config: McpConfig,
+    id: Option<String>,
 ) -> Result<McpProbe, String> {
     validate_auth_type(&auth_type)?;
-    validate_auth_transport(&auth_type, &transport)?;
+    let owner = id.as_deref();
+    if let Some(owner_id) = owner {
+        let pool = crate::tools::memory_pool(&app)
+            .await
+            .map_err(|e| e.to_string())?;
+        let row = server_row(&pool, owner_id).await?;
+        let existing = config_from_row(&row);
+        merge_blank_values(&mut config.env, &existing.env);
+        merge_blank_values(&mut config.headers, &existing.headers);
+    }
+    resolve_config_secrets(&mut config, owner)?;
+    validate_config(&config)?;
+    let transport = if config
+        .command
+        .as_deref()
+        .is_some_and(|command| !command.trim().is_empty())
+    {
+        "stdio"
+    } else {
+        "http"
+    };
+    validate_auth_transport(&auth_type, transport)?;
     let config = McpServerConfig {
         id: "draft".to_string(),
         project_id: None,
         name: "draft".to_string(),
-        transport,
+        transport: transport.to_string(),
         auth_type,
-        cmd,
-        args: Vec::new(),
-        cwd: None,
-        env: BTreeMap::new(),
-        url,
-        headers: BTreeMap::new(),
+        cmd: config.command,
+        args: config.args,
+        cwd: config.cwd,
+        env: config.env,
+        url: config.url,
+        headers: config.headers,
         deny_tools: None,
-        timeout_ms: None,
+        timeout_ms: config.timeout_ms,
+        tool_hash: None,
         _enabled: true,
     };
     match connect_once(&config).await {
@@ -1577,6 +2403,10 @@ fn clean_tool_names(names: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
+    let mut owned = config.clone();
+    resolve_map(&mut owned.env, "environment", Some(&owned.id))?;
+    resolve_map(&mut owned.headers, "header", Some(&owned.id))?;
+    let config = &owned;
     let auth_token = match config.auth_type.as_str() {
         "none" => None,
         "bearer" => {
@@ -1600,7 +2430,7 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
     if config.transport == "stdio" && auth_token.is_some() {
         return Err("stdio servers do not use authorization".to_string());
     }
-    let (transport, tools_dirty) = if config.transport == "sse" {
+    let (transport, tools_dirty, job) = if config.transport == "sse" {
         let timeout = Duration::from_millis(
             config
                 .timeout_ms
@@ -1612,15 +2442,19 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
                 connect_legacy_sse(config, auth_token.as_deref(), timeout).await?,
             ),
             None,
+            None,
         )
     } else {
-        let (service, dirty) = connect_rmcp(config, auth_token.as_deref()).await?;
-        (McpTransport::Rmcp(service), Some(dirty))
+        let (service, dirty, job) = connect_rmcp(config, auth_token.as_deref()).await?;
+        (McpTransport::Rmcp(service), Some(dirty), job)
     };
     let mut session = Session {
         config: config.clone(),
         transport,
+        _job: job,
         tools: Vec::new(),
+        tool_hash: None,
+        needs_review: false,
         timeouts: 0,
         tools_dirty,
         tools_checked: Instant::now(),
@@ -1641,6 +2475,7 @@ async fn connect_rmcp(
     (
         RunningService<RoleClient, ToolChangeHandler>,
         Arc<AtomicBool>,
+        Option<JobHandle>,
     ),
     String,
 > {
@@ -1675,7 +2510,7 @@ async fn connect_rmcp(
         .await
         .map_err(|_| "initialize timeout".to_string())?
         .map_err(|e| e.to_string())?;
-        return Ok((service, dirty));
+        return Ok((service, dirty, None));
     }
     let cmd = config.cmd.as_deref().unwrap_or("").trim();
     if cmd.is_empty() {
@@ -1684,23 +2519,43 @@ async fn connect_rmcp(
     let mut parts = split_command(cmd);
     parts.extend(config.args.iter().cloned());
     let (program, args, path) = resolve_command(&parts)?;
-    let transport =
-        TokioChildProcess::new(tokio::process::Command::new(program).configure(|command| {
-            command
-                .args(&args)
-                .env("PATH", &path)
-                .envs(&config.env)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .kill_on_drop(true);
-            if let Some(cwd) = config.cwd.as_deref() {
-                command.current_dir(cwd);
-            }
-            #[cfg(windows)]
-            command.creation_flags(CREATE_NO_WINDOW);
-        }))
+    let command = tokio::process::Command::new(program).configure(|command| {
+        command
+            .args(&args)
+            .env("PATH", &path)
+            .envs(&config.env)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        if let Some(cwd) = config.cwd.as_deref() {
+            command.current_dir(cwd);
+        }
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
+    });
+    let (transport, stderr) = TokioChildProcess::builder(command)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
+    let pid = transport
+        .id()
+        .ok_or_else(|| "spawn failed: missing process id".to_string())?;
+    let job = assign_to_job(pid)?;
+    if let Some(stderr) = stderr {
+        let mut secrets: Vec<String> = config
+            .env
+            .values()
+            .chain(config.headers.values())
+            .filter(|value| value.len() >= 6)
+            .cloned()
+            .collect();
+        if let Some(token) = auth_token
+            && token.len() >= 6
+        {
+            secrets.push(token.to_string());
+        }
+        spawn_stderr_reader(config.id.clone(), stderr, secrets);
+    }
     let service = tokio::time::timeout(
         STARTUP_TIMEOUT,
         handler.serve_with_lifecycle(transport, lifecycle),
@@ -1708,13 +2563,16 @@ async fn connect_rmcp(
     .await
     .map_err(|_| "initialize timeout".to_string())?
     .map_err(|e| e.to_string())?;
-    Ok((service, dirty))
+    Ok((service, dirty, Some(job)))
 }
 
 struct Session {
     config: McpServerConfig,
     transport: McpTransport,
+    _job: Option<JobHandle>,
     tools: Vec<McpToolDef>,
+    tool_hash: Option<String>,
+    needs_review: bool,
     timeouts: u32,
     tools_dirty: Option<Arc<AtomicBool>>,
     tools_checked: Instant,
@@ -1893,6 +2751,44 @@ fn probe_connected(id: &str, tools: &[McpToolDef]) -> McpProbe {
             })
             .collect(),
     }
+}
+
+async fn persist_initial_tool_hash(app: &AppHandle, id: &str, session: &mut Session) {
+    if session.config.tool_hash.is_some() {
+        return;
+    }
+    let Some(hash) = session.tool_hash.clone() else {
+        return;
+    };
+    let pool = match crate::tools::memory_pool(app).await {
+        Ok(pool) => pool,
+        Err(error) => {
+            eprintln!("mcp: tool hash persistence skipped: {error}");
+            return;
+        }
+    };
+    if let Err(error) = sqlx::query("UPDATE mcp_servers SET tool_hash = ? WHERE id = ?")
+        .bind(&hash)
+        .bind(id)
+        .execute(&pool)
+        .await
+    {
+        eprintln!("mcp: tool hash persistence failed: {error}");
+        return;
+    }
+    session.config.tool_hash = Some(hash);
+}
+
+fn probe_session(id: &str, session: &Session) -> McpProbe {
+    let mut report = probe_connected(id, &session.tools);
+    if session.needs_review {
+        report.status = "needs_review".to_string();
+        report.error = Some(
+            "Tool definitions changed. Review the new tools and approve them before use."
+                .to_string(),
+        );
+    }
+    report
 }
 
 fn cache_probe(state: &McpState, report: McpProbe) {
@@ -2177,6 +3073,13 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
             parse_tools(&name, &listed)
         }
     };
+    let hash = tools_hash(&tools);
+    session.needs_review = session
+        .config
+        .tool_hash
+        .as_deref()
+        .is_some_and(|stored| stored != hash);
+    session.tool_hash = Some(hash);
     session.tools = tools;
     session.tools_checked = Instant::now();
     Ok(())
@@ -2588,6 +3491,9 @@ async fn collect_catalog(
             continue;
         };
         let session = handle.lock().await;
+        if session.needs_review {
+            continue;
+        }
         for def in filter_tools(config, session.tools.clone()) {
             let alias = mcp_name(&def.server, &def.tool);
             if !seen.insert(alias.clone()) {
@@ -2626,7 +3532,7 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
         let handle = match existing {
             Some(handle) => handle,
             None => {
-                let session = match connect_once(config).await {
+                let mut session = match connect_once(config).await {
                     Ok(session) => session,
                     Err(error) => {
                         eprintln!("mcp: connect {} failed: {error}", config.name);
@@ -2634,7 +3540,8 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
                         continue;
                     }
                 };
-                cache_probe(&state, probe_connected(&config.id, &session.tools));
+                persist_initial_tool_hash(app, &config.id, &mut session).await;
+                cache_probe(&state, probe_session(&config.id, &session));
                 let created = Arc::new(tokio::sync::Mutex::new(session));
                 state
                     .sessions
@@ -2651,7 +3558,8 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
                 cache_probe(&state, probe_failed(&config.id, error));
                 continue;
             }
-            cache_probe(&state, probe_connected(&config.id, &session.tools));
+            persist_initial_tool_hash(app, &config.id, &mut session).await;
+            cache_probe(&state, probe_session(&config.id, &session));
         }
     }
     let (defs, catalog) = collect_catalog(&state, &configs).await;
@@ -2675,8 +3583,9 @@ async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> 
         let handle = state.session(&key).await;
         let Some(handle) = handle else {
             match connect_once(config).await {
-                Ok(session) => {
-                    cache_probe(&state, probe_connected(&config.id, &session.tools));
+                Ok(mut session) => {
+                    persist_initial_tool_hash(app, &config.id, &mut session).await;
+                    cache_probe(&state, probe_session(&config.id, &session));
                     let created = Arc::new(tokio::sync::Mutex::new(session));
                     state.sessions.lock().await.insert(key, created);
                 }
@@ -2690,6 +3599,9 @@ async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> 
         let mut session = handle.lock().await;
         if let Err(error) = initialize_session(&mut session).await {
             eprintln!("mcp: re-list {} failed: {error}", session.config.name);
+        } else {
+            persist_initial_tool_hash(app, &config.id, &mut session).await;
+            cache_probe(&state, probe_session(&config.id, &session));
         }
     }
     let (_defs, catalog) = collect_catalog(&state, &configs).await;

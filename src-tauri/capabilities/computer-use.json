@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "computer-use-overlay",
+  "description": "Control indicator for the computer-use server",
+  "windows": ["computer-use"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-start-dragging"
+  ]
+}

@@ -7,6 +7,7 @@ import {
   Keyboard,
   History,
   Mic,
+  Monitor,
   Palette,
   Plug,
   Search,
@@ -25,6 +26,7 @@ import {
   AboutPage,
   AppearancePage,
   AuditPage,
+  ComputerUsePage,
   DataPage,
   GeneralPage,
   McpPage,
@@ -51,6 +53,7 @@ const ICONS: Record<SettingsPageId, ReactNode> = {
   models: <Cpu size={16} />,
   search: <Search size={16} />,
   mcp: <Blocks size={16} />,
+  computer: <Monitor size={16} />,
   sandbox: <Shield size={16} />,
   voice: <Mic size={16} />,
   audit: <History size={16} />,
@@ -246,6 +249,7 @@ export function SettingsDialog() {
           {page === "models" && <ModelsPage />}
           {page === "search" && <SearchPage />}
           {page === "mcp" && <McpPage />}
+          {page === "computer" && <ComputerUsePage />}
           {page === "sandbox" && <SandboxPage />}
           {page === "voice" && <VoicePage />}
           {page === "audit" && <AuditPage />}
