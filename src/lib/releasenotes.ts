@@ -1,4 +1,6 @@
-export type ChangeKind = "new" | "improved" | "fixed";
+export const CHANGE_KINDS = ["new", "improved", "fixed"] as const;
+
+export type ChangeKind = (typeof CHANGE_KINDS)[number];
 
 export interface ReleaseChange {
   kind: ChangeKind;
@@ -12,8 +14,6 @@ export interface Release {
   changes: ReleaseChange[];
 }
 
-export const CHANGE_KINDS: readonly ChangeKind[] = ["new", "improved", "fixed"];
-
 export const CHANGE_LABELS: Record<ChangeKind, string> = {
   new: "New",
   improved: "Improved",
@@ -21,6 +21,42 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 };
 
 export const RELEASES: readonly Release[] = [
+  {
+    version: "0.7.0",
+    date: "2026-10-29",
+    summary:
+      "MCP servers get structured config, portable import/export, secret references, bounded logs and tool-definition review. A bundled Windows computer-use server adds observe and action tools with per-app tiers, hard denies, a kill switch, dry-run and an audit. AgentRouter Responses turns are stateless and show reasoning again.",
+    changes: [
+      {
+        kind: "new",
+        text: "MCP server config now supports arguments, working directory, environment variables, custom headers and timeouts. Standard mcpServers JSON imports and exports, imported servers start off until you enable them, and secret-like env or header values stay in Windows Credential Manager as ${secret:name} references.",
+      },
+      {
+        kind: "new",
+        text: "Each MCP server keeps bounded stderr logs with best-effort redaction, and a changed tool definition marks the server Review needed until its tools are approved.",
+      },
+      {
+        kind: "improved",
+        text: "Windows stdio MCP servers run in a Job Object, so the child process tree stops with the app. Existing .cmd shim resolution and the hidden console window still work.",
+      },
+      {
+        kind: "new",
+        text: "Computer use is a bundled MCP server, off by default. It can list apps and windows, read a compact UI Automation tree, take a window screenshot, then click, type, set values, press keys, scroll, drag, focus, launch an allowlisted app, or read and write the clipboard.",
+      },
+      {
+        kind: "new",
+        text: "Each app is approved at View, Interact or Full access. Terminals, password managers, security tools, elevation prompts and password fields are always blocked. A global kill switch, an optional always-on-top overlay, an action budget, dry-run and before/after audit thumbnails control what runs.",
+      },
+      {
+        kind: "improved",
+        text: "Computer-use input is checked against the focused process and click point. Windows-key, Alt+Tab, Alt+Esc and elevation shortcuts are denied, and pause stops observation as well as actions.",
+      },
+      {
+        kind: "fixed",
+        text: "AgentRouter Responses turns no longer replay Azure resource-bound items. When reasoning replay is enabled, a cross-resource or decryption 400 retries once without items, and reasoning summaries bring visible thinking back for gateway GPT models.",
+      },
+    ],
+  },
   {
     version: "0.6.1",
     date: "2026-10-28",
@@ -77,7 +113,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "new",
-        text: "A provider connection can hold up to ten keys. A quota or billing rejection skips to the next key and cools the rejected key for ten minutes; plain rate limits keep the existing backoff. Providers lists each key, shows a cooling key, and can remove one or all keys.",
+        text: "A provider connection can hold up to ten keys. A quota or billing rejection skips to the next key and cools the rejected key for ten minutes; plain rate limits keep the existing backoff. The Providers page lists each key, shows a cooling key, and can remove one or all keys.",
       },
       {
         kind: "improved",

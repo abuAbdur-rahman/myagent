@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { mcpTargetArgs, mcpTargetError, type McpDraft } from "./mcp-draft";
+import {
+  mcpConfigFromDraft,
+  mcpDraftFromConfig,
+  mcpTargetArgs,
+  mcpTargetError,
+  type McpDraft,
+} from "./mcp-draft";
 
 function draft(overrides: Partial<McpDraft>): McpDraft {
   return {
@@ -9,6 +15,11 @@ function draft(overrides: Partial<McpDraft>): McpDraft {
     authType: "none",
     command: "",
     url: "",
+    args: "",
+    cwd: "",
+    env: "",
+    headers: "",
+    timeoutMs: "",
     ...overrides,
   };
 }
@@ -64,5 +75,80 @@ describe("mcpTargetError", () => {
   it("accepts http and https URLs for http and sse", () => {
     expect(mcpTargetError(draft({ transport: "http", url: "http://localhost:8000/mcp" }))).toBeNull();
     expect(mcpTargetError(draft({ transport: "sse", url: "https://example.com/sse" }))).toBeNull();
+  });
+});
+
+describe("mcpConfigFromDraft", () => {
+  it("builds a stdio config with args, env, cwd and timeout", () => {
+    expect(
+      mcpConfigFromDraft(
+        draft({
+          command: "npx",
+          args: "-y\nserver\n",
+          cwd: " C:\\work ",
+          env: "NODE_ENV=production\nTOKEN=",
+          timeoutMs: "5000",
+        }),
+      ),
+    ).toEqual({
+      command: "npx",
+      args: ["-y", "server"],
+      cwd: "C:\\work",
+      env: { NODE_ENV: "production", TOKEN: "" },
+      url: null,
+      headers: {},
+      timeout_ms: 5000,
+    });
+  });
+
+  it("builds an HTTP config with headers", () => {
+    expect(
+      mcpConfigFromDraft(
+        draft({
+          transport: "http",
+          url: " https://example.com/mcp ",
+          headers: "Authorization=\nX-Client=myagent",
+        }),
+      ),
+    ).toEqual({
+      command: null,
+      args: [],
+      cwd: null,
+      env: {},
+      url: "https://example.com/mcp",
+      headers: { Authorization: "", "X-Client": "myagent" },
+      timeout_ms: null,
+    });
+  });
+
+  it("rejects malformed pairs and timeouts", () => {
+    expect(() => mcpConfigFromDraft(draft({ env: "NO_EQUALS" }))).toThrow("KEY=VALUE");
+    expect(() => mcpConfigFromDraft(draft({ timeoutMs: "0" }))).toThrow("Timeout");
+  });
+});
+
+describe("mcpDraftFromConfig", () => {
+  it("keeps stored values blank and formats args", () => {
+    expect(
+      mcpDraftFromConfig(
+        { name: "server", transport: "stdio", authType: "none" },
+        {
+          command: "npx",
+          args: ["-y", "server"],
+          cwd: "C:\\work",
+          env: { TOKEN: "" },
+          url: null,
+          headers: {},
+          timeout_ms: 5000,
+        },
+      ),
+    ).toMatchObject({
+      command: "npx",
+      args: "-y\nserver",
+      cwd: "C:\\work",
+      env: "TOKEN=",
+      headers: "",
+      timeoutMs: "5000",
+    });
   });
 });

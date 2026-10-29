@@ -58,16 +58,28 @@ pub(super) fn requires_responses(error: &AppError) -> bool {
     names_both && explicit
 }
 
+pub(super) fn is_cross_resource_error(error: &AppError) -> bool {
+    let AppError::Upstream(message) = error else {
+        return false;
+    };
+    let lower = message.to_ascii_lowercase();
+    lower.contains("different azure openai resource")
+        || lower.contains("items are not persisted")
+        || lower.contains("decryption failure")
+        || lower.contains("cross-resource")
+}
+
 pub(super) fn body(
     model: &str,
     history: &[Value],
     tools: Option<&Value>,
     effort: Option<&str>,
     stream: bool,
+    replay_reasoning_items: bool,
 ) -> Value {
     let mut body = json!({
         "model": model,
-        "input": input(history),
+        "input": input(history, replay_reasoning_items),
         "stream": stream,
         "store": false,
     });
@@ -78,13 +90,15 @@ pub(super) fn body(
         }
     }
     if let Some(effort) = effort.filter(|value| !value.is_empty() && *value != "none") {
-        body["reasoning"] = json!({ "effort": effort });
-        body["include"] = json!(["reasoning.encrypted_content"]);
+        body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
+        if replay_reasoning_items {
+            body["include"] = json!(["reasoning.encrypted_content"]);
+        }
     }
     body
 }
 
-fn input(history: &[Value]) -> Vec<Value> {
+fn input(history: &[Value], replay_reasoning_items: bool) -> Vec<Value> {
     let mut out = Vec::new();
     for (index, message) in history.iter().enumerate() {
         let role = message.get("role").and_then(Value::as_str).unwrap_or("");
@@ -106,7 +120,9 @@ fn input(history: &[Value]) -> Vec<Value> {
                 let start = out.len();
                 let mut saw_message = false;
                 let mut replayed_calls = HashSet::new();
-                if let Some(items) = message.get("responses_items").and_then(Value::as_array) {
+                if replay_reasoning_items
+                    && let Some(items) = message.get("responses_items").and_then(Value::as_array)
+                {
                     for item in items {
                         if let Some(item) = sanitize_item(item) {
                             match item.get("type").and_then(Value::as_str) {
@@ -1014,6 +1030,21 @@ mod tests {
     }
 
     #[test]
+    fn detects_cross_resource_errors() {
+        let error = AppError::Upstream(
+            "400 Bad Request: {\"error\":{\"message\":\"The requested item was created under a different Azure OpenAI resource. Use the same resource that created the item to access it.\"}}"
+                .to_string(),
+        );
+        assert!(is_cross_resource_error(&error));
+        assert!(is_cross_resource_error(&AppError::Upstream(
+            "400 Decryption Failure".to_string()
+        )));
+        assert!(!is_cross_resource_error(&AppError::Upstream(
+            "400 invalid request".to_string()
+        )));
+    }
+
+    #[test]
     fn marker_cache_is_per_base_and_model() {
         let base = "https://responses-test.example/v1";
         assert!(!only(base, "model-a"));
@@ -1045,7 +1076,7 @@ mod tests {
             }),
             json!({ "role": "tool", "tool_call_id": "call_1", "content": "found" }),
         ];
-        let converted = input(&history);
+        let converted = input(&history, true);
         assert_eq!(converted[0]["role"], "system");
         assert_eq!(converted[1]["content"][0]["type"], "input_text");
         assert_eq!(converted[1]["content"][1]["type"], "input_image");
@@ -1071,7 +1102,7 @@ mod tests {
                 { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}" }
             ]
         })];
-        let converted = input(&history);
+        let converted = input(&history, true);
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[0]["type"], "reasoning");
         assert_eq!(converted[1]["role"], "assistant");
@@ -1090,7 +1121,7 @@ mod tests {
                 { "type": "reasoning", "id": "rs_1", "encrypted_content": "opaque" }
             ]
         })];
-        let converted = input(&history);
+        let converted = input(&history, true);
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[0]["type"], "reasoning");
         assert_eq!(converted[1]["role"], "assistant");
@@ -1233,20 +1264,60 @@ mod tests {
             }])),
             Some("high"),
             true,
+            true,
         );
         assert_eq!(body["store"], json!(false));
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["reasoning"]["summary"], "auto");
         assert_eq!(body["tools"][0]["name"], "lookup");
         assert!(body.get("temperature").is_none());
     }
 
     #[test]
     fn body_omits_reasoning_when_effort_is_none() {
-        let body = body("gpt-5.6-sol", &[], None, Some("none"), false);
+        let body = body("gpt-5.6-sol", &[], None, Some("none"), false, true);
         assert!(body.get("reasoning").is_none());
         assert!(body.get("include").is_none());
         assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn agentrouter_body_drops_replayed_reasoning_items() {
+        let body = body(
+            "gpt-6-astra",
+            &[json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": { "name": "lookup", "arguments": "{}" }
+                }],
+                "responses_items": [
+                    { "type": "reasoning", "encrypted_content": "opaque" },
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "lookup",
+                        "arguments": "{}"
+                    }
+                ]
+            })],
+            None,
+            Some("high"),
+            true,
+            false,
+        );
+        let input = body["input"].as_array().expect("input array");
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["call_id"], "call_1");
+        assert!(input[0].get("id").is_none());
+        assert!(input[0].get("encrypted_content").is_none());
+        assert_eq!(body["reasoning"]["summary"], "auto");
+        assert!(body.get("include").is_none());
     }
 
     #[test]

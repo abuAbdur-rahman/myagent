@@ -18,7 +18,16 @@ vi.mock("../../lib/api", () => ({
   mcpBeginAuth: mocks.mcpBeginAuth,
   mcpCancelAuth: mocks.mcpCancelAuth,
   mcpDisconnect: mocks.mcpDisconnect,
-  mcpTest: vi.fn(),
+  mcpTestConfig: vi.fn(),
+  mcpConfig: vi.fn().mockResolvedValue({
+    command: null,
+    args: [],
+    cwd: null,
+    env: {},
+    url: "https://example.com/mcp",
+    headers: {},
+    timeout_ms: null,
+  }),
   mcpList: vi.fn(),
   mcpStatus: vi.fn(),
 }));

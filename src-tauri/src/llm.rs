@@ -476,7 +476,7 @@ async fn post_responses_text(request: ResponsesText<'_>) -> AppResult<String> {
         connection_id,
         max_output_tokens,
     } = request;
-    let mut body = responses::body(model, history, None, None, false);
+    let mut body = responses::body(model, history, None, None, false, true);
     if let Some(max_output_tokens) = max_output_tokens {
         body["max_output_tokens"] = serde_json::json!(max_output_tokens);
     }
@@ -1493,7 +1493,13 @@ async fn post_with_retry(
     for attempt in 0..MAX_ATTEMPTS {
         let request =
             agentrouter_headers(client.post(url).bearer_auth(&active_key), route.kind, url);
-        match request.json(body).send().await {
+        let notified = cancel.notified();
+        tokio::pin!(notified);
+        let response = tokio::select! {
+            _ = &mut notified => return Err(AppError::Cancelled),
+            response = request.json(body).send() => response,
+        };
+        match response {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
@@ -2091,26 +2097,60 @@ impl ModelClient for RealModel<'_> {
         }
         if responses::only(&self.req.base_url, &self.req.model) {
             let effort = responses_effort(self.client, self.req, &self.key).await;
+            let replay_reasoning_items =
+                !is_agentrouter(self.req.connection_kind.as_deref(), &self.req.base_url);
             let body = responses::body(
                 &self.req.model,
                 &prune_tool_history(messages),
                 Some(&self.tool_specs),
                 effort.as_deref(),
                 true,
+                replay_reasoning_items,
             );
-            return responses::stream_iteration(
+            let observed = ObservedSink::new(self.on_event);
+            let result = responses::stream_iteration(
                 self.client,
                 &endpoint(&self.req.base_url, "responses"),
                 &self.key,
                 &body,
                 self.cancel,
-                self.on_event,
+                &observed,
                 ProviderRoute::new(
                     self.req.connection_kind.as_deref(),
                     Some(&self.req.connection_id),
                 ),
             )
             .await;
+            if replay_reasoning_items
+                && !observed.seen()
+                && result
+                    .as_ref()
+                    .err()
+                    .is_some_and(responses::is_cross_resource_error)
+            {
+                let body = responses::body(
+                    &self.req.model,
+                    &prune_tool_history(messages),
+                    Some(&self.tool_specs),
+                    effort.as_deref(),
+                    true,
+                    false,
+                );
+                return responses::stream_iteration(
+                    self.client,
+                    &endpoint(&self.req.base_url, "responses"),
+                    &self.key,
+                    &body,
+                    self.cancel,
+                    &observed,
+                    ProviderRoute::new(
+                        self.req.connection_kind.as_deref(),
+                        Some(&self.req.connection_id),
+                    ),
+                )
+                .await;
+            }
+            return result;
         }
         let mut body = serde_json::json!({
             "model": self.req.model,
@@ -2141,26 +2181,60 @@ impl ModelClient for RealModel<'_> {
             Err(error) if responses::requires_responses(&error) && !observed.seen() => {
                 responses::mark(&self.req.base_url, &self.req.model);
                 let effort = responses_effort(self.client, self.req, &self.key).await;
+                let replay_reasoning_items =
+                    !is_agentrouter(self.req.connection_kind.as_deref(), &self.req.base_url);
                 let body = responses::body(
                     &self.req.model,
                     &prune_tool_history(messages),
                     Some(&self.tool_specs),
                     effort.as_deref(),
                     true,
+                    replay_reasoning_items,
                 );
-                responses::stream_iteration(
+                let responses_observed = ObservedSink::new(self.on_event);
+                let result = responses::stream_iteration(
                     self.client,
                     &endpoint(&self.req.base_url, "responses"),
                     &self.key,
                     &body,
                     self.cancel,
-                    self.on_event,
+                    &responses_observed,
                     ProviderRoute::new(
                         self.req.connection_kind.as_deref(),
                         Some(&self.req.connection_id),
                     ),
                 )
-                .await
+                .await;
+                if replay_reasoning_items
+                    && !responses_observed.seen()
+                    && result
+                        .as_ref()
+                        .err()
+                        .is_some_and(responses::is_cross_resource_error)
+                {
+                    let body = responses::body(
+                        &self.req.model,
+                        &prune_tool_history(messages),
+                        Some(&self.tool_specs),
+                        effort.as_deref(),
+                        true,
+                        false,
+                    );
+                    return responses::stream_iteration(
+                        self.client,
+                        &endpoint(&self.req.base_url, "responses"),
+                        &self.key,
+                        &body,
+                        self.cancel,
+                        &responses_observed,
+                        ProviderRoute::new(
+                            self.req.connection_kind.as_deref(),
+                            Some(&self.req.connection_id),
+                        ),
+                    )
+                    .await;
+                }
+                result
             }
             Err(error) => Err(error),
         }
@@ -3013,18 +3087,54 @@ async fn stream_responses_completion(
 ) -> AppResult<()> {
     let effort = responses_effort(client, req, key).await;
     let history = prune_tool_history(history);
-    let body = responses::body(req.model.as_str(), &history, None, effort.as_deref(), true);
-    responses::stream_iteration(
+    let replay_reasoning_items = !is_agentrouter(req.connection_kind.as_deref(), &req.base_url);
+    let body = responses::body(
+        req.model.as_str(),
+        &history,
+        None,
+        effort.as_deref(),
+        true,
+        replay_reasoning_items,
+    );
+    let observed = ObservedSink::new(on_event);
+    let result = responses::stream_iteration(
         client,
         &endpoint(&req.base_url, "responses"),
         key,
         &body,
         cancel,
-        on_event,
+        &observed,
         ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
-    .await
-    .map(|_| ())
+    .await;
+    if replay_reasoning_items
+        && !observed.seen()
+        && result
+            .as_ref()
+            .err()
+            .is_some_and(responses::is_cross_resource_error)
+    {
+        let body = responses::body(
+            req.model.as_str(),
+            &history,
+            None,
+            effort.as_deref(),
+            true,
+            false,
+        );
+        return responses::stream_iteration(
+            client,
+            &endpoint(&req.base_url, "responses"),
+            key,
+            &body,
+            cancel,
+            &observed,
+            ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
+        )
+        .await
+        .map(|_| ());
+    }
+    result.map(|_| ())
 }
 
 #[cfg(test)]

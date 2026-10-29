@@ -1,6 +1,6 @@
 [package]
 name = "myagent"
-version = "0.6.1"
+version = "0.7.0"
 description = "Windows desktop chat client with bring-your-own-key providers"
 authors = ["Abu Abdir-rahman <abdulazeezadekiilekun@gmail.com>"]
 repository = "https://github.com/abuAbdur-rahman/myagent"
@@ -48,10 +48,13 @@ globset = "0.4.19"
 tauri-plugin-dialog = "2"
 transcribe-rs = { path = "vendor/transcribe-rs", features = ["onnx"] }
 sha2 = "0.10"
-rmcp = { version = "3.7.0", default-features = false, features = ["client", "auth", "reqwest", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.7.0", default-features = false, features = ["client", "server", "auth", "reqwest", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest"] }
+dirs = "7"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+uiautomation = { version = "0.25", features = ["process", "clipboard", "screenshot"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

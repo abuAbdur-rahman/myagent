@@ -388,6 +388,16 @@ export interface McpServerRow {
   has_token: boolean;
 }
 
+export interface McpConfig {
+  command: string | null;
+  args: string[];
+  cwd: string | null;
+  env: Record<string, string>;
+  url: string | null;
+  headers: Record<string, string>;
+  timeout_ms: number | null;
+}
+
 export function mcpList(projectId: string | null) {
   return invoke<McpServerRow[]>("mcp_list", { projectId });
 }
@@ -415,26 +425,27 @@ export function mcpToolList(raw: string | null): string[] {
   }
 }
 
-export function mcpAdd(
+export function mcpSave(
+  id: string | null,
   projectId: string | null,
   name: string,
   transport: string,
   authType: string,
-  cmd: string | null,
-  url: string | null,
+  config: McpConfig,
 ) {
-  return invoke<McpServerRow>("mcp_add", { projectId, name, transport, authType, cmd, url });
+  return invoke<McpServerRow>("mcp_save", { id, projectId, name, transport, authType, config });
 }
 
-export function mcpUpdate(
-  id: string,
-  name: string,
-  transport: string,
-  authType: string,
-  cmd: string | null,
-  url: string | null,
-) {
-  return invoke<McpServerRow>("mcp_update", { id, name, transport, authType, cmd, url });
+export function mcpImport(projectId: string | null, json: string) {
+  return invoke<McpServerRow[]>("mcp_import", { projectId, json });
+}
+
+export function mcpExport(projectId: string | null) {
+  return invoke<string>("mcp_export", { projectId });
+}
+
+export function mcpConfig(id: string) {
+  return invoke<McpConfig>("mcp_config", { id });
 }
 
 export function mcpSetPolicy(id: string, ask: string[], allow: string[], deny: string[]) {
@@ -473,17 +484,85 @@ export function mcpProbe(id: string) {
   return invoke<McpProbe>("mcp_probe", { id });
 }
 
-export function mcpTest(
-  transport: string,
-  authType: string,
-  cmd: string | null,
-  url: string | null,
-) {
-  return invoke<McpProbe>("mcp_test", { transport, authType, cmd, url });
+export function mcpLogs(id: string) {
+  return invoke<string[]>("mcp_logs_for", { id });
+}
+
+export function mcpApproveTools(id: string) {
+  return invoke<McpServerRow>("mcp_approve_tools", { id });
+}
+
+export function mcpTestConfig(authType: string, config: McpConfig, id: string | null) {
+  return invoke<McpProbe>("mcp_test_config", { authType, config, id });
 }
 
 export function mcpRemove(id: string) {
   return invoke<void>("mcp_remove", { id });
+}
+
+export type ComputerUseTier = "view" | "interact" | "full";
+
+export interface ComputerUsePolicy {
+  path: string;
+  name: string;
+  tier: ComputerUseTier;
+  publisher: string | null;
+}
+
+export interface ComputerUseConfig {
+  enabled: boolean;
+  paused: boolean;
+  dry_run: boolean;
+  overlay: boolean;
+  hotkey: string;
+  max_actions_per_run: number;
+  audit_thumbnails: boolean;
+  allow: ComputerUsePolicy[];
+  deny: string[];
+}
+
+export interface ComputerUseAuditEntry {
+  at: number;
+  action: string;
+  app?: string | null;
+  pid?: number | null;
+  dry_run: boolean;
+  ok: boolean;
+  detail: string;
+  before?: string | null;
+  after?: string | null;
+}
+
+export function computerUseConfig() {
+  return invoke<ComputerUseConfig>("computer_use_config");
+}
+
+export function computerUseSetConfig(config: ComputerUseConfig) {
+  return invoke<ComputerUseConfig>("computer_use_set_config", { config });
+}
+
+export function computerUseSetPaused(paused: boolean) {
+  return invoke<ComputerUseConfig>("computer_use_set_paused", { paused });
+}
+
+export function computerUseSetOverlay(overlay: boolean) {
+  return invoke<ComputerUseConfig>("computer_use_set_overlay", { overlay });
+}
+
+export function computerUseAudit(limit?: number) {
+  return invoke<ComputerUseAuditEntry[]>("computer_use_audit", { limit });
+}
+
+export function computerUseClearAudit() {
+  return invoke<void>("computer_use_clear_audit");
+}
+
+export function computerUseHardDenies() {
+  return invoke<string[]>("computer_use_hard_denies");
+}
+
+export function computerUseAuditImage(name: string) {
+  return invoke<string>("computer_use_audit_image", { name });
 }
 
 export function mcpToggle(id: string, enabled: boolean) {
