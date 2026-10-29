@@ -25,13 +25,20 @@ export interface ModelCapabilities {
 
 const GATEWAY_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+const DEEPSEEK_V4_EFFORTS = ["none", "low", "high", "max"];
+
 const FAMILY_PATTERNS: { test: RegExp; efforts: string[] }[] = [
   { test: /^(o1|o3|o4|gpt-5|grok)/i, efforts: ["none", "minimal", "low", "medium", "high", "xhigh"] },
   { test: /claude/i, efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { test: /gemini/i, efforts: ["low", "medium", "high"] },
-  { test: /deepseek.*reason|reasoner/i, efforts: ["none", "low", "medium", "high"] },
+  { test: /deepseek.*(flash|v4)/i, efforts: DEEPSEEK_V4_EFFORTS },
+  { test: /deepseek.*reason|reasoner/i, efforts: ["low", "high", "max"] },
   { test: /qwen.*think|thinking/i, efforts: ["none", "low", "medium", "high"] },
 ];
+
+function deepseekFamilyEfforts(modelId: string): string[] | null {
+  return /deepseek.*(flash|v4)/i.test(modelId) ? DEEPSEEK_V4_EFFORTS : null;
+}
 
 function familyEfforts(modelId: string): string[] | null {
   for (const family of FAMILY_PATTERNS) {
@@ -124,14 +131,15 @@ export function lookupEfforts(
   modelId: string,
   kind?: ProviderKind,
 ): string[] | null {
-  if (kind === "deepseek" || kind === "ollama" || kind === "ollama-cloud") return null;
+  if (kind === "ollama" || kind === "ollama-cloud") return null;
+  if (kind === "deepseek") return deepseekFamilyEfforts(modelId);
   const entry = catalog?.find((m) => m.id === modelId);
-  if (entry) {
-    if (!entry.reasoningEfforts) return null;
+  if (entry?.reasoningEfforts) {
     return entry.reasoningMandatory
       ? entry.reasoningEfforts.filter((level) => level !== "none")
       : entry.reasoningEfforts;
   }
+  if (entry) return null;
   return familyEfforts(modelId);
 }
 
@@ -143,12 +151,17 @@ const CITED_CONTEXT: Record<string, number> = {
   "deepseek-v3.1": 128_000,
   "deepseek-v3.2": 128_000,
   "deepseek-r1": 128_000,
+  "deepseek-flash": 1_000_000,
+  "deepseek-v4-flash": 1_000_000,
+  "deepseek-v4-pro": 1_000_000,
+  "deepseek-v4.1-flash": 1_000_000,
 };
 
 function citedContextLength(modelId: string): number | null {
   const id = modelId.toLowerCase().split("/").pop() ?? "";
   const exact = CITED_CONTEXT[id];
   if (exact !== undefined) return exact;
+  if (/^deepseek-(flash|v4)(\.|-|$)/.test(id)) return 1_000_000;
   if (/^deepseek-(v3|r1)(\.|-|$)/.test(id)) return 128_000;
   return null;
 }

@@ -301,6 +301,12 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     loadFileCommands,
     setVoicePhase,
   } = useApp();
+  const effortValue =
+    reasoningEffort && supportedEfforts?.includes(reasoningEffort)
+      ? reasoningEffort
+      : supportedEfforts?.includes("high")
+        ? "high"
+        : (supportedEfforts?.[0] ?? "none");
   const editorRef = useRef<TipTapHandle | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -629,8 +635,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           <Select
             size="sm"
             className="w-28 flex-none"
-            value={reasoningEffort ?? "none"}
-            onChange={(level) => setReasoningEffort(level === "none" ? null : level)}
+            value={effortValue}
+            onChange={(level) => setReasoningEffort(level)}
             aria-label="Reasoning effort"
             title={
               supportedEfforts

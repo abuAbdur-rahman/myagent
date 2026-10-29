@@ -204,15 +204,15 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Switching mid-chat applies to the next turn only.
 
 ## C3. Model catalogue and capabilities
-- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider. 0.4.1: the Models page is a capability table per connection; DeepSeek seeds `deepseek-chat` and `deepseek-reasoner` with an unknown window and no vision, and Ollama Cloud falls back from `/v1/models` to `/api/tags`. 0.5.0: DeepSeek seeds a cited context window instead of unknown. 0.6.0: the backend catalogue and picker caches are ten hours; Refresh on Models, saving/deleting a provider or a successful test invalidates. 0.6.1: Refresh bypasses the backend cache, empty lists are not cached, a request that finishes after invalidation cannot repopulate the cache, and stored entries are Zod-validated)
+- **Status:** Have (0.1.7: Rust-side fetch, 24h TTL cache, caps per model. 0.3.4: an absent supports_vision is unknown rather than blind, a known-family table answers when the provider reports no modality, a per-model override wins over both, and Settings → Models lists every configured provider. 0.4.1: the Models page is a capability table per connection; DeepSeek seeds `deepseek-chat` and `deepseek-reasoner` with an unknown window and no vision, and Ollama Cloud falls back from `/v1/models` to `/api/tags`. 0.5.0: DeepSeek seeds a cited context window instead of unknown. 0.6.0: the backend catalogue and picker caches are ten hours; Refresh on Models, saving/deleting a provider or a successful test invalidates. 0.6.1: Refresh bypasses the backend cache, empty lists are not cached, a request that finishes after invalidation cannot repopulate the cache, and stored entries are Zod-validated. 0.7.1: DeepSeek seeds `deepseek-flash`, `deepseek-v4-flash` and `deepseek-v4-pro` with a 1M window, vision and effort levels; legacy `deepseek-chat` and `deepseek-reasoner` stay readable)
 - **Ref:** † OpenRouter's models list includes context length and supported parameters.
 - **Build:** Fetch, cache with a TTL, and read: context length, supports reasoning, supports tools. Disable UI that a model cannot use. Fall back to safe defaults when unknown, to a known-family table for image support, and to a per-model override when the user knows better.
 - **Done:** A model without tool support never gets tools in its request.
 
 ## C4. Reasoning effort control
-- **Status:** Have (0.1.7: caps-gated selector, mixed param shape, Rust re-gate. 0.4.1: hidden for DeepSeek, Ollama Cloud and local Ollama, whose request body carries no reasoning field)
-- **Ref:** † OpenRouter accepts a `reasoning` request parameter with effort. Claude Code has effort levels and a thinking toggle.
-- **Build:** Selector (off, minimal, low, medium, high) shown only for reasoning-capable models (C3). Maps to the provider parameter.
+- **Status:** Have (0.1.7: caps-gated selector, mixed param shape, Rust re-gate. 0.4.1: hidden for DeepSeek, Ollama Cloud and local Ollama, whose request body carries no reasoning field. 0.7.1: DeepSeek V4 exposes `none`/`low`/`high`/`max` and sends `thinking` plus `reasoning_effort`; Ollama Cloud and local Ollama still hide it)
+- **Ref:** † OpenRouter accepts a `reasoning` request parameter with effort. Claude Code has effort levels and a thinking toggle. DeepSeek V4 uses `thinking` with `low`/`high`/`max`.
+- **Build:** Selector (off and the provider's levels) shown only for reasoning-capable models (C3). Maps to the provider parameter.
 - **Done:** The request body contains the parameter only when supported.
 
 ## C5. Usage and cost

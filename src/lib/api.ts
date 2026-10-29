@@ -305,7 +305,7 @@ export interface ChatStreamArgs {
   requestId: string;
   connectionId: string;
   model: string;
-  messages: { role: string; content: string | ChatContentPart[] }[];
+  messages: { role: string; content: string | ChatContentPart[]; reasoning?: string | null }[];
   temperature?: number;
   enableTools?: boolean;
   maxIterations?: number;
