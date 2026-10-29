@@ -177,7 +177,8 @@ impl ComputerUseServer {
             "launch_app" => {
                 parse::<LaunchAppArgs>(&arguments).and_then(|args| self.launch_app(&config, args))
             }
-            "read_clipboard" => self.read_clipboard(&config),
+            "read_clipboard" => parse::<ReadClipboardArgs>(&arguments)
+                .and_then(|args| self.read_clipboard(&config, args)),
             "write_clipboard" => parse::<WriteClipboardArgs>(&arguments)
                 .and_then(|args| self.write_clipboard(&config, args)),
             _ => Err(format!("unknown_tool: {name}")),
@@ -979,8 +980,17 @@ impl ComputerUseServer {
         })))
     }
 
-    fn read_clipboard(&self, config: &ComputerUseConfig) -> Result<CallToolResult, String> {
+    fn read_clipboard(
+        &self,
+        config: &ComputerUseConfig,
+        args: ReadClipboardArgs,
+    ) -> Result<CallToolResult, String> {
         self.require_active(config)?;
+        if !args.confirm.unwrap_or(false) {
+            return Err(
+                "confirmation_required: set confirm=true to read the clipboard".to_string(),
+            );
+        }
         if !config
             .allow
             .iter()
@@ -1307,8 +1317,13 @@ fn tools() -> Vec<Tool> {
         ),
         tool(
             "read_clipboard",
-            "Read text from the clipboard. Requires an app with interact access.",
-            schema(json!({}), &[]),
+            "Read text from the clipboard. Requires an app with interact access and confirm=true.",
+            schema(
+                json!({
+                    "confirm": {"type": "boolean"}
+                }),
+                &[],
+            ),
             false,
         ),
         tool(
@@ -1856,11 +1871,10 @@ fn policy_for(config: &ComputerUseConfig, info: &WindowInfo) -> PolicyMatch {
     }
     let policy = config.allow.iter().find(|policy| {
         let policy_name = policy.name.to_ascii_lowercase();
-        let policy_path = policy.path.to_ascii_lowercase();
-        if policy_path.is_empty() {
+        if policy.path.trim().is_empty() {
             !policy_name.is_empty() && policy_name == name
         } else {
-            !exe.is_empty() && (policy_path == exe || exe.ends_with(&policy_path))
+            !exe.is_empty() && path_matches(&policy.path, &info.exe)
         }
     });
     PolicyMatch {
@@ -1924,9 +1938,10 @@ fn app_matches_info(app: &str, info: &WindowInfo) -> bool {
 }
 
 fn path_matches(policy: &str, actual: &str) -> bool {
-    let policy = policy.trim().to_ascii_lowercase();
-    let actual = actual.trim().to_ascii_lowercase();
-    !policy.is_empty() && (policy == actual || actual.ends_with(&policy))
+    let policy = policy.trim();
+    !policy.is_empty()
+        && Path::new(policy).is_absolute()
+        && policy.eq_ignore_ascii_case(actual.trim())
 }
 
 fn ensure_focus_not_password(automation: &UIAutomation) -> Result<(), String> {
@@ -2000,6 +2015,9 @@ fn validate_keys(keys: &str, confirmed: bool) -> Result<(), String> {
     }
     if has("ctrl") && has("shift") && (has("esc") || has("escape")) {
         return Err("hard_denied: Ctrl+Shift+Esc opens Task Manager".to_string());
+    }
+    if has("ctrl") && (has("esc") || has("escape")) {
+        return Err("hard_denied: Ctrl+Esc opens the Start menu".to_string());
     }
     if has("ctrl") && has("shift") && (has("enter") || has("return")) {
         return Err("hard_denied: Ctrl+Shift+Enter requests elevation".to_string());
@@ -2345,6 +2363,12 @@ struct LaunchAppArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ReadClipboardArgs {
+    confirm: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WriteClipboardArgs {
     text: String,
     confirm: Option<bool>,
@@ -2364,6 +2388,7 @@ mod tests {
         assert!(validate_keys("{ctrl}{tab}", false).is_ok());
         assert!(validate_keys("{ctrl}{tab}{c}", false).is_err());
         assert!(validate_keys("{ctrl}{shift}{esc}", true).is_err());
+        assert!(validate_keys("{ctrl}{esc}", true).is_err());
         assert!(validate_keys("{ctrl}{shift}{enter}", true).is_err());
         assert!(validate_keys("{alt}{f4}", false).is_err());
         assert!(validate_keys("{alt}{f4}", true).is_ok());
@@ -2403,6 +2428,23 @@ mod tests {
             ..info
         };
         assert!(policy_for(&config, &other).tier.is_none());
+    }
+
+    #[test]
+    fn path_matching_requires_an_exact_absolute_path() {
+        assert!(path_matches(
+            "C:\\Apps\\notepad.exe",
+            "C:\\Apps\\notepad.exe"
+        ));
+        assert!(path_matches(
+            "C:\\Apps\\notepad.exe",
+            "c:\\apps\\NOTEPAD.EXE"
+        ));
+        assert!(!path_matches(
+            "C:\\Apps\\notepad.exe",
+            "C:\\Apps\\notepad.exe.bak"
+        ));
+        assert!(!path_matches("notepad.exe", "C:\\Apps\\notepad.exe"));
     }
 
     #[test]

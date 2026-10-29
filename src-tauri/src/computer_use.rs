@@ -230,6 +230,12 @@ fn normalize(mut config: ComputerUseConfig) -> Result<ComputerUseConfig, String>
     }
     #[cfg(windows)]
     crate::computer_use_hotkey::validate(&config.hotkey)?;
+    for policy in &config.allow {
+        let path = policy.path.trim();
+        if !path.is_empty() && !std::path::Path::new(path).is_absolute() {
+            return Err("allowlist paths must be absolute".to_string());
+        }
+    }
     let mut seen_policies = std::collections::HashSet::new();
     config.allow = config
         .allow

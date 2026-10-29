@@ -1849,8 +1849,43 @@ pub async fn mcp_save(
     name: String,
     transport: String,
     auth_type: String,
-    mut config: McpConfig,
+    config: McpConfig,
 ) -> Result<McpServerRow, String> {
+    save_server(
+        app,
+        SaveServerInput {
+            id,
+            project_id,
+            name,
+            transport,
+            auth_type,
+            config,
+            enabled: true,
+        },
+    )
+    .await
+}
+
+struct SaveServerInput {
+    id: Option<String>,
+    project_id: Option<String>,
+    name: String,
+    transport: String,
+    auth_type: String,
+    config: McpConfig,
+    enabled: bool,
+}
+
+async fn save_server(app: AppHandle, input: SaveServerInput) -> Result<McpServerRow, String> {
+    let SaveServerInput {
+        id,
+        project_id,
+        name,
+        transport,
+        auth_type,
+        mut config,
+        enabled,
+    } = input;
     let name = name.trim().to_string();
     if !valid_server_name(&name) {
         return Err("server name must be 1-64 chars: letters, digits, - or _".to_string());
@@ -1890,15 +1925,20 @@ pub async fn mcp_save(
         let before = server_row(&pool, &id).await?;
         ensure_unique_server_name(&pool, before.project_id.as_deref(), &name, Some(&id)).await?;
         let existing = config_from_row(&before);
-        merge_blank_values(&mut config.env, &existing.env);
-        merge_blank_values(&mut config.headers, &existing.headers);
+        let target_changed = before.transport != transport
+            || before.url != url
+            || before.cmd != cmd
+            || existing.args != config.args
+            || existing.cwd != config.cwd;
+        if !target_changed {
+            merge_blank_values(&mut config.env, &existing.env);
+            merge_blank_values(&mut config.headers, &existing.headers);
+        }
         protect_config_secrets(&id, &mut config)?;
         let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
         if config_json.len() > MAX_MCP_CONFIG_BYTES {
             return Err("MCP config is too large".to_string());
         }
-        let target_changed =
-            before.transport != transport || before.url != url || before.cmd != cmd;
         let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
         if let Err(error) = sqlx::query(
             "UPDATE mcp_servers SET name = ?, transport = ?, auth_type = ?, cmd = ?, url = ?, config_json = ?, timeout_ms = ? WHERE id = ?",
@@ -1958,7 +1998,7 @@ pub async fn mcp_save(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     sqlx::query(
-        "INSERT INTO mcp_servers (id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, created_at, config_json) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?)",
+        "INSERT INTO mcp_servers (id, project_id, name, transport, auth_type, cmd, url, allow_tools, timeout_ms, enabled, created_at, config_json) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&project_id)
@@ -1968,6 +2008,7 @@ pub async fn mcp_save(
     .bind(&cmd)
     .bind(&url)
     .bind(config.timeout_ms.map(|value| value as i64))
+    .bind(if enabled { 1 } else { 0 })
     .bind(now)
     .bind(&config_json)
     .execute(&pool)
@@ -2083,31 +2124,21 @@ pub async fn mcp_import(
             headers,
             timeout_ms: server.timeout,
         };
-        match mcp_save(
+        match save_server(
             app.clone(),
-            None,
-            project_id.clone(),
-            name.clone(),
-            transport.to_string(),
-            "none".to_string(),
-            config,
+            SaveServerInput {
+                id: None,
+                project_id: project_id.clone(),
+                name: name.clone(),
+                transport: transport.to_string(),
+                auth_type: "none".to_string(),
+                config,
+                enabled: false,
+            },
         )
         .await
         {
-            Ok(mut row) => {
-                if let Err(error) = sqlx::query("UPDATE mcp_servers SET enabled = 0 WHERE id = ?")
-                    .bind(&row.id)
-                    .execute(&pool)
-                    .await
-                {
-                    return Err(format!(
-                        "imported {} server(s); could not disable '{name}': {error}",
-                        imported.len()
-                    ));
-                }
-                row.enabled = false;
-                imported.push(row);
-            }
+            Ok(row) => imported.push(row),
             Err(error) => {
                 return Err(format!(
                     "imported {} server(s); failed on '{name}': {error}",
@@ -2347,8 +2378,14 @@ pub async fn mcp_test_config(
             .map_err(|e| e.to_string())?;
         let row = server_row(&pool, owner_id).await?;
         let existing = config_from_row(&row);
-        merge_blank_values(&mut config.env, &existing.env);
-        merge_blank_values(&mut config.headers, &existing.headers);
+        let target_changed = row.url != config.url
+            || row.cmd != config.command
+            || existing.args != config.args
+            || existing.cwd != config.cwd;
+        if !target_changed {
+            merge_blank_values(&mut config.env, &existing.env);
+            merge_blank_values(&mut config.headers, &existing.headers);
+        }
     }
     resolve_config_secrets(&mut config, owner)?;
     validate_config(&config)?;

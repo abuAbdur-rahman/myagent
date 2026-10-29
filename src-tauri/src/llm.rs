@@ -3077,15 +3077,16 @@ async fn stream_responses_completion(
 ) -> AppResult<()> {
     let effort = responses_effort(client, req, key).await;
     let history = prune_tool_history(history);
+    let replay_reasoning_items = !is_agentrouter(req.connection_kind.as_deref(), &req.base_url);
     let body = responses::body(
         req.model.as_str(),
         &history,
         None,
         effort.as_deref(),
         true,
-        !is_agentrouter(req.connection_kind.as_deref(), &req.base_url),
+        replay_reasoning_items,
     );
-    responses::stream_iteration(
+    let result = responses::stream_iteration(
         client,
         &endpoint(&req.base_url, "responses"),
         key,
@@ -3094,8 +3095,34 @@ async fn stream_responses_completion(
         on_event,
         ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
     )
-    .await
-    .map(|_| ())
+    .await;
+    if replay_reasoning_items
+        && result
+            .as_ref()
+            .err()
+            .is_some_and(responses::is_cross_resource_error)
+    {
+        let body = responses::body(
+            req.model.as_str(),
+            &history,
+            None,
+            effort.as_deref(),
+            true,
+            false,
+        );
+        return responses::stream_iteration(
+            client,
+            &endpoint(&req.base_url, "responses"),
+            key,
+            &body,
+            cancel,
+            on_event,
+            ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
+        )
+        .await
+        .map(|_| ());
+    }
+    result.map(|_| ())
 }
 
 #[cfg(test)]
