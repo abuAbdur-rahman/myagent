@@ -1,4 +1,6 @@
-export type ChangeKind = "new" | "improved" | "fixed";
+export const CHANGE_KINDS = ["new", "improved", "fixed"] as const;
+
+export type ChangeKind = (typeof CHANGE_KINDS)[number];
 
 export interface ReleaseChange {
   kind: ChangeKind;
@@ -11,8 +13,6 @@ export interface Release {
   summary: string;
   changes: ReleaseChange[];
 }
-
-export const CHANGE_KINDS: readonly ChangeKind[] = ["new", "improved", "fixed"];
 
 export const CHANGE_LABELS: Record<ChangeKind, string> = {
   new: "New",
@@ -33,7 +33,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "new",
-        text: "Each MCP server keeps bounded, redacted stderr logs, and a changed tool definition marks the server Review needed until its tools are approved.",
+        text: "Each MCP server keeps bounded stderr logs with best-effort redaction, and a changed tool definition marks the server Review needed until its tools are approved.",
       },
       {
         kind: "improved",
@@ -53,7 +53,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "AgentRouter Responses turns no longer replay Azure resource-bound items. A cross-resource or decryption 400 retries once without items, and reasoning summaries bring visible thinking back for gateway GPT models.",
+        text: "AgentRouter Responses turns no longer replay Azure resource-bound items. When reasoning replay is enabled, a cross-resource or decryption 400 retries once without items, and reasoning summaries bring visible thinking back for gateway GPT models.",
       },
     ],
   },
@@ -113,7 +113,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "new",
-        text: "A provider connection can hold up to ten keys. A quota or billing rejection skips to the next key and cools the rejected key for ten minutes; plain rate limits keep the existing backoff. Providers lists each key, shows a cooling key, and can remove one or all keys.",
+        text: "A provider connection can hold up to ten keys. A quota or billing rejection skips to the next key and cools the rejected key for ten minutes; plain rate limits keep the existing backoff. The Providers page lists each key, shows a cooling key, and can remove one or all keys.",
       },
       {
         kind: "improved",
