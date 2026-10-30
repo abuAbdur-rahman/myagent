@@ -22,6 +22,38 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.0",
+    date: "2026-10-30",
+    summary:
+      "MCP server details show the error and next action, the protocol revision and tool cache metadata. Computer use now finds the page inside Chromium windows, captures the window it was asked for, and refuses clicks unless the window is focused.",
+    changes: [
+      {
+        kind: "new",
+        text: "MCP server details show the error with its next action, the negotiated protocol revision and tools cache metadata.",
+      },
+      {
+        kind: "new",
+        text: "Computer use reads Chromium and Electron page content by walking the renderer window, so get_state returns the document, text fields and buttons instead of the toolbar and address bar.",
+      },
+      {
+        kind: "improved",
+        text: "Screenshots target the requested window, so a covered window no longer shows whatever is in front of it.",
+      },
+      {
+        kind: "fixed",
+        text: "Clicks raise the target window and refuse with not_foreground unless it is really focused; an element click also checks the point lands inside that element, so a click can no longer hit browser chrome or another app.",
+      },
+      {
+        kind: "fixed",
+        text: "Typing into a Chromium window no longer lands in the address bar: element typing needs a page tree, and app-only typing needs confirm=true.",
+      },
+      {
+        kind: "new",
+        text: "A scripted eval covers observation and representative actions on Notepad and a Chromium page, checks results through the page itself, and restores your own config and audit log afterwards.",
+      },
+    ],
+  },
+  {
     version: "0.7.1",
     date: "2026-10-29",
     summary:

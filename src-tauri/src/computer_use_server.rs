@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
@@ -29,6 +29,12 @@ use uiautomation::screenshots::Screenshot;
 use uiautomation::types::{Point, ScrollAmount, TreeScope, UIProperty};
 use uiautomation::variants::{Value as VariantValue, Variant};
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Graphics::Gdi::{
+    BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS,
+    DeleteDC, DeleteObject, GetDC, GetDIBits, HGDIOBJ, ReleaseDC, SelectObject,
+};
+use windows_sys::Win32::Storage::Xps::PrintWindow;
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -36,7 +42,12 @@ use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_MOUSE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
+    INPUT, INPUT_MOUSE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, SetFocus,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumChildWindows, GetClassNameW, GetForegroundWindow, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, PW_RENDERFULLCONTENT, SW_RESTORE, SendMessageW,
+    SetForegroundWindow, ShowWindow, WM_GETOBJECT,
 };
 
 use crate::computer_use::{AppTier, AuditEntry, ComputerUseConfig};
@@ -47,6 +58,8 @@ const SNAPSHOT_TTL: Duration = Duration::from_secs(600);
 const MAX_SNAPSHOTS: usize = 20;
 const MAX_TREE_NODES: usize = 1_200;
 const MAX_TREE_DEPTH: usize = 8;
+const LAZY_MAX_NODES: usize = 400;
+const UIA_ROOT_OBJECT_ID: isize = -25;
 
 pub fn run() {
     unsafe {
@@ -100,7 +113,7 @@ impl ServerHandler for ComputerUseServer {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Observe before acting. Call get_state to get a snapshot and element ids; ids expire and stale ids return stale_snapshot. Actions require an allowlisted app and the right tier. Hard-denied apps, password fields and secure-desktop input are refused. Check results for stale_snapshot, app_not_allowlisted, tier_denied, hard_denied, computer_use_paused, yield_to_user, publisher_mismatch and dry_run.",
+                "Observe before acting. Call get_state to get a snapshot and element ids; ids expire and stale ids return stale_snapshot. Chromium and Electron windows expose only browser chrome to UI Automation, so their element ids are toolbar controls, not page content: call screenshot or get_state with screenshot=true, click the page point with app, x and y, then type with confirm=true. Actions require an allowlisted app and the right tier. Hard-denied apps, password fields and secure-desktop input are refused. Check results for stale_snapshot, app_not_allowlisted, tier_denied, hard_denied, computer_use_paused, yield_to_user, publisher_mismatch, chromium_content_unavailable, unverified_focus and dry_run.",
             )
     }
 
@@ -350,8 +363,40 @@ impl ComputerUseServer {
         let automation = automation()?;
         let (window, info) = resolve_window(&automation, &args.app, args.window.as_deref())?;
         let tier = require_app(config, &info, AppTier::View)?;
-        let max_nodes = args.max_nodes.unwrap_or(600).clamp(50, MAX_TREE_NODES);
-        let (snapshot, mut state) = build_state(&automation, &window, &info, tier, max_nodes)?;
+        let lazy = is_chromium_window(&info);
+        let mut root = window.clone();
+        if lazy {
+            root = chromium_root(&automation, &info, &window);
+        }
+        let requested = args.max_nodes.unwrap_or(600).clamp(50, MAX_TREE_NODES);
+        let max_nodes = if lazy {
+            requested.min(LAZY_MAX_NODES)
+        } else {
+            requested
+        };
+        let max_depth = MAX_TREE_DEPTH;
+        let (snapshot, mut state) =
+            build_state(&automation, &root, &info, tier, max_nodes, max_depth)?;
+        if lazy {
+            let has_document = state["nodes"]
+                .as_array()
+                .map(|nodes| {
+                    nodes.iter().any(|node| {
+                        node["role"]
+                            .as_str()
+                            .map(|role| role.eq_ignore_ascii_case("Document"))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            state["lazy"] = json!(true);
+            state["page_tree_unavailable"] = json!(!has_document);
+            state["hint"] = json!(if has_document {
+                "chromium_tree_is_shallow: the page tree may be partial, call screenshot or get_state with screenshot=true before acting"
+            } else {
+                "chromium_page_unavailable: this window exposes only browser chrome to UI Automation, so element ids are toolbar controls, not page content; call screenshot or get_state with screenshot=true, then click by point with app, x and y"
+            });
+        }
         let snapshot_id = self
             .snapshots
             .lock()
@@ -416,7 +461,7 @@ impl ComputerUseServer {
             return Ok(dry_run_result("invoke", &info, &args.element, &detail));
         }
         self.begin_action(config)?;
-        let before = self.thumb(config, &element, "before");
+        let before = self.thumb(config, &element, &info, "before");
         if let Ok(pattern) = element.get_pattern::<UIInvokePattern>() {
             pattern
                 .invoke()
@@ -430,7 +475,7 @@ impl ComputerUseServer {
                 .click()
                 .map_err(|error| format!("invoke_failed: {error}"))?;
         }
-        let after = self.thumb(config, &element, "after");
+        let after = self.thumb(config, &element, &info, "after");
         let detail = format!("invoked {}", element_ref.name);
         audit_action(config, "invoke", &info, false, &detail, before, after);
         Ok(ok_json(json!({
@@ -445,48 +490,104 @@ impl ComputerUseServer {
     fn click(&self, config: &ComputerUseConfig, args: ClickArgs) -> Result<CallToolResult, String> {
         self.require_active(config)?;
         let automation = automation()?;
-        let (_snapshot, element_ref, element, info) =
-            resolve_snapshot_element(&automation, &self.snapshots, &args.snapshot, &args.element)?;
-        require_app(config, &info, AppTier::Interact)?;
-        verify_app_argument(&args.app, &info)?;
         let button = args.button.as_deref().unwrap_or("left");
         if !matches!(button, "left" | "right") {
             return Err("invalid_arguments: button must be left or right".to_string());
         }
         let double = args.double.unwrap_or(false);
-        if config.dry_run {
+        if let (Some(snapshot), Some(element_id)) =
+            (args.snapshot.as_deref(), args.element.as_deref())
+        {
+            let (_snapshot, element_ref, element, info) =
+                resolve_snapshot_element(&automation, &self.snapshots, snapshot, element_id)?;
+            require_app(config, &info, AppTier::Interact)?;
+            verify_app_argument(&args.app, &info)?;
+            if config.dry_run {
+                let detail = format!(
+                    "would click {} with {button}{}",
+                    element_ref.name,
+                    if double { " double" } else { "" }
+                );
+                audit_action(config, "click", &info, true, &detail, None, None);
+                return Ok(dry_run_result("click", &info, element_id, &detail));
+            }
+            self.begin_action(config)?;
+            raise_window(info.hwnd);
+            std::thread::sleep(Duration::from_millis(150));
+            require_window_foreground(&info)?;
+            let point = element_click_point(&element)?;
+            require_point_matches_element(&automation, point, &element, &info)?;
+            require_point_in_app(&automation, point, info.pid)?;
+            let before = self.thumb(config, &element, &info, "before");
+            let mouse = Mouse::new();
+            match (button, double) {
+                ("right", _) => mouse.right_click(&point),
+                (_, true) => mouse.double_click(&point),
+                _ => mouse.click(&point),
+            }
+            .map_err(|error| format!("click_failed: {error}"))?;
+            let after = self.thumb(config, &element, &info, "after");
             let detail = format!(
-                "would click {} with {button}{}",
+                "clicked {} with {button}{}",
                 element_ref.name,
                 if double { " double" } else { "" }
             );
+            audit_action(config, "click", &info, false, &detail, before, after);
+            return Ok(ok_json(json!({
+                "ok": true,
+                "action": "click",
+                "app": info.exe,
+                "element": element_id,
+                "button": button,
+                "double": double,
+            })));
+        }
+        let (Some(x), Some(y)) = (args.x, args.y) else {
+            return Err(
+                "invalid_arguments: pass snapshot and element, or app with x and y".to_string(),
+            );
+        };
+        let app = args
+            .app
+            .as_deref()
+            .ok_or_else(|| "app_required: pass app with x and y".to_string())?;
+        let (window, info) = resolve_window(&automation, app, args.window.as_deref())?;
+        require_app(config, &info, AppTier::Interact)?;
+        verify_app_argument(&args.app, &info)?;
+        if !info.rect.contains(x, y) {
+            return Err("invalid_arguments: point must be inside the window".to_string());
+        }
+        let point = Point::new(x, y);
+        if config.dry_run {
+            ensure_point_not_password(&automation, point)?;
+            require_point_in_app(&automation, point, info.pid)?;
+            let detail = format!("would click point ({x}, {y}) with {button}");
             audit_action(config, "click", &info, true, &detail, None, None);
-            return Ok(dry_run_result("click", &info, &args.element, &detail));
+            return Ok(dry_run_result("click", &info, &format!("{x},{y}"), &detail));
         }
         self.begin_action(config)?;
-        let point = element
-            .get_click_point()
-            .map_err(|error| format!("click_failed: {error}"))?;
+        raise_window(info.hwnd);
+        std::thread::sleep(Duration::from_millis(150));
+        require_window_foreground(&info)?;
+        ensure_point_not_password(&automation, point)?;
         require_point_in_app(&automation, point, info.pid)?;
-        let before = self.thumb(config, &element, "before");
+        let before = self.thumb(config, &window, &info, "before");
+        let mouse = Mouse::new();
         match (button, double) {
-            ("right", _) => element.right_click(),
-            (_, true) => element.double_click(),
-            _ => element.click(),
+            ("right", _) => mouse.right_click(&point),
+            (_, true) => mouse.double_click(&point),
+            _ => mouse.click(&point),
         }
         .map_err(|error| format!("click_failed: {error}"))?;
-        let after = self.thumb(config, &element, "after");
-        let detail = format!(
-            "clicked {} with {button}{}",
-            element_ref.name,
-            if double { " double" } else { "" }
-        );
+        let after = self.thumb(config, &window, &info, "after");
+        let detail = format!("clicked point ({x}, {y}) with {button}");
         audit_action(config, "click", &info, false, &detail, before, after);
         Ok(ok_json(json!({
             "ok": true,
             "action": "click",
             "app": info.exe,
-            "element": args.element,
+            "x": x,
+            "y": y,
             "button": button,
             "double": double,
         })))
@@ -502,11 +603,13 @@ impl ComputerUseServer {
             return Err(format!("text_too_long: limit is {MAX_TEXT} characters"));
         }
         let automation = automation()?;
+        let mut page_tree = true;
         let (info, focus, target, target_name) = if let (Some(snapshot), Some(element)) =
             (args.snapshot.as_deref(), args.element.as_deref())
         {
-            let (_snapshot, element_ref, element, info) =
+            let (snapshot, element_ref, element, info) =
                 resolve_snapshot_element(&automation, &self.snapshots, snapshot, element)?;
+            page_tree = snapshot.has_document;
             (info, element.clone(), Some(element), element_ref.name)
         } else {
             let app = args
@@ -519,6 +622,21 @@ impl ComputerUseServer {
         };
         require_app(config, &info, AppTier::Interact)?;
         verify_app_argument(&args.app, &info)?;
+        if is_chromium_window(&info) {
+            if args.snapshot.is_some() || args.element.is_some() {
+                if !page_tree {
+                    return Err(
+                        "chromium_content_unavailable: this Chromium window exposes only browser chrome to UI Automation, so element typing could land in the address bar; take a screenshot, click the page point, then type with confirm=true"
+                            .to_string(),
+                    );
+                }
+            } else if !args.confirm.unwrap_or(false) {
+                return Err(
+                    "unverified_focus: Chromium app-only typing cannot verify the focused control; click the page point, review the screenshot, then retry with confirm=true"
+                        .to_string(),
+                );
+            }
+        }
         if config.dry_run {
             let detail = format!(
                 "would type {} chars into {}",
@@ -529,7 +647,7 @@ impl ComputerUseServer {
             return Ok(dry_run_result("type_text", &info, &target_name, &detail));
         }
         self.begin_action(config)?;
-        let before = self.thumb(config, &focus, "before");
+        let before = self.thumb(config, &focus, &info, "before");
         if let Some(element) = &target {
             element
                 .set_focus()
@@ -540,17 +658,13 @@ impl ComputerUseServer {
                 .send_text(&args.text, 10)
                 .map_err(|error| format!("type_failed: {error}"))?;
         } else {
-            focus
-                .set_focus()
-                .map_err(|error| format!("focus_failed: {error}"))?;
-            ensure_focused_app(&automation, info.pid)?;
-            ensure_focus_not_password(&automation)?;
+            focus_app_for_input(&automation, &focus, info.pid)?;
             Keyboard::new()
                 .interval(10)
                 .send_text(&args.text)
                 .map_err(|error| format!("type_failed: {error}"))?;
         }
-        let after = self.thumb(config, &focus, "after");
+        let after = self.thumb(config, &focus, &info, "after");
         let detail = format!(
             "typed {} chars into {}",
             args.text.chars().count(),
@@ -580,6 +694,12 @@ impl ComputerUseServer {
             resolve_snapshot_element(&automation, &self.snapshots, &args.snapshot, &args.element)?;
         require_app(config, &info, AppTier::Interact)?;
         verify_app_argument(&args.app, &info)?;
+        if is_chromium_window(&info) && !_snapshot.has_document {
+            return Err(
+                "chromium_content_unavailable: this Chromium window exposes only browser chrome to UI Automation, so element ids are not page content; take a screenshot, click the point, then type with confirm=true"
+                    .to_string(),
+            );
+        }
         if config.dry_run {
             let detail = format!(
                 "would set {} to {} chars",
@@ -590,7 +710,7 @@ impl ComputerUseServer {
             return Ok(dry_run_result("set_value", &info, &args.element, &detail));
         }
         self.begin_action(config)?;
-        let before = self.thumb(config, &element, "before");
+        let before = self.thumb(config, &element, &info, "before");
         if let Ok(pattern) = element.get_pattern::<UIValuePattern>() {
             pattern
                 .set_value(&args.value)
@@ -607,7 +727,7 @@ impl ComputerUseServer {
         } else {
             return Err("set_value_unsupported: element has no value pattern".to_string());
         }
-        let after = self.thumb(config, &element, "after");
+        let after = self.thumb(config, &element, &info, "after");
         let detail = format!(
             "set {} to {} chars",
             element_ref.name,
@@ -649,17 +769,13 @@ impl ComputerUseServer {
             return Ok(dry_run_result("press_keys", &info, "", &detail));
         }
         self.begin_action(config)?;
-        let before = self.thumb(config, &window, "before");
-        window
-            .set_focus()
-            .map_err(|error| format!("focus_failed: {error}"))?;
-        ensure_focused_app(&automation, info.pid)?;
-        ensure_focus_not_password(&automation)?;
+        let before = self.thumb(config, &window, &info, "before");
+        focus_app_for_input(&automation, &window, info.pid)?;
         Keyboard::new()
             .interval(10)
             .send_keys(&args.keys)
             .map_err(|error| format!("keys_failed: {error}"))?;
-        let after = self.thumb(config, &window, "after");
+        let after = self.thumb(config, &window, &info, "after");
         let detail = format!("pressed {}", args.keys);
         audit_action(config, "press_keys", &info, false, &detail, before, after);
         Ok(ok_json(json!({
@@ -715,7 +831,7 @@ impl ComputerUseServer {
             return Ok(dry_run_result("scroll", &info, "", &detail));
         }
         self.begin_action(config)?;
-        let before = self.thumb(config, &window, "before");
+        let before = self.thumb(config, &window, &info, "before");
         let mut used_pattern = false;
         if let Some(element) = &target
             && let Ok(pattern) = element.get_pattern::<UIScrollPattern>()
@@ -775,7 +891,7 @@ impl ComputerUseServer {
             require_point_in_app(&automation, point, info.pid)?;
             mouse_wheel(point, horizontal, delta)?;
         }
-        let after = self.thumb(config, &window, "after");
+        let after = self.thumb(config, &window, &info, "after");
         let detail = format!(
             "scrolled {direction} by {}",
             if large { "large" } else { "small" }
@@ -818,7 +934,7 @@ impl ComputerUseServer {
             return Ok(dry_run_result("drag", &info, "", &detail));
         }
         self.begin_action(config)?;
-        let before = self.thumb(config, &window, "before");
+        let before = self.thumb(config, &window, &info, "before");
         let mouse = Mouse::new();
         mouse
             .move_to(&start)
@@ -826,7 +942,7 @@ impl ComputerUseServer {
         mouse
             .drag_to(MouseButton::LEFT, &end)
             .map_err(|error| format!("drag_failed: {error}"))?;
-        let after = self.thumb(config, &window, "after");
+        let after = self.thumb(config, &window, &info, "after");
         let detail = format!(
             "dragged from ({}, {}) to ({}, {})",
             args.from_x, args.from_y, args.to_x, args.to_y
@@ -1146,12 +1262,13 @@ impl ComputerUseServer {
         &self,
         config: &ComputerUseConfig,
         element: &UIElement,
+        info: &WindowInfo,
         label: &str,
     ) -> Option<String> {
         if !config.audit_thumbnails {
             return None;
         }
-        let shot = Screenshot::capture_element(element).ok()?;
+        let shot = capture_element(element, info).ok()?;
         let dir = crate::computer_use::audit_dir().ok()?;
         std::fs::create_dir_all(&dir).ok()?;
         let name = format!(
@@ -1225,28 +1342,32 @@ fn tools() -> Vec<Tool> {
         ),
         tool(
             "click",
-            "Click an element from the current snapshot. Refuses password fields and offscreen elements.",
+            "Click an element from the current snapshot, or a screen point with app plus x and y. Refuses password fields and offscreen points.",
             schema(
                 json!({
-                    "app": {"type": "string", "description": "Optional app check."},
+                    "app": {"type": "string", "description": "App name, path, pid or title when clicking a point."},
+                    "window": {"type": "string", "description": "Optional window title filter when clicking a point."},
                     "snapshot": {"type": "string", "description": "Snapshot id from get_state."},
                     "element": {"type": "string", "description": "Element id from the snapshot."},
+                    "x": {"type": "integer", "description": "Screen x coordinate for a point click."},
+                    "y": {"type": "integer", "description": "Screen y coordinate for a point click."},
                     "button": {"type": "string", "enum": ["left", "right"]},
                     "double": {"type": "boolean"}
                 }),
-                &["snapshot", "element"],
+                &[],
             ),
             false,
         ),
         tool(
             "type_text",
-            "Type literal text into an element or the focused window. Pass snapshot and element, or app.",
+            "Type literal text into an element or the focused window. Pass snapshot and element, or app. Chromium windows expose only browser chrome, so click the page point first and pass confirm=true with app.",
             schema(
                 json!({
                     "app": {"type": "string", "description": "App name, path, pid or title when no element is given."},
                     "snapshot": {"type": "string", "description": "Optional snapshot id."},
                     "element": {"type": "string", "description": "Optional element id."},
-                    "text": {"type": "string", "description": "Literal text, up to 10,000 characters."}
+                    "text": {"type": "string", "description": "Literal text, up to 10,000 characters."},
+                    "confirm": {"type": "boolean", "description": "Required for app-only typing in Chromium windows, where focus cannot be verified."}
                 }),
                 &["text"],
             ),
@@ -1548,8 +1669,10 @@ fn window_info(element: &UIElement, self_exe: Option<&str>) -> Option<WindowInfo
     let name = file_name(&exe);
     let title = truncate(&element.get_name().unwrap_or_default(), 300);
     let class = truncate(&element.get_classname().unwrap_or_default(), 300);
+    let hwnd: isize = handle.into();
     Some(WindowInfo {
         pid,
+        hwnd,
         exe,
         name,
         title,
@@ -1622,12 +1745,22 @@ fn find_window_by_snapshot(
     let windows = top_level_windows(automation)?;
     let mut candidates: Vec<(UIElement, WindowInfo)> = windows
         .into_iter()
-        .filter(|(_, info)| {
-            info.pid == snapshot.pid
-                && (snapshot.window_class.is_empty()
-                    || info.class.eq_ignore_ascii_case(&snapshot.window_class))
-        })
+        .filter(|(_, info)| info.pid == snapshot.pid)
         .collect();
+    if snapshot.hwnd != 0 {
+        if let Some(index) = candidates
+            .iter()
+            .position(|(_, info)| info.hwnd == snapshot.hwnd)
+        {
+            return Ok(candidates.swap_remove(index));
+        }
+        return Err(
+            "stale_snapshot: the bound window is gone; observe again with get_state".to_string(),
+        );
+    }
+    candidates.retain(|(_, info)| {
+        snapshot.window_class.is_empty() || info.class.eq_ignore_ascii_case(&snapshot.window_class)
+    });
     if candidates.is_empty() {
         return Err("stale_snapshot: the window is gone; observe again with get_state".to_string());
     }
@@ -1690,6 +1823,7 @@ fn build_state(
     info: &WindowInfo,
     tier: AppTier,
     max_nodes: usize,
+    max_depth: usize,
 ) -> Result<(Snapshot, Value), String> {
     let walker = automation
         .get_control_view_walker()
@@ -1700,18 +1834,30 @@ fn build_state(
         nodes: Vec::new(),
         count: 0,
         max_nodes,
-        max_depth: MAX_TREE_DEPTH,
+        max_depth,
     };
-    builder.walk(window, 0, None);
+    if is_chromium_window(info) {
+        builder.walk_breadth(window);
+    } else {
+        builder.walk(window, 0, None);
+    }
     let truncated = builder.count >= max_nodes;
     let TreeBuilder {
         elements, nodes, ..
     } = builder;
+    let has_document = nodes.iter().any(|node| {
+        node["role"]
+            .as_str()
+            .map(|role| role.eq_ignore_ascii_case("Document"))
+            .unwrap_or(false)
+    });
     let snapshot = Snapshot {
         created: Instant::now(),
         pid: info.pid,
+        hwnd: info.hwnd,
         window_title: info.title.clone(),
         window_class: info.class.clone(),
+        has_document,
         elements,
     };
     let state = json!({
@@ -1732,7 +1878,7 @@ fn build_state(
         "truncated": truncated,
         "limits": {
             "max_nodes": max_nodes,
-            "max_depth": MAX_TREE_DEPTH,
+            "max_depth": max_depth,
         },
     });
     Ok((snapshot, state))
@@ -1748,10 +1894,7 @@ struct TreeBuilder<'a> {
 }
 
 impl TreeBuilder<'_> {
-    fn walk(&mut self, element: &UIElement, depth: usize, parent: Option<&str>) {
-        if self.count >= self.max_nodes {
-            return;
-        }
+    fn record(&mut self, element: &UIElement, depth: usize, parent: Option<&str>) -> String {
         let id = format!("e{}", self.count + 1);
         self.count += 1;
         let role = element
@@ -1808,6 +1951,14 @@ impl TreeBuilder<'_> {
             "value": value,
             "actionable": actionable,
         }));
+        id
+    }
+
+    fn walk(&mut self, element: &UIElement, depth: usize, parent: Option<&str>) {
+        if self.count >= self.max_nodes {
+            return;
+        }
+        let id = self.record(element, depth, parent);
         if depth >= self.max_depth {
             return;
         }
@@ -1823,6 +1974,34 @@ impl TreeBuilder<'_> {
                 match self.walker.get_next_sibling(&current) {
                     Ok(next) => current = next,
                     Err(_) => break,
+                }
+            }
+        }
+    }
+
+    fn walk_breadth(&mut self, root: &UIElement) {
+        let mut queue: VecDeque<(UIElement, usize, Option<String>)> = VecDeque::new();
+        queue.push_back((root.clone(), 0, None));
+        while let Some((element, depth, parent)) = queue.pop_front() {
+            if self.count >= self.max_nodes {
+                break;
+            }
+            let id = self.record(&element, depth, parent.as_deref());
+            if depth >= self.max_depth {
+                continue;
+            }
+            if let Ok(mut child) = self.walker.get_first_child(&element) {
+                let mut guard = 0;
+                loop {
+                    queue.push_back((child.clone(), depth + 1, Some(id.clone())));
+                    guard += 1;
+                    if guard >= 500 {
+                        break;
+                    }
+                    match self.walker.get_next_sibling(&child) {
+                        Ok(next) => child = next,
+                        Err(_) => break,
+                    }
                 }
             }
         }
@@ -1997,9 +2176,148 @@ fn path_matches(policy: &str, actual: &str) -> bool {
         && policy.eq_ignore_ascii_case(actual.trim())
 }
 
+fn chromium_root(automation: &UIAutomation, info: &WindowInfo, window: &UIElement) -> UIElement {
+    let Some(renderer) = chromium_renderer(info.hwnd) else {
+        return window.clone();
+    };
+    let Ok(element) = automation.element_from_handle(renderer.into()) else {
+        return window.clone();
+    };
+    if chromium_is_active(info.hwnd) {
+        let _ = element.get_name();
+        if let Ok(tree) = build_state(automation, &element, info, AppTier::View, 40, 3)
+            && nodes_have_document(&tree.1)
+        {
+            return element;
+        }
+    }
+    for attempt in 0..12 {
+        wake_chromium_accessibility(info.hwnd);
+        let _ = element.get_name();
+        std::thread::sleep(Duration::from_millis(if attempt == 0 { 150 } else { 250 }));
+        if let Ok(tree) = build_state(automation, &element, info, AppTier::View, 40, 3)
+            && nodes_have_document(&tree.1)
+        {
+            mark_chromium_active(info.hwnd);
+            return element;
+        }
+    }
+    element
+}
+
+fn chromium_active() -> &'static Mutex<Vec<(isize, Instant)>> {
+    static ACTIVE: std::sync::OnceLock<Mutex<Vec<(isize, Instant)>>> = std::sync::OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+const CHROMIUM_READY_TTL: Duration = Duration::from_secs(120);
+
+fn chromium_is_active(hwnd: isize) -> bool {
+    chromium_active()
+        .lock()
+        .map(|items| {
+            items
+                .iter()
+                .any(|(item, at)| *item == hwnd && at.elapsed() < CHROMIUM_READY_TTL)
+        })
+        .unwrap_or(false)
+}
+
+fn mark_chromium_active(hwnd: isize) {
+    if let Ok(mut items) = chromium_active().lock() {
+        items.retain(|(item, at)| *item != hwnd || at.elapsed() < CHROMIUM_READY_TTL);
+        items.push((hwnd, Instant::now()));
+    }
+}
+
+fn nodes_have_document(state: &Value) -> bool {
+    state["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes.iter().any(|node| {
+                node["role"]
+                    .as_str()
+                    .map(|role| role.eq_ignore_ascii_case("Document"))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn is_chromium_window(info: &WindowInfo) -> bool {
+    info.class.to_ascii_lowercase().contains("chrome_widgetwin")
+}
+
+unsafe extern "system" fn collect_child_window(hwnd: *mut std::ffi::c_void, lparam: isize) -> i32 {
+    let children = unsafe { &mut *(lparam as *mut Vec<isize>) };
+    children.push(hwnd as isize);
+    1
+}
+
+fn wake_chromium_accessibility(hwnd: isize) {
+    if let Some(renderer) = chromium_renderer(hwnd) {
+        unsafe {
+            SendMessageW(
+                renderer as *mut std::ffi::c_void,
+                WM_GETOBJECT,
+                0,
+                UIA_ROOT_OBJECT_ID,
+            );
+        }
+    }
+}
+
+fn chromium_renderer(hwnd: isize) -> Option<isize> {
+    if hwnd == 0 {
+        return None;
+    }
+    let mut children: Vec<isize> = Vec::new();
+    unsafe {
+        EnumChildWindows(
+            hwnd as *mut std::ffi::c_void,
+            Some(collect_child_window),
+            &mut children as *mut Vec<isize> as isize,
+        );
+    }
+    children.into_iter().find(|child| {
+        let mut buffer = [0u16; 256];
+        let len = unsafe {
+            GetClassNameW(
+                *child as *mut std::ffi::c_void,
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            )
+        };
+        len > 0
+            && String::from_utf16_lossy(&buffer[..len as usize])
+                .eq_ignore_ascii_case("Chrome_RenderWidgetHostHWND")
+    })
+}
+
+fn password_label(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    ["password", "passwd", "passcode", "pwd", "secret"]
+        .iter()
+        .any(|needle| value.contains(needle))
+}
+
+fn element_looks_like_password(element: &UIElement) -> bool {
+    if element.is_password().unwrap_or(false) {
+        return true;
+    }
+    [
+        element.get_name().unwrap_or_default(),
+        element.get_automation_id().unwrap_or_default(),
+        element.get_help_text().unwrap_or_default(),
+        element.get_classname().unwrap_or_default(),
+    ]
+    .iter()
+    .any(|value| password_label(value))
+}
+
 fn ensure_focus_not_password(automation: &UIAutomation) -> Result<(), String> {
     if let Ok(focused) = automation.get_focused_element()
-        && focused.is_password().unwrap_or(false)
+        && element_looks_like_password(&focused)
     {
         return Err("password_field: the focused control is a password field".to_string());
     }
@@ -2016,6 +2334,89 @@ fn ensure_focused_app(automation: &UIAutomation, pid: u32) -> Result<(), String>
     Ok(())
 }
 
+fn focus_app_for_input(
+    automation: &UIAutomation,
+    window: &UIElement,
+    pid: u32,
+) -> Result<(), String> {
+    ensure_focus_not_password(automation)?;
+    let focused = automation
+        .get_focused_element()
+        .map_err(|error| format!("uia_failed: {error}"))?;
+    if focused.get_process_id().unwrap_or(0) != pid {
+        window
+            .set_focus()
+            .map_err(|error| format!("focus_failed: {error}"))?;
+        ensure_focused_app(automation, pid)?;
+        ensure_focus_not_password(automation)?;
+    }
+    Ok(())
+}
+
+fn element_click_point(element: &UIElement) -> Result<Point, String> {
+    let rect = element
+        .get_bounding_rectangle()
+        .map_err(|error| format!("click_failed: {error}"))?;
+    let center = Point::new(
+        (rect.get_left() + rect.get_right()) / 2,
+        (rect.get_top() + rect.get_bottom()) / 2,
+    );
+    let inside = |x: i32, y: i32| {
+        x >= rect.get_left()
+            && x <= rect.get_right()
+            && y >= rect.get_top()
+            && y <= rect.get_bottom()
+    };
+    match element.get_clickable_point() {
+        Ok(Some(point)) if inside(point.get_x(), point.get_y()) => Ok(point),
+        _ => Ok(center),
+    }
+}
+
+fn require_point_matches_element(
+    automation: &UIAutomation,
+    point: Point,
+    element: &UIElement,
+    info: &WindowInfo,
+) -> Result<(), String> {
+    let expected = element
+        .get_bounding_rectangle()
+        .map_err(|error| format!("uia_failed: {error}"))?;
+    let hit = automation
+        .element_from_point(point)
+        .map_err(|error| format!("uia_failed: {error}"))?;
+    if hit.get_process_id().unwrap_or(0) != info.pid {
+        return Err("not_foreground: the click point is covered by another app".to_string());
+    }
+    let Ok(actual) = hit.get_bounding_rectangle() else {
+        return Ok(());
+    };
+    let inside = actual.get_left() >= expected.get_left() - 1
+        && actual.get_top() >= expected.get_top() - 1
+        && actual.get_right() <= expected.get_right() + 1
+        && actual.get_bottom() <= expected.get_bottom() + 1;
+    if inside {
+        return Ok(());
+    }
+    Err(format!(
+        "click_target_mismatch: point ({}, {}) resolves outside the observed element; expected {:?} got {:?}",
+        point.get_x(),
+        point.get_y(),
+        (
+            expected.get_left(),
+            expected.get_top(),
+            expected.get_right(),
+            expected.get_bottom()
+        ),
+        (
+            actual.get_left(),
+            actual.get_top(),
+            actual.get_right(),
+            actual.get_bottom()
+        )
+    ))
+}
+
 fn require_point_in_app(automation: &UIAutomation, point: Point, pid: u32) -> Result<(), String> {
     let element = automation
         .element_from_point(point)
@@ -2028,7 +2429,7 @@ fn require_point_in_app(automation: &UIAutomation, point: Point, pid: u32) -> Re
 
 fn ensure_point_not_password(automation: &UIAutomation, point: Point) -> Result<(), String> {
     if let Ok(element) = automation.element_from_point(point)
-        && element.is_password().unwrap_or(false)
+        && element_looks_like_password(&element)
     {
         return Err("password_field: the point is inside a password field".to_string());
     }
@@ -2126,8 +2527,221 @@ fn mouse_wheel(point: Point, horizontal: bool, delta: i32) -> Result<(), String>
     Ok(())
 }
 
-fn capture_element(element: &UIElement, _info: &WindowInfo) -> Result<Screenshot, String> {
-    Screenshot::capture_element(element).map_err(|error| format!("screenshot_failed: {error}"))
+fn capture_element(element: &UIElement, info: &WindowInfo) -> Result<Screenshot, String> {
+    let rect = element
+        .get_bounding_rectangle()
+        .map_err(|error| format!("screenshot_failed: {error}"))?;
+    let target = RectInfo {
+        left: rect.get_left(),
+        top: rect.get_top(),
+        right: rect.get_right(),
+        bottom: rect.get_bottom(),
+    };
+    let window = RectInfo {
+        left: info.rect.left,
+        top: info.rect.top,
+        right: info.rect.right,
+        bottom: info.rect.bottom,
+    };
+    let shot = capture_window(info.hwnd, window)?;
+    if target.left == window.left
+        && target.top == window.top
+        && target.right == window.right
+        && target.bottom == window.bottom
+    {
+        return Ok(shot);
+    }
+    let x = target.left - window.left;
+    let y = target.top - window.top;
+    crop(
+        shot,
+        x.max(0) as u32,
+        y.max(0) as u32,
+        target.width().max(1) as u32,
+        target.height().max(1) as u32,
+    )
+}
+
+fn raise_window(hwnd: isize) {
+    if hwnd == 0 || is_foreground(hwnd) {
+        return;
+    }
+    unsafe {
+        if IsIconic(hwnd as *mut std::ffi::c_void) != 0 {
+            ShowWindow(hwnd as *mut std::ffi::c_void, SW_RESTORE);
+        }
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, std::ptr::null_mut())
+        };
+        let current = GetCurrentThreadId();
+        let attached = foreground_thread != 0 && foreground_thread != current;
+        if attached {
+            AttachThreadInput(current, foreground_thread, 1);
+        }
+        let _ = BringWindowToTop(hwnd as *mut std::ffi::c_void);
+        let _ = SetForegroundWindow(hwnd as *mut std::ffi::c_void);
+        let _ = SetFocus(hwnd as *mut std::ffi::c_void);
+        if attached {
+            AttachThreadInput(current, foreground_thread, 0);
+        }
+    }
+}
+
+fn window_rect(hwnd: isize) -> Option<RectInfo> {
+    if hwnd == 0 {
+        return None;
+    }
+    let mut rect = std::mem::MaybeUninit::uninit();
+    let valid = unsafe { GetWindowRect(hwnd as *mut std::ffi::c_void, rect.as_mut_ptr()) } != 0;
+    if !valid {
+        return None;
+    }
+    let rect = unsafe { rect.assume_init() };
+    let info = RectInfo {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    };
+    (info.width() > 0 && info.height() > 0).then_some(info)
+}
+
+fn is_foreground(hwnd: isize) -> bool {
+    hwnd != 0 && unsafe { GetForegroundWindow() == hwnd as *mut std::ffi::c_void }
+}
+
+fn require_window_foreground(info: &WindowInfo) -> Result<(), String> {
+    if is_foreground(info.hwnd) {
+        return Ok(());
+    }
+    Err(format!(
+        "not_foreground: {} is behind another window, so a screen click would land elsewhere; bring it forward and retry",
+        info.title
+    ))
+}
+
+fn capture_window(hwnd: isize, rect: RectInfo) -> Result<Screenshot, String> {
+    if rect.width() <= 0 || rect.height() <= 0 {
+        return Err("screenshot_failed: window has no visible area".to_string());
+    }
+    if let Some(actual) = window_rect(hwnd) {
+        if is_foreground(hwnd)
+            && let Ok(shot) = Screenshot::capture_rect(uiautomation::types::Rect::new(
+                actual.left,
+                actual.top,
+                actual.right,
+                actual.bottom,
+            ))
+        {
+            return Ok(shot);
+        }
+        if let Ok(shot) = print_window(hwnd, actual.width(), actual.height()) {
+            return Ok(flip_rows(shot));
+        }
+    }
+    Screenshot::capture_rect(uiautomation::types::Rect::new(
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+    ))
+    .map_err(|error| format!("screenshot_failed: {error}"))
+}
+
+fn print_window(hwnd: isize, width: i32, height: i32) -> Result<Screenshot, String> {
+    unsafe {
+        let screen = GetDC(std::ptr::null_mut());
+        if screen.is_null() {
+            return Err("screenshot_failed: no screen dc".to_string());
+        }
+        let memory = CreateCompatibleDC(screen);
+        if memory.is_null() {
+            ReleaseDC(std::ptr::null_mut(), screen);
+            return Err("screenshot_failed: no memory dc".to_string());
+        }
+        let bitmap = CreateCompatibleBitmap(screen, width, height);
+        if bitmap.is_null() {
+            DeleteDC(memory);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            return Err("screenshot_failed: no bitmap".to_string());
+        }
+        let previous: HGDIOBJ = SelectObject(memory, bitmap);
+        let printed = PrintWindow(hwnd as *mut std::ffi::c_void, memory, PW_RENDERFULLCONTENT);
+        let header = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        };
+        let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
+        let mut info = BITMAPINFO {
+            bmiHeader: header,
+            bmiColors: [Default::default(); 1],
+        };
+        let copied = if printed != 0 {
+            GetDIBits(
+                memory,
+                bitmap,
+                0,
+                height as u32,
+                pixels.as_mut_ptr().cast(),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        } else {
+            0
+        };
+        SelectObject(memory, previous);
+        DeleteObject(bitmap);
+        DeleteDC(memory);
+        ReleaseDC(std::ptr::null_mut(), screen);
+        if copied == 0 {
+            return Err("screenshot_failed: PrintWindow returned no pixels".to_string());
+        }
+        Ok(Screenshot::new(pixels, width as u32, height as u32))
+    }
+}
+
+fn flip_rows(shot: Screenshot) -> Screenshot {
+    let width = shot.width() as usize;
+    let height = shot.height() as usize;
+    let pixels = shot.pixels();
+    let row = width * 4;
+    let mut out = vec![0u8; pixels.len()];
+    for y in 0..height {
+        let from = (height - 1 - y) * row;
+        let to = y * row;
+        out[to..to + row].copy_from_slice(&pixels[from..from + row]);
+    }
+    Screenshot::new(out, shot.width(), shot.height())
+}
+
+fn crop(shot: Screenshot, x: u32, y: u32, width: u32, height: u32) -> Result<Screenshot, String> {
+    let source_width = shot.width();
+    let source_height = shot.height();
+    let width = width.min(source_width.saturating_sub(x));
+    let height = height.min(source_height.saturating_sub(y));
+    if width == 0 || height == 0 {
+        return Ok(shot);
+    }
+    let pixels = shot.pixels();
+    let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
+    for row in 0..height as usize {
+        let from = ((y as usize + row) * source_width as usize + x as usize) * 4;
+        let to = row * width as usize * 4;
+        out[to..to + width as usize * 4].copy_from_slice(&pixels[from..from + width as usize * 4]);
+    }
+    Ok(Screenshot::new(out, width, height))
 }
 
 fn encode_png(shot: &Screenshot) -> Result<(String, u32, u32), String> {
@@ -2196,8 +2810,10 @@ fn truncate(value: &str, max: usize) -> String {
 struct Snapshot {
     created: Instant,
     pid: u32,
+    hwnd: isize,
     window_title: String,
     window_class: String,
+    has_document: bool,
     elements: HashMap<String, ElementRef>,
 }
 
@@ -2241,6 +2857,7 @@ impl SnapshotStore {
 #[derive(Clone)]
 struct WindowInfo {
     pid: u32,
+    hwnd: isize,
     exe: String,
     name: String,
     title: String,
@@ -2341,8 +2958,11 @@ struct ElementArgs {
 #[serde(deny_unknown_fields)]
 struct ClickArgs {
     app: Option<String>,
-    snapshot: String,
-    element: String,
+    window: Option<String>,
+    snapshot: Option<String>,
+    element: Option<String>,
+    x: Option<i32>,
+    y: Option<i32>,
     button: Option<String>,
     double: Option<bool>,
 }
@@ -2354,6 +2974,7 @@ struct TypeTextArgs {
     snapshot: Option<String>,
     element: Option<String>,
     text: String,
+    confirm: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -2464,6 +3085,17 @@ mod tests {
     }
 
     #[test]
+    fn password_labels_are_detected() {
+        assert!(password_label("Password"));
+        assert!(password_label("Enter your passwd"));
+        assert!(password_label("pwd"));
+        assert!(password_label("Passcode"));
+        assert!(password_label("client secret"));
+        assert!(!password_label("Search"));
+        assert!(!password_label("Email"));
+    }
+
+    #[test]
     fn policy_requires_an_exact_app_match() {
         let config = ComputerUseConfig {
             allow: vec![crate::computer_use::AppPolicy {
@@ -2476,6 +3108,7 @@ mod tests {
         };
         let info = WindowInfo {
             pid: 7,
+            hwnd: 0,
             exe: "C:\\Windows\\System32\\notepad.exe".to_string(),
             name: "notepad.exe".to_string(),
             title: "Untitled - Notepad".to_string(),
