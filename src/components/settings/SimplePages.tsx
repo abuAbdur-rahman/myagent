@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  Info,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -168,6 +169,7 @@ const MCP_PRESETS: McpPreset[] = [
 ];
 
 type McpDecision = "ask" | "allow" | "block";
+type McpDetailsTab = "tools" | "logs" | "config" | "about";
 
 interface McpPolicy {
   ask: string[];
@@ -220,6 +222,13 @@ const MCP_DECISIONS: { value: McpDecision; label: string }[] = [
   { value: "ask", label: "Ask" },
   { value: "allow", label: "Allow" },
   { value: "block", label: "Block" },
+];
+
+const MCP_DETAIL_TABS: { value: McpDetailsTab; label: string }[] = [
+  { value: "tools", label: "Tools" },
+  { value: "logs", label: "Logs" },
+  { value: "config", label: "Config" },
+  { value: "about", label: "About" },
 ];
 
 const MCP_COMMAND_HINT = "Run on this machine. A missing binary shows as Failed until it starts.";
@@ -333,7 +342,8 @@ function mcpAllowedCount(server: api.McpServerRow, tools: api.McpToolInfo[]): nu
 }
 
 function mcpProbeError(probe: api.McpProbe | undefined): string {
-  return probe?.error || "Could not connect.";
+  const error = probe?.error || "Could not connect.";
+  return probe?.next_action ? `${error} ${probe.next_action}` : error;
 }
 
 function mcpNameFormatError(name: string): string | null {
@@ -385,10 +395,24 @@ function mcpAuthBlocked(
 function mcpProbeState(probe: api.McpProbe | undefined, probing: boolean): McpState {
   if (probing) return { tone: "accent", label: "Connecting" };
   if (!probe) return { tone: "neutral", label: "Not checked" };
-  if (probe.status === "needs_review") return { tone: "warn", label: "Review needed" };
-  return probe.status === "connected"
-    ? { tone: "success", label: "Connected" }
-    : { tone: "danger", label: "Failed" };
+  switch (probe.status) {
+    case "connected":
+      return { tone: "success", label: "Connected" };
+    case "needs_review":
+      return { tone: "warn", label: "Review needed" };
+    case "needs_auth":
+      return { tone: "warn", label: "Sign in" };
+    case "starting":
+      return { tone: "accent", label: "Starting" };
+    case "busy":
+      return { tone: "accent", label: "Busy" };
+    case "stopped":
+      return { tone: "neutral", label: "Stopped" };
+    case "disabled":
+      return { tone: "neutral", label: "Off" };
+    default:
+      return { tone: "danger", label: "Failed" };
+  }
 }
 
 function mcpStatus(
@@ -646,6 +670,7 @@ function mcpServerMenu(
   server: api.McpServerRow,
   probing: boolean,
   handlers: {
+    onDetails: (server: api.McpServerRow) => void;
     onEdit: (server: api.McpServerRow) => void;
     onRemove: (server: api.McpServerRow) => void;
     onReconnect: (id: string) => void;
@@ -653,6 +678,12 @@ function mcpServerMenu(
   },
 ): MenuEntry[] {
   return [
+    {
+      id: "details",
+      label: "Details",
+      icon: <Info size={15} />,
+      onSelect: () => handlers.onDetails(server),
+    },
     {
       id: "edit",
       label: "Edit",
@@ -723,6 +754,7 @@ function McpServerCard({
   probe,
   probing,
   onToggle,
+  onDetails,
   onEdit,
   onRemove,
   onReconnect,
@@ -736,6 +768,7 @@ function McpServerCard({
   probe: api.McpProbe | undefined;
   probing: boolean;
   onToggle: (id: string, enabled: boolean) => void;
+  onDetails: (server: api.McpServerRow) => void;
   onEdit: (server: api.McpServerRow) => void;
   onRemove: (server: api.McpServerRow) => void;
   onReconnect: (id: string) => void;
@@ -747,7 +780,13 @@ function McpServerCard({
   const [open, setOpen] = useState(false);
   const tools = mcpServerTools(probe);
   const state = mcpStatus(server, probe, probing);
-  const menu = mcpServerMenu(server, probing, { onEdit, onRemove, onReconnect, onLogs });
+  const menu = mcpServerMenu(server, probing, {
+    onDetails,
+    onEdit,
+    onRemove,
+    onReconnect,
+    onLogs,
+  });
 
   return (
     <div
@@ -1745,6 +1784,186 @@ export function GeneralPage() {
   );
 }
 
+function McpDetailsDialog({
+  server,
+  probe,
+  probing,
+  onClose,
+  onReconnect,
+  onApprove,
+  onDecision,
+}: {
+  server: api.McpServerRow | null;
+  probe: api.McpProbe | undefined;
+  probing: boolean;
+  onClose: () => void;
+  onReconnect: (id: string) => void;
+  onApprove: (id: string) => void;
+  onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
+}) {
+  const [tab, setTab] = useState<McpDetailsTab>("tools");
+  const [config, setConfig] = useState<api.McpConfig | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[] | null>(null);
+  const [logsLoading, setLogsLoading] = useState(false);
+
+  useEffect(() => {
+    setTab("tools");
+    setConfig(null);
+    setConfigError(null);
+    setLogs(null);
+    setLogsLoading(false);
+    if (!server) return;
+    let active = true;
+    void api
+      .mcpConfig(server.id)
+      .then((value) => {
+        if (active) setConfig(value);
+      })
+      .catch((error) => {
+        if (active) setConfigError(errorText(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [server]);
+
+  useEffect(() => {
+    if (!server || tab !== "logs" || logs !== null || logsLoading) return;
+    let active = true;
+    setLogsLoading(true);
+    void api
+      .mcpLogs(server.id)
+      .then((value) => {
+        if (active) setLogs(value);
+      })
+      .catch((error) => {
+        if (active) {
+          toast(errorText(error));
+          setLogs([]);
+        }
+      })
+      .finally(() => {
+        if (active) setLogsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [server, tab, logs, logsLoading]);
+
+  const tools = mcpServerTools(probe);
+  const state = server ? mcpStatus(server, probe, probing) : null;
+  const target = server ? mcpTargetText(server) : null;
+  const ttl = probe?.tools_ttl_ms;
+
+  return (
+    <Dialog
+      open={server !== null}
+      onClose={onClose}
+      title={server ? "Server · " + server.name : "Server"}
+    >
+      {server && (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {state && <Pill tone={state.tone}>{state.label}</Pill>}
+            <Badge>{server.transport}</Badge>
+            {probe?.protocol_version && <Badge>MCP {probe.protocol_version}</Badge>}
+          </div>
+          <Segmented<McpDetailsTab>
+            value={tab}
+            options={MCP_DETAIL_TABS}
+            onChange={setTab}
+            label={server.name + " details"}
+          />
+          {tab === "tools" && (
+            <McpToolList
+              server={server}
+              tools={tools}
+              probing={probing}
+              onReconnect={onReconnect}
+              onDecision={onDecision}
+            />
+          )}
+          {tab === "logs" && (
+            <div className="flex flex-col gap-2">
+              <p className="m-0 text-xs text-muted">
+                Bounded stderr from the last run. This is process output, not a redacted audit log.
+              </p>
+              <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-card border border-border bg-surface p-3 font-mono text-xs">
+                {logsLoading
+                  ? "Loading…"
+                  : logs && logs.length > 0
+                    ? logs.join("\n")
+                    : "No log lines yet."}
+              </pre>
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={logsLoading}
+                  onClick={() => setLogs(null)}
+                >
+                  <RefreshCw size={14} />
+                  Refresh
+                </Button>
+              </div>
+            </div>
+          )}
+          {tab === "config" &&
+            (configError ? (
+              <p className="text-xs text-danger">{configError}</p>
+            ) : (
+              <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-card border border-border bg-surface p-3 font-mono text-xs">
+                {config ? JSON.stringify(config, null, 2) : "Loading…"}
+              </pre>
+            ))}
+          {tab === "about" && (
+            <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-xs">
+              <dt className="text-muted">Target</dt>
+              <dd className="min-w-0 break-all font-mono">{target?.text}</dd>
+              <dt className="text-muted">Auth</dt>
+              <dd>{server.auth_type}</dd>
+              <dt className="text-muted">Timeout</dt>
+              <dd>{server.timeout_ms ? server.timeout_ms + " ms" : "Default"}</dd>
+              <dt className="text-muted">Protocol</dt>
+              <dd>{probe?.protocol_version ?? "Unknown"}</dd>
+              <dt className="text-muted">Tool cache</dt>
+              <dd>
+                {ttl != null
+                  ? ttl + " ms · " + (probe?.tools_cache_scope ?? "default")
+                  : "No cache hint"}
+              </dd>
+              <dt className="text-muted">Tools</dt>
+              <dd>{tools.length}</dd>
+              {probe?.error && (
+                <>
+                  <dt className="text-muted">Last error</dt>
+                  <dd className="text-danger">{mcpProbeError(probe)}</dd>
+                </>
+              )}
+            </dl>
+          )}
+          <div className="flex justify-end gap-2">
+            {state?.label === "Review needed" && (
+              <Button size="sm" onClick={() => onApprove(server.id)}>
+                Approve tools
+              </Button>
+            )}
+            {state?.label === "Failed" && (
+              <Button size="sm" variant="ghost" onClick={() => onReconnect(server.id)}>
+                Try again
+              </Button>
+            )}
+            <Button size="sm" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 function McpLogsDialog({
   server,
   logs,
@@ -1791,6 +2010,7 @@ export function McpPage() {
   const { servers, probes, probing, status, run, reconnect, refresh } = useMcpServers(projectId);
   const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
   const [importing, setImporting] = useState(false);
+  const [detailsFor, setDetailsFor] = useState<api.McpServerRow | null>(null);
   const [logsFor, setLogsFor] = useState<api.McpServerRow | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
@@ -1803,6 +2023,13 @@ export function McpPage() {
       const fresh = servers.find((server) => server.id === id);
       if (!fresh || fresh === current.editing) return current;
       return { ...current, editing: fresh };
+    });
+  }, [servers]);
+
+  useEffect(() => {
+    setDetailsFor((current) => {
+      if (!current) return current;
+      return servers.find((server) => server.id === current.id) ?? null;
     });
   }, [servers]);
 
@@ -1873,6 +2100,9 @@ export function McpPage() {
     void run(() => api.mcpSetPolicy(server.id, policy.ask, policy.allow, policy.deny));
   };
 
+  const approve = (id: string) =>
+    void run(() => api.mcpApproveTools(id), "Tool definitions approved");
+
   const close = () => setDialog(CLOSED_MCP_DIALOG);
 
   const summary = mcpSummary(servers, probes);
@@ -1929,13 +2159,12 @@ export function McpPage() {
                   enabled ? "Server enabled" : "Server disabled",
                 )
               }
+              onDetails={setDetailsFor}
               onEdit={(target) => setDialog({ open: true, editing: target, seed: null })}
               onRemove={(target) => void remove(target)}
               onReconnect={reconnect}
               onLogs={(target) => void openLogs(target)}
-              onApprove={(id) =>
-                void run(() => api.mcpApproveTools(id), "Tool definitions approved")
-              }
+              onApprove={approve}
               onDecision={decide}
               onApproval={(id, mode) => void run(() => api.mcpSetApproval(id, mode))}
             />
@@ -1964,6 +2193,15 @@ export function McpPage() {
         onRefresh={() => {
           if (logsFor) void openLogs(logsFor);
         }}
+      />
+      <McpDetailsDialog
+        server={detailsFor}
+        probe={detailsFor ? probes[detailsFor.id] : undefined}
+        probing={detailsFor ? probing[detailsFor.id] === true : false}
+        onClose={() => setDetailsFor(null)}
+        onReconnect={reconnect}
+        onApprove={approve}
+        onDecision={decide}
       />
     </div>
   );

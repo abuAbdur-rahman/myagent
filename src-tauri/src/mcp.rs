@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rmcp::ClientHandler;
-use rmcp::model::{CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion};
+use rmcp::model::{
+    CacheScope, CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion,
+};
 use rmcp::service::{
     ClientLifecycleMode, ClientServiceExt, NotificationContext, RoleClient, RunningService,
 };
@@ -532,6 +534,75 @@ mod tests {
             vec![r"C:\Program Files\srv.exe", "--port", "1"]
         );
         assert_eq!(split_command("  "), Vec::<String>::new());
+    }
+
+    #[test]
+    fn classifies_connection_errors() {
+        assert_eq!(
+            classify_mcp_error("spawn failed: not found"),
+            McpErrorKind::SpawnFailed
+        );
+        assert_eq!(
+            classify_mcp_error("initialize timeout"),
+            McpErrorKind::HandshakeTimeout
+        );
+        assert_eq!(
+            classify_mcp_error("bearer token is not set"),
+            McpErrorKind::AuthRequired
+        );
+        assert_eq!(
+            classify_mcp_error("stored token expired"),
+            McpErrorKind::AuthExpired
+        );
+        assert_eq!(
+            classify_mcp_error("mcp url rejected: bad"),
+            McpErrorKind::InvalidConfig
+        );
+        assert_eq!(
+            classify_mcp_error("something else"),
+            McpErrorKind::ConnectionFailed
+        );
+    }
+
+    #[test]
+    fn failed_probe_carries_kind_and_next_action() {
+        let probe = probe_failed("srv", "bearer token is not set".to_string());
+        assert_eq!(probe.status, "needs_auth");
+        assert_eq!(probe.phase, "needs_auth");
+        assert_eq!(probe.error_kind.as_deref(), Some("auth_required"));
+        assert!(probe.next_action.is_some());
+
+        let invalid = probe_failed("srv", "mcp url rejected: bad".to_string());
+        assert_eq!(invalid.status, "failed");
+        assert_eq!(invalid.phase, "failed");
+        assert_eq!(invalid.error_kind.as_deref(), Some("invalid_config"));
+    }
+
+    #[test]
+    fn server_phase_tracks_transitions() {
+        let state = McpState::default();
+        assert_eq!(state.phase("srv"), None);
+        state.set_phase("srv", ServerPhase::Starting);
+        assert_eq!(state.phase("srv"), Some(ServerPhase::Starting));
+        state.set_phase("srv", ServerPhase::Ready);
+        assert_eq!(state.phase("srv"), Some(ServerPhase::Ready));
+        state.clear_phase("srv");
+        assert_eq!(state.phase("srv"), None);
+    }
+
+    #[test]
+    fn cache_hints_control_tool_refresh() {
+        assert!(tools_cache_expired(Some(0), Duration::ZERO));
+        assert!(!tools_cache_expired(Some(60_000), Duration::from_secs(30)));
+        assert!(tools_cache_expired(Some(60_000), Duration::from_secs(60)));
+        assert!(!tools_cache_expired(None, Duration::from_secs(60)));
+        assert!(tools_cache_expired(None, Duration::from_secs(301)));
+    }
+
+    #[test]
+    fn cache_scope_names_are_stable() {
+        assert_eq!(cache_scope_name(CacheScope::Public), "public");
+        assert_eq!(cache_scope_name(CacheScope::Private), "private");
     }
 
     #[cfg(windows)]
@@ -1564,7 +1635,9 @@ pub async fn mcp_remove(app: AppHandle, id: String) -> Result<(), String> {
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
-    forget_probe(&app.state::<McpState>(), &id);
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    state.clear_phase(&id);
     clear_logs(&id);
     Ok(())
 }
@@ -1580,7 +1653,19 @@ pub async fn mcp_toggle(app: AppHandle, id: String, enabled: bool) -> Result<(),
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
-    forget_probe(&app.state::<McpState>(), &id);
+    let state = app.state::<McpState>();
+    forget_probe(&state, &id);
+    let row = server_row(&pool, &id).await?;
+    let key = McpState::key(&McpServerConfig::from(&row));
+    state.sessions.lock().await.remove(&key);
+    state.set_phase(
+        &id,
+        if enabled {
+            ServerPhase::Stopped
+        } else {
+            ServerPhase::Disabled
+        },
+    );
     Ok(())
 }
 
@@ -1607,6 +1692,7 @@ pub async fn mcp_set_token(
     forget_probe(&state, &id);
     let key = McpState::key(&McpServerConfig::from(&row));
     state.sessions.lock().await.remove(&key);
+    state.set_phase(&id, ServerPhase::Stopped);
     Ok(row)
 }
 
@@ -1626,6 +1712,7 @@ pub async fn mcp_delete_token(app: AppHandle, id: String) -> Result<McpServerRow
     forget_probe(&state, &id);
     let key = McpState::key(&McpServerConfig::from(&row));
     state.sessions.lock().await.remove(&key);
+    state.set_phase(&id, ServerPhase::Stopped);
     Ok(row)
 }
 
@@ -1687,6 +1774,7 @@ pub async fn mcp_disconnect(app: AppHandle, id: String) -> Result<McpServerRow, 
     forget_probe(&state, &id);
     let key = McpState::key(&McpServerConfig::from(&row));
     state.sessions.lock().await.remove(&key);
+    state.set_phase(&id, ServerPhase::Stopped);
     Ok(row)
 }
 
@@ -1983,6 +2071,14 @@ async fn save_server(app: AppHandle, input: SaveServerInput) -> Result<McpServer
         let row = server_row(&pool, &id).await?;
         let key = McpState::key(&McpServerConfig::from(&row));
         state.sessions.lock().await.remove(&key);
+        state.set_phase(
+            &id,
+            if row.enabled {
+                ServerPhase::Stopped
+            } else {
+                ServerPhase::Disabled
+            },
+        );
         return Ok(row);
     }
 
@@ -2014,7 +2110,16 @@ async fn save_server(app: AppHandle, input: SaveServerInput) -> Result<McpServer
     .execute(&pool)
     .await
     .map_err(|e| e.to_string())?;
-    server_row(&pool, &id).await
+    let row = server_row(&pool, &id).await?;
+    app.state::<McpState>().set_phase(
+        &id,
+        if enabled {
+            ServerPhase::Stopped
+        } else {
+            ServerPhase::Disabled
+        },
+    );
+    Ok(row)
 }
 
 fn portable_name(raw: &str) -> String {
@@ -2308,6 +2413,37 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
     let config = McpServerConfig::from(&row);
     let key = McpState::key(&config);
     state.sessions.lock().await.remove(&key);
+    if !row.enabled {
+        let report = McpProbe {
+            id: id.clone(),
+            status: ServerPhase::Disabled.as_str().to_string(),
+            phase: ServerPhase::Disabled.as_str().to_string(),
+            error: None,
+            error_kind: None,
+            next_action: None,
+            protocol_version: None,
+            tools_ttl_ms: None,
+            tools_cache_scope: None,
+            tools: Vec::new(),
+        };
+        cache_probe(&state, report.clone());
+        return Ok(report);
+    }
+    cache_probe(
+        &state,
+        McpProbe {
+            id: id.clone(),
+            status: ServerPhase::Starting.as_str().to_string(),
+            phase: ServerPhase::Starting.as_str().to_string(),
+            error: None,
+            error_kind: None,
+            next_action: None,
+            protocol_version: None,
+            tools_ttl_ms: None,
+            tools_cache_scope: None,
+            tools: Vec::new(),
+        },
+    );
     let report = match connect_once(&config).await {
         Ok(mut session) => {
             persist_initial_tool_hash(&app, &id, &mut session).await;
@@ -2356,6 +2492,7 @@ pub async fn mcp_approve_tools(app: AppHandle, id: String) -> Result<McpServerRo
         session.needs_review = false;
         session.config.tool_hash = Some(hash);
     }
+    state.set_phase(&id, ServerPhase::Ready);
     forget_probe(&state, &id);
     if let Err(error) = mcp_probe(app.clone(), id.clone()).await {
         eprintln!("mcp: post-approval probe failed: {error}");
@@ -2417,7 +2554,7 @@ pub async fn mcp_test_config(
         _enabled: true,
     };
     match connect_once(&config).await {
-        Ok(session) => Ok(probe_connected("draft", &session.tools)),
+        Ok(session) => Ok(probe_connected("draft", &session)),
         Err(error) => Ok(probe_failed("draft", error)),
     }
 }
@@ -2495,6 +2632,9 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
         timeouts: 0,
         tools_dirty,
         tools_checked: Instant::now(),
+        protocol_version: None,
+        tools_ttl_ms: None,
+        tools_cache_scope: None,
     };
     if let Err(error) = initialize_session(&mut session).await {
         if config.auth_type == "oauth" && looks_like_auth_error(&error) {
@@ -2613,6 +2753,9 @@ struct Session {
     timeouts: u32,
     tools_dirty: Option<Arc<AtomicBool>>,
     tools_checked: Instant,
+    protocol_version: Option<String>,
+    tools_ttl_ms: Option<u64>,
+    tools_cache_scope: Option<String>,
 }
 
 enum McpTransport {
@@ -2712,6 +2855,21 @@ impl LegacySseParser {
     }
 }
 
+fn cache_scope_name(scope: CacheScope) -> String {
+    match scope {
+        CacheScope::Public => "public".to_string(),
+        CacheScope::Private => "private".to_string(),
+        _ => "private".to_string(),
+    }
+}
+
+fn tools_cache_expired(ttl_ms: Option<u64>, elapsed: Duration) -> bool {
+    match ttl_ms {
+        Some(ttl_ms) => elapsed >= Duration::from_millis(ttl_ms),
+        None => elapsed >= TOOL_REFRESH_INTERVAL,
+    }
+}
+
 impl Session {
     fn timeout(&self) -> Duration {
         Duration::from_millis(
@@ -2741,7 +2899,10 @@ impl Session {
             .tools_dirty
             .as_ref()
             .is_some_and(|flag| flag.swap(false, Ordering::Relaxed));
-        dirty || self.tools_checked.elapsed() >= TOOL_REFRESH_INTERVAL
+        if dirty {
+            return true;
+        }
+        tools_cache_expired(self.tools_ttl_ms, self.tools_checked.elapsed())
     }
 }
 
@@ -2758,29 +2919,183 @@ pub struct McpToolInfo {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServerPhase {
+    Disabled,
+    Starting,
+    Ready,
+    Busy,
+    NeedsAuth,
+    NeedsReview,
+    Failed,
+    Stopped,
+}
+
+impl ServerPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Busy => "busy",
+            Self::NeedsAuth => "needs_auth",
+            Self::NeedsReview => "needs_review",
+            Self::Failed => "failed",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    fn from_status(status: &str) -> Option<Self> {
+        match status {
+            "disabled" => Some(Self::Disabled),
+            "starting" => Some(Self::Starting),
+            "connected" | "ready" => Some(Self::Ready),
+            "busy" => Some(Self::Busy),
+            "needs_auth" => Some(Self::NeedsAuth),
+            "needs_review" => Some(Self::NeedsReview),
+            "failed" => Some(Self::Failed),
+            "stopped" => Some(Self::Stopped),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpErrorKind {
+    InvalidConfig,
+    SpawnFailed,
+    HandshakeTimeout,
+    AuthRequired,
+    AuthExpired,
+    ToolReviewRequired,
+    ProtocolUnsupported,
+    ConnectionFailed,
+}
+
+impl McpErrorKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidConfig => "invalid_config",
+            Self::SpawnFailed => "spawn_failed",
+            Self::HandshakeTimeout => "handshake_timeout",
+            Self::AuthRequired => "auth_required",
+            Self::AuthExpired => "auth_expired",
+            Self::ToolReviewRequired => "tool_review_required",
+            Self::ProtocolUnsupported => "protocol_unsupported",
+            Self::ConnectionFailed => "connection_failed",
+        }
+    }
+
+    fn next_action(self) -> &'static str {
+        match self {
+            Self::InvalidConfig => "Fix the server command, URL or auth settings.",
+            Self::SpawnFailed => "Check the command, working directory and PATH, then test again.",
+            Self::HandshakeTimeout => "Check that the server starts and responds, then retry.",
+            Self::AuthRequired => "Set the token or sign in, then test again.",
+            Self::AuthExpired => "Sign in again, then test again.",
+            Self::ToolReviewRequired => "Review the new tools and approve them.",
+            Self::ProtocolUnsupported => "Update the server or choose a compatible protocol.",
+            Self::ConnectionFailed => "Check the server and logs, then retry.",
+        }
+    }
+
+    fn status(self) -> &'static str {
+        match self {
+            Self::AuthRequired | Self::AuthExpired => "needs_auth",
+            Self::ToolReviewRequired => "needs_review",
+            _ => "failed",
+        }
+    }
+
+    fn phase(self) -> ServerPhase {
+        match self {
+            Self::AuthRequired | Self::AuthExpired => ServerPhase::NeedsAuth,
+            Self::ToolReviewRequired => ServerPhase::NeedsReview,
+            _ => ServerPhase::Failed,
+        }
+    }
+}
+
+fn classify_mcp_error(error: &str) -> McpErrorKind {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("tool definitions changed") {
+        McpErrorKind::ToolReviewRequired
+    } else if lower.contains("unsupported auth type")
+        || lower.contains("oauth requires")
+        || lower.contains("stdio servers do not")
+    {
+        McpErrorKind::InvalidConfig
+    } else if lower.contains("auth")
+        || lower.contains("token")
+        || lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("oauth")
+    {
+        if lower.contains("expired") {
+            McpErrorKind::AuthExpired
+        } else {
+            McpErrorKind::AuthRequired
+        }
+    } else if lower.contains("timeout") {
+        McpErrorKind::HandshakeTimeout
+    } else if lower.contains("spawn failed") || lower.contains("missing process id") {
+        McpErrorKind::SpawnFailed
+    } else if lower.contains("protocol") || lower.contains("version") {
+        McpErrorKind::ProtocolUnsupported
+    } else if lower.contains("url rejected")
+        || lower.contains("needs a")
+        || lower.contains("invalid")
+        || lower.contains("unsupported")
+    {
+        McpErrorKind::InvalidConfig
+    } else {
+        McpErrorKind::ConnectionFailed
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct McpProbe {
     pub id: String,
     pub status: String,
+    pub phase: String,
     pub error: Option<String>,
+    pub error_kind: Option<String>,
+    pub next_action: Option<String>,
+    pub protocol_version: Option<String>,
+    pub tools_ttl_ms: Option<u64>,
+    pub tools_cache_scope: Option<String>,
     pub tools: Vec<McpToolInfo>,
 }
 
 fn probe_failed(id: &str, error: String) -> McpProbe {
+    let kind = classify_mcp_error(&error);
     McpProbe {
         id: id.to_string(),
-        status: "failed".to_string(),
+        status: kind.status().to_string(),
+        phase: kind.phase().as_str().to_string(),
         error: Some(error),
+        error_kind: Some(kind.as_str().to_string()),
+        next_action: Some(kind.next_action().to_string()),
+        protocol_version: None,
+        tools_ttl_ms: None,
+        tools_cache_scope: None,
         tools: Vec::new(),
     }
 }
 
-fn probe_connected(id: &str, tools: &[McpToolDef]) -> McpProbe {
+fn probe_connected(id: &str, session: &Session) -> McpProbe {
     McpProbe {
         id: id.to_string(),
         status: "connected".to_string(),
+        phase: ServerPhase::Ready.as_str().to_string(),
         error: None,
-        tools: tools
+        error_kind: None,
+        next_action: None,
+        protocol_version: session.protocol_version.clone(),
+        tools_ttl_ms: session.tools_ttl_ms,
+        tools_cache_scope: session.tools_cache_scope.clone(),
+        tools: session
+            .tools
             .iter()
             .map(|tool| McpToolInfo {
                 name: tool.tool.clone(),
@@ -2817,18 +3132,25 @@ async fn persist_initial_tool_hash(app: &AppHandle, id: &str, session: &mut Sess
 }
 
 fn probe_session(id: &str, session: &Session) -> McpProbe {
-    let mut report = probe_connected(id, &session.tools);
+    let mut report = probe_connected(id, session);
     if session.needs_review {
-        report.status = "needs_review".to_string();
+        let kind = McpErrorKind::ToolReviewRequired;
+        report.status = kind.status().to_string();
+        report.phase = kind.phase().as_str().to_string();
         report.error = Some(
             "Tool definitions changed. Review the new tools and approve them before use."
                 .to_string(),
         );
+        report.error_kind = Some(kind.as_str().to_string());
+        report.next_action = Some(kind.next_action().to_string());
     }
     report
 }
 
 fn cache_probe(state: &McpState, report: McpProbe) {
+    if let Some(phase) = ServerPhase::from_status(&report.status) {
+        state.set_phase(&report.id, phase);
+    }
     if let Ok(mut guard) = state.probes.write() {
         guard.insert(report.id.clone(), report);
     }
@@ -2912,6 +3234,7 @@ pub struct McpState {
     sessions: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Session>>>>,
     catalog: std::sync::RwLock<Vec<CatalogEntry>>,
     probes: std::sync::RwLock<HashMap<String, McpProbe>>,
+    phases: std::sync::RwLock<HashMap<String, ServerPhase>>,
 }
 
 impl McpState {
@@ -2921,6 +3244,23 @@ impl McpState {
             config.project_id.as_deref().unwrap_or(""),
             config.id
         )
+    }
+
+    fn set_phase(&self, id: &str, phase: ServerPhase) {
+        if let Ok(mut guard) = self.phases.write() {
+            guard.insert(id.to_string(), phase);
+        }
+    }
+
+    #[cfg(test)]
+    fn phase(&self, id: &str) -> Option<ServerPhase> {
+        self.phases.read().ok()?.get(id).copied()
+    }
+
+    fn clear_phase(&self, id: &str) {
+        if let Ok(mut guard) = self.phases.write() {
+            guard.remove(id);
+        }
     }
 
     async fn session(&self, key: &str) -> Option<Arc<tokio::sync::Mutex<Session>>> {
@@ -3010,10 +3350,11 @@ async fn list_rmcp_tools(
     client: &RunningService<RoleClient, ToolChangeHandler>,
     server: &str,
     timeout: Duration,
-) -> Result<Vec<McpToolDef>, String> {
+) -> Result<(Vec<McpToolDef>, Option<u64>, Option<CacheScope>), String> {
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen: HashSet<String> = HashSet::new();
+    let mut hints: Option<(Option<u64>, Option<CacheScope>)> = None;
     for _ in 0..MAX_TOOL_PAGES {
         let params = cursor
             .take()
@@ -3022,6 +3363,9 @@ async fn list_rmcp_tools(
             .await
             .map_err(|_| "timeout".to_string())?
             .map_err(|e| e.to_string())?;
+        if hints.is_none() {
+            hints = Some((result.ttl_ms, result.cache_scope));
+        }
         tools.extend(
             result
                 .tools
@@ -3030,7 +3374,10 @@ async fn list_rmcp_tools(
         );
         match result.next_cursor {
             Some(next) if !next.is_empty() && seen.insert(next.clone()) => cursor = Some(next),
-            _ => return Ok(tools),
+            _ => {
+                let (ttl_ms, cache_scope) = hints.unwrap_or((None, None));
+                return Ok((tools, ttl_ms, cache_scope));
+            }
         }
     }
     Err(format!(
@@ -3087,13 +3434,24 @@ fn initialize_body(id: u64) -> Value {
 async fn initialize_session(session: &mut Session) -> Result<(), String> {
     let timeout = session.timeout();
     let name = session.config.name.clone();
-    let tools = match &mut session.transport {
-        McpTransport::Rmcp(client) => list_rmcp_tools(client, &name, timeout).await?,
+    let protocol_version;
+    let (tools, ttl_ms, cache_scope) = match &mut session.transport {
+        McpTransport::Rmcp(client) => {
+            protocol_version = client
+                .peer_info()
+                .map(|info| info.protocol_version.to_string());
+            list_rmcp_tools(client, &name, timeout).await?
+        }
         McpTransport::LegacySse(sse) => {
-            let _ = sse
+            let initialized = sse
                 .request(&initialize_body(1), timeout)
                 .await
                 .map_err(|failure| failure.message)?;
+            protocol_version = initialized
+                .get("result")
+                .and_then(|result| result.get("protocolVersion"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
             sse.notify(
                 &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
                 timeout,
@@ -3107,7 +3465,7 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
                 )
                 .await
                 .map_err(|failure| failure.message)?;
-            parse_tools(&name, &listed)
+            (parse_tools(&name, &listed), None, None)
         }
     };
     let hash = tools_hash(&tools);
@@ -3118,6 +3476,9 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
         .is_some_and(|stored| stored != hash);
     session.tool_hash = Some(hash);
     session.tools = tools;
+    session.protocol_version = protocol_version;
+    session.tools_ttl_ms = ttl_ms;
+    session.tools_cache_scope = cache_scope.map(cache_scope_name);
     session.tools_checked = Instant::now();
     Ok(())
 }
@@ -3569,6 +3930,7 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
         let handle = match existing {
             Some(handle) => handle,
             None => {
+                state.set_phase(&config.id, ServerPhase::Starting);
                 let mut session = match connect_once(config).await {
                     Ok(session) => session,
                     Err(error) => {
@@ -3589,6 +3951,14 @@ pub async fn flush(app: &AppHandle, project: Option<&str>) -> Result<Vec<McpTool
             }
         };
         let mut session = handle.lock().await;
+        state.set_phase(
+            &config.id,
+            if session.needs_review {
+                ServerPhase::NeedsReview
+            } else {
+                ServerPhase::Ready
+            },
+        );
         if session.should_refresh_tools() {
             if let Err(error) = initialize_session(&mut session).await {
                 eprintln!("mcp: initialize {} failed: {error}", session.config.name);
@@ -3619,6 +3989,7 @@ async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> 
         let key = McpState::key(config);
         let handle = state.session(&key).await;
         let Some(handle) = handle else {
+            state.set_phase(&config.id, ServerPhase::Starting);
             match connect_once(config).await {
                 Ok(mut session) => {
                     persist_initial_tool_hash(app, &config.id, &mut session).await;
@@ -3634,11 +4005,21 @@ async fn relist_server(app: &AppHandle, project: Option<&str>, server: &str) -> 
             continue;
         };
         let mut session = handle.lock().await;
+        let server_id = session.config.id.clone();
+        state.set_phase(
+            &server_id,
+            if session.needs_review {
+                ServerPhase::NeedsReview
+            } else {
+                ServerPhase::Ready
+            },
+        );
         if let Err(error) = initialize_session(&mut session).await {
             eprintln!("mcp: re-list {} failed: {error}", session.config.name);
+            cache_probe(&state, probe_failed(&server_id, error));
         } else {
-            persist_initial_tool_hash(app, &config.id, &mut session).await;
-            cache_probe(&state, probe_session(&config.id, &session));
+            persist_initial_tool_hash(app, &server_id, &mut session).await;
+            cache_probe(&state, probe_session(&server_id, &session));
         }
     }
     let (_defs, catalog) = collect_catalog(&state, &configs).await;
@@ -3722,22 +4103,27 @@ pub async fn try_execute(
         return Some(Err(unavailable(name)));
     };
     let mut session = handle.lock().await;
+    let server_id = session.config.id.clone();
     if session.timeouts >= MAX_TIMEOUTS_BEFORE_RESTART {
         drop(session);
         state.sessions.lock().await.remove(&key);
+        state.set_phase(&server_id, ServerPhase::Stopped);
         return Some(Err(unavailable(name)));
     }
+    state.set_phase(&server_id, ServerPhase::Busy);
     let outcome = tokio::select! {
         outcome = call_on_session(&mut session, &tool, &args) => outcome,
         _ = cancel.notified() => {
             drop(session);
             state.sessions.lock().await.remove(&key);
+            state.set_phase(&server_id, ServerPhase::Stopped);
             return Some(Err("cancelled by user".to_string()));
         }
     };
     match outcome {
         Ok(text) => {
             session.timeouts = 0;
+            state.set_phase(&server_id, ServerPhase::Ready);
             Some(Ok(crate::tools::ExecOutput {
                 output: cap_mcp_text(text),
                 artifact: None,
@@ -3754,6 +4140,9 @@ pub async fn try_execute(
                 drop(session);
                 if dead {
                     state.sessions.lock().await.remove(&key);
+                    state.set_phase(&server_id, ServerPhase::Failed);
+                } else {
+                    state.set_phase(&server_id, ServerPhase::Ready);
                 }
                 return Some(Err(timed_out(name)));
             }
@@ -3761,6 +4150,9 @@ pub async fn try_execute(
                 crate::mcp_oauth::force_refresh(&session.config.id);
                 drop(session);
                 state.sessions.lock().await.remove(&key);
+                state.set_phase(&server_id, ServerPhase::NeedsAuth);
+            } else {
+                state.set_phase(&server_id, ServerPhase::Ready);
             }
             Some(Err(message))
         }
