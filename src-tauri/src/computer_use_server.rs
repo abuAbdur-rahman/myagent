@@ -512,9 +512,8 @@ impl ComputerUseServer {
                 return Ok(dry_run_result("click", &info, element_id, &detail));
             }
             self.begin_action(config)?;
-            if raise_window(info.hwnd) {
-                std::thread::sleep(Duration::from_millis(150));
-            }
+            raise_window(info.hwnd);
+            std::thread::sleep(Duration::from_millis(150));
             require_window_foreground(&info)?;
             let point = element_click_point(&element)?;
             require_point_matches_element(&automation, point, &element, &info)?;
@@ -559,18 +558,19 @@ impl ComputerUseServer {
             return Err("invalid_arguments: point must be inside the window".to_string());
         }
         let point = Point::new(x, y);
-        ensure_point_not_password(&automation, point)?;
-        require_point_in_app(&automation, point, info.pid)?;
         if config.dry_run {
+            ensure_point_not_password(&automation, point)?;
+            require_point_in_app(&automation, point, info.pid)?;
             let detail = format!("would click point ({x}, {y}) with {button}");
             audit_action(config, "click", &info, true, &detail, None, None);
             return Ok(dry_run_result("click", &info, &format!("{x},{y}"), &detail));
         }
         self.begin_action(config)?;
-        if raise_window(info.hwnd) {
-            std::thread::sleep(Duration::from_millis(150));
-        }
+        raise_window(info.hwnd);
+        std::thread::sleep(Duration::from_millis(150));
         require_window_foreground(&info)?;
+        ensure_point_not_password(&automation, point)?;
+        require_point_in_app(&automation, point, info.pid)?;
         let before = self.thumb(config, &window, &info, "before");
         let mouse = Mouse::new();
         match (button, double) {
@@ -623,15 +623,16 @@ impl ComputerUseServer {
         require_app(config, &info, AppTier::Interact)?;
         verify_app_argument(&args.app, &info)?;
         if is_chromium_window(&info) {
-            if (args.snapshot.is_some() || args.element.is_some()) && !page_tree {
+            if args.snapshot.is_some() || args.element.is_some() {
+                if !page_tree {
+                    return Err(
+                        "chromium_content_unavailable: this Chromium window exposes only browser chrome to UI Automation, so element typing could land in the address bar; take a screenshot, click the page point, then type with confirm=true"
+                            .to_string(),
+                    );
+                }
+            } else if !args.confirm.unwrap_or(false) {
                 return Err(
-                    "chromium_content_unavailable: this Chromium window exposes only browser chrome to UI Automation, so element typing could land in the address bar; take a screenshot, click the page point, then type with confirm=true"
-                        .to_string(),
-                );
-            }
-            if !args.confirm.unwrap_or(false) {
-                return Err(
-                    "unverified_focus: Chromium keyboard input cannot verify the focused control; click the page point, review the screenshot, then retry with confirm=true"
+                    "unverified_focus: Chromium app-only typing cannot verify the focused control; click the page point, review the screenshot, then retry with confirm=true"
                         .to_string(),
                 );
             }
@@ -1746,11 +1747,16 @@ fn find_window_by_snapshot(
         .into_iter()
         .filter(|(_, info)| info.pid == snapshot.pid)
         .collect();
-    if let Some(index) = candidates
-        .iter()
-        .position(|(_, info)| snapshot.hwnd != 0 && info.hwnd == snapshot.hwnd)
-    {
-        return Ok(candidates.swap_remove(index));
+    if snapshot.hwnd != 0 {
+        if let Some(index) = candidates
+            .iter()
+            .position(|(_, info)| info.hwnd == snapshot.hwnd)
+        {
+            return Ok(candidates.swap_remove(index));
+        }
+        return Err(
+            "stale_snapshot: the bound window is gone; observe again with get_state".to_string(),
+        );
     }
     candidates.retain(|(_, info)| {
         snapshot.window_class.is_empty() || info.class.eq_ignore_ascii_case(&snapshot.window_class)
@@ -2179,7 +2185,11 @@ fn chromium_root(automation: &UIAutomation, info: &WindowInfo, window: &UIElemen
     };
     if chromium_is_active(info.hwnd) {
         let _ = element.get_name();
-        return element;
+        if let Ok(tree) = build_state(automation, &element, info, AppTier::View, 40, 3)
+            && nodes_have_document(&tree.1)
+        {
+            return element;
+        }
     }
     for attempt in 0..12 {
         wake_chromium_accessibility(info.hwnd);
@@ -2195,23 +2205,28 @@ fn chromium_root(automation: &UIAutomation, info: &WindowInfo, window: &UIElemen
     element
 }
 
-fn chromium_active() -> &'static Mutex<Vec<isize>> {
-    static ACTIVE: std::sync::OnceLock<Mutex<Vec<isize>>> = std::sync::OnceLock::new();
+fn chromium_active() -> &'static Mutex<Vec<(isize, Instant)>> {
+    static ACTIVE: std::sync::OnceLock<Mutex<Vec<(isize, Instant)>>> = std::sync::OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(Vec::new()))
 }
+
+const CHROMIUM_READY_TTL: Duration = Duration::from_secs(120);
 
 fn chromium_is_active(hwnd: isize) -> bool {
     chromium_active()
         .lock()
-        .map(|items| items.contains(&hwnd))
+        .map(|items| {
+            items
+                .iter()
+                .any(|(item, at)| *item == hwnd && at.elapsed() < CHROMIUM_READY_TTL)
+        })
         .unwrap_or(false)
 }
 
 fn mark_chromium_active(hwnd: isize) {
-    if let Ok(mut items) = chromium_active().lock()
-        && !items.contains(&hwnd)
-    {
-        items.push(hwnd);
+    if let Ok(mut items) = chromium_active().lock() {
+        items.retain(|(item, at)| *item != hwnd || at.elapsed() < CHROMIUM_READY_TTL);
+        items.push((hwnd, Instant::now()));
     }
 }
 
@@ -2547,12 +2562,9 @@ fn capture_element(element: &UIElement, info: &WindowInfo) -> Result<Screenshot,
     )
 }
 
-fn raise_window(hwnd: isize) -> bool {
-    if hwnd == 0 {
-        return false;
-    }
-    if is_foreground(hwnd) {
-        return false;
+fn raise_window(hwnd: isize) {
+    if hwnd == 0 || is_foreground(hwnd) {
+        return;
     }
     unsafe {
         if IsIconic(hwnd as *mut std::ffi::c_void) != 0 {
@@ -2576,7 +2588,6 @@ fn raise_window(hwnd: isize) -> bool {
             AttachThreadInput(current, foreground_thread, 0);
         }
     }
-    !is_foreground(hwnd)
 }
 
 fn window_rect(hwnd: isize) -> Option<RectInfo> {
@@ -2617,17 +2628,15 @@ fn capture_window(hwnd: isize, rect: RectInfo) -> Result<Screenshot, String> {
         return Err("screenshot_failed: window has no visible area".to_string());
     }
     if let Some(actual) = window_rect(hwnd) {
-        raise_window(hwnd);
-        if is_foreground(hwnd) {
-            std::thread::sleep(Duration::from_millis(120));
-            if let Ok(shot) = Screenshot::capture_rect(uiautomation::types::Rect::new(
+        if is_foreground(hwnd)
+            && let Ok(shot) = Screenshot::capture_rect(uiautomation::types::Rect::new(
                 actual.left,
                 actual.top,
                 actual.right,
                 actual.bottom,
-            )) {
-                return Ok(shot);
-            }
+            ))
+        {
+            return Ok(shot);
         }
         if let Ok(shot) = print_window(hwnd, actual.width(), actual.height()) {
             return Ok(flip_rows(shot));

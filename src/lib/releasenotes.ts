@@ -25,11 +25,11 @@ export const RELEASES: readonly Release[] = [
     version: "0.8.0",
     date: "2026-10-30",
     summary:
-      "MCP servers report a real runtime phase, protocol revision and cache metadata. Computer use now finds the page inside Chromium windows, captures the window it was asked for, refuses clicks unless the window is focused, and verifies publishers and user takeover.",
+      "MCP server details show the error and next action, the protocol revision and tool cache metadata. Computer use now finds the page inside Chromium windows, captures the window it was asked for, and refuses clicks unless the window is focused.",
     changes: [
       {
         kind: "new",
-        text: "MCP servers show a runtime phase, a typed error with a next action, the negotiated protocol revision and tools cache metadata, in a server details page.",
+        text: "MCP server details show the error with its next action, the negotiated protocol revision and tools cache metadata.",
       },
       {
         kind: "new",
@@ -37,11 +37,11 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "improved",
-        text: "Screenshots capture the requested window with PrintWindow, so a covered window no longer shows whatever is in front of it.",
+        text: "Screenshots target the requested window, so a covered window no longer shows whatever is in front of it.",
       },
       {
         kind: "fixed",
-        text: "Clicks raise the target window and refuse with not_foreground unless it is really focused, then verify the point lands inside the observed element, so a click can no longer hit browser chrome or another app.",
+        text: "Clicks raise the target window and refuse with not_foreground unless it is really focused; an element click also checks the point lands inside that element, so a click can no longer hit browser chrome or another app.",
       },
       {
         kind: "fixed",
@@ -49,7 +49,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "new",
-        text: "A scripted eval runs the observe and action set on Notepad and a Chromium form, with screenshots and page-title checks, and restores your real computer-use config afterwards.",
+        text: "A scripted eval covers observation and representative actions on Notepad and a Chromium page, checks results through the page itself, and restores your own config and audit log afterwards.",
       },
     ],
   },
