@@ -333,7 +333,8 @@ function mcpAllowedCount(server: api.McpServerRow, tools: api.McpToolInfo[]): nu
 }
 
 function mcpProbeError(probe: api.McpProbe | undefined): string {
-  return probe?.error || "Could not connect.";
+  const error = probe?.error || "Could not connect.";
+  return probe?.next_action ? `${error} ${probe.next_action}` : error;
 }
 
 function mcpNameFormatError(name: string): string | null {
@@ -385,10 +386,24 @@ function mcpAuthBlocked(
 function mcpProbeState(probe: api.McpProbe | undefined, probing: boolean): McpState {
   if (probing) return { tone: "accent", label: "Connecting" };
   if (!probe) return { tone: "neutral", label: "Not checked" };
-  if (probe.status === "needs_review") return { tone: "warn", label: "Review needed" };
-  return probe.status === "connected"
-    ? { tone: "success", label: "Connected" }
-    : { tone: "danger", label: "Failed" };
+  switch (probe.status) {
+    case "connected":
+      return { tone: "success", label: "Connected" };
+    case "needs_review":
+      return { tone: "warn", label: "Review needed" };
+    case "needs_auth":
+      return { tone: "warn", label: "Sign in" };
+    case "starting":
+      return { tone: "accent", label: "Starting" };
+    case "busy":
+      return { tone: "accent", label: "Busy" };
+    case "stopped":
+      return { tone: "neutral", label: "Stopped" };
+    case "disabled":
+      return { tone: "neutral", label: "Off" };
+    default:
+      return { tone: "danger", label: "Failed" };
+  }
 }
 
 function mcpStatus(

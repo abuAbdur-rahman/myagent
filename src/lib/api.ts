@@ -410,7 +410,10 @@ export interface McpToolInfo {
 export interface McpProbe {
   id: string;
   status: string;
+  phase: string;
   error: string | null;
+  error_kind: string | null;
+  next_action: string | null;
   tools: McpToolInfo[];
 }
 
