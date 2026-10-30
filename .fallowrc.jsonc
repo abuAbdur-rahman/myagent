@@ -7,7 +7,7 @@
   "health": {
     "ignore": ["src/components/ui/select/**", "public/**"]
   },
-  "ignoreFindings": ["public/pcm-worklet.js"],
+  "ignoreFindings": ["public/pcm-worklet.js", "scripts/computer-use-eval.mjs"],
   // Pin the complexity gate to the v0.3.0 baseline so `fallow audit` fails only
   // on regressions introduced after it, not on the inherited hot functions
   // (AppProvider, sendMessage, …) that predate this release.
