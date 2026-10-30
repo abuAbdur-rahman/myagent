@@ -407,12 +407,32 @@ export interface McpToolInfo {
   description: string;
 }
 
+export type McpPhase =
+  | "disabled"
+  | "starting"
+  | "ready"
+  | "busy"
+  | "needs_auth"
+  | "needs_review"
+  | "failed"
+  | "stopped";
+
+export type McpErrorKind =
+  | "invalid_config"
+  | "spawn_failed"
+  | "handshake_timeout"
+  | "auth_required"
+  | "auth_expired"
+  | "tool_review_required"
+  | "protocol_unsupported"
+  | "connection_failed";
+
 export interface McpProbe {
   id: string;
   status: string;
-  phase: string;
+  phase: McpPhase;
   error: string | null;
-  error_kind: string | null;
+  error_kind: McpErrorKind | null;
   next_action: string | null;
   protocol_version: string | null;
   tools_ttl_ms: number | null;
