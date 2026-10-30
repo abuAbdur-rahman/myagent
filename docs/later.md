@@ -13,6 +13,12 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ---
 
+## Current
+
+- Shipped: 0.7.0 (MCP setup UX + Windows computer use), 0.7.1 (DeepSeek V4).
+- Next: 0.8.0 - `docs/plan/v0.8.0-hardening.md`.
+- After that: 1.0.0 - `docs/releases/v1.0.0.md`.
+
 ## Now
 
 ### v0.3.2: design system pass, MCP migrations, issue fixes
@@ -243,7 +249,7 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J10 | Artifact export | Missing | S | F1 |
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
 | [ ] | J11 | Scheduled runs | Missing | L | B8 |
-| [ ] | J12 | MCP and skills | Partial (0.6.0: auth/HTTP; 0.7.0 setup UX remains) | L | D4, D5 |
+| [ ] | J12 | MCP and skills | Partial (0.6.0: auth/HTTP; 0.7.0 setup UX; 0.8.0 protocol refresh, state machine and details/composer remain) | L | D4, D5 |
 
 ---
 
@@ -294,19 +300,23 @@ design that is deliberately late. See E6 in `features.md`.
 
 ---
 
-## Planned for 0.7.0 to 1.0.0
+## Shipped 0.7.0 and planned 0.8.0 to 1.0.0
 
-Plan: `docs/plan/v0.7.0-mcp-computer-use.md`. The research behind it is
-dated 2026-10-27/28; verify protocol, crate, `jev` binary and `/v1/systemone`
-details before starting an item.
+0.7.0 shipped the MCP setup/safety foundation and the computer-use
+observe/action server. 0.7.1 shipped the DeepSeek V4 thinking-level and
+reasoning-replay patch. The remaining work is the 0.8.0 plan.
+
+Plan: `docs/plan/v0.8.0-hardening.md`. Parent research:
+`docs/plan/v0.7.0-mcp-computer-use.md`. Verify protocol, crate, `jev` binary and
+`/v1/systemone` details before starting an item.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | J12 | MCP setup UX: Rust-owned state machine, standard `mcpServers` import/export, Job Object process lifetime, server logs, tool-hash re-approval, `server/discover` fallback (0.7.0) | Plan: `docs/plan/v0.7.0-mcp-computer-use.md` | L | D4, D5 |
-| [ ] | J13 | Windows computer use: UIA tree first, screenshot fallback, observe and act, per-app tiers, hard denies, kill switch, overlay, audit, dry-run (0.7.0) | Plan: same | XL | J12, D4 |
-| [ ] | — | 0.8.0 hardening: lazy Chromium, DPI/multi-monitor, orphan cleanup, eval, security review | Plan: same | M | 0.7.0 |
-| [ ] | J14 | Local navigator: optional CPU tier-2 verifier, jevos-v5, shadow mode, benchmark gates (0.8.0) | Plan: same | M | J13 |
-| [ ] | — | 1.0.0 integration: MCP + computer-use polish, clean-machine eval, security review | Plan: same | M | 0.7.0–0.8.0 |
+| [x] | J12 | MCP setup UX: standard `mcpServers` import/export, Job Object process lifetime, server logs, tool-hash re-approval, structured config (0.7.0) | Have (0.7.0); 0.8.0 protocol refresh, state machine and details/composer remain | L | D4, D5 |
+| [x] | J13 | Windows computer use: UIA tree first, screenshot fallback, observe and act, per-app tiers, hard denies, kill switch, overlay, audit, dry-run (0.7.0) | Have (0.7.0); 0.8.0 hardening/eval and trust remain | XL | J12, D4 |
+| [ ] | — | 0.8.0 hardening: state machine, protocol discovery, details/composer UX, Chromium/DPI/orphan fixes, eval, publisher verification, yield-to-user | Next: `docs/plan/v0.8.0-hardening.md` | M | 0.7.0 |
+| [ ] | J14 | Local navigator: optional CPU tier-2 verifier, jevos-v5, shadow mode, benchmark gates (0.8.0) | Planned: same plan | M | J13 |
+| [ ] | — | 1.0.0 integration: MCP + computer-use polish, clean-machine eval, security review | Planned: `docs/releases/v1.0.0.md` | M | 0.7.0–0.8.0 |
 
 ---
 
