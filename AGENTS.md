@@ -45,6 +45,9 @@ Run every check before saying "done".
 ## Hard rules
 
 - **Only edit files in scope.** Ask before touching anything else.
+- **Never push or open a PR for a docs-only change.** Keep docs edits local
+  unless the user explicitly asks. Release notes may ride only in a PR that also
+  carries code or version changes.
 - **Verify `docs/features.md` Status in code before changing it.** Never ship doc-only versioned releases; one patch release = code/test fixes for already-released features only.
 - **Ask with the question tool. Always.** Any question for the user goes through
   the interactive question tool — never plain chat text. Batch all open
@@ -93,6 +96,9 @@ Run every check before saying "done".
    restart it. Do not push an empty commit just to get a green check.
 6. Push only when the gates are clean or only minor/nit findings remain.
 7. Never force-push, never commit secrets, never commit `node_modules`/`target`/`dist`.
+8. **Docs-only changes stay local.** Never push, open a PR, or tag a docs-only
+   change unless the user explicitly asks. Release notes may ride only with a
+   code/version release PR.
 
 ---
 
