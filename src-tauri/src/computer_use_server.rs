@@ -100,7 +100,7 @@ impl ServerHandler for ComputerUseServer {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Observe before acting. Call get_state to get a snapshot and element ids; ids expire and stale ids return stale_snapshot. Actions require an allowlisted app and the right tier. Hard-denied apps, password fields and secure-desktop input are refused. Check results for stale_snapshot, app_not_allowlisted, tier_denied, hard_denied, computer_use_paused and dry_run.",
+                "Observe before acting. Call get_state to get a snapshot and element ids; ids expire and stale ids return stale_snapshot. Actions require an allowlisted app and the right tier. Hard-denied apps, password fields and secure-desktop input are refused. Check results for stale_snapshot, app_not_allowlisted, tier_denied, hard_denied, computer_use_paused, yield_to_user, publisher_mismatch and dry_run.",
             )
     }
 
@@ -221,6 +221,20 @@ impl ComputerUseServer {
             ));
         }
         Ok(())
+    }
+
+    fn begin_action(&self, config: &ComputerUseConfig) -> Result<(), String> {
+        let last = self.last_action.lock().ok().and_then(|guard| *guard);
+        if should_yield(
+            crate::computer_use::user_idle_ms(),
+            last.map(|last| last.elapsed()),
+        ) {
+            return Err(
+                "yield_to_user: user input detected; pause and confirm before continuing"
+                    .to_string(),
+            );
+        }
+        self.check_budget(config)
     }
 
     fn snapshot(&self, id: &str) -> Result<Snapshot, String> {
@@ -401,7 +415,7 @@ impl ComputerUseServer {
             audit_action(config, "invoke", &info, true, &detail, None, None);
             return Ok(dry_run_result("invoke", &info, &args.element, &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let before = self.thumb(config, &element, "before");
         if let Ok(pattern) = element.get_pattern::<UIInvokePattern>() {
             pattern
@@ -449,7 +463,7 @@ impl ComputerUseServer {
             audit_action(config, "click", &info, true, &detail, None, None);
             return Ok(dry_run_result("click", &info, &args.element, &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let point = element
             .get_click_point()
             .map_err(|error| format!("click_failed: {error}"))?;
@@ -514,7 +528,7 @@ impl ComputerUseServer {
             audit_action(config, "type_text", &info, true, &detail, None, None);
             return Ok(dry_run_result("type_text", &info, &target_name, &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let before = self.thumb(config, &focus, "before");
         if let Some(element) = &target {
             element
@@ -575,7 +589,7 @@ impl ComputerUseServer {
             audit_action(config, "set_value", &info, true, &detail, None, None);
             return Ok(dry_run_result("set_value", &info, &args.element, &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let before = self.thumb(config, &element, "before");
         if let Ok(pattern) = element.get_pattern::<UIValuePattern>() {
             pattern
@@ -634,7 +648,7 @@ impl ComputerUseServer {
             audit_action(config, "press_keys", &info, true, &detail, None, None);
             return Ok(dry_run_result("press_keys", &info, "", &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let before = self.thumb(config, &window, "before");
         window
             .set_focus()
@@ -700,7 +714,7 @@ impl ComputerUseServer {
             audit_action(config, "scroll", &info, true, &detail, None, None);
             return Ok(dry_run_result("scroll", &info, "", &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let before = self.thumb(config, &window, "before");
         let mut used_pattern = false;
         if let Some(element) = &target
@@ -803,7 +817,7 @@ impl ComputerUseServer {
             audit_action(config, "drag", &info, true, &detail, None, None);
             return Ok(dry_run_result("drag", &info, "", &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let before = self.thumb(config, &window, "before");
         let mouse = Mouse::new();
         mouse
@@ -841,7 +855,7 @@ impl ComputerUseServer {
                 json!({"dry_run": true, "action": "wait", "ms": ms}),
             ));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         tokio::time::sleep(Duration::from_millis(ms)).await;
         let detail = format!("waited {ms} ms");
         audit_raw(config, "wait", None, None, false, true, &detail, None, None);
@@ -862,7 +876,7 @@ impl ComputerUseServer {
             audit_action(config, "focus_window", &info, true, &detail, None, None);
             return Ok(dry_run_result("focus_window", &info, "", &detail));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         window
             .set_focus()
             .map_err(|error| format!("focus_failed: {error}"))?;
@@ -930,6 +944,16 @@ impl ComputerUseServer {
                     .to_string(),
             );
         }
+        if let Some(expected) = policy.publisher.as_deref() {
+            let actual = crate::computer_use::publisher_for(&args.path);
+            if actual.as_deref() != Some(expected) {
+                return Err(format!(
+                    "publisher_mismatch: {} expected {expected}, got {}",
+                    args.path,
+                    actual.as_deref().unwrap_or("unsigned or unverifiable")
+                ));
+            }
+        }
         let extra = args.args.unwrap_or_default();
         if extra.len() > 32 {
             return Err("invalid_arguments: at most 32 arguments".to_string());
@@ -959,7 +983,7 @@ impl ComputerUseServer {
                 "args": extra.len(),
             })));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let mut command = Command::new(path);
         command.args(&extra);
         command.creation_flags(CREATE_NO_WINDOW);
@@ -1024,7 +1048,7 @@ impl ComputerUseServer {
                 json!({"dry_run": true, "action": "read_clipboard"}),
             ));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         let text = Clipboard::new()
             .map_err(|error| format!("clipboard_failed: {error}"))?
             .get_text()
@@ -1094,7 +1118,7 @@ impl ComputerUseServer {
                 "chars": args.text.chars().count(),
             })));
         }
-        self.check_budget(config)?;
+        self.begin_action(config)?;
         Clipboard::new()
             .map_err(|error| format!("clipboard_failed: {error}"))?
             .set_text(&args.text)
@@ -1368,6 +1392,16 @@ fn schema(properties: Value, required: &[&str]) -> Value {
 
 fn parse<T: DeserializeOwned>(value: &Value) -> Result<T, String> {
     serde_json::from_value(value.clone()).map_err(|error| format!("invalid_arguments: {error}"))
+}
+
+fn should_yield(idle_ms: Option<u32>, last_action_age: Option<Duration>) -> bool {
+    let Some(age) = last_action_age else {
+        return false;
+    };
+    if age < Duration::from_millis(750) {
+        return false;
+    }
+    idle_ms.is_some_and(|idle| idle < 750)
 }
 
 fn error_result(message: impl Into<String>) -> CallToolResult {
@@ -1861,6 +1895,7 @@ fn policy_for(config: &ComputerUseConfig, info: &WindowInfo) -> PolicyMatch {
         return PolicyMatch {
             tier: None,
             blocked: Some(reason),
+            publisher: None,
         };
     }
     let name = file_name(&info.exe).to_ascii_lowercase();
@@ -1873,6 +1908,7 @@ fn policy_for(config: &ComputerUseConfig, info: &WindowInfo) -> PolicyMatch {
         return PolicyMatch {
             tier: None,
             blocked: Some(format!("user deny rule {rule:?}")),
+            publisher: None,
         };
     }
     let policy = config.allow.iter().find(|policy| {
@@ -1886,6 +1922,7 @@ fn policy_for(config: &ComputerUseConfig, info: &WindowInfo) -> PolicyMatch {
     PolicyMatch {
         tier: policy.map(|policy| policy.tier),
         blocked: None,
+        publisher: policy.and_then(|policy| policy.publisher.clone()),
     }
 }
 
@@ -1915,6 +1952,16 @@ fn require_app(
             needed.as_str(),
             tier.as_str()
         ));
+    }
+    if let Some(expected) = policy.publisher.as_deref() {
+        let actual = crate::computer_use::publisher_for(&info.exe);
+        if actual.as_deref() != Some(expected) {
+            return Err(format!(
+                "publisher_mismatch: {} expected {expected}, got {}",
+                info.exe,
+                actual.as_deref().unwrap_or("unsigned or unverifiable")
+            ));
+        }
     }
     Ok(tier)
 }
@@ -2247,6 +2294,7 @@ impl RectInfo {
 struct PolicyMatch {
     tier: Option<AppTier>,
     blocked: Option<String>,
+    publisher: Option<String>,
 }
 
 struct AppEntry {
@@ -2401,6 +2449,18 @@ mod tests {
         assert!(validate_keys("{alt}{f4}", false).is_err());
         assert!(validate_keys("{alt}{f4}", true).is_ok());
         assert!(validate_keys("{ctrl}c", false).is_ok());
+    }
+
+    #[test]
+    fn yield_to_user_requires_idle_after_a_previous_action() {
+        assert!(!should_yield(Some(10), None));
+        assert!(!should_yield(Some(10), Some(Duration::from_millis(100))));
+        assert!(should_yield(Some(10), Some(Duration::from_millis(1_000))));
+        assert!(!should_yield(
+            Some(2_000),
+            Some(Duration::from_millis(1_000))
+        ));
+        assert!(!should_yield(None, Some(Duration::from_millis(1_000))));
     }
 
     #[test]

@@ -1,9 +1,15 @@
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
+use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use windows_sys::Win32::System::SystemInformation::GetTickCount;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
 const APP_ID: &str = "com.abdul.myagent";
 pub const AUDIT_FILE: &str = "computer-use-audit.jsonl";
@@ -188,6 +194,70 @@ pub struct AuditEntry {
     pub after: Option<String>,
 }
 
+type PublisherCache = Mutex<HashMap<String, (Instant, Option<String>)>>;
+
+static PUBLISHER_CACHE: OnceLock<PublisherCache> = OnceLock::new();
+
+pub fn user_idle_ms() -> Option<u32> {
+    let mut info = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    let result = unsafe {
+        let ok = GetLastInputInfo(&mut info);
+        if ok == 0 {
+            return None;
+        }
+        GetTickCount()
+    };
+    Some(result.wrapping_sub(info.dwTime))
+}
+
+fn verify_publisher(path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() || !Path::new(path).is_file() {
+        return None;
+    }
+    let script = "$s = Get-AuthenticodeSignature -LiteralPath $env:MYAGENT_VERIFY_PATH; if ($s.Status -eq 'Valid' -and $s.SignerCertificate) { $s.SignerCertificate.Subject }";
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("MYAGENT_VERIFY_PATH", path)
+        .creation_flags(0x08000000)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let subject = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if subject.is_empty() || subject.len() > 512 {
+        None
+    } else {
+        Some(subject)
+    }
+}
+
+pub fn publisher_for(path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let key = path.to_ascii_lowercase();
+    let cache = PUBLISHER_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some((checked, value)) = guard.get(&key)
+        && checked.elapsed() < Duration::from_secs(600)
+    {
+        return value.clone();
+    }
+    let value = verify_publisher(path);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, (Instant::now(), value.clone()));
+    }
+    value
+}
+
 pub fn data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
         .map(|dir| dir.join(APP_ID))
@@ -246,7 +316,10 @@ fn normalize(mut config: ComputerUseConfig) -> Result<ComputerUseConfig, String>
             policy.publisher = policy
                 .publisher
                 .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
+                .filter(|value| !value.is_empty() && value.len() <= 512);
+            if policy.publisher.is_none() && !policy.path.is_empty() {
+                policy.publisher = publisher_for(&policy.path);
+            }
             if policy.path.is_empty() && policy.name.is_empty() {
                 return None;
             }
@@ -546,4 +619,14 @@ pub async fn ensure_builtin(app: &AppHandle) -> Result<(), String> {
         eprintln!("computer-use: seed marker failed: {error}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_publisher_path_is_none() {
+        assert!(publisher_for("   ").is_none());
+    }
 }
