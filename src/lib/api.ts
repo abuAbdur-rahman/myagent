@@ -414,6 +414,9 @@ export interface McpProbe {
   error: string | null;
   error_kind: string | null;
   next_action: string | null;
+  protocol_version: string | null;
+  tools_ttl_ms: number | null;
+  tools_cache_scope: string | null;
   tools: McpToolInfo[];
 }
 

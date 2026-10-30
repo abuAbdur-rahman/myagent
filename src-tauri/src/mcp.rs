@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rmcp::ClientHandler;
-use rmcp::model::{CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion};
+use rmcp::model::{
+    CacheScope, CallToolRequestParams, CallToolResult, PaginatedRequestParams, ProtocolVersion,
+};
 use rmcp::service::{
     ClientLifecycleMode, ClientServiceExt, NotificationContext, RoleClient, RunningService,
 };
@@ -586,6 +588,21 @@ mod tests {
         assert_eq!(state.phase("srv"), Some(ServerPhase::Ready));
         state.clear_phase("srv");
         assert_eq!(state.phase("srv"), None);
+    }
+
+    #[test]
+    fn cache_hints_control_tool_refresh() {
+        assert!(tools_cache_expired(Some(0), Duration::ZERO));
+        assert!(!tools_cache_expired(Some(60_000), Duration::from_secs(30)));
+        assert!(tools_cache_expired(Some(60_000), Duration::from_secs(60)));
+        assert!(!tools_cache_expired(None, Duration::from_secs(60)));
+        assert!(tools_cache_expired(None, Duration::from_secs(301)));
+    }
+
+    #[test]
+    fn cache_scope_names_are_stable() {
+        assert_eq!(cache_scope_name(CacheScope::Public), "public");
+        assert_eq!(cache_scope_name(CacheScope::Private), "private");
     }
 
     #[cfg(windows)]
@@ -2404,6 +2421,9 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
             error: None,
             error_kind: None,
             next_action: None,
+            protocol_version: None,
+            tools_ttl_ms: None,
+            tools_cache_scope: None,
             tools: Vec::new(),
         };
         cache_probe(&state, report.clone());
@@ -2418,6 +2438,9 @@ pub async fn mcp_probe(app: AppHandle, id: String) -> Result<McpProbe, String> {
             error: None,
             error_kind: None,
             next_action: None,
+            protocol_version: None,
+            tools_ttl_ms: None,
+            tools_cache_scope: None,
             tools: Vec::new(),
         },
     );
@@ -2531,7 +2554,7 @@ pub async fn mcp_test_config(
         _enabled: true,
     };
     match connect_once(&config).await {
-        Ok(session) => Ok(probe_connected("draft", &session.tools)),
+        Ok(session) => Ok(probe_connected("draft", &session)),
         Err(error) => Ok(probe_failed("draft", error)),
     }
 }
@@ -2609,6 +2632,9 @@ async fn connect_once(config: &McpServerConfig) -> Result<Session, String> {
         timeouts: 0,
         tools_dirty,
         tools_checked: Instant::now(),
+        protocol_version: None,
+        tools_ttl_ms: None,
+        tools_cache_scope: None,
     };
     if let Err(error) = initialize_session(&mut session).await {
         if config.auth_type == "oauth" && looks_like_auth_error(&error) {
@@ -2727,6 +2753,9 @@ struct Session {
     timeouts: u32,
     tools_dirty: Option<Arc<AtomicBool>>,
     tools_checked: Instant,
+    protocol_version: Option<String>,
+    tools_ttl_ms: Option<u64>,
+    tools_cache_scope: Option<String>,
 }
 
 enum McpTransport {
@@ -2826,6 +2855,21 @@ impl LegacySseParser {
     }
 }
 
+fn cache_scope_name(scope: CacheScope) -> String {
+    match scope {
+        CacheScope::Public => "public".to_string(),
+        CacheScope::Private => "private".to_string(),
+        _ => "private".to_string(),
+    }
+}
+
+fn tools_cache_expired(ttl_ms: Option<u64>, elapsed: Duration) -> bool {
+    match ttl_ms {
+        Some(ttl_ms) => elapsed >= Duration::from_millis(ttl_ms),
+        None => elapsed >= TOOL_REFRESH_INTERVAL,
+    }
+}
+
 impl Session {
     fn timeout(&self) -> Duration {
         Duration::from_millis(
@@ -2855,7 +2899,10 @@ impl Session {
             .tools_dirty
             .as_ref()
             .is_some_and(|flag| flag.swap(false, Ordering::Relaxed));
-        dirty || self.tools_checked.elapsed() >= TOOL_REFRESH_INTERVAL
+        if dirty {
+            return true;
+        }
+        tools_cache_expired(self.tools_ttl_ms, self.tools_checked.elapsed())
     }
 }
 
@@ -3014,6 +3061,9 @@ pub struct McpProbe {
     pub error: Option<String>,
     pub error_kind: Option<String>,
     pub next_action: Option<String>,
+    pub protocol_version: Option<String>,
+    pub tools_ttl_ms: Option<u64>,
+    pub tools_cache_scope: Option<String>,
     pub tools: Vec<McpToolInfo>,
 }
 
@@ -3026,11 +3076,14 @@ fn probe_failed(id: &str, error: String) -> McpProbe {
         error: Some(error),
         error_kind: Some(kind.as_str().to_string()),
         next_action: Some(kind.next_action().to_string()),
+        protocol_version: None,
+        tools_ttl_ms: None,
+        tools_cache_scope: None,
         tools: Vec::new(),
     }
 }
 
-fn probe_connected(id: &str, tools: &[McpToolDef]) -> McpProbe {
+fn probe_connected(id: &str, session: &Session) -> McpProbe {
     McpProbe {
         id: id.to_string(),
         status: "connected".to_string(),
@@ -3038,7 +3091,11 @@ fn probe_connected(id: &str, tools: &[McpToolDef]) -> McpProbe {
         error: None,
         error_kind: None,
         next_action: None,
-        tools: tools
+        protocol_version: session.protocol_version.clone(),
+        tools_ttl_ms: session.tools_ttl_ms,
+        tools_cache_scope: session.tools_cache_scope.clone(),
+        tools: session
+            .tools
             .iter()
             .map(|tool| McpToolInfo {
                 name: tool.tool.clone(),
@@ -3075,7 +3132,7 @@ async fn persist_initial_tool_hash(app: &AppHandle, id: &str, session: &mut Sess
 }
 
 fn probe_session(id: &str, session: &Session) -> McpProbe {
-    let mut report = probe_connected(id, &session.tools);
+    let mut report = probe_connected(id, session);
     if session.needs_review {
         let kind = McpErrorKind::ToolReviewRequired;
         report.status = kind.status().to_string();
@@ -3293,10 +3350,11 @@ async fn list_rmcp_tools(
     client: &RunningService<RoleClient, ToolChangeHandler>,
     server: &str,
     timeout: Duration,
-) -> Result<Vec<McpToolDef>, String> {
+) -> Result<(Vec<McpToolDef>, Option<u64>, Option<CacheScope>), String> {
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen: HashSet<String> = HashSet::new();
+    let mut hints: Option<(Option<u64>, Option<CacheScope>)> = None;
     for _ in 0..MAX_TOOL_PAGES {
         let params = cursor
             .take()
@@ -3305,6 +3363,9 @@ async fn list_rmcp_tools(
             .await
             .map_err(|_| "timeout".to_string())?
             .map_err(|e| e.to_string())?;
+        if hints.is_none() {
+            hints = Some((result.ttl_ms, result.cache_scope));
+        }
         tools.extend(
             result
                 .tools
@@ -3313,7 +3374,10 @@ async fn list_rmcp_tools(
         );
         match result.next_cursor {
             Some(next) if !next.is_empty() && seen.insert(next.clone()) => cursor = Some(next),
-            _ => return Ok(tools),
+            _ => {
+                let (ttl_ms, cache_scope) = hints.unwrap_or((None, None));
+                return Ok((tools, ttl_ms, cache_scope));
+            }
         }
     }
     Err(format!(
@@ -3370,13 +3434,24 @@ fn initialize_body(id: u64) -> Value {
 async fn initialize_session(session: &mut Session) -> Result<(), String> {
     let timeout = session.timeout();
     let name = session.config.name.clone();
-    let tools = match &mut session.transport {
-        McpTransport::Rmcp(client) => list_rmcp_tools(client, &name, timeout).await?,
+    let protocol_version;
+    let (tools, ttl_ms, cache_scope) = match &mut session.transport {
+        McpTransport::Rmcp(client) => {
+            protocol_version = client
+                .peer_info()
+                .map(|info| info.protocol_version.to_string());
+            list_rmcp_tools(client, &name, timeout).await?
+        }
         McpTransport::LegacySse(sse) => {
-            let _ = sse
+            let initialized = sse
                 .request(&initialize_body(1), timeout)
                 .await
                 .map_err(|failure| failure.message)?;
+            protocol_version = initialized
+                .get("result")
+                .and_then(|result| result.get("protocolVersion"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
             sse.notify(
                 &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
                 timeout,
@@ -3390,7 +3465,7 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
                 )
                 .await
                 .map_err(|failure| failure.message)?;
-            parse_tools(&name, &listed)
+            (parse_tools(&name, &listed), None, None)
         }
     };
     let hash = tools_hash(&tools);
@@ -3401,6 +3476,9 @@ async fn initialize_session(session: &mut Session) -> Result<(), String> {
         .is_some_and(|stored| stored != hash);
     session.tool_hash = Some(hash);
     session.tools = tools;
+    session.protocol_version = protocol_version;
+    session.tools_ttl_ms = ttl_ms;
+    session.tools_cache_scope = cache_scope.map(cache_scope_name);
     session.tools_checked = Instant::now();
     Ok(())
 }
