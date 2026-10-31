@@ -9,6 +9,8 @@ const base: SandboxStatus = {
   image: "sha256:abc",
   image_size: 262_144_000,
   project_root: "D:\\oss\\demo",
+  profile: "office",
+  allow_installs: false,
   packages: [],
   cpus: 1,
   memory_mb: 1024,

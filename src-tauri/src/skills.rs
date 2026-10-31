@@ -6,7 +6,42 @@ use crate::permissions;
 pub struct SkillInfo {
     pub id: String,
     pub name: String,
+    pub title: String,
+    pub version: String,
+    pub summary: String,
     pub description: String,
+    pub source: String,
+    pub enabled: bool,
+    pub directory: String,
+    pub triggers: Vec<String>,
+    pub requires_tools: Vec<String>,
+    pub requires_python: Vec<String>,
+    pub requires_node: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct DoctorResult {
+    pub skill: String,
+    pub ok: bool,
+    pub missing: Vec<String>,
+    pub failed_tests: Vec<String>,
+    pub versions: std::collections::BTreeMap<String, String>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct SkillMeta {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub version: Option<String>,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+    pub triggers: Vec<String>,
+    pub requires_tools: Vec<String>,
+    pub requires_python: Vec<String>,
+    pub requires_node: Vec<String>,
+    pub network: Option<String>,
+    pub writes: Vec<String>,
 }
 
 pub fn is_valid_skill_name(name: &str) -> bool {
@@ -17,21 +52,190 @@ pub fn is_valid_skill_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-fn frontmatter_description(content: &str) -> Option<String> {
+fn frontmatter_block(content: &str) -> Option<&str> {
     let body = content.strip_prefix("---")?;
-    let end = body.find("---")?;
-    let front = &body[..end];
-    for line in front.lines() {
-        let line = line.trim();
-        if let Some(value) = line
-            .strip_prefix("description:")
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-        {
-            return Some(value.trim_matches('"').to_string());
+    let body = body
+        .strip_prefix("\r\n")
+        .or_else(|| body.strip_prefix('\n'))?;
+    let mut offset = 0;
+    for line in body.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']).trim() == "---" {
+            return Some(&body[..offset]);
         }
+        offset += line.len();
     }
     None
+}
+
+fn unquote(value: &str) -> String {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(value);
+    value.trim().to_string()
+}
+
+fn inline_list(value: &str) -> Vec<String> {
+    let value = value.trim();
+    let inner = value
+        .strip_prefix('[')
+        .and_then(|v| v.strip_suffix(']'))
+        .unwrap_or(value);
+    inner
+        .split(',')
+        .map(unquote)
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn push_list(out: &mut Vec<String>, raw: &str) {
+    for item in inline_list(raw) {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+}
+
+fn apply_scalar(meta: &mut SkillMeta, key: &str, value: &str) {
+    let value = unquote(value);
+    match key {
+        "id" | "name" => meta.id = Some(value),
+        "title" => meta.title = Some(value),
+        "version" => meta.version = Some(value),
+        "summary" => meta.summary = Some(value),
+        "description" => meta.description = Some(value),
+        "triggers" => push_list(&mut meta.triggers, value.as_str()),
+        "requires_tools" => push_list(&mut meta.requires_tools, value.as_str()),
+        "writes" => push_list(&mut meta.writes, value.as_str()),
+        "requires_imports" => apply_flow_imports(meta, value.as_str()),
+        "network" => meta.network = Some(value),
+        _ => {}
+    }
+}
+
+fn apply_flow_imports(meta: &mut SkillMeta, value: &str) {
+    let Some(inner) = value.trim().strip_prefix('{') else {
+        return;
+    };
+    let inner = inner.strip_suffix('}').unwrap_or(inner);
+    let mut depth = 0;
+    let mut current = String::new();
+    let mut parts = Vec::new();
+    for ch in inner.chars() {
+        match ch {
+            '[' | '{' => depth += 1,
+            ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+                continue;
+            }
+            _ => {}
+        }
+        current.push(ch);
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+    for part in parts {
+        let Some((key, list)) = part.split_once(':') else {
+            continue;
+        };
+        let target = match key.trim() {
+            "python" => &mut meta.requires_python,
+            "node" => &mut meta.requires_node,
+            _ => continue,
+        };
+        for item in inline_list(list.trim()) {
+            if !target.contains(&item) {
+                target.push(item);
+            }
+        }
+    }
+}
+
+fn apply_list_item(meta: &mut SkillMeta, key: &str, item: &str) {
+    let item = unquote(item);
+    if item.is_empty() {
+        return;
+    }
+    let target = match key {
+        "triggers" => &mut meta.triggers,
+        "requires_tools" => &mut meta.requires_tools,
+        "writes" => &mut meta.writes,
+        "requires_imports.python" => &mut meta.requires_python,
+        "requires_imports.node" => &mut meta.requires_node,
+        _ => return,
+    };
+    if !target.contains(&item) {
+        target.push(item);
+    }
+}
+
+pub fn parse_meta(content: &str) -> SkillMeta {
+    let mut meta = SkillMeta::default();
+    let Some(front) = frontmatter_block(content) else {
+        return meta;
+    };
+    let mut key = String::new();
+    let mut nested = String::new();
+    let mut sub = String::new();
+    for line in front.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if let Some(item) = trimmed.strip_prefix("- ") {
+            let full = if nested.is_empty() {
+                key.clone()
+            } else {
+                format!("{nested}.{sub}")
+            };
+            apply_list_item(&mut meta, &full, item);
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let raw_key = raw_key.trim();
+        if indent == 0 {
+            key = raw_key.to_string();
+            nested.clear();
+            sub.clear();
+            apply_scalar(&mut meta, key.as_str(), raw_value);
+            continue;
+        }
+        if key == "requires_imports" {
+            nested = key.clone();
+            sub = raw_key.to_string();
+            let list = raw_value.trim();
+            if list.starts_with('[') {
+                let target = if raw_key == "python" {
+                    &mut meta.requires_python
+                } else if raw_key == "node" {
+                    &mut meta.requires_node
+                } else {
+                    continue;
+                };
+                for item in inline_list(list) {
+                    if !target.contains(&item) {
+                        target.push(item);
+                    }
+                }
+            }
+            continue;
+        }
+        apply_scalar(&mut meta, raw_key, raw_value);
+    }
+    meta
+}
+
+fn frontmatter_description(content: &str) -> Option<String> {
+    let meta = parse_meta(content);
+    meta.summary.or(meta.description)
 }
 
 fn first_line_description(content: &str) -> Option<String> {
@@ -203,7 +407,8 @@ pub fn parse_skill(name: &str, content: &str) -> Option<(String, String)> {
     }
     let description = frontmatter_description(content)
         .or_else(|| first_line_description(content))
-        .filter(|d| !d.is_empty() && d.chars().count() <= 500)?;
+        .filter(|d| !d.is_empty())?;
+    let description: String = description.chars().take(500).collect();
     Some((name.to_string(), description))
 }
 
@@ -242,18 +447,83 @@ pub fn to_model_output(name: &str, directory: &str, content: &str, files: &[Stri
     out.join("\n")
 }
 
-fn skill_dirs(app: &AppHandle) -> Vec<std::path::PathBuf> {
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct SkillState {
+    #[serde(default)]
+    disabled: Vec<String>,
+}
+
+fn state_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("skills.json"))
+}
+
+fn state_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+fn load_state(app: &AppHandle) -> SkillState {
+    let Some(path) = state_path(app) else {
+        return SkillState::default();
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!("skills: cannot parse state, keeping skills enabled: {error}");
+                SkillState::default()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => SkillState::default(),
+        Err(error) => {
+            eprintln!("skills: cannot read state: {error}");
+            SkillState::default()
+        }
+    }
+}
+
+fn save_state(app: &AppHandle, state: &SkillState) -> Result<(), String> {
+    let path = state_path(app).ok_or("app data directory unavailable")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, &path).map_err(|e| e.to_string())
+}
+
+fn skill_dirs(app: &AppHandle) -> Vec<(std::path::PathBuf, &'static str)> {
     let mut dirs = Vec::new();
+    if let Ok(data) = app.path().app_data_dir() {
+        dirs.push((data.join("skills"), "user"));
+    }
     if let Ok(resource) = app.path().resource_dir() {
         let bundled = resource.join("skills");
         if bundled.is_dir() {
-            dirs.push(bundled);
+            dirs.push((bundled, "builtin"));
         }
     }
-    if let Ok(data) = app.path().app_data_dir() {
-        dirs.push(data.join("skills"));
-    }
     dirs
+}
+
+pub fn sandbox_mounts(app: &AppHandle) -> Vec<(std::path::PathBuf, String)> {
+    let mut mounts = Vec::new();
+    for (dir, source) in skill_dirs(app) {
+        if !dir.is_dir() {
+            continue;
+        }
+        let target = if source == "user" {
+            "/opt/skills-user:ro"
+        } else {
+            "/opt/skills:ro"
+        };
+        mounts.push((dir, target.to_string()));
+    }
+    mounts
 }
 
 fn scan_dir(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
@@ -284,25 +554,45 @@ fn scan_dir(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
 }
 
 pub fn list_skills(app: &AppHandle) -> Vec<(SkillInfo, std::path::PathBuf)> {
-    let mut all = Vec::new();
-    for dir in skill_dirs(app) {
+    let disabled = load_state(app).disabled;
+    let mut all: Vec<(SkillInfo, std::path::PathBuf)> = Vec::new();
+    for (dir, source) in skill_dirs(app) {
         for (name, path) in scan_dir(&dir) {
-            if all.iter().any(|entry: &(SkillInfo, _)| entry.0.id == name) {
+            if all.iter().any(|entry| entry.0.id == name) {
                 continue;
             }
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            if let Some((id, description)) = parse_skill(&name, &content) {
-                all.push((
-                    SkillInfo {
-                        id: id.clone(),
-                        name: id,
-                        description,
-                    },
-                    path,
-                ));
-            }
+            let Some((id, description)) = parse_skill(&name, &content) else {
+                continue;
+            };
+            let meta = parse_meta(&content);
+            let title = meta.title.clone().unwrap_or_else(|| id.clone());
+            let summary = meta.summary.clone().unwrap_or_else(|| description.clone());
+            let version = meta.version.clone().unwrap_or_else(|| "0.0.0".to_string());
+            let directory = path
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            all.push((
+                SkillInfo {
+                    id: id.clone(),
+                    name: id.clone(),
+                    title,
+                    version,
+                    summary: summary.clone(),
+                    description,
+                    source: source.to_string(),
+                    enabled: !disabled.iter().any(|item| item == &id),
+                    directory,
+                    triggers: meta.triggers,
+                    requires_tools: meta.requires_tools,
+                    requires_python: meta.requires_python,
+                    requires_node: meta.requires_node,
+                },
+                path,
+            ));
         }
     }
     all
@@ -339,6 +629,9 @@ pub fn prepare_skill(app: &AppHandle, id: &str) -> Result<String, String> {
         .into_iter()
         .find(|(info, _)| info.id == id)
         .ok_or_else(|| "unknown skill".to_string())?;
+    if !found.0.enabled {
+        return Err("skill is disabled".to_string());
+    }
     let content = std::fs::read_to_string(&found.1).map_err(|e| e.to_string())?;
     let content = cap_skill_body(&content);
     let directory = found
@@ -360,6 +653,9 @@ pub async fn skill_index(app: AppHandle) -> Result<Vec<SkillInfo>, String> {
     let all = list_skills(&app);
     let mut visible = Vec::new();
     for (info, _) in all {
+        if !info.enabled {
+            continue;
+        }
         let resources = vec![info.id.clone()];
         let effect = permissions::check(&app, "skill", &resources, None)
             .await
@@ -381,6 +677,186 @@ pub async fn skill_read(app: AppHandle, id: String) -> Result<String, String> {
         return Err("skill denied by rule".to_string());
     }
     prepare_skill(&app, &id)
+}
+
+fn safe_requirement(value: &str, extra: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
+}
+
+pub(crate) fn doctor_script(info: &SkillInfo) -> Result<String, String> {
+    for tool in &info.requires_tools {
+        if !safe_requirement(tool, "._+-") {
+            return Err(format!("invalid tool requirement: {tool}"));
+        }
+    }
+    for module in info.requires_python.iter().chain(&info.requires_node) {
+        if !safe_requirement(module, "._-") {
+            return Err(format!("invalid import requirement: {module}"));
+        }
+    }
+    let container = if info.source == "user" {
+        "/opt/skills-user"
+    } else {
+        "/opt/skills"
+    };
+    let dir = format!("{container}/{}", info.id);
+    let mut script = String::from("set -u\n");
+    for tool in &info.requires_tools {
+        script.push_str(&format!(
+            "if command -v {tool} >/dev/null 2>&1; then v=$({tool} --version 2>&1 | head -n 1); printf 'VERSION\\t{tool}\\t%s\\n' \"$v\"; else printf 'MISSING\\t{tool}\\n'; fi\n"
+        ));
+    }
+    if !info.requires_python.is_empty() {
+        let modules = info
+            .requires_python
+            .iter()
+            .map(|module| format!("\"{module}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        script.push_str(&format!(
+            "if command -v python3 >/dev/null 2>&1; then python3 - <<'PY'\nimport importlib.util\nfor mod in ({modules},):\n    try:\n        found = importlib.util.find_spec(mod) is not None\n    except Exception:\n        found = False\n    if not found:\n        print(\"IMPORTMISS\\tpython\\t\" + mod)\nPY\nelse\n  for mod in {modules}; do printf 'IMPORTMISS\\tpython\\t%s\\n' \"$mod\"; done\nfi\n"
+        ));
+    }
+    if !info.requires_node.is_empty() {
+        let modules = info
+            .requires_node
+            .iter()
+            .map(|module| format!("\"{module}\""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        script.push_str(&format!(
+            "if command -v node >/dev/null 2>&1; then for mod in {modules}; do node -e 'try{{require.resolve(process.argv[1])}}catch(e){{process.exit(1)}}' \"$mod\" >/dev/null 2>&1 || printf 'IMPORTMISS\\tnode\\t%s\\n' \"$mod\"; done; else for mod in {modules}; do printf 'IMPORTMISS\\tnode\\t%s\\n' \"$mod\"; done; fi\n"
+        ));
+    }
+    script.push_str(&format!(
+        "if [ -f {dir}/tests/run.sh ]; then out=$(mktemp -d /tmp/myagent-doctor-XXXXXX); mkdir -p \"$out/outputs\"; log=$out/test.log; if (cd \"$out\" && SKILL_DIR={dir} OUTPUTS=\"$out/outputs\" timeout 120 sh {dir}/tests/run.sh >\"$log\" 2>&1); then printf 'TEST\\tOK\\tgolden\\n'; else printf 'TEST\\tFAIL\\tgolden\\n'; tail -n 20 \"$log\" | sed 's/^/DETAIL\\t/'; fi; rm -rf \"$out\"; fi\n"
+    ));
+    Ok(script)
+}
+
+fn clean_version(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+#[tauri::command]
+pub async fn skills_list(app: AppHandle) -> Result<Vec<SkillInfo>, String> {
+    Ok(list_skills(&app)
+        .into_iter()
+        .map(|(info, _)| info)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn skills_read(app: AppHandle, id: String) -> Result<String, String> {
+    if !is_valid_skill_name(&id) {
+        return Err("unknown skill".to_string());
+    }
+    let found = list_skills(&app)
+        .into_iter()
+        .find(|(info, _)| info.id == id)
+        .ok_or_else(|| "unknown skill".to_string())?;
+    std::fs::read_to_string(&found.1).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn skills_set_enabled(
+    app: AppHandle,
+    id: String,
+    enabled: bool,
+) -> Result<Vec<SkillInfo>, String> {
+    if !is_valid_skill_name(&id) {
+        return Err("unknown skill".to_string());
+    }
+    if !list_skills(&app).iter().any(|(info, _)| info.id == id) {
+        return Err("unknown skill".to_string());
+    }
+    {
+        let _guard = state_lock()
+            .lock()
+            .map_err(|_| "skills state is locked".to_string())?;
+        let mut state = load_state(&app);
+        state.disabled.retain(|item| item != &id);
+        if !enabled {
+            state.disabled.push(id);
+        }
+        save_state(&app, &state)?;
+    }
+    skills_list(app).await
+}
+
+#[tauri::command]
+pub async fn skills_doctor(app: AppHandle, id: String) -> Result<DoctorResult, String> {
+    let found = list_skills(&app)
+        .into_iter()
+        .find(|(info, _)| info.id == id)
+        .ok_or_else(|| "unknown skill".to_string())?;
+    let info = found.0;
+    let resources = vec![info.id.clone()];
+    let effect = permissions::check(&app, "skill", &resources, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    if effect == permissions::Effect::Deny {
+        return Err("skill denied by rule".to_string());
+    }
+    let mut result = DoctorResult {
+        skill: info.id.clone(),
+        ok: false,
+        ..DoctorResult::default()
+    };
+    let sandbox = crate::sandbox::config(&app);
+    if !sandbox.enabled || sandbox.image.is_none() {
+        result.detail = Some("Enable the sandbox to run skill checks.".to_string());
+        return Ok(result);
+    }
+    let script = doctor_script(&info)?;
+    let cancel = tokio::sync::Notify::new();
+    let run = crate::sandbox::run(&app, &script, ".", Some(180), None, &cancel).await?;
+    for line in run.output.lines() {
+        let mut parts = line.splitn(3, '\t');
+        match (parts.next(), parts.next()) {
+            (Some("VERSION"), Some(tool)) => {
+                if let Some(version) = parts.next() {
+                    result
+                        .versions
+                        .insert(tool.to_string(), clean_version(version));
+                }
+            }
+            (Some("MISSING"), Some(tool)) => result.missing.push(tool.to_string()),
+            (Some("IMPORTMISS"), Some(kind)) => {
+                if let Some(module) = parts.next() {
+                    result.missing.push(format!("{kind}:{module}"));
+                }
+            }
+            (Some("TEST"), Some("FAIL")) => {
+                let name = parts.next().unwrap_or("golden").to_string();
+                result.failed_tests.push(name);
+            }
+            _ => {}
+        }
+    }
+    if run.exit_code != 0 {
+        result.detail = Some(format!("self-test exited with {}", run.exit_code));
+        return Ok(result);
+    }
+    result.ok = result.missing.is_empty() && result.failed_tests.is_empty();
+    if !result.ok {
+        result.detail = Some(format!(
+            "{} missing, {} failed test(s)",
+            result.missing.len(),
+            result.failed_tests.len()
+        ));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -534,5 +1010,83 @@ mod tests {
             MAX_SKILL_BODY_CHARS
         );
         assert!(capped.contains("[truncated: skill body is"));
+    }
+
+    #[test]
+    fn parses_our_frontmatter_schema() {
+        let content = "---\nid: pdf-workbench\ntitle: PDF Workbench\nversion: 1.2.0\ntriggers: [\"pdf\", \".pdf\"]\nrequires_tools:\n  - python3\n  - qpdf\nrequires_imports:\n  python: [pypdf, pdfplumber]\n  node: []\nnetwork: none\nwrites: [\"outputs/\"]\nsummary: Work with PDFs.\n---\n";
+        let meta = parse_meta(content);
+        assert_eq!(meta.id.as_deref(), Some("pdf-workbench"));
+        assert_eq!(meta.title.as_deref(), Some("PDF Workbench"));
+        assert_eq!(meta.version.as_deref(), Some("1.2.0"));
+        assert_eq!(meta.triggers, vec!["pdf", ".pdf"]);
+        assert_eq!(meta.requires_tools, vec!["python3", "qpdf"]);
+        assert_eq!(meta.requires_python, vec!["pypdf", "pdfplumber"]);
+        assert!(meta.requires_node.is_empty());
+        assert_eq!(meta.writes, vec!["outputs/"]);
+        assert_eq!(meta.summary.as_deref(), Some("Work with PDFs."));
+        assert_eq!(
+            parse_skill("pdf-workbench", content).unwrap().1,
+            "Work with PDFs."
+        );
+    }
+
+    #[test]
+    fn parses_flow_import_map() {
+        let content = "---\nrequires_imports: {python: [pypdf, pdfplumber], node: [sharp]}\n---\n";
+        let meta = parse_meta(content);
+        assert_eq!(meta.requires_python, vec!["pypdf", "pdfplumber"]);
+        assert_eq!(meta.requires_node, vec!["sharp"]);
+    }
+
+    #[test]
+    fn frontmatter_ignores_dashes_inside_values() {
+        let content = "---\nsummary: Use a---b and c\nversion: 1.0.0\n---\nBody";
+        let meta = parse_meta(content);
+        assert_eq!(meta.summary.as_deref(), Some("Use a---b and c"));
+        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert!(content.contains("Body"));
+    }
+
+    #[test]
+    fn parses_block_import_lists() {
+        let content = "---\nrequires_imports:\n  python:\n    - pypdf\n  node:\n    - sharp\n---\n";
+        let meta = parse_meta(content);
+        assert_eq!(meta.requires_python, vec!["pypdf"]);
+        assert_eq!(meta.requires_node, vec!["sharp"]);
+    }
+
+    #[test]
+    fn old_frontmatter_still_parses() {
+        let meta = parse_meta("---\nname: notes\ndescription: Old style\n---\n");
+        assert_eq!(meta.id.as_deref(), Some("notes"));
+        assert_eq!(meta.description.as_deref(), Some("Old style"));
+    }
+
+    #[test]
+    fn doctor_script_rejects_shell_metacharacters() {
+        let mut info = SkillInfo {
+            id: "demo".into(),
+            name: "demo".into(),
+            title: "Demo".into(),
+            version: "1.0.0".into(),
+            summary: "Demo".into(),
+            description: "Demo".into(),
+            source: "builtin".into(),
+            enabled: true,
+            directory: String::new(),
+            triggers: Vec::new(),
+            requires_tools: vec!["python3; rm -rf /".into()],
+            requires_python: Vec::new(),
+            requires_node: Vec::new(),
+        };
+        assert!(doctor_script(&info).is_err());
+        info.requires_tools = vec!["python3".into()];
+        info.requires_python = vec!["pypdf; touch /tmp/x".into()];
+        assert!(doctor_script(&info).is_err());
+        info.requires_python = vec!["pypdf".into()];
+        let script = doctor_script(&info).unwrap();
+        assert!(script.contains("/opt/skills/demo"));
+        assert!(script.contains("command -v python3"));
     }
 }

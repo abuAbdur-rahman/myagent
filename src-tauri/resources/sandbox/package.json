@@ -1,0 +1,13 @@
+{
+  "name": "myagent-sandbox-tools",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "pptxgenjs": "4.0.1",
+    "pdf-lib": "1.17.1",
+    "sharp": "0.35.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-icons": "5.7.0"
+  }
+}
