@@ -821,7 +821,12 @@ pub async fn skills_doctor(app: AppHandle, id: String) -> Result<DoctorResult, S
     let script = doctor_script(&info)?;
     let cancel = tokio::sync::Notify::new();
     let run = crate::sandbox::run(&app, &script, ".", Some(180), None, &cancel).await?;
+    let mut log_lines: Vec<String> = Vec::new();
     for line in run.output.lines() {
+        if let Some(text) = line.strip_prefix("DETAIL\t") {
+            log_lines.push(text.to_string());
+            continue;
+        }
         let mut parts = line.splitn(3, '\t');
         match (parts.next(), parts.next()) {
             (Some("VERSION"), Some(tool)) => {
@@ -844,17 +849,29 @@ pub async fn skills_doctor(app: AppHandle, id: String) -> Result<DoctorResult, S
             _ => {}
         }
     }
+    let logs = log_lines.join("\n");
+    let with_logs = |summary: String| {
+        if logs.is_empty() {
+            summary
+        } else {
+            let logs: String = logs.chars().take(4000).collect();
+            format!("{summary}\n{logs}")
+        }
+    };
     if run.exit_code != 0 {
-        result.detail = Some(format!("self-test exited with {}", run.exit_code));
+        result.detail = Some(with_logs(format!(
+            "self-test exited with {}",
+            run.exit_code
+        )));
         return Ok(result);
     }
     result.ok = result.missing.is_empty() && result.failed_tests.is_empty();
     if !result.ok {
-        result.detail = Some(format!(
+        result.detail = Some(with_logs(format!(
             "{} missing, {} failed test(s)",
             result.missing.len(),
             result.failed_tests.len()
-        ));
+        )));
     }
     Ok(result)
 }

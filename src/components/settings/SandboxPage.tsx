@@ -219,7 +219,7 @@ function FolderSection({
 
 const PROFILES = [
   { id: "core", label: "Core", detail: "PDF, OCR and fonts (~0.5 GB)" },
-  { id: "office", label: "Office", detail: "Adds LibreOffice and deck tools (~1.5 GB)" },
+  { id: "office", label: "Office", detail: "Adds LibreOffice and deck tools (~2.1 GB)" },
   { id: "full", label: "Full", detail: "Adds CJK fonts and more OCR languages" },
 ] as const;
 

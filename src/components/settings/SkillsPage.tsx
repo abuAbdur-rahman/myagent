@@ -40,7 +40,9 @@ function DoctorNote({ result }: { result: SkillDoctorResult }) {
           </span>
         ))}
       </div>
-      {result.detail && <p className="mt-1 text-muted">{result.detail}</p>}
+      {result.detail && (
+        <p className="mt-1 whitespace-pre-wrap text-muted">{result.detail}</p>
+      )}
       {result.missing.length > 0 && (
         <p className="mt-1 text-muted">Missing: {result.missing.join(", ")}</p>
       )}

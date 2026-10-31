@@ -2059,7 +2059,7 @@ mod tests {
     }
 
     fn it_config(image: &str) -> SandboxConfig {
-        SandboxConfig {
+        let mut cfg = SandboxConfig {
             enabled: true,
             project_root: None,
             image: Some(image.to_string()),
@@ -2070,7 +2070,9 @@ mod tests {
             cpus: Some(1.0),
             memory_mb: Some(512),
             skill_mounts: Vec::new(),
-        }
+        };
+        cfg.image_tag = expected_tag(&cfg).ok();
+        cfg
     }
 
     #[tokio::test]

@@ -45,7 +45,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "pip, npm and apt installs are refused before the container starts unless Allow installs is on for the project, so a skill cannot change its own toolchain.",
+        text: "pip, npm and apt installs are refused before the container starts unless Allow installs is on in Sandbox settings. The guard reads the command; it does not inspect scripts or stop a skill from installing packages into a writable project folder.",
       },
     ],
   },
