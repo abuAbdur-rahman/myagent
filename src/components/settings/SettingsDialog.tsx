@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  BookOpen,
   Brain,
   Cpu,
   Database,
@@ -21,6 +22,7 @@ import { useApp } from "../../lib/store";
 import { ProvidersPage } from "./ProvidersPage";
 import { ChangelogPage } from "./ChangelogPage";
 import { SandboxPage } from "./SandboxPage";
+import { SkillsPage } from "./SkillsPage";
 import { VoicePage } from "./VoicePage";
 import {
   AboutPage,
@@ -55,6 +57,7 @@ const ICONS: Record<SettingsPageId, ReactNode> = {
   mcp: <Blocks size={16} />,
   computer: <Monitor size={16} />,
   sandbox: <Shield size={16} />,
+  skills: <BookOpen size={16} />,
   voice: <Mic size={16} />,
   audit: <History size={16} />,
   memory: <Brain size={16} />,
@@ -251,6 +254,7 @@ export function SettingsDialog() {
           {page === "mcp" && <McpPage />}
           {page === "computer" && <ComputerUsePage />}
           {page === "sandbox" && <SandboxPage />}
+          {page === "skills" && <SkillsPage />}
           {page === "voice" && <VoicePage />}
           {page === "audit" && <AuditPage />}
           {page === "memory" && <MemoryPage />}

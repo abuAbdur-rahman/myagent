@@ -29,6 +29,7 @@ function useSandbox() {
   const [busy, setBusy] = useState<string | null>(null);
   const [cpus, setCpus] = useState("1");
   const [memory, setMemory] = useState("1024");
+  const [profile, setProfile] = useState<SandboxStatus["profile"]>("office");
 
   const apply = (next: SandboxStatus) => {
     const known = new Set(EXTRAS.map((extra) => extra.name));
@@ -38,6 +39,7 @@ function useSandbox() {
     setAdvanced(next.packages.filter((name) => !known.has(name)).join(" "));
     setCpus(String(next.cpus));
     setMemory(String(next.memory_mb));
+    setProfile(next.profile);
   };
 
   const load = async () => {
@@ -64,7 +66,9 @@ function useSandbox() {
   };
 
   const enable = () =>
-    void run("enable", () => api.sandboxEnable(parsePackages(extras, advanced), root || null));
+    void run("enable", () =>
+      api.sandboxEnable(profile, parsePackages(extras, advanced), root || null),
+    );
 
   const pickFolder = async () => {
     try {
@@ -89,6 +93,8 @@ function useSandbox() {
     busy,
     cpus,
     memory,
+    profile,
+    setProfile,
     setAdvanced,
     setCpus,
     setMemory,
@@ -211,26 +217,55 @@ function FolderSection({
   );
 }
 
+const PROFILES = [
+  { id: "core", label: "Core", detail: "PDF, OCR and fonts (~0.5 GB)" },
+  { id: "office", label: "Office", detail: "Adds LibreOffice and deck tools (~2.1 GB)" },
+  { id: "full", label: "Full", detail: "Adds CJK fonts and more OCR languages" },
+] as const;
+
 function PackagesSection({
   root,
+  profile,
+  enabled,
   extras,
   advanced,
   busy,
+  onProfile,
   onToggleExtra,
   onAdvanced,
   onEnable,
 }: {
   root: string;
+  profile: SandboxStatus["profile"];
+  enabled: boolean;
   extras: string[];
   advanced: string;
   busy: string | null;
+  onProfile: (value: SandboxStatus["profile"]) => void;
   onToggleExtra: (name: string) => void;
   onAdvanced: (value: string) => void;
   onEnable: () => void;
 }) {
   return (
     <div className="flex flex-col gap-2 rounded-card border border-border p-3" data-setting-term="Packages">
-      <div className="text-xs font-medium">Packages</div>
+      <div className="text-xs font-medium">Toolchain profile</div>
+      <div className="grid grid-cols-3 gap-1 text-xs">
+        {PROFILES.map((item) => (
+          <label key={item.id} className="flex flex-col gap-0.5 rounded-control border border-border p-2">
+            <span className="flex items-center gap-2 font-medium">
+              <input
+                type="radio"
+                name="sandbox-profile"
+                checked={profile === item.id}
+                onChange={() => onProfile(item.id)}
+              />
+              {item.label}
+            </span>
+            <span className="text-muted">{item.detail}</span>
+          </label>
+        ))}
+      </div>
+      <div className="mt-1 text-xs font-medium">Packages</div>
       <div className="grid grid-cols-2 gap-1 text-xs">
         {EXTRAS.map((extra) => (
           <label key={extra.name} className="flex items-center gap-2">
@@ -251,9 +286,18 @@ function PackagesSection({
         aria-label="Advanced packages"
       />
       <div className="flex items-center justify-between text-xs text-muted">
-        <span>Baseline: python3, Node, ripgrep, coreutils. About 250 MB to download once.</span>
+        <span>
+          Office builds about 2.1 GB once; Core is smaller. The image includes Python, Node 20,
+          PDF, OCR and document tools.
+        </span>
         <Button variant="primary" size="sm" disabled={!root || busy !== null} onClick={onEnable}>
-          {busy === "enable" ? <Spinner label="Building" /> : "Enable sandbox"}
+          {busy === "enable" ? (
+            <Spinner label="Building" />
+          ) : enabled ? (
+            "Rebuild image"
+          ) : (
+            "Enable sandbox"
+          )}
         </Button>
       </div>
     </div>
@@ -317,6 +361,37 @@ function LimitsSection({
   );
 }
 
+function InstallsSection({
+  allowed,
+  busy,
+  onChange,
+}: {
+  allowed: boolean;
+  busy: string | null;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div
+      className="flex items-start justify-between gap-4 rounded-card border border-border p-3"
+      data-setting-term="Allow installs"
+    >
+      <div>
+        <div className="text-xs font-medium">Allow installs</div>
+        <p className="mt-1 max-w-xl text-xs text-muted">
+          Off by default. Commands that call pip, npm or apt are refused before the container
+          starts, so a skill cannot change its own toolchain.
+        </p>
+      </div>
+      <Toggle
+        checked={allowed}
+        disabled={busy !== null}
+        label="Allow installs"
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
 type SandboxModel = ReturnType<typeof useSandbox>;
 
 function StatusLine({
@@ -353,13 +428,16 @@ function Reason({ status, root }: { status: SandboxStatus; root: string }) {
 
 function PackagesPanel({ sandbox }: { sandbox: SandboxModel }) {
   const { status, root, extras, advanced, busy } = sandbox;
-  if (status?.state !== "no_image") return null;
+  if (status?.state !== "no_image" && status?.state !== "ready") return null;
   return (
     <PackagesSection
       root={root}
+      profile={sandbox.profile}
+      enabled={status.enabled}
       extras={extras}
       advanced={advanced}
       busy={busy}
+      onProfile={sandbox.setProfile}
       onToggleExtra={sandbox.toggleExtra}
       onAdvanced={sandbox.setAdvanced}
       onEnable={sandbox.enable}
@@ -428,6 +506,15 @@ export function SandboxPage() {
       />
       <PackagesPanel sandbox={sandbox} />
       <LimitsPanel sandbox={sandbox} />
+      {status.state === "ready" && (
+        <InstallsSection
+          allowed={status.allow_installs}
+          busy={busy}
+          onChange={(allow) =>
+            void sandbox.run("installs", () => api.sandboxSetAllowInstalls(allow))
+          }
+        />
+      )}
       <BusyLine busy={busy} />
     </div>
   );

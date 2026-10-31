@@ -10,13 +10,16 @@ const BASE_IMAGE: &str =
 const BASELINE_PACKAGES: &[&str] = &[
     "ca-certificates",
     "coreutils",
+    "curl",
     "findutils",
     "grep",
-    "nodejs",
     "python3",
     "ripgrep",
     "sed",
+    "xz-utils",
 ];
+const NODE_VERSION: &str = "20.20.2";
+const NODE_SHA256: &str = "df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d";
 const PROTECTED_DIRS: &[&str] = &[
     ".git", ".vscode", ".husky", ".github", ".claude", "skills", "commands",
 ];
@@ -31,7 +34,7 @@ const PREFLIGHT_FILES: &[&str] = &[
 ];
 const MAX_TIMEOUT_SECS: u64 = 900;
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const MAX_PACKAGES: usize = 30;
+const MAX_PACKAGES: usize = 80;
 const CHECKPOINT_KEEP: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,11 +46,23 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub image: Option<String>,
     #[serde(default)]
+    pub image_tag: Option<String>,
+    #[serde(default = "default_profile")]
+    pub profile: String,
+    #[serde(default)]
+    pub allow_installs: bool,
+    #[serde(default)]
     pub packages: Vec<String>,
     #[serde(default)]
     pub cpus: Option<f32>,
     #[serde(default)]
     pub memory_mb: Option<u32>,
+    #[serde(skip)]
+    pub skill_mounts: Vec<(PathBuf, String)>,
+}
+
+fn default_profile() -> String {
+    "office".to_string()
 }
 
 impl Default for SandboxConfig {
@@ -56,9 +71,13 @@ impl Default for SandboxConfig {
             enabled: false,
             project_root: None,
             image: None,
+            image_tag: None,
+            profile: default_profile(),
+            allow_installs: false,
             packages: Vec::new(),
             cpus: Some(1.0),
             memory_mb: Some(1024),
+            skill_mounts: Vec::new(),
         }
     }
 }
@@ -71,6 +90,8 @@ pub struct SandboxStatus {
     pub image: Option<String>,
     pub image_size: Option<u64>,
     pub project_root: Option<String>,
+    pub profile: String,
+    pub allow_installs: bool,
     pub packages: Vec<String>,
     pub cpus: f32,
     pub memory_mb: u32,
@@ -239,6 +260,8 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
         image: cfg.image.clone(),
         image_size: None,
         project_root: cfg.project_root.clone(),
+        profile: cfg.profile.clone(),
+        allow_installs: cfg.allow_installs,
         packages: cfg.packages.clone(),
         cpus: cfg.cpus.unwrap_or(1.0),
         memory_mb: cfg.memory_mb.unwrap_or(1024),
@@ -266,6 +289,17 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
                 status.state = "ready".to_string();
                 status.image = Some(id);
                 status.image_size = Some(size);
+                let stale = match expected_tag(&cfg) {
+                    Ok(tag) => cfg.image_tag.as_deref() != Some(tag.as_str()),
+                    Err(_) => true,
+                };
+                if stale {
+                    status.state = "no_image".to_string();
+                    status.detail = Some(
+                        "Sandbox image is out of date; rebuild it to add the current toolchain"
+                            .to_string(),
+                    );
+                }
             }
             None => {
                 status.state = "no_image".to_string();
@@ -290,11 +324,167 @@ fn valid_package(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "+._-".contains(c))
 }
 
+const CORE_PACKAGES: &[&str] = &[
+    "fontconfig",
+    "fonts-dejavu",
+    "fonts-liberation",
+    "fonts-noto-core",
+    "libcairo2",
+    "libharfbuzz0b",
+    "libpango-1.0-0",
+    "libpangoft2-1.0-0",
+    "libxml2-utils",
+    "ocrmypdf",
+    "poppler-utils",
+    "python3-pip",
+    "python3-venv",
+    "qpdf",
+    "tesseract-ocr",
+    "tesseract-ocr-eng",
+    "unzip",
+    "zip",
+];
+const OFFICE_PACKAGES: &[&str] = &[
+    "fonts-noto-color-emoji",
+    "libreoffice-calc",
+    "libreoffice-impress",
+    "libreoffice-writer",
+];
+const FULL_PACKAGES: &[&str] = &[
+    "fonts-noto-cjk",
+    "tesseract-ocr-ara",
+    "tesseract-ocr-deu",
+    "tesseract-ocr-fra",
+    "tesseract-ocr-hin",
+    "tesseract-ocr-por",
+    "tesseract-ocr-spa",
+];
+
+const PYTHON_REQUIREMENTS: &str = include_str!("../resources/sandbox/requirements.txt");
+const NODE_PACKAGE_JSON: &str = include_str!("../resources/sandbox/package.json");
+const NODE_PACKAGE_LOCK: &str = include_str!("../resources/sandbox/package-lock.json");
+const LO_CONVERT: &str = include_str!("../resources/sandbox/lo-convert.sh");
+
+pub fn profile_packages(profile: &str) -> Result<Vec<String>, String> {
+    let mut all: Vec<String> = CORE_PACKAGES.iter().map(|name| name.to_string()).collect();
+    match profile {
+        "core" => {}
+        "office" => all.extend(OFFICE_PACKAGES.iter().map(|name| name.to_string())),
+        "full" => {
+            all.extend(OFFICE_PACKAGES.iter().map(|name| name.to_string()));
+            all.extend(FULL_PACKAGES.iter().map(|name| name.to_string()));
+        }
+        other => return Err(format!("unknown sandbox profile: {other}")),
+    }
+    Ok(all)
+}
+
+fn digest(parts: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn toolchain_digest() -> String {
+    digest(&[
+        PYTHON_REQUIREMENTS,
+        NODE_PACKAGE_JSON,
+        NODE_PACKAGE_LOCK,
+        LO_CONVERT,
+    ])
+}
+
+fn tool_name(token: &str) -> String {
+    let cleaned = token
+        .trim_matches(|c| c == '"' || c == '\'')
+        .replace('\\', "");
+    cleaned
+        .rsplit('/')
+        .next()
+        .unwrap_or(cleaned.as_str())
+        .to_ascii_lowercase()
+}
+
+fn looks_like_install(tokens: &[String]) -> bool {
+    let names: Vec<String> = tokens.iter().map(|token| tool_name(token)).collect();
+    let start = names
+        .iter()
+        .position(|name| {
+            !matches!(
+                name.as_str(),
+                "sudo" | "env" | "command" | "nohup" | "time" | "exec"
+            ) && !name.contains('=')
+                && !name.starts_with('-')
+        })
+        .unwrap_or(names.len());
+    let names = &names[start..];
+    let has = |name: &str| names.iter().any(|item| item == name);
+    let first = names.first().map(String::as_str).unwrap_or_default();
+    if matches!(first, "sh" | "bash" | "zsh" | "dash")
+        && let Some(position) = names.iter().position(|name| name == "-c")
+    {
+        let rest = tokens[start + position + 1..].join(" ");
+        if blocked_install(&rest).is_some() {
+            return true;
+        }
+    }
+    if matches!(first, "eval" | "xargs") {
+        let rest = tokens[start + 1..].join(" ");
+        if blocked_install(&rest).is_some() {
+            return true;
+        }
+    }
+    if first == "apt" || first == "apt-get" {
+        return true;
+    }
+    if first == "uv" && has("add") {
+        return true;
+    }
+    if (first == "pip" || first == "pip3") && has("install") {
+        return true;
+    }
+    if first == "uv" && has("pip") && has("install") {
+        return true;
+    }
+    if (first == "python" || first == "python3")
+        && names
+            .windows(3)
+            .any(|window| window[0] == "-m" && window[1] == "pip" && window[2] == "install")
+    {
+        return true;
+    }
+    (first == "npm" || first == "pnpm" || first == "yarn")
+        && names
+            .iter()
+            .skip(1)
+            .any(|item| matches!(item.as_str(), "install" | "i" | "add" | "ci"))
+}
+
+pub fn blocked_install(command: &str) -> Option<String> {
+    command
+        .split([';', '|', '&', '\n', '\r', '(', ')', '{', '}'])
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .find_map(|segment| {
+            let tokens: Vec<String> = segment.split_whitespace().map(str::to_string).collect();
+            looks_like_install(&tokens).then(|| segment.to_string())
+        })
+}
+
 fn packages_for(cfg: &SandboxConfig) -> Result<Vec<String>, String> {
     let mut all: Vec<String> = BASELINE_PACKAGES
         .iter()
         .map(|name| name.to_string())
         .collect();
+    for name in profile_packages(&cfg.profile)? {
+        if !all.contains(&name) {
+            all.push(name);
+        }
+    }
     for name in &cfg.packages {
         if !valid_package(name) {
             return Err(format!("package name not allowed: {name}"));
@@ -310,37 +500,62 @@ fn packages_for(cfg: &SandboxConfig) -> Result<Vec<String>, String> {
     Ok(all)
 }
 
-fn same_packages(cfg: &SandboxConfig, wanted: &[String]) -> bool {
-    let mut stored: Vec<String> = cfg.packages.clone();
-    stored.sort();
-    stored.dedup();
-    let mut extras: Vec<String> = wanted
-        .iter()
-        .filter(|name| !BASELINE_PACKAGES.contains(&name.as_str()))
-        .cloned()
-        .collect();
-    extras.sort();
-    extras.dedup();
-    stored == extras
-}
-
 pub fn dockerfile(cfg: &SandboxConfig) -> Result<String, String> {
     let packages = packages_for(cfg)?;
     Ok(format!(
-        "FROM {BASE_IMAGE}\nENV DEBIAN_FRONTEND=noninteractive\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends {} \\\n && rm -rf /var/lib/apt/lists/*\nRUN useradd --create-home --uid 1000 sandbox\nWORKDIR /work\n",
+        "FROM {BASE_IMAGE}\n\
+         ENV DEBIAN_FRONTEND=noninteractive\n\
+         COPY requirements.txt /tmp/requirements.txt\n\
+         COPY package.json package-lock.json /opt/node-tools/\n\
+         COPY lo-convert /usr/local/bin/lo-convert\n\
+         RUN apt-get update \\\n\
+          && apt-get install -y --no-install-recommends {} \\\n\
+          && rm -rf /var/lib/apt/lists/*\n\
+         RUN curl -fsSLo /tmp/node.tar.xz https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-linux-x64.tar.xz \\\n\
+          && echo \"{NODE_SHA256}  /tmp/node.tar.xz\" | sha256sum -c - \\\n\
+          && mkdir -p /opt/node20 \\\n\
+          && tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node20 \\\n\
+          && ln -sf /opt/node20/bin/node /usr/local/bin/node \\\n\
+          && ln -sf /opt/node20/bin/npm /usr/local/bin/npm \\\n\
+          && ln -sf /opt/node20/bin/npx /usr/local/bin/npx \\\n\
+          && rm /tmp/node.tar.xz \\\n\
+          && node -e 'const major=+process.versions.node.split(\".\")[0]; if (major < 20) process.exit(1)'\n\
+         RUN python3 -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version'\n\
+         RUN python3 -m venv /opt/venv \\\n\
+          && printf 'pip==26.2.2 --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70\\n' > /tmp/pip-lock.txt \\\n\
+          && /opt/venv/bin/python -m pip install --no-cache-dir --no-deps --require-hashes -r /tmp/pip-lock.txt \\\n\
+          && rm -f /tmp/pip-lock.txt \\\n\
+          && /opt/venv/bin/pip install --no-cache-dir --retries 10 --timeout 60 --resume-retries 20 --require-hashes -r /tmp/requirements.txt \\\n\
+          && rm -f /tmp/requirements.txt\n\
+         RUN --mount=type=cache,target=/root/.npm cd /opt/node-tools && npm ci --no-audit --no-fund --fetch-retries=10 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 --fetch-timeout=600000\n\
+         RUN chmod +x /usr/local/bin/lo-convert && fc-cache -f\n\
+         ENV PATH=/opt/venv/bin:/opt/node20/bin:/opt/node-tools/node_modules/.bin:$PATH\n\
+         ENV NODE_PATH=/opt/node-tools/node_modules\n\
+         RUN useradd --create-home --uid 1000 sandbox\n\
+         WORKDIR /work\n",
         packages.join(" ")
     ))
 }
 
-fn image_tag(packages: &[String]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    packages.hash(&mut hasher);
-    format!("myagent-sandbox:{:016x}", hasher.finish())
+fn image_tag(profile: &str, packages: &[String], toolchain: &str, dockerfile: &str) -> String {
+    let joined = packages.join(" ");
+    let hash = digest(&[BASE_IMAGE, profile, joined.as_str(), toolchain, dockerfile]);
+    format!("myagent-sandbox:{}", &hash[..16])
+}
+
+fn expected_tag(cfg: &SandboxConfig) -> Result<String, String> {
+    let packages = packages_for(cfg)?;
+    Ok(image_tag(
+        &cfg.profile,
+        &packages,
+        &toolchain_digest(),
+        &dockerfile(cfg)?,
+    ))
 }
 
 pub async fn enable(
     app: &tauri::AppHandle,
+    profile: &str,
     packages: &[String],
     project_root: Option<String>,
 ) -> Result<SandboxStatus, String> {
@@ -348,6 +563,8 @@ pub async fn enable(
     if let Some(root) = project_root {
         cfg.project_root = Some(root);
     }
+    profile_packages(profile)?;
+    cfg.profile = profile.to_string();
     cfg.packages = packages.to_vec();
     let dockerfile = dockerfile(&cfg)?;
     let root = cfg
@@ -360,12 +577,11 @@ pub async fn enable(
     }
     let bin = docker_bin().ok_or("Docker Desktop was not found")?;
     daemon_version(&bin).await?;
-    let packages = packages_for(&cfg)?;
-    if let Some(image) = cfg.image.clone()
-        && same_packages(&cfg, &packages)
-        && image_info(&bin, &image).await.is_some()
-    {
+    let tag = expected_tag(&cfg)?;
+    if let Some((id, _)) = image_info(&bin, &tag).await {
         cfg.enabled = true;
+        cfg.image = Some(id);
+        cfg.image_tag = Some(tag);
         cfg.project_root = Some(host_path(&root_path));
         save(app, &cfg)?;
         return Ok(status(app).await);
@@ -378,6 +594,14 @@ pub async fn enable(
     std::fs::create_dir_all(&context).map_err(|e| format!("build context: {e}"))?;
     std::fs::write(context.join("Dockerfile"), &dockerfile)
         .map_err(|e| format!("build context: {e}"))?;
+    std::fs::write(context.join("requirements.txt"), PYTHON_REQUIREMENTS)
+        .map_err(|e| format!("build context: {e}"))?;
+    std::fs::write(context.join("package.json"), NODE_PACKAGE_JSON)
+        .map_err(|e| format!("build context: {e}"))?;
+    std::fs::write(context.join("package-lock.json"), NODE_PACKAGE_LOCK)
+        .map_err(|e| format!("build context: {e}"))?;
+    std::fs::write(context.join("lo-convert"), LO_CONVERT.replace("\r\n", "\n"))
+        .map_err(|e| format!("build context: {e}"))?;
     let pull = docker_output(
         &bin,
         &["pull".into(), BASE_IMAGE.into()],
@@ -387,7 +611,6 @@ pub async fn enable(
     if !pull.status.success() {
         return Err(format!("docker pull failed: {}", text(&pull.stderr)));
     }
-    let tag = image_tag(&packages);
     let build = docker_output(
         &bin,
         &[
@@ -424,7 +647,7 @@ pub async fn enable(
             id.clone(),
             "sh".into(),
             "-c".into(),
-            "command -v python3 && command -v node && command -v rg".into(),
+            "command -v python3 && command -v node && command -v rg && command -v lo-convert && test -x /opt/venv/bin/python".into(),
         ],
         Duration::from_secs(120),
     )
@@ -437,6 +660,7 @@ pub async fn enable(
     }
     cfg.enabled = true;
     cfg.image = Some(id);
+    cfg.image_tag = Some(tag);
     cfg.project_root = Some(host_path(&root_path));
     save(app, &cfg)?;
     Ok(status(app).await)
@@ -574,6 +798,10 @@ pub fn run_args(
             args.push("-v".into());
             args.push(mount(&path, &format!("/work/{name}:ro")));
         }
+    }
+    for (source, target) in &cfg.skill_mounts {
+        args.push("-v".into());
+        args.push(mount(source, target));
     }
     let workdir = if cwd == "." {
         "/work".to_string()
@@ -986,10 +1214,11 @@ pub async fn run(
     conversation_id: Option<&str>,
     cancel: &tokio::sync::Notify,
 ) -> Result<RunResult, String> {
-    let cfg = config(app);
+    let mut cfg = config(app);
     if !cfg.enabled {
         return Err("sandbox is off".to_string());
     }
+    cfg.skill_mounts = crate::skills::sandbox_mounts(app);
     let root = project_root(app)?;
     let data = app
         .path()
@@ -1032,6 +1261,18 @@ pub(crate) async fn run_inner(
 ) -> Result<RunResult, String> {
     if cfg.image.is_none() {
         return Err("sandbox image is not built".to_string());
+    }
+    let tag =
+        expected_tag(cfg).map_err(|error| format!("sandbox image is out of date: {error}"))?;
+    if cfg.image_tag.as_deref() != Some(tag.as_str()) {
+        return Err("sandbox image is out of date; rebuild the sandbox".to_string());
+    }
+    if !cfg.allow_installs
+        && let Some(segment) = blocked_install(command)
+    {
+        return Err(format!(
+            "installs are blocked in the sandbox: {segment}. Turn on Allow installs for this project to run it."
+        ));
     }
     let bin = docker_bin().ok_or("Docker Desktop was not found")?;
     daemon_version(&bin).await?;
@@ -1481,10 +1722,11 @@ pub async fn sandbox_status(app: tauri::AppHandle) -> Result<SandboxStatus, Stri
 #[tauri::command]
 pub async fn sandbox_enable(
     app: tauri::AppHandle,
+    profile: String,
     packages: Vec<String>,
     project_root: Option<String>,
 ) -> Result<SandboxStatus, String> {
-    enable(&app, &packages, project_root).await
+    enable(&app, &profile, &packages, project_root).await
 }
 
 #[tauri::command]
@@ -1495,7 +1737,18 @@ pub async fn sandbox_disable(app: tauri::AppHandle) -> Result<SandboxStatus, Str
 #[tauri::command]
 pub async fn sandbox_rebuild(app: tauri::AppHandle) -> Result<SandboxStatus, String> {
     let cfg = config(&app);
-    enable(&app, &cfg.packages, None).await
+    enable(&app, &cfg.profile, &cfg.packages, None).await
+}
+
+#[tauri::command]
+pub async fn sandbox_set_allow_installs(
+    app: tauri::AppHandle,
+    allow: bool,
+) -> Result<SandboxStatus, String> {
+    let mut cfg = config(&app);
+    cfg.allow_installs = allow;
+    save(&app, &cfg)?;
+    Ok(status(&app).await)
 }
 
 #[tauri::command]
@@ -1528,9 +1781,13 @@ mod tests {
             enabled: true,
             project_root: None,
             image: Some("sha256:abc".to_string()),
+            image_tag: None,
+            profile: "office".to_string(),
+            allow_installs: false,
             packages: Vec::new(),
             cpus: Some(1.0),
             memory_mb: Some(1024),
+            skill_mounts: Vec::new(),
         }
     }
 
@@ -1661,11 +1918,90 @@ mod tests {
 
     #[test]
     fn image_tags_follow_the_package_list() {
-        let one = image_tag(&["a".to_string()]);
-        let two = image_tag(&["b".to_string()]);
+        let one = image_tag("office", &["a".to_string()], "lock1", "docker1");
+        let two = image_tag("office", &["b".to_string()], "lock1", "docker1");
+        let three = image_tag("core", &["a".to_string()], "lock1", "docker1");
+        let four = image_tag("office", &["a".to_string()], "lock2", "docker1");
+        let five = image_tag("office", &["a".to_string()], "lock1", "docker2");
         assert_ne!(one, two);
-        assert_eq!(one, image_tag(&["a".to_string()]));
+        assert_ne!(one, three);
+        assert_ne!(one, four);
+        assert_ne!(one, five);
+        assert_eq!(
+            one,
+            image_tag("office", &["a".to_string()], "lock1", "docker1")
+        );
         assert!(one.starts_with("myagent-sandbox:"));
+    }
+
+    #[test]
+    fn installs_are_blocked_in_sandbox_commands() {
+        for command in [
+            "pip install pypdf",
+            "pip3 install --upgrade pypdf",
+            "ls; apt-get install -y jq",
+            "sudo apt-get install -y jq",
+            "sudo -E pip install pypdf",
+            "env -i pip install pypdf",
+            "FOO=1 npm install",
+            "sh -c 'pip install pypdf'",
+            "eval 'npm ci'",
+            "xargs pip install",
+            "uv add pypdf",
+            "p\\ip install pypdf",
+            "'pip' install pypdf",
+            "python3 -m pip install pypdf",
+            "npm install",
+            "npm ci",
+            "pnpm add sharp",
+            "yarn add pdf-lib",
+        ] {
+            assert!(
+                blocked_install(command).is_some(),
+                "{command} should be blocked"
+            );
+        }
+        for command in [
+            "pip list",
+            "npm run build",
+            "python3 script.py",
+            "apt-cache show jq",
+            "git status",
+        ] {
+            assert!(blocked_install(command).is_none(), "{command} should run");
+        }
+    }
+
+    #[test]
+    fn upgrading_from_0_8_0_defaults_the_profile_and_marks_the_image_stale() {
+        let old = r#"{"enabled":true,"project_root":"D:\\oss\\demo","image":"sha256:old","packages":[],"cpus":1.0,"memory_mb":1024}"#;
+        let cfg: SandboxConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(cfg.profile, "office");
+        assert!(!cfg.allow_installs);
+        assert!(cfg.skill_mounts.is_empty());
+        assert!(cfg.image_tag.is_none());
+        let tag = expected_tag(&cfg).unwrap();
+        assert_ne!(cfg.image_tag.as_deref(), Some(tag.as_str()));
+    }
+
+    #[test]
+    fn profiles_select_apt_sets() {
+        let core = profile_packages("core").unwrap();
+        let office = profile_packages("office").unwrap();
+        let full = profile_packages("full").unwrap();
+        assert!(!core.contains(&"libreoffice-writer".to_string()));
+        assert!(office.contains(&"libreoffice-writer".to_string()));
+        assert!(full.contains(&"fonts-noto-cjk".to_string()));
+        assert!(profile_packages("huge").is_err());
+        let mut cfg = cfg();
+        cfg.profile = "core".to_string();
+        let docker = dockerfile(&cfg).unwrap();
+        assert!(docker.contains("requirements.txt"));
+        assert!(docker.contains("npm ci"));
+        assert!(docker.contains("lo-convert"));
+        assert!(docker.contains("node-v20.20.2-linux-x64.tar.xz"));
+        assert!(docker.contains("sha256sum -c -"));
+        assert!(docker.contains("process.versions.node"));
     }
 
     #[test]
@@ -1723,14 +2059,127 @@ mod tests {
     }
 
     fn it_config(image: &str) -> SandboxConfig {
-        SandboxConfig {
+        let mut cfg = SandboxConfig {
             enabled: true,
             project_root: None,
             image: Some(image.to_string()),
+            image_tag: None,
+            profile: "office".to_string(),
+            allow_installs: false,
             packages: Vec::new(),
             cpus: Some(1.0),
             memory_mb: Some(512),
-        }
+            skill_mounts: Vec::new(),
+        };
+        cfg.image_tag = expected_tag(&cfg).ok();
+        cfg
+    }
+
+    #[tokio::test]
+    #[ignore = "builds the toolchain image (about 1.5 GB) and runs a skill self-test"]
+    async fn toolchain_image_passes_skill_doctor() {
+        let bin = docker_bin().expect("docker binary");
+        daemon_version(&bin).await.unwrap();
+        let mut cfg = cfg();
+        cfg.profile = "office".to_string();
+        cfg.image = None;
+        cfg.image_tag = None;
+        let context =
+            std::env::temp_dir().join(format!("myagent-toolchain-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&context).unwrap();
+        std::fs::write(context.join("Dockerfile"), dockerfile(&cfg).unwrap()).unwrap();
+        std::fs::write(context.join("requirements.txt"), PYTHON_REQUIREMENTS).unwrap();
+        std::fs::write(context.join("package.json"), NODE_PACKAGE_JSON).unwrap();
+        std::fs::write(context.join("package-lock.json"), NODE_PACKAGE_LOCK).unwrap();
+        std::fs::write(context.join("lo-convert"), LO_CONVERT.replace("\r\n", "\n")).unwrap();
+        let tag = expected_tag(&cfg).unwrap();
+        let pull = docker_output(
+            &bin,
+            &["pull".into(), BASE_IMAGE.into()],
+            Duration::from_secs(900),
+        )
+        .await
+        .unwrap();
+        assert!(pull.status.success(), "{}", text(&pull.stderr));
+        let build = docker_output(
+            &bin,
+            &[
+                "build".into(),
+                "--tag".into(),
+                tag.clone(),
+                context.display().to_string(),
+            ],
+            Duration::from_secs(3600),
+        )
+        .await
+        .unwrap();
+        assert!(build.status.success(), "{}", text(&build.stderr));
+
+        let skills = context.join("skills");
+        std::fs::create_dir_all(skills.join("demo/tests")).unwrap();
+        std::fs::write(
+            skills.join("demo/SKILL.md"),
+            "---\nid: demo\nversion: 1.0.0\n---\nFixture",
+        )
+        .unwrap();
+        std::fs::write(
+            skills.join("demo/tests/run.sh"),
+            "#!/bin/sh\nset -eu\n/opt/venv/bin/python -c \"import pypdf, pdfplumber, reportlab, pptx, PIL, pandas, openpyxl\"\nnode -e \"require('pptxgenjs'); require('pdf-lib'); require('sharp')\"\ncommand -v lo-convert\nqpdf --version >/dev/null\nsoffice --version >/dev/null\necho ok > \"$OUTPUTS/ok.txt\"\n",
+        )
+        .unwrap();
+        let info = crate::skills::SkillInfo {
+            id: "demo".into(),
+            name: "demo".into(),
+            title: "Demo".into(),
+            version: "1.0.0".into(),
+            summary: "Fixture".into(),
+            description: "Fixture".into(),
+            source: "builtin".into(),
+            enabled: true,
+            directory: String::new(),
+            triggers: Vec::new(),
+            requires_tools: vec!["python3".into(), "qpdf".into(), "soffice".into()],
+            requires_python: vec!["pypdf".into(), "pptx".into()],
+            requires_node: vec!["pptxgenjs".into(), "sharp".into()],
+        };
+        let script = crate::skills::doctor_script(&info).unwrap();
+        let run = docker_output(
+            &bin,
+            &[
+                "run".into(),
+                "--rm".into(),
+                "--network".into(),
+                "none".into(),
+                "--read-only".into(),
+                "--tmpfs".into(),
+                "/tmp:rw,size=256m".into(),
+                "--user".into(),
+                "1000:1000".into(),
+                "--cap-drop".into(),
+                "ALL".into(),
+                "--security-opt".into(),
+                "no-new-privileges".into(),
+                "--env".into(),
+                "HOME=/tmp".into(),
+                "-v".into(),
+                format!("{}:/opt/skills:ro", skills.display()),
+                tag,
+                "timeout".into(),
+                "180".into(),
+                "sh".into(),
+                "-c".into(),
+                script,
+            ],
+            Duration::from_secs(300),
+        )
+        .await
+        .unwrap();
+        let output = format!("{}\n{}", text(&run.stdout), text(&run.stderr));
+        assert!(run.status.success(), "{output}");
+        assert!(!output.contains("MISSING"), "{output}");
+        assert!(!output.contains("IMPORTMISS"), "{output}");
+        assert!(output.contains("TEST\tOK"), "{output}");
+        std::fs::remove_dir_all(&context).unwrap();
     }
 
     #[tokio::test]

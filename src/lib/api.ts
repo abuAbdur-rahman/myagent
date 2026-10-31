@@ -360,7 +360,26 @@ export function spillImageWrite(conversationId: string, name: string, dataUrl: s
 export interface SkillInfo {
   id: string;
   name: string;
+  title: string;
+  version: string;
+  summary: string;
   description: string;
+  source: "builtin" | "user";
+  enabled: boolean;
+  directory: string;
+  triggers: string[];
+  requires_tools: string[];
+  requires_python: string[];
+  requires_node: string[];
+}
+
+export interface SkillDoctorResult {
+  skill: string;
+  ok: boolean;
+  missing: string[];
+  failed_tests: string[];
+  versions: Record<string, string>;
+  detail: string | null;
 }
 
 export function skillIndex() {
@@ -369,6 +388,18 @@ export function skillIndex() {
 
 export function skillRead(id: string) {
   return invoke<string>("skill_read", { id });
+}
+
+export function skillsList() {
+  return invoke<SkillInfo[]>("skills_list");
+}
+
+export function skillsSetEnabled(id: string, enabled: boolean) {
+  return invoke<SkillInfo[]>("skills_set_enabled", { id, enabled });
+}
+
+export function skillsDoctor(id: string) {
+  return invoke<SkillDoctorResult>("skills_doctor", { id });
 }
 
 export interface McpServerRow {
@@ -658,6 +689,8 @@ export type SandboxStatus = {
   image: string | null;
   image_size: number | null;
   project_root: string | null;
+  profile: "core" | "office" | "full";
+  allow_installs: boolean;
   packages: string[];
   cpus: number;
   memory_mb: number;
@@ -668,8 +701,20 @@ export function sandboxStatus() {
   return invoke<SandboxStatus>("sandbox_status");
 }
 
-export function sandboxEnable(packages: string[], projectRoot?: string | null) {
-  return invoke<SandboxStatus>("sandbox_enable", { packages, projectRoot: projectRoot ?? null });
+export function sandboxEnable(
+  profile: "core" | "office" | "full",
+  packages: string[],
+  projectRoot?: string | null,
+) {
+  return invoke<SandboxStatus>("sandbox_enable", {
+    profile,
+    packages,
+    projectRoot: projectRoot ?? null,
+  });
+}
+
+export function sandboxSetAllowInstalls(allow: boolean) {
+  return invoke<SandboxStatus>("sandbox_set_allow_installs", { allow });
 }
 
 export function sandboxDisable() {

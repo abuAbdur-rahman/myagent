@@ -33,7 +33,9 @@ export function parseSkillMentions(text: string): string[] {
   return found;
 }
 
-export function buildSkillIndexBlock(skills: SkillInfo[]): string {
+export type SkillSummary = Pick<SkillInfo, "id" | "name" | "description">;
+
+export function buildSkillIndexBlock(skills: SkillSummary[]): string {
   if (skills.length === 0) return "";
   const lines = skills.map(
     (skill) => `- ${skill.name}: ${stripBoundaryTags(skill.description.trim())}`,
@@ -48,7 +50,7 @@ export interface ResolvedMentions {
 
 export async function resolveSkillMentions(
   text: string,
-  index: SkillInfo[],
+  index: SkillSummary[],
 ): Promise<ResolvedMentions> {
   const mentions = parseSkillMentions(text);
   if (mentions.length === 0) return { content: text, unknown: [] };

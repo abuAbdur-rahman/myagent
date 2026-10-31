@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.1",
+    date: "2026-10-31",
+    summary:
+      "Skills get our own metadata, an enabled switch, a self-test and a Settings page. The sandbox image now carries the document toolchain: PDF and OCR tools, a pinned Python and Node set, LibreOffice with a serialised wrapper, and installs are refused unless you allow them.",
+    changes: [
+      {
+        kind: "new",
+        text: "Skills declare title, version, triggers, required tools and imports, network and write scope. Settings > Skills lists built-in and user skills, turns each one off, opens its folder and runs a self-test.",
+      },
+      {
+        kind: "new",
+        text: "Self-tests run inside the sandbox with the skill folders mounted read-only. Missing tools, missing imports, versions and failed golden tests come back as one result.",
+      },
+      {
+        kind: "new",
+        text: "The sandbox image offers Core, Office and Full toolchain profiles. Python packages are installed from a hashed lockfile, Node packages from a committed lockfile, and LibreOffice runs through a wrapper that serialises conversions and enforces a timeout.",
+      },
+      {
+        kind: "improved",
+        text: "Rebuilding reuses an image only when the profile, the package list and the toolchain files match, so a changed pin builds a new image instead of reusing a stale one.",
+      },
+      {
+        kind: "fixed",
+        text: "pip, npm and apt installs are refused before the container starts unless Allow installs is on in Sandbox settings. The guard reads the command; it does not inspect scripts or stop a skill from installing packages into a writable project folder.",
+      },
+    ],
+  },
+  {
     version: "0.8.0",
     date: "2026-10-30",
     summary:
