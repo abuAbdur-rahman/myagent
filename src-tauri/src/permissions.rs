@@ -233,11 +233,6 @@ pub fn default_rules() -> Vec<Rule> {
             effect: Effect::Allow,
         },
         Rule {
-            action: "sandbox_run".to_string(),
-            resource: "*".to_string(),
-            effect: Effect::Allow,
-        },
-        Rule {
             action: "skill".to_string(),
             resource: "*".to_string(),
             effect: Effect::Allow,

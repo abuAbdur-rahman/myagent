@@ -23,8 +23,13 @@ export function SandboxBuildStatus() {
 
     void listen<BuildEvent>("sandbox-build", (message) => {
       if (!live) return;
+      if (message.payload.state === "building") {
+        if (hideTimer.current) window.clearTimeout(hideTimer.current);
+        setEvent(message.payload);
+        return;
+      }
       setEvent(message.payload);
-      if (message.payload.state !== "building") scheduleHide();
+      if (message.payload.state !== "failed") scheduleHide();
     }).then((stop) => {
       if (live) unlisten = stop;
       else stop();

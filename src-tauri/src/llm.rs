@@ -2608,7 +2608,13 @@ impl ToolRunner for RealTools<'_> {
             self.repeat.reset();
         }
 
-        let resources = approval_resources(&name, &args);
+        let mut resources = approval_resources(&name, &args);
+        if name == "skill"
+            && let Some(requested) = resources.first().cloned()
+            && let Some(canonical) = crate::skills::canonical_skill_id(self.app, &requested)
+        {
+            resources[0] = canonical;
+        }
         let checked =
             permissions::check(self.app, &name, &resources, self.req.project_id.as_deref()).await;
         if let Err(error) = &checked {
@@ -2626,7 +2632,8 @@ impl ToolRunner for RealTools<'_> {
             .as_ref()
             .copied()
             .unwrap_or(permissions::Effect::Ask);
-        if decision == permissions::Effect::Allow && sensitive_resource(&name, &resources) {
+        let sensitive = sensitive_resource(&name, &resources);
+        if decision == permissions::Effect::Allow && sensitive {
             decision = permissions::Effect::Ask;
         }
         if decision == permissions::Effect::Ask {
@@ -2646,11 +2653,16 @@ impl ToolRunner for RealTools<'_> {
             )
             .await
             {
-                decision = judged;
+                decision = if sensitive && judged == permissions::Effect::Allow {
+                    permissions::Effect::Ask
+                } else {
+                    judged
+                };
             }
         }
         let sandbox_auto = checked.is_ok()
             && decision != permissions::Effect::Deny
+            && !sensitive
             && name.starts_with("sandbox_")
             && crate::sandbox::enabled(self.app);
         let (verdict, screen_failed) = if decision == permissions::Effect::Ask || sandbox_auto {

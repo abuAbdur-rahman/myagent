@@ -704,13 +704,18 @@ fn resolve_skill_id(requested: &str, skills: &[(SkillInfo, std::path::PathBuf)])
     }
 }
 
+pub fn canonical_skill_id(app: &AppHandle, id: &str) -> Option<String> {
+    let requested = id.trim().to_ascii_lowercase();
+    resolve_skill_id(&requested, &list_skills(app))
+}
+
 pub fn prepare_skill(app: &AppHandle, id: &str) -> Result<String, String> {
     let id = id.trim().to_ascii_lowercase();
-    if !is_valid_skill_name(&id) {
-        return Err(format!("unknown skill: {id}"));
-    }
     let all = list_skills(app);
     let resolved = resolve_skill_id(&id, &all).ok_or_else(|| unknown_skill(&id, &all))?;
+    if !is_valid_skill_name(&resolved) {
+        return Err(format!("unknown skill: {id}"));
+    }
     let Some(found) = all.iter().find(|(info, _)| info.id == resolved) else {
         return Err(unknown_skill(&id, &all));
     };
@@ -753,14 +758,15 @@ pub async fn skill_index(app: AppHandle) -> Result<Vec<SkillInfo>, String> {
 
 #[tauri::command]
 pub async fn skill_read(app: AppHandle, id: String) -> Result<String, String> {
-    let resources = vec![id.clone()];
+    let resolved = canonical_skill_id(&app, &id).unwrap_or(id);
+    let resources = vec![resolved.clone()];
     let effect = permissions::check(&app, "skill", &resources, None)
         .await
         .map_err(|e| e.to_string())?;
     if effect == permissions::Effect::Deny {
         return Err("skill denied by rule".to_string());
     }
-    prepare_skill(&app, &id)
+    prepare_skill(&app, &resolved)
 }
 
 fn user_skills_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {

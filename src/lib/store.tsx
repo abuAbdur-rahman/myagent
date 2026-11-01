@@ -367,6 +367,7 @@ interface AppContextValue {
     limitKnown: boolean;
     lastIn: number | null;
     lastOut: number | null;
+    prompt: string;
   };
 
   projects: Project[];
@@ -1266,6 +1267,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         limitKnown,
         lastIn: lastUsage.prompt_tokens ?? null,
         lastOut: lastUsage.completion_tokens ?? null,
+        prompt: system ?? "",
       };
     }
     const estimated = estimateContext(
@@ -1280,6 +1282,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       limitKnown,
       lastIn: null,
       lastOut: null,
+      prompt: system ?? "",
     };
   }, [
     messages,

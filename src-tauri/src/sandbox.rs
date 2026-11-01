@@ -303,11 +303,6 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
         status.detail = Some(build_detail().lock().map(|v| v.clone()).unwrap_or_default());
         return status;
     }
-    if let Ok(Some(error)) = build_error().lock().map(|v| v.clone()) {
-        status.state = "no_image".to_string();
-        status.detail = Some(error);
-        return status;
-    }
     let Some(bin) = docker_bin() else {
         status.detail = Some("Docker Desktop was not found".to_string());
         return status;
@@ -351,6 +346,11 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
             status.state = "no_image".to_string();
             status.detail = Some("Sandbox image has not been built".to_string());
         }
+    }
+    if status.state != "ready"
+        && let Ok(Some(error)) = build_error().lock().map(|v| v.clone())
+    {
+        status.detail = Some(error);
     }
     status
 }
@@ -622,7 +622,12 @@ pub async fn start_enable(
             "building",
             "Pulling the base image and building the toolchain…",
         );
-        let result = enable(&app_handle, &profile, &packages, project_root).await;
+        let inner_app = app_handle.clone();
+        let result = tauri::async_runtime::spawn(async move {
+            enable(&inner_app, &profile, &packages, project_root).await
+        })
+        .await
+        .unwrap_or_else(|error| Err(format!("sandbox build task failed: {error}")));
         match result {
             Ok(_) => {
                 if let Ok(mut detail) = build_detail().lock() {
@@ -760,6 +765,9 @@ pub async fn disable(app: &tauri::AppHandle) -> Result<SandboxStatus, String> {
     let mut cfg = config(app);
     cfg.enabled = false;
     save(app, &cfg)?;
+    if let Ok(mut error) = build_error().lock() {
+        *error = None;
+    }
     Ok(status(app).await)
 }
 
@@ -1241,6 +1249,27 @@ fn changed_unstaged(root: &Path) -> Vec<String> {
         }
     }
     paths
+}
+
+pub fn credential_path(path: &str) -> bool {
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    [
+        ".env",
+        ".ssh/",
+        ".aws/",
+        ".gnupg/",
+        ".kube/",
+        "id_rsa",
+        "id_ed25519",
+        "logins.json",
+        "key4.db",
+        "login data",
+        "local state",
+        "cookies",
+        "credentials",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 pub fn is_sensitive(path: &str) -> bool {
@@ -1838,6 +1867,9 @@ pub fn grep_files(
             continue;
         }
         let rel = display_rel(&root, entry.path());
+        if credential_path(&rel) {
+            continue;
+        }
         if let Some(matcher) = &file_matcher
             && !matcher.is_match(&rel)
         {

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Brain, Copy, FileText, X } from "lucide-react";
 import { useApp } from "../lib/store";
-import { buildSystemPrompt } from "../lib/context";
 import { parseDocAttachments } from "../lib/attachments";
 import * as api from "../lib/api";
 import { copyWithToast } from "./ChatHeader";
@@ -14,10 +13,12 @@ function estimate(text: string): number {
 function Section({
   title,
   tokens,
+  count,
   children,
 }: {
   title: string;
   tokens?: number;
+  count?: number;
   children: ReactNode;
 }) {
   return (
@@ -26,6 +27,9 @@ function Section({
         <h3 className="m-0 text-[11px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
         {typeof tokens === "number" && (
           <span className="text-[11px] tabular-nums text-muted">≈{tokens} tok</span>
+        )}
+        {typeof count === "number" && (
+          <span className="text-[11px] tabular-nums text-muted">{count}</span>
         )}
       </div>
       {children}
@@ -39,7 +43,6 @@ export function ContextInspector() {
     activeProject,
     globalMemories,
     projectMemories,
-    displayName,
     standingPrompt,
     chatPrompt,
     contextInfo,
@@ -60,19 +63,6 @@ export function ContextInspector() {
       live = false;
     };
   }, []);
-
-  const system = useMemo(
-    () =>
-      buildSystemPrompt({
-        globalMemories,
-        project: activeProject,
-        projectMemories,
-        userName: displayName || undefined,
-        standingPrompt: standingPrompt || undefined,
-        chatPrompt: chatPrompt ?? undefined,
-      }) ?? "",
-    [globalMemories, activeProject, projectMemories, displayName, standingPrompt, chatPrompt],
-  );
 
   const docs = useMemo(
     () => messages.flatMap((message) => parseDocAttachments(message.attachments)),
@@ -128,7 +118,7 @@ export function ContextInspector() {
           </div>
         </Section>
 
-        <Section title="Checklist" tokens={todos.length}>
+        <Section title="Checklist" count={todos.length}>
           {todos.length === 0 ? (
             <p className="m-0 text-xs text-muted">No checklist for this chat.</p>
           ) : (
@@ -170,14 +160,14 @@ export function ContextInspector() {
           </dl>
         </Section>
 
-        <Section title="System prompt" tokens={estimate(system)}>
+        <Section title="System prompt" tokens={estimate(contextInfo.prompt)}>
           <div className="mb-2 flex justify-end">
-            <Button size="sm" variant="ghost" onClick={() => void copyWithToast(system)}>
+            <Button size="sm" variant="ghost" onClick={() => void copyWithToast(contextInfo.prompt)}>
               <Copy size={12} /> Copy
             </Button>
           </div>
           <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface-2 p-2 font-mono text-[11px] text-muted">
-            {system || "No system prompt."}
+            {contextInfo.prompt || "No system prompt."}
           </pre>
         </Section>
 
@@ -201,7 +191,7 @@ export function ContextInspector() {
           </p>
         </Section>
 
-        <Section title="Attachments" tokens={docs.length}>
+        <Section title="Attachments" count={docs.length}>
           {docs.length === 0 ? (
             <p className="m-0 text-xs text-muted">No documents attached.</p>
           ) : (
@@ -216,7 +206,7 @@ export function ContextInspector() {
           )}
         </Section>
 
-        <Section title="Skills" tokens={skills.length}>
+        <Section title="Skills" count={skills.length}>
           {skills.length === 0 ? (
             <p className="m-0 text-xs text-muted">No skills indexed.</p>
           ) : (

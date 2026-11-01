@@ -29,11 +29,11 @@ export const RELEASES: readonly Release[] = [
     changes: [
       {
         kind: "improved",
-        text: "Read-only tools (sandbox read/glob/grep/run, web search/fetch, skill, document read, image describe, todo, time and recall) no longer ask every time. Writes, deletes, installs, host shell and unknown tools still ask, and a credential path such as .env, .ssh or .aws goes to the decision model.",
+        text: "Read-only tools (sandbox read/glob/grep, web search/fetch, skill, document read, image describe, todo, time and recall) no longer ask every time. sandbox_run can write project files and still asks unless the sandbox screener accepts it; file writes, deletes, installs, host shell and unknown tools still ask, and a credential path such as .env, .ssh or .aws always needs review.",
       },
       {
         kind: "new",
-        text: "A small decision model classifies each remaining approval as allow, ask or deny within a 3 second budget; if it fails or is unsure, the approval card is shown.",
+        text: "A small decision model classifies each remaining approval as allow, ask or deny within a 3 second budget. If it fails or is unsure, the card stays, though an enabled sandbox screener may still auto-allow its own tools. Sensitive paths never take that shortcut.",
       },
       {
         kind: "new",
