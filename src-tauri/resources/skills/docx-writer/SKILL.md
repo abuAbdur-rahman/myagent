@@ -23,7 +23,7 @@ python3 "$SKILL_DIR/bin/docb" build spec.json -o outputs/report.docx
 
 ## Workflow
 
-1. `docb new spec.json` writes a starter spec.
+1. `docb new -o spec.json` writes a starter spec.
 2. `docb validate spec.json` checks block types and table shapes.
 3. `docb build spec.json -o outputs/report.docx`.
 4. `docb check outputs/report.docx` reopens it and reports paragraphs, tables

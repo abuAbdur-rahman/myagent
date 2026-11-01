@@ -25,7 +25,7 @@ python3 "$SKILL_DIR/bin/sheetb" build spec.json -o outputs/report.xlsx
 
 ## Workflow
 
-1. Write the spec, or start from `sheetb new spec.json`.
+1. Write the spec, or start from `sheetb new -o spec.json`.
 2. `sheetb validate spec.json` checks sheet names, row shapes and formulas.
 3. `sheetb build spec.json -o outputs/book.xlsx`.
 4. `sheetb check outputs/book.xlsx` reopens it and reports sheets, rows and

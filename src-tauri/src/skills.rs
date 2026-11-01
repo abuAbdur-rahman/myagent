@@ -740,15 +740,29 @@ fn user_skills_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .map_err(|e| format!("app data directory: {e}"))
 }
 
-fn write_user_skill(app: &AppHandle, id: &str, content: &str) -> Result<(), String> {
+fn builtin_skill_exists(app: &AppHandle, id: &str) -> bool {
+    skill_dirs(app)
+        .into_iter()
+        .filter(|(_, source)| *source != "user")
+        .any(|(dir, _)| dir.join(id).join("SKILL.md").is_file())
+}
+
+fn write_user_skill(app: &AppHandle, id: &str, content: &str, replace: bool) -> Result<(), String> {
     if !is_valid_skill_name(id) {
         return Err(format!("invalid skill id: {id}"));
     }
+    if builtin_skill_exists(app, id) {
+        return Err(format!("'{id}' is a built-in skill id; choose another id"));
+    }
     let dir = user_skills_dir(app)?.join(id);
+    let skill_file = dir.join("SKILL.md");
+    if skill_file.exists() && !replace {
+        return Err(format!("skill '{id}' already exists; import it to replace"));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("skill folder: {e}"))?;
     let temp = dir.join("SKILL.md.tmp");
     std::fs::write(&temp, content).map_err(|e| format!("skill file: {e}"))?;
-    std::fs::rename(&temp, dir.join("SKILL.md")).map_err(|e| format!("skill file: {e}"))
+    std::fs::rename(&temp, skill_file).map_err(|e| format!("skill file: {e}"))
 }
 
 fn clean_field(value: &str, name: &str, max: usize) -> Result<String, String> {
@@ -759,9 +773,9 @@ fn clean_field(value: &str, name: &str, max: usize) -> Result<String, String> {
     if value.chars().count() > max {
         return Err(format!("{name} is too long (max {max})"));
     }
-    if value.contains(['\n', '\r', '"', '\\', '[', ']', ',']) {
+    if value.contains(['\n', '\r', '"', '\\']) {
         return Err(format!(
-            "{name} cannot contain quotes, brackets, commas or line breaks"
+            "{name} cannot contain quotes, backslashes or line breaks"
         ));
     }
     Ok(value.to_string())
@@ -774,6 +788,9 @@ fn clean_list(values: &[String], name: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for value in values {
         let value = clean_field(value, name, 96)?;
+        if value.contains([',', '[', ']']) {
+            return Err(format!("{name} entries cannot contain commas or brackets"));
+        }
         if !out.contains(&value) {
             out.push(value);
         }
@@ -907,14 +924,14 @@ pub async fn skills_save_draft(
     draft: SkillDraft,
 ) -> Result<Vec<SkillInfo>, String> {
     let content = draft_markdown(&draft)?;
-    write_user_skill(&app, &draft.id, &content)?;
+    write_user_skill(&app, &draft.id, &content, false)?;
     skills_list(app).await
 }
 
 #[tauri::command]
 pub async fn skills_save_raw(app: AppHandle, content: String) -> Result<Vec<SkillInfo>, String> {
     let id = validate_raw_skill(&content)?;
-    write_user_skill(&app, &id, &content)?;
+    write_user_skill(&app, &id, &content, false)?;
     skills_list(app).await
 }
 
@@ -932,7 +949,7 @@ pub async fn skills_import(app: AppHandle, path: String) -> Result<Vec<SkillInfo
         let content = std::fs::read_to_string(&source)
             .map_err(|e| format!("skill file must be UTF-8 text: {e}"))?;
         let id = validate_raw_skill(&content)?;
-        write_user_skill(&app, &id, &content)?;
+        write_user_skill(&app, &id, &content, true)?;
     } else if metadata.is_dir() {
         let id = source
             .file_name()
@@ -956,6 +973,9 @@ pub async fn skills_import(app: AppHandle, path: String) -> Result<Vec<SkillInfo
             return Err("skill folder name must match the frontmatter id".to_string());
         }
         validate_raw_skill(&content)?;
+        if builtin_skill_exists(&app, &id) {
+            return Err(format!("'{id}' is a built-in skill id; choose another id"));
+        }
         let base = user_skills_dir(&app)?;
         let target = base.join(&id);
         if std::fs::canonicalize(&source).ok() == std::fs::canonicalize(&target).ok() {
@@ -972,10 +992,21 @@ pub async fn skills_import(app: AppHandle, path: String) -> Result<Vec<SkillInfo
             let _ = std::fs::remove_dir_all(&staging);
             return Err(format!("skill file: {error}"));
         }
-        if target.exists() {
-            std::fs::remove_dir_all(&target).map_err(|e| format!("replace skill: {e}"))?;
+        let backup = base.join(format!(".backup-{}", uuid::Uuid::new_v4()));
+        let had_target = target.exists();
+        if had_target {
+            std::fs::rename(&target, &backup).map_err(|e| format!("replace skill: {e}"))?;
         }
-        std::fs::rename(&staging, &target).map_err(|e| format!("install skill: {e}"))?;
+        if let Err(error) = std::fs::rename(&staging, &target) {
+            let _ = std::fs::remove_dir_all(&staging);
+            if had_target {
+                let _ = std::fs::rename(&backup, &target);
+            }
+            return Err(format!("install skill: {error}"));
+        }
+        if had_target {
+            let _ = std::fs::remove_dir_all(&backup);
+        }
     } else {
         return Err("skill source must be a SKILL.md file or a folder".to_string());
     }

@@ -278,15 +278,11 @@ def cmd_tables(args) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
-                writer.writerows(
-                    [
-                        [
-                            "'" + str(cell) if str(cell).startswith(("=", "+", "-", "@")) else cell
-                            for cell in row
-                        ]
-                        for row in item["rows"]
-                    ]
-                )
+                def safe_cell(cell):
+                    text = str(cell)
+                    return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else cell
+
+                writer.writerows([[safe_cell(cell) for cell in row] for row in item["rows"]])
             files.append(str(target))
         emit({"ok": True, "tables": len(tables), "files": files})
         return
@@ -297,7 +293,15 @@ def cmd_tables(args) -> None:
     for item in tables:
         sheet = workbook.create_sheet(f"p{item['page']}-{item['table']}")
         for row in item["rows"]:
-            sheet.append(row)
+            sheet.append(
+                [
+                    "'" + str(cell)
+                    if isinstance(cell, str)
+                    and cell.lstrip().startswith(("=", "+", "-", "@"))
+                    else cell
+                    for cell in row
+                ]
+            )
     workbook.save(target)
     emit({"ok": True, "tables": len(tables), "files": [str(target)]})
 
@@ -308,7 +312,7 @@ def cmd_images(args) -> None:
     prefix = str(target)
     parent = target.parent
     stem = target.name
-    for stale in parent.glob(f"{stem}*.png"):
+    for stale in parent.glob(f"{stem}-*.png"):
         stale.unlink()
     run(["pdfimages", "-png", str(source), prefix], "pdfimages")
     files = sorted(

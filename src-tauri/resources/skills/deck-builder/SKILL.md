@@ -23,7 +23,7 @@ python3 "$SKILL_DIR/bin/deckb" build spec.json -o outputs/deck.pptx
 
 ## Workflow
 
-1. `deckb new spec.json` writes a starter deck.
+1. `deckb new -o spec.json` writes a starter deck.
 2. `deckb validate spec.json` checks layouts, text fit, table shapes, chart
    data and image alt text.
 3. `deckb build spec.json -o outputs/deck.pptx`.

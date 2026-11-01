@@ -311,8 +311,14 @@ def cmd_build(args) -> None:
     presentation.core_properties.author = str((spec.get("meta") or {}).get("author", ""))
     title = (spec.get("meta") or {}).get("title", "deck")
     target = output_path(args.out, f"{safe_name(title, 'deck')}.pptx")
-    if source_file(args.file).resolve() == target.resolve():
-        fail("refusing to overwrite the input spec; choose a new output")
+    inputs = [source_file(args.file).resolve()]
+    inputs.extend(
+        Path(item["image"]).expanduser().resolve()
+        for item in spec["slides"]
+        if item["layout"] == "image"
+    )
+    if target.resolve() in inputs:
+        fail("refusing to overwrite the input spec or an image; choose a new output")
     presentation.save(target)
     emit({"ok": True, "file": str(target), "slides": len(spec["slides"])})
 

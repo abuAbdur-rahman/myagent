@@ -366,24 +366,6 @@ fn truncate_preview(text: &str) -> String {
     truncate_chars(text.trim(), 500)
 }
 
-fn created_files(text: &str) -> Vec<String> {
-    let Some((_, rest)) = text.rsplit_once("\ncreated files:\n") else {
-        return Vec::new();
-    };
-    rest.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| {
-            let path = std::path::Path::new(line);
-            !path.is_absolute()
-                && !path
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-        })
-        .map(str::to_string)
-        .collect()
-}
-
 fn domains_in(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for token in text.split(|c: char| {
@@ -2917,7 +2899,7 @@ impl ToolRunner for RealTools<'_> {
                     Vec::new()
                 };
                 let files: Vec<String> = if name == "sandbox_run" {
-                    created_files(&done.output)
+                    done.files.clone()
                 } else {
                     touched_path.clone().into_iter().collect()
                 };
@@ -3349,16 +3331,6 @@ mod tests {
             false,
             &AppError::Upstream("404 Not Found".to_string())
         ));
-    }
-
-    #[test]
-    fn created_files_reads_the_output_marker() {
-        let output = "stdout:\nok\n\ncreated files:\noutputs/deck.pptx\noutputs/report.xlsx\n";
-        assert_eq!(
-            created_files(output),
-            vec!["outputs/deck.pptx", "outputs/report.xlsx"]
-        );
-        assert!(created_files("plain output").is_empty());
     }
 
     #[test]

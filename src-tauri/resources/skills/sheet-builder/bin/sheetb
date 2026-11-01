@@ -105,6 +105,7 @@ def validate_spec(spec: dict) -> list[str]:
 def cmd_new(args) -> None:
     spec = {
         "title": "New workbook",
+        "allow_formulas": True,
         "sheets": [
             {
                 "name": "Sheet1",
@@ -141,7 +142,7 @@ def cmd_build(args) -> None:
         page = book.create_sheet(str(sheet["name"]))
         columns = sheet.get("columns") or []
         rows = sheet.get("rows") or []
-        allow_formulas = bool(spec.get("allow_formulas"))
+        allow_formulas = spec.get("allow_formulas") is True
 
         def value(cell):
             if isinstance(cell, str) and cell.startswith("=") and not allow_formulas:

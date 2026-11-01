@@ -1846,10 +1846,8 @@ pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactP
             "pdftocairo -png -r 120 -f 1 -l {PREVIEW_PAGES} \"$PREVIEW_FILE\" /preview/page || exit 4; pdftotext -layout \"$PREVIEW_FILE\" /preview/text.txt 2>/dev/null || true"
         )
     };
-    let container = format!(
-        "myagent-preview-{}",
-        &uuid::Uuid::new_v4().to_string()[..12]
-    );
+    let container_id = format!("preview-{}", &uuid::Uuid::new_v4().to_string()[..12]);
+    let container = format!("myagent-{container_id}");
     let args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
@@ -1897,7 +1895,7 @@ pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactP
     let output = match output {
         Ok(value) => value,
         Err(error) => {
-            kill_container(&bin, &container).await;
+            kill_container(&bin, &container_id).await;
             return Err(error);
         }
     };

@@ -4127,6 +4127,7 @@ pub async fn try_execute(
             Some(Ok(crate::tools::ExecOutput {
                 output: cap_mcp_text(text),
                 artifact: None,
+                files: Vec::new(),
             }))
         }
         Err(failure) => {
