@@ -29,3 +29,6 @@ dist-ssr
 # Bundled screen model (fetched by `npm run model:screen`, never committed)
 src-tauri/resources/screen-model/*.onnx
 src-tauri/resources/screen-model/tokenizer.json
+
+__pycache__/
+*.pyc
