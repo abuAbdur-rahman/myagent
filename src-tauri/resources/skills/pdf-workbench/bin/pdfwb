@@ -297,9 +297,11 @@ def cmd_images(args) -> None:
     emit({"ok": True, "images": len(files), "files": files})
 
 
-def render_pages(source: Path, spec: str | None, dpi: int, out: str | None) -> list[str]:
+def render_pages(
+    source: Path, spec: str | None, dpi: int, out: str | None, password: str | None = None
+) -> list[str]:
     pypdfium2 = module("pypdfium2", "pypdfium2")
-    pdf = pypdfium2.PdfDocument(str(source))
+    pdf = pypdfium2.PdfDocument(str(source), password=password)
     try:
         selected = page_numbers(spec, len(pdf)) if spec else list(range(len(pdf)))
         files = []
@@ -320,7 +322,7 @@ def render_pages(source: Path, spec: str | None, dpi: int, out: str | None) -> l
 
 def cmd_render(args) -> None:
     source = input_file(args.file)
-    files = render_pages(source, args.pages, args.dpi, args.out)
+    files = render_pages(source, args.pages, args.dpi, args.out, args.password)
     emit({"ok": True, "files": files})
 
 
@@ -332,8 +334,6 @@ def cmd_ocr(args) -> None:
     target = output_path(args.out, f"{source.stem}-ocr.pdf")
     guard_not_input(source, target)
     command = ["ocrmypdf", "--skip-text", "-l", args.lang]
-    if args.force:
-        command.append("--force-ocr")
     command.extend([str(source), str(target)])
     run(command, "ocrmypdf")
     emit({"ok": True, "file": str(target), "pages": len(reader.pages)})
@@ -355,6 +355,8 @@ def cmd_merge(args) -> None:
         for name, start in starts:
             writer.add_outline_item(name, start)
     target = output_path(args.out, "merged.pdf")
+    for source in sources:
+        guard_not_input(source, target)
     writer.write(str(target))
     emit({"ok": True, "file": str(target), "sources": len(sources)})
 
@@ -387,6 +389,7 @@ def cmd_split(args) -> None:
                 requested.mkdir(parents=True, exist_ok=True)
                 target = requested / name
             target.parent.mkdir(parents=True, exist_ok=True)
+        guard_not_input(source, target)
         writer.write(str(target))
         files.append(str(target))
     emit({"ok": True, "files": files})
@@ -489,14 +492,31 @@ def cmd_fill(args) -> None:
     if not isinstance(values, dict):
         fail("--values must be a JSON object of field -> value")
     reader = reader_for(source, args.password)
+    fields = reader.get_fields() or {}
+    available: dict[str, str] = {}
+    for key, field in fields.items():
+        names = {key, key.rsplit(".", 1)[-1], str(field.get("/T", ""))}
+        for name in names:
+            if name:
+                available[name] = key
+    matched: dict[str, object] = {}
+    unmatched: list[str] = []
+    for name, value in values.items():
+        key = available.get(name)
+        if key is None:
+            unmatched.append(name)
+        else:
+            matched[key] = value
+    if not matched:
+        fail(f"no matching form fields; available: {', '.join(sorted(available)) or 'none'}")
     writer = writer_for()
     writer.append(reader)
     for page in writer.pages:
-        writer.update_page_form_field_values(page, values)
+        writer.update_page_form_field_values(page, matched)
     target = output_path(args.out, f"{source.stem}-filled.pdf")
     guard_not_input(source, target)
     writer.write(str(target))
-    emit({"ok": True, "file": str(target), "filled": len(values)})
+    emit({"ok": True, "file": str(target), "filled": len(matched), "unmatched": unmatched})
 
 
 def cmd_encrypt(args) -> None:
@@ -553,6 +573,7 @@ def cmd_meta(args) -> None:
 def cmd_make(args) -> None:
     source = input_file(args.input)
     target = output_path(args.out, f"{source.stem}.pdf")
+    guard_not_input(source, target)
     html = source.read_text(encoding="utf-8")
     if source.suffix.lower() in {".md", ".markdown"}:
         markdown = module("markdown", "markdown")
@@ -577,8 +598,8 @@ def cmd_verify(args) -> None:
     source = input_file(args.file)
     reader = reader_for(source, args.password)
     result = {"ok": True, "file": str(source), "pages": len(reader.pages), "encrypted": bool(reader.is_encrypted)}
-    if args.png:
-        files = render_pages(source, "1", 120, args.png)
+    if args.png is not None:
+        files = render_pages(source, "1", 120, args.png or None, args.password)
         result["png"] = files[0]
     emit(result)
 
@@ -615,6 +636,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("file")
     render.add_argument("--pages")
     render.add_argument("--dpi", type=int, default=144)
+    render.add_argument("--password")
     render.add_argument("--out")
 
     ocr = command("ocr", cmd_ocr, "make a scanned PDF searchable")
@@ -688,7 +710,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify = command("verify", cmd_verify, "reopen and check a PDF")
     verify.add_argument("file")
     verify.add_argument("--password")
-    verify.add_argument("--png")
+    verify.add_argument("--png", nargs="?", const="")
 
     return parser
 

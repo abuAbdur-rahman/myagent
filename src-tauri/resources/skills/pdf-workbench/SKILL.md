@@ -3,9 +3,9 @@ id: pdf-workbench
 title: PDF Workbench
 version: 1.0.0
 triggers: ["pdf", ".pdf", "merge pdf", "split pdf", "extract text", "pdf table", "ocr", "fill form", "watermark"]
-requires_tools: [python3, pdftotext, qpdf, tesseract, ocrmypdf]
+requires_tools: [python3, pdftotext, pdfimages, qpdf, tesseract, ocrmypdf]
 requires_imports:
-  python: [pypdf, pdfplumber, pypdfium2, reportlab, PIL, openpyxl, markdown]
+  python: [pypdf, pdfplumber, pypdfium2, reportlab, PIL, openpyxl, markdown, weasyprint]
   node: []
 network: none
 writes: ["outputs/"]
@@ -38,7 +38,9 @@ python3 /opt/skills/pdf-workbench/bin/pdfwb inspect /work/report.pdf
 2. Choose the action from what inspect found:
    - scanned pages -> `ocr` first, then `text`
    - form fields -> `fields`, then `fill`
-   - encrypted -> pass `--password` (never guess one)
+   - encrypted -> `inspect`, `fields`, `fill`, `meta`, `verify` and `render`
+     accept `--password`; for other commands run `decrypt` first. Never guess a
+     password.
    - visual check -> `render` and look at the PNG
 3. Run the command. It writes to `outputs/` unless `--out` says otherwise.
 4. `verify` the result. It reopens the file, checks the page count and renders
@@ -77,8 +79,11 @@ All commands use the same 1-based syntax:
 | `optimize FILE` | linearize and compress structure |
 | `verify FILE [--png]` | reopen, page count, optional first-page PNG |
 
-Every command accepts `--out PATH`. Without it, output goes to
-`$OUTPUTS` when set, otherwise `outputs/`.
+File-producing commands accept `--out PATH`: `tables`, `images`, `render`,
+`ocr`, `merge`, `split`, `pages`, `stamp`, `fill`, `encrypt`, `decrypt`,
+`meta`, `make` and `optimize`. `inspect`, `text`, `fields` and `verify` return
+JSON only; `verify --png` is the optional render. Without `--out`, output goes
+to `$OUTPUTS` when set, otherwise `outputs/`.
 
 Examples:
 

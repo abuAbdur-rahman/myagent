@@ -81,8 +81,10 @@ test -f "$OUT"/table-p1-t1.csv
 
 pdfwb merge "$WORK/a.pdf" "$WORK/b.pdf" --bookmarks > "$WORK/merge.json"
 MERGE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["file"])' "$WORK/merge.json")
-pdfwb verify "$MERGE" > "$WORK/merge-verify.json"
+pdfwb verify "$MERGE" --png > "$WORK/merge-verify.json"
 grep -q '"pages": 3' "$WORK/merge-verify.json"
+PNG=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["png"])' "$WORK/merge-verify.json")
+test -f "$PNG"
 
 pdfwb split "$WORK/a.pdf" --every 1 > "$WORK/split.json"
 test "$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["files"]))' "$WORK/split.json")" -eq 2
@@ -118,6 +120,8 @@ pdfwb ocr "$WORK/scan.pdf" > "$WORK/ocr.json"
 OCR=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["file"])' "$WORK/ocr.json")
 pdfwb text "$OCR" > "$WORK/ocr-text.json"
 grep -qi 'HELLO' "$WORK/ocr-text.json"
+pdfwb ocr "$WORK/scan.pdf" --force > "$WORK/ocr-force.json"
+grep -q '"ok": true' "$WORK/ocr-force.json"
 
 pdfwb optimize "$WORK/a.pdf" > "$WORK/optimize.json"
 OPT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["file"])' "$WORK/optimize.json")
