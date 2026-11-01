@@ -1,0 +1,702 @@
+#!/usr/bin/env python3
+"""PDF Workbench: one JSON CLI for inspecting, extracting, editing and making PDFs."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import importlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+MAX_INPUT_BYTES = 100 * 1024 * 1024
+MAX_OCR_PAGES = 200
+
+
+def fail(message: str, code: int = 2) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def missing_tool(name: str) -> None:
+    fail(f"missing_tool: {name}", 3)
+
+
+def module(name: str, tool: str | None = None):
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        missing_tool(tool or name)
+
+
+def emit(value) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def tool(name: str) -> str:
+    found = shutil.which(name)
+    if not found:
+        missing_tool(name)
+    return found
+
+
+def input_file(path: str) -> Path:
+    target = Path(path).expanduser()
+    if not target.is_file():
+        fail(f"input not found: {path}")
+    if target.stat().st_size > MAX_INPUT_BYTES:
+        fail(f"input is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB: {path}")
+    return target
+
+
+def output_dir() -> Path:
+    base = Path(os.environ.get("OUTPUTS", "outputs")).expanduser()
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def output_path(raw: str | None, default_name: str) -> Path:
+    target = Path(raw).expanduser() if raw else output_dir() / default_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def guard_not_input(source: Path, target: Path) -> None:
+    if source.resolve() == target.resolve():
+        fail("refusing to overwrite the input file; choose a new --out path")
+
+
+def run(command: list[str], tool_name: str) -> subprocess.CompletedProcess:
+    tool(tool_name)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        fail(detail[-1] if detail else f"{tool_name} failed")
+    return result
+
+
+def page_numbers(spec: str, count: int) -> list[int]:
+    pages: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_text, end_text = part.split("-", 1)
+            try:
+                start = int(start_text)
+                end = count if end_text == "end" else int(end_text)
+            except ValueError:
+                fail(f"bad page range: {part}")
+            if start < 1 or end < start or end > count:
+                fail(f"page range out of bounds: {part} (document has {count} pages)")
+            pages.extend(range(start - 1, end))
+        else:
+            try:
+                page = int(part)
+            except ValueError:
+                fail(f"bad page number: {part}")
+            if page < 1 or page > count:
+                fail(f"page out of bounds: {part}")
+            pages.append(page - 1)
+    if not pages:
+        fail("no pages selected")
+    return pages
+
+
+def reader_for(path: Path, password: str | None):
+    pypdf = module("pypdf", "pypdf")
+    try:
+        reader = pypdf.PdfReader(str(path))
+    except Exception as error:
+        fail(f"cannot open PDF: {error}")
+    if reader.is_encrypted:
+        if not password:
+            fail("encrypted: password required", 3)
+        try:
+            if reader.decrypt(password) == 0:
+                fail("wrong password", 3)
+        except Exception:
+            fail("wrong password", 3)
+    return reader
+
+
+def writer_for():
+    pypdf = module("pypdf", "pypdf")
+    return pypdf.PdfWriter()
+
+
+def outline_count(items) -> int:
+    total = 0
+    for item in items or []:
+        if isinstance(item, list):
+            total += outline_count(item)
+        else:
+            total += 1
+    return total
+
+
+def cmd_inspect(args) -> None:
+    source = input_file(args.file)
+    pypdf = module("pypdf", "pypdf")
+    try:
+        reader = pypdf.PdfReader(str(source))
+    except Exception as error:
+        fail(f"cannot open PDF: {error}")
+    if reader.is_encrypted and not args.password:
+        emit({"ok": False, "file": str(source), "encrypted": True, "error": "password_required"})
+        raise SystemExit(3)
+    if reader.is_encrypted and reader.decrypt(args.password) == 0:
+        emit({"ok": False, "file": str(source), "encrypted": True, "error": "wrong_password"})
+        raise SystemExit(3)
+
+    pages = []
+    text_pages = []
+    scanned_pages = []
+    image_count = 0
+    for index, page in enumerate(reader.pages, start=1):
+        box = page.mediabox
+        pages.append(
+            {
+                "page": index,
+                "width": round(float(box.width), 1),
+                "height": round(float(box.height), 1),
+            }
+        )
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        if text.strip():
+            text_pages.append(index)
+        else:
+            scanned_pages.append(index)
+        try:
+            image_count += len(page.images)
+        except Exception:
+            pass
+
+    fields = {}
+    try:
+        for name, field in (reader.get_fields() or {}).items():
+            fields[name] = {
+                "type": str(field.get("/FT", "")),
+                "value": str(field.get("/V", "")),
+            }
+    except Exception:
+        fields = {}
+
+    metadata = {}
+    try:
+        metadata = {str(key).lstrip("/"): str(value) for key, value in (reader.metadata or {}).items()}
+    except Exception:
+        pass
+
+    emit(
+        {
+            "ok": True,
+            "file": str(source),
+            "page_count": len(reader.pages),
+            "pages": pages,
+            "encrypted": bool(reader.is_encrypted),
+            "text_pages": text_pages,
+            "scanned_pages": scanned_pages,
+            "form_fields": fields,
+            "images": image_count,
+            "metadata": metadata,
+            "bookmarks": outline_count(reader.outline),
+        }
+    )
+
+
+def page_text(path: Path, spec: str | None, layout: bool) -> list[dict]:
+    reader = reader_for(path, None)
+    selected = page_numbers(spec, len(reader.pages)) if spec else list(range(len(reader.pages)))
+    try:
+        pdfplumber = module("pdfplumber", "pdfplumber")
+        with pdfplumber.open(str(path)) as pdf:
+            return [
+                {
+                    "page": index + 1,
+                    "text": pdf.pages[index].extract_text(layout=layout) or "",
+                }
+                for index in selected
+            ]
+    except SystemExit:
+        raise
+    except Exception:
+        return [
+            {"page": index + 1, "text": reader.pages[index].extract_text() or ""}
+            for index in selected
+        ]
+
+
+def cmd_text(args) -> None:
+    source = input_file(args.file)
+    emit({"ok": True, "pages": page_text(source, args.pages, args.layout)})
+
+
+def cmd_tables(args) -> None:
+    source = input_file(args.file)
+    pdfplumber = module("pdfplumber", "pdfplumber")
+    with pdfplumber.open(str(source)) as pdf:
+        count = len(pdf.pages)
+        selected = page_numbers(args.pages, count) if args.pages else list(range(count))
+        tables = []
+        for index in selected:
+            for number, table in enumerate(pdf.pages[index].extract_tables(), start=1):
+                tables.append({"page": index + 1, "table": number, "rows": table})
+    if args.format == "json":
+        emit({"ok": True, "tables": tables})
+        return
+    if not tables:
+        emit({"ok": True, "tables": 0, "files": []})
+        return
+    known = {name: item for name, item in enumerate(tables)}
+    stem = source.stem
+    files = []
+    if args.format == "csv":
+        for index, item in known.items():
+            name = f"{stem}-p{item['page']}-t{item['table']}.csv"
+            target = output_path(args.out if len(tables) == 1 else None, name)
+            with target.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerows(item["rows"])
+            files.append(str(target))
+        emit({"ok": True, "tables": len(tables), "files": files})
+        return
+    openpyxl = module("openpyxl", "openpyxl")
+    target = output_path(args.out, f"{stem}-tables.xlsx")
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for item in tables:
+        sheet = workbook.create_sheet(f"p{item['page']}-{item['table']}")
+        for row in item["rows"]:
+            sheet.append(row)
+    workbook.save(target)
+    emit({"ok": True, "tables": len(tables), "files": [str(target)]})
+
+
+def cmd_images(args) -> None:
+    source = input_file(args.file)
+    target = output_path(args.out, f"{source.stem}-image")
+    prefix = str(target)
+    run(["pdfimages", "-png", str(source), prefix], "pdfimages")
+    parent = target.parent
+    stem = target.name
+    files = sorted(
+        str(path)
+        for path in parent.iterdir()
+        if path.is_file() and path.name.startswith(stem) and path.suffix.lower() == ".png"
+    )
+    emit({"ok": True, "images": len(files), "files": files})
+
+
+def render_pages(source: Path, spec: str | None, dpi: int, out: str | None) -> list[str]:
+    pypdfium2 = module("pypdfium2", "pypdfium2")
+    pdf = pypdfium2.PdfDocument(str(source))
+    try:
+        selected = page_numbers(spec, len(pdf)) if spec else list(range(len(pdf)))
+        files = []
+        for index in selected:
+            page = pdf[index]
+            bitmap = page.render(scale=dpi / 72)
+            image = bitmap.to_pil()
+            target = output_path(out, f"{source.stem}-p{index + 1}.png") if out is None else Path(out)
+            if len(selected) > 1 and out:
+                target = Path(out).with_name(f"{Path(out).stem}-p{index + 1}.png")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            image.save(target)
+            files.append(str(target))
+        return files
+    finally:
+        pdf.close()
+
+
+def cmd_render(args) -> None:
+    source = input_file(args.file)
+    files = render_pages(source, args.pages, args.dpi, args.out)
+    emit({"ok": True, "files": files})
+
+
+def cmd_ocr(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, None)
+    if len(reader.pages) > MAX_OCR_PAGES and not args.force:
+        fail(f"OCR is capped at {MAX_OCR_PAGES} pages; pass --force to override")
+    target = output_path(args.out, f"{source.stem}-ocr.pdf")
+    guard_not_input(source, target)
+    command = ["ocrmypdf", "--skip-text", "-l", args.lang]
+    if args.force:
+        command.append("--force-ocr")
+    command.extend([str(source), str(target)])
+    run(command, "ocrmypdf")
+    emit({"ok": True, "file": str(target), "pages": len(reader.pages)})
+
+
+def cmd_merge(args) -> None:
+    sources = [input_file(path) for path in args.files]
+    if len(sources) < 2:
+        fail("merge needs at least two files")
+    writer = writer_for()
+    starts = []
+    page_start = 0
+    for source in sources:
+        reader = reader_for(source, None)
+        writer.append(reader)
+        starts.append((source.stem, page_start))
+        page_start += len(reader.pages)
+    if args.bookmarks:
+        for name, start in starts:
+            writer.add_outline_item(name, start)
+    target = output_path(args.out, "merged.pdf")
+    writer.write(str(target))
+    emit({"ok": True, "file": str(target), "sources": len(sources)})
+
+
+def cmd_split(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, None)
+    count = len(reader.pages)
+    chunks: list[list[int]] = []
+    if args.every:
+        if args.every < 1:
+            fail("--every must be at least 1")
+        chunks = [list(range(start, min(start + args.every, count))) for start in range(0, count, args.every)]
+    elif args.ranges:
+        chunks = [page_numbers(part, count) for part in args.ranges.split(";") if part.strip()]
+    else:
+        fail("split needs --every N or --ranges 1-3;4-6")
+    files = []
+    for chunk in chunks:
+        writer = writer_for()
+        for index in chunk:
+            writer.add_page(reader.pages[index])
+        name = f"{source.stem}-p{chunk[0] + 1}-{chunk[-1] + 1}.pdf"
+        target = output_path(None, name)
+        if args.out:
+            requested = Path(args.out).expanduser()
+            if len(chunks) == 1 and requested.suffix.lower() == ".pdf":
+                target = requested
+            else:
+                requested.mkdir(parents=True, exist_ok=True)
+                target = requested / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+        writer.write(str(target))
+        files.append(str(target))
+    emit({"ok": True, "files": files})
+
+
+def cmd_pages(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, None)
+    count = len(reader.pages)
+    selected = list(range(count))
+    if args.keep:
+        selected = page_numbers(args.keep, count)
+    if args.drop:
+        dropped = set(page_numbers(args.drop, count))
+        selected = [index for index in selected if index not in dropped]
+    if args.reorder:
+        selected = page_numbers(args.reorder, count)
+    if not selected:
+        fail("no pages left after the selection")
+    writer = writer_for()
+    for index in selected:
+        page = reader.pages[index]
+        if args.rotate:
+            page.rotate(args.rotate)
+        writer.add_page(page)
+    target = output_path(args.out, f"{source.stem}-pages.pdf")
+    guard_not_input(source, target)
+    writer.write(str(target))
+    emit({"ok": True, "file": str(target), "pages": len(selected)})
+
+
+def cmd_stamp(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, None)
+    selected = page_numbers(args.pages, len(reader.pages)) if args.pages else list(range(len(reader.pages)))
+    reportlab_canvas = module("reportlab.pdfgen.canvas", "reportlab")
+    reportlab_lib = module("reportlab.lib.colors", "reportlab")
+    reportlab_units = module("reportlab.lib.units", "reportlab")
+    from io import BytesIO
+
+    target = output_path(args.out, f"{source.stem}-stamped.pdf")
+    guard_not_input(source, target)
+    writer = writer_for()
+    for index, page in enumerate(reader.pages):
+        if index in selected:
+            buffer = BytesIO()
+            width = float(page.mediabox.width)
+            height = float(page.mediabox.height)
+            overlay = reportlab_canvas.Canvas(buffer, pagesize=(width, height))
+            if args.text:
+                overlay.saveState()
+                overlay.setFillColor(reportlab_lib.Color(0.4, 0.4, 0.4, alpha=args.opacity))
+                overlay.setFont("Helvetica-Bold", max(18, int(width / 18)))
+                overlay.translate(width / 2, height / 2)
+                overlay.rotate(45)
+                overlay.drawCentredString(0, 0, args.text)
+                overlay.restoreState()
+            if args.image:
+                image_path = input_file(args.image)
+                overlay.saveState()
+                overlay.setFillAlpha(args.opacity)
+                size = min(width, height) * 0.4
+                overlay.drawImage(
+                    str(image_path),
+                    (width - size) / 2,
+                    (height - size) / 2,
+                    width=size,
+                    height=size,
+                    mask="auto",
+                )
+                overlay.restoreState()
+            overlay.save()
+            buffer.seek(0)
+            stamp_reader = module("pypdf", "pypdf").PdfReader(buffer)
+            page.merge_page(stamp_reader.pages[0])
+        writer.add_page(page)
+    writer.write(str(target))
+    emit({"ok": True, "file": str(target), "pages": len(selected)})
+
+
+def cmd_fields(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, args.password)
+    fields = {}
+    for name, field in (reader.get_fields() or {}).items():
+        fields[name] = {
+            "type": str(field.get("/FT", "")),
+            "value": str(field.get("/V", "")),
+            "default": str(field.get("/DV", "")),
+        }
+    emit({"ok": True, "fields": fields})
+
+
+def cmd_fill(args) -> None:
+    source = input_file(args.file)
+    try:
+        values = json.loads(args.values)
+    except json.JSONDecodeError as error:
+        fail(f"--values is not valid JSON: {error}")
+    if not isinstance(values, dict):
+        fail("--values must be a JSON object of field -> value")
+    reader = reader_for(source, args.password)
+    writer = writer_for()
+    writer.append(reader)
+    for page in writer.pages:
+        writer.update_page_form_field_values(page, values)
+    target = output_path(args.out, f"{source.stem}-filled.pdf")
+    guard_not_input(source, target)
+    writer.write(str(target))
+    emit({"ok": True, "file": str(target), "filled": len(values)})
+
+
+def cmd_encrypt(args) -> None:
+    source = input_file(args.file)
+    target = output_path(args.out, f"{source.stem}-encrypted.pdf")
+    guard_not_input(source, target)
+    owner = args.owner_password or args.user_password
+    run(
+        [
+            "qpdf",
+            "--encrypt",
+            args.user_password,
+            owner,
+            "256",
+            "--",
+            str(source),
+            str(target),
+        ],
+        "qpdf",
+    )
+    emit({"ok": True, "file": str(target), "encrypted": True})
+
+
+def cmd_decrypt(args) -> None:
+    source = input_file(args.file)
+    target = output_path(args.out, f"{source.stem}-decrypted.pdf")
+    guard_not_input(source, target)
+    run(["qpdf", f"--password={args.password}", "--decrypt", str(source), str(target)], "qpdf")
+    emit({"ok": True, "file": str(target), "encrypted": False})
+
+
+def cmd_meta(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, args.password)
+    metadata = {str(key).lstrip("/"): str(value) for key, value in (reader.metadata or {}).items()}
+    if not args.set:
+        emit({"ok": True, "metadata": metadata})
+        return
+    updates = {}
+    for pair in args.set:
+        if "=" not in pair:
+            fail(f"bad --set value: {pair}; use key=value")
+        key, value = pair.split("=", 1)
+        updates[key] = value
+    writer = writer_for()
+    writer.append(reader)
+    writer.add_metadata({**{f"/{key}": value for key, value in metadata.items()}, **{f"/{key}": value for key, value in updates.items()}})
+    target = output_path(args.out, f"{source.stem}-meta.pdf")
+    guard_not_input(source, target)
+    writer.write(str(target))
+    emit({"ok": True, "file": str(target), "metadata": {**metadata, **updates}})
+
+
+def cmd_make(args) -> None:
+    source = input_file(args.input)
+    target = output_path(args.out, f"{source.stem}.pdf")
+    html = source.read_text(encoding="utf-8")
+    if source.suffix.lower() in {".md", ".markdown"}:
+        markdown = module("markdown", "markdown")
+        html = markdown.markdown(html, extensions=["tables", "fenced_code"])
+    weasyprint = module("weasyprint", "weasyprint")
+    weasyprint.HTML(string=html, base_url=str(source.parent)).write_pdf(str(target))
+    emit({"ok": True, "file": str(target)})
+
+
+def cmd_optimize(args) -> None:
+    source = input_file(args.file)
+    target = output_path(args.out, f"{source.stem}-optimized.pdf")
+    guard_not_input(source, target)
+    run(
+        ["qpdf", "--linearize", "--object-streams=generate", str(source), str(target)],
+        "qpdf",
+    )
+    emit({"ok": True, "file": str(target), "original": source.stat().st_size, "optimized": target.stat().st_size})
+
+
+def cmd_verify(args) -> None:
+    source = input_file(args.file)
+    reader = reader_for(source, args.password)
+    result = {"ok": True, "file": str(source), "pages": len(reader.pages), "encrypted": bool(reader.is_encrypted)}
+    if args.png:
+        files = render_pages(source, "1", 120, args.png)
+        result["png"] = files[0]
+    emit(result)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="pdfwb", description="Inspect, extract, edit and create PDFs.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def command(name: str, handler, help_text: str):
+        item = sub.add_parser(name, help=help_text)
+        item.set_defaults(handler=handler)
+        return item
+
+    inspect = command("inspect", cmd_inspect, "inventory a PDF")
+    inspect.add_argument("file")
+    inspect.add_argument("--password")
+
+    text = command("text", cmd_text, "extract text")
+    text.add_argument("file")
+    text.add_argument("--pages")
+    text.add_argument("--layout", action="store_true")
+
+    tables = command("tables", cmd_tables, "extract tables")
+    tables.add_argument("file")
+    tables.add_argument("--pages")
+    tables.add_argument("--format", choices=["json", "csv", "xlsx"], default="json")
+    tables.add_argument("--out")
+
+    images = command("images", cmd_images, "extract embedded images")
+    images.add_argument("file")
+    images.add_argument("--out")
+
+    render = command("render", cmd_render, "render pages to PNG")
+    render.add_argument("file")
+    render.add_argument("--pages")
+    render.add_argument("--dpi", type=int, default=144)
+    render.add_argument("--out")
+
+    ocr = command("ocr", cmd_ocr, "make a scanned PDF searchable")
+    ocr.add_argument("file")
+    ocr.add_argument("--lang", default="eng")
+    ocr.add_argument("--force", action="store_true")
+    ocr.add_argument("--out")
+
+    merge = command("merge", cmd_merge, "combine PDFs")
+    merge.add_argument("files", nargs="+")
+    merge.add_argument("--bookmarks", action="store_true")
+    merge.add_argument("--out")
+
+    split = command("split", cmd_split, "split a PDF")
+    split.add_argument("file")
+    split.add_argument("--every", type=int)
+    split.add_argument("--ranges")
+    split.add_argument("--out")
+
+    pages = command("pages", cmd_pages, "keep, drop, reorder or rotate pages")
+    pages.add_argument("file")
+    pages.add_argument("--keep")
+    pages.add_argument("--drop")
+    pages.add_argument("--reorder")
+    pages.add_argument("--rotate", type=int, choices=[0, 90, 180, 270])
+    pages.add_argument("--out")
+
+    stamp = command("stamp", cmd_stamp, "watermark or stamp")
+    stamp.add_argument("file")
+    stamp.add_argument("--text")
+    stamp.add_argument("--image")
+    stamp.add_argument("--opacity", type=float, default=0.3)
+    stamp.add_argument("--pages")
+    stamp.add_argument("--out")
+
+    fields = command("fields", cmd_fields, "list form fields")
+    fields.add_argument("file")
+    fields.add_argument("--password")
+
+    fill = command("fill", cmd_fill, "fill form fields from JSON")
+    fill.add_argument("file")
+    fill.add_argument("--values", required=True)
+    fill.add_argument("--password")
+    fill.add_argument("--out")
+
+    encrypt = command("encrypt", cmd_encrypt, "password-protect a PDF")
+    encrypt.add_argument("file")
+    encrypt.add_argument("--user-password", required=True)
+    encrypt.add_argument("--owner-password")
+    encrypt.add_argument("--out")
+
+    decrypt = command("decrypt", cmd_decrypt, "remove a known password")
+    decrypt.add_argument("file")
+    decrypt.add_argument("--password", required=True)
+    decrypt.add_argument("--out")
+
+    meta = command("meta", cmd_meta, "read or write metadata")
+    meta.add_argument("file")
+    meta.add_argument("--set", action="append")
+    meta.add_argument("--password")
+    meta.add_argument("--out")
+
+    make = command("make", cmd_make, "create a PDF from Markdown or HTML")
+    make.add_argument("input")
+    make.add_argument("--out")
+
+    optimize = command("optimize", cmd_optimize, "linearize and compress a PDF")
+    optimize.add_argument("file")
+    optimize.add_argument("--out")
+
+    verify = command("verify", cmd_verify, "reopen and check a PDF")
+    verify.add_argument("file")
+    verify.add_argument("--password")
+    verify.add_argument("--png")
+
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    args.handler(args)
+
+
+if __name__ == "__main__":
+    main()

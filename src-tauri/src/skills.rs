@@ -507,6 +507,15 @@ fn skill_dirs(app: &AppHandle) -> Vec<(std::path::PathBuf, &'static str)> {
             dirs.push((bundled, "builtin"));
         }
     }
+    #[cfg(debug_assertions)]
+    {
+        let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("skills");
+        if dev.is_dir() && !dirs.iter().any(|(dir, _)| dir == &dev) {
+            dirs.push((dev, "builtin"));
+        }
+    }
     dirs
 }
 
@@ -1059,6 +1068,18 @@ mod tests {
             parse_skill("pdf-workbench", content).unwrap().1,
             "Work with PDFs."
         );
+    }
+
+    #[test]
+    fn bundled_pdf_skill_has_the_expected_contract() {
+        let content = include_str!("../resources/skills/pdf-workbench/SKILL.md");
+        let meta = parse_meta(content);
+        assert_eq!(meta.id.as_deref(), Some("pdf-workbench"));
+        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert!(meta.requires_tools.contains(&"qpdf".to_string()));
+        assert!(meta.requires_python.contains(&"pypdf".to_string()));
+        assert_eq!(meta.writes, vec!["outputs/"]);
+        assert!(parse_skill("pdf-workbench", content).is_some());
     }
 
     #[test]

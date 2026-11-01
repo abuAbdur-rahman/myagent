@@ -11,6 +11,7 @@ const KNOWN_TOOLS = [
   "research_run",
   "todo_write",
   "todo_set",
+  "skill",
 ] as const;
 
 type KnownToolName = (typeof KNOWN_TOOLS)[number];

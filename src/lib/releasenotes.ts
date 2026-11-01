@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.3",
+    date: "2026-11-01",
+    summary:
+      "The first built-in skill ships: PDF Workbench inspects, extracts, OCRs, edits and creates PDFs from one JSON CLI. Skills are bundled with the installer, appear in Settings, and the tool log shows a Using skill chip.",
+    changes: [
+      {
+        kind: "new",
+        text: "PDF Workbench adds pdfwb: inspect, text, tables, images, render, ocr, merge, split, pages, stamp, fields, fill, encrypt, decrypt, meta, make, optimize and verify, with our 1-based page range syntax.",
+      },
+      {
+        kind: "new",
+        text: "PDF Workbench writes new files to outputs/, never overwrites the input, caps input at 100 MB and OCR at 200 pages, needs a user-supplied password for encrypted files, and has no network access.",
+      },
+      {
+        kind: "new",
+        text: "Skills are bundled as an app resource, so the installer finds pdf-workbench in Settings > Skills without a manual copy.",
+      },
+      {
+        kind: "improved",
+        text: "A skill call in the tool log shows a Using skill chip with the skill name.",
+      },
+      {
+        kind: "fixed",
+        text: "The PDF skill's golden tests run inside the sandbox: merge, split, table CSV, form fill, encrypt/decrypt, stamp, Markdown-to-PDF with H2O, OCR of a scanned page, optimize and render.",
+      },
+    ],
+  },
+  {
     version: "0.8.2",
     date: "2026-11-01",
     summary:

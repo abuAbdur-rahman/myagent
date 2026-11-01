@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronUp,
@@ -71,6 +72,8 @@ function ToolIcon({ name }: { name: string }) {
   const props = { size: 14 } as const;
   if (!isKnownTool(name)) return <Wrench {...props} />;
   switch (name) {
+    case "skill":
+      return <BookOpen {...props} />;
     case "run_powershell":
       return <Terminal {...props} />;
     case "get_time":
@@ -159,9 +162,15 @@ export function ToolLogView({
                   </span>
                 )}
                 <ToolIcon name={entry.name} />
-                <span className="truncate" title={entry.summary}>
-                  {entry.summary}
-                </span>
+                {entry.name === "skill" ? (
+                  <span className="truncate rounded bg-active px-1.5 py-px text-xs text-accent">
+                    Using skill: {entry.summary.replace(/^Skill:\s*/, "")}
+                  </span>
+                ) : (
+                  <span className="truncate" title={entry.summary}>
+                    {entry.summary}
+                  </span>
+                )}
               </summary>
               {entry.preview && (
                 <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
