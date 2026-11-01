@@ -1,6 +1,6 @@
 [package]
 name = "myagent"
-version = "0.8.4"
+version = "0.8.5"
 description = "Windows desktop chat client with bring-your-own-key providers"
 authors = ["Abu Abdir-rahman <abdulazeezadekiilekun@gmail.com>"]
 repository = "https://github.com/abuAbdur-rahman/myagent"
