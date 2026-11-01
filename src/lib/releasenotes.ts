@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.4",
+    date: "2026-11-01",
+    summary:
+      "Fewer approval cards: read-only tools run by default, and a small decision model judges the rest, with extra caution for secrets like .env. A new Context inspector shows the checklist, important context, system prompt, memory, attachments, skills and token usage. Sandbox builds now run in the background with a floating status. Skill aliases such as pdf resolve to pdf-workbench.",
+    changes: [
+      {
+        kind: "improved",
+        text: "Read-only tools (sandbox read/glob/grep/run, web search/fetch, skill, document read, image describe, todo, time and recall) no longer ask every time. Writes, deletes, installs, host shell and unknown tools still ask, and a credential path such as .env, .ssh or .aws goes to the decision model.",
+      },
+      {
+        kind: "new",
+        text: "A small decision model classifies each remaining approval as allow, ask or deny within a 3 second budget; if it fails or is unsure, the approval card is shown.",
+      },
+      {
+        kind: "new",
+        text: "Context inspector: a Gauge button in the chat header opens token usage, checklist, important context, system prompt, memory counts, attachments and indexed skills, with copy for the system prompt.",
+      },
+      {
+        kind: "improved",
+        text: "Sandbox image builds now start in the background. Settings shows the build stage, and a floating status card follows the build across the app until it succeeds or fails.",
+      },
+      {
+        kind: "fixed",
+        text: "Skill aliases resolve from triggers, titles and id prefixes, so a call to pdf loads pdf-workbench instead of failing with unknown skill.",
+      },
+    ],
+  },
+  {
     version: "0.8.3",
     date: "2026-11-01",
     summary:

@@ -15,6 +15,7 @@ import { Markdown } from "./Markdown";
 import { Badge } from "./ui";
 import { SessionPanel } from "./SessionPanel";
 import { FilePreview } from "./FilePreview";
+import { ContextInspector } from "./ContextInspector";
 import { cn, copyText, downloadText } from "../lib/utils";
 import { toast } from "../lib/toast";
 
@@ -105,6 +106,10 @@ export function ArtifactsPanel() {
   useEffect(() => endDrag, [endDrag]);
 
   if (!panelOpen) return null;
+
+  if (panelView === "context") {
+    return <ContextInspector />;
+  }
 
   if (panelView === "session" || !panelArtifact) {
     return <SessionPanel />;

@@ -5,6 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { ChatHeader } from "./components/ChatHeader";
 import { ContextBar } from "./components/ContextBar";
+import { SandboxBuildStatus } from "./components/SandboxBuildStatus";
 import { ProjectsGrid } from "./components/ProjectsGrid";
 import { OutputsGallery } from "./components/OutputsGallery";
 import { ProjectDetail } from "./components/ProjectDetail";
@@ -260,6 +261,7 @@ function Shell() {
         onClose={() => setPaletteOpen(false)}
       />
       <Toaster />
+      <SandboxBuildStatus />
       <ConfirmHost />
     </div>
   );

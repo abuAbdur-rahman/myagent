@@ -261,7 +261,7 @@ type View = "chat" | "projects" | "project" | "outputs";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
 export type PanelMode = "dock" | "full" | "mini";
-type PanelView = "session" | "artifact";
+type PanelView = "session" | "artifact" | "context";
 
 interface PanelArtifact {
   id: string;
@@ -487,6 +487,7 @@ interface AppContextValue {
   panelWidth: number;
   openArtifact: (artifact: PanelArtifact) => void;
   openSessionPanel: () => void;
+  openContextPanel: () => void;
   showSessionView: () => void;
   closePanel: () => void;
   togglePanel: () => void;
@@ -992,6 +993,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const openSessionPanel = useCallback(() => {
     if (!panelOpenRef.current) setPanelModeState("dock");
     setPanelViewState("session");
+    setPanelOpen(true);
+  }, []);
+
+  const openContextPanel = useCallback(() => {
+    if (!panelOpenRef.current) setPanelModeState("dock");
+    setPanelViewState("context");
     setPanelOpen(true);
   }, []);
 
@@ -2690,6 +2697,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     panelWidth,
     openArtifact,
     openSessionPanel,
+    openContextPanel,
     showSessionView,
     closePanel,
     togglePanel,
