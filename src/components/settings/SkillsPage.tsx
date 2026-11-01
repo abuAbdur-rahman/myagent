@@ -153,8 +153,8 @@ export function SkillsPage() {
   if (skills.length === 0) {
     return (
       <p className="text-sm text-muted">
-        No skills found. Built-in skills ship with the app; user skills live in the app data
-        folder.
+        No skills installed yet. The PDF and deck skills arrive in 0.9.0; user skills live in
+        the app data skills folder.
       </p>
     );
   }

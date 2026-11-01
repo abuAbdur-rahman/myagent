@@ -478,7 +478,7 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "run_powershell",
-                "description": "Run a non-interactive Windows PowerShell command and return its output. Prefer read-only inspection (listing files, reading versions); never run destructive commands (deletion, formatting, permission changes) without the user explicitly asking for that exact command. Use grep to keep only matching lines, head or tail for a line range, and max_chars to cap the result.",
+                "description": "Run a non-interactive Windows PowerShell command and return its output. While the sandbox is on, only read-only inspection is allowed: ls, cat, head, tail, rg, Get-ChildItem, Get-Content, Get-Process, Select-String and similar. Writes, deletes, installs and process launches are refused. A refusal is final: do not retry the same command or another path expression. Use grep to keep only matching lines, head or tail for a line range, and max_chars to cap the result.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1072,85 +1072,307 @@ pub async fn memory_approval_text(
     }
 }
 
-fn sandbox_inspection(command: &str) -> Result<(), String> {
-    let lowered = command.to_lowercase();
-    for bad in [
-        ">",
-        "set-content",
-        "add-content",
-        "out-file",
-        "new-item",
-        "remove-item",
-        "copy-item",
-        "move-item",
-        "rename-item",
-        "start-process",
-        "start-job",
-        "invoke-expression",
-        "invoke-command",
-        "clear-content",
-        "tee-object",
-        "export-csv",
-        "python",
-        "node ",
-        "npm ",
-        "pnpm",
-        "yarn",
-        "cargo ",
-        "git ",
-        "mkdir",
-        "del ",
-        "rm ",
-    ] {
-        if lowered.contains(bad) {
-            return Err(format!(
-                "host shell is inspection-only while the sandbox is on ({bad}); use sandbox_run"
-            ));
+const HOST_READ_COMMANDS: &[&str] = &[
+    "basename",
+    "cat",
+    "cut",
+    "date",
+    "df",
+    "dir",
+    "dirname",
+    "du",
+    "echo",
+    "file",
+    "grep",
+    "head",
+    "hostname",
+    "ipconfig",
+    "ls",
+    "md5sum",
+    "netstat",
+    "printf",
+    "ps",
+    "pwd",
+    "realpath",
+    "rg",
+    "sha256sum",
+    "sort",
+    "stat",
+    "systeminfo",
+    "tail",
+    "type",
+    "uniq",
+    "wc",
+    "which",
+    "whoami",
+    "xxd",
+];
+
+const HOST_READ_CMDLETS: &[&str] = &[
+    "cd",
+    "convertfrom-json",
+    "convertto-json",
+    "format-list",
+    "format-table",
+    "format-wide",
+    "get-childitem",
+    "get-command",
+    "get-content",
+    "get-date",
+    "get-filehash",
+    "get-help",
+    "get-item",
+    "get-itemproperty",
+    "get-location",
+    "get-member",
+    "get-process",
+    "get-psdrive",
+    "get-service",
+    "get-variable",
+    "get-volume",
+    "join-path",
+    "measure-object",
+    "out-string",
+    "resolve-path",
+    "select-object",
+    "select-string",
+    "set-location",
+    "sort-object",
+    "split-path",
+    "test-path",
+    "where-object",
+    "write-output",
+];
+
+fn split_host_segments(command: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in command.chars() {
+        match quote {
+            Some(mark) => {
+                current.push(ch);
+                if ch == mark {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    current.push(ch);
+                }
+                ';' | '|' | '&' | '\n' | '\r' => {
+                    segments.push(current.trim().to_string());
+                    current.clear();
+                }
+                _ => current.push(ch),
+            },
         }
     }
-    if command.contains(['[', ']', '`', '$', '{', '}', '(', ')']) {
-        return Err(
-            "host shell is inspection-only while the sandbox is on; use sandbox_run".to_string(),
-        );
+    segments.push(current.trim().to_string());
+    segments
+}
+
+fn host_words(segment: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in segment.chars() {
+        match quote {
+            Some(mark) => {
+                if ch == mark {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                ch if ch.is_whitespace() => {
+                    if !current.is_empty() {
+                        words.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
     }
-    let allowed = [
-        "get-",
-        "test-path",
-        "resolve-path",
-        "select-",
-        "where-object",
-        "measure-object",
-        "format-",
-        "out-string",
-        "select-string",
-        "dir",
-        "ls",
-        "pwd",
-        "whoami",
-        "hostname",
-        "ipconfig",
-        "netstat",
-        "cat",
-        "type",
-        "head",
-        "tail",
-    ];
-    for segment in command.split(['|', ';', '&']) {
-        let first = segment
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
-        if first.is_empty() {
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+fn host_command_name(word: &str) -> Option<String> {
+    if word.contains(['/', '\\', ':']) {
+        return None;
+    }
+    let lowered = word.to_ascii_lowercase();
+    Some(lowered.strip_suffix(".exe").unwrap_or(&lowered).to_string())
+}
+
+fn host_assignment(segment: &str) -> Option<&str> {
+    let segment = segment.trim_start();
+    let rest = segment.strip_prefix('$')?;
+    let (name, value) = rest.split_once('=')?;
+    let name = name.trim();
+    let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    (valid && !value.trim().is_empty()).then_some(value)
+}
+
+fn host_sensitive_path(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    [
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".kube",
+        "id_rsa",
+        "id_ed25519",
+        "logins.json",
+        "key4.db",
+        "login data",
+        "local state",
+        "cookies",
+        ".env",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn sandbox_inspection_inner(command: &str, depth: usize) -> Result<(), String> {
+    let mut quote: Option<char> = None;
+    let bytes: Vec<char> = command.chars().collect();
+    let mut index = 0;
+    while index < bytes.len() {
+        let ch = bytes[index];
+        if matches!(
+            ch,
+            '\u{2018}' | '\u{2019}' | '\u{201c}' | '\u{201d}' | '\u{2032}' | '\u{2033}'
+        ) {
+            return Err("Unicode quote characters are not allowed in the host shell".into());
+        }
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+            }
+            Some(_) => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '`' {
+                    return Err("backtick escaping is not allowed in the host shell".into());
+                } else if ch == '$' && bytes.get(index + 1) == Some(&'(') {
+                    return Err("subexpressions are not allowed in the host shell".into());
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '`' => return Err("backtick escaping is not allowed in the host shell".into()),
+                '>' | '<' => {
+                    return Err(
+                        "host shell is read-only while the sandbox is on; redirection is blocked"
+                            .into(),
+                    );
+                }
+                '$' if bytes.get(index + 1) == Some(&'(') => {
+                    return Err("subexpressions are not allowed in the host shell".into());
+                }
+                '[' | ']' | '{' | '}' | '(' | ')' => {
+                    return Err(format!(
+                        "host shell is read-only while the sandbox is on; '{ch}' is not allowed"
+                    ));
+                }
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    if host_sensitive_path(command) {
+        return Err("host shell refuses credential and secret paths".into());
+    }
+    for segment in split_host_segments(command) {
+        if segment.is_empty() || segment.starts_with('#') {
             continue;
         }
-        if !allowed.iter().any(|prefix| first.starts_with(prefix)) {
+        if let Some(value) = host_assignment(&segment) {
+            if depth > 0 {
+                return Err("nested assignments are not allowed".into());
+            }
+            sandbox_inspection_inner(value, depth + 1)?;
+            continue;
+        }
+        let words = host_words(&segment);
+        let Some(first) = words.first() else {
+            continue;
+        };
+        let Some(name) = host_command_name(first) else {
+            return Err(
+                "command paths are not allowed; use a bare command name such as ls, cat or rg"
+                    .into(),
+            );
+        };
+        let allowed = HOST_READ_COMMANDS.contains(&name.as_str())
+            || HOST_READ_CMDLETS.contains(&name.as_str());
+        if !allowed {
             return Err(format!(
-                "'{first}' is not an inspection command; use sandbox_run for anything that changes files or runs project code"
+                "'{name}' is not allowed while the sandbox is on. Use read-only commands such as ls, cat, rg, Get-ChildItem or Get-Content, or sandbox_run for project work. Do not retry the same command."
+            ));
+        }
+        let args: Vec<String> = words[1..]
+            .iter()
+            .map(|word| word.to_ascii_lowercase())
+            .collect();
+        let content_reader = matches!(
+            name.as_str(),
+            "cat" | "type" | "head" | "tail" | "get-content" | "get-filehash"
+        );
+        if content_reader
+            && words[1..]
+                .iter()
+                .any(|word| word.contains('*') || word.contains('?'))
+        {
+            return Err(
+                "wildcard paths are blocked for file-reading commands; name the file or use ls or rg"
+                    .into(),
+            );
+        }
+        let dangerous = match name.as_str() {
+            "rg" => args.iter().any(|arg| {
+                arg.starts_with('$')
+                    || arg.starts_with('@')
+                    || arg == "--pre"
+                    || arg.starts_with("--pre=")
+                    || arg == "--pre-glob"
+                    || arg.starts_with("--pre-glob=")
+                    || arg == "--hostname-bin"
+                    || arg.starts_with("--hostname-bin=")
+            }),
+            "sort" => args.iter().any(|arg| {
+                arg.starts_with('$')
+                    || arg.starts_with('@')
+                    || arg.starts_with("/o")
+                    || arg == "--output"
+                    || arg.starts_with("--output=")
+                    || arg == "--compress-program"
+                    || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('o'))
+            }),
+            "ipconfig" => args.iter().any(|arg| arg != "/all" && arg != "/displaydns"),
+            "get-help" => args.iter().any(|arg| arg == "-online"),
+            _ => false,
+        };
+        if dangerous {
+            return Err(format!(
+                "'{name}' with that option can run or write, so it is blocked"
             ));
         }
     }
     Ok(())
+}
+
+fn sandbox_inspection(command: &str) -> Result<(), String> {
+    sandbox_inspection_inner(command, 0)
 }
 
 pub fn summarize_call(name: &str, args: &Value) -> String {
@@ -2220,6 +2442,15 @@ mod tests {
             "dir C:\\",
             "Get-Content README.md",
             "netstat -ano",
+            "Get-ChildItem -LiteralPath \"$HOME\\Downloads\" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 5",
+            "Get-ChildItem -LiteralPath \"$env:USERPROFILE\\Downloads\" -File -ErrorAction SilentlyContinue",
+            "$d = Join-Path $HOME 'Downloads'; Get-ChildItem $d -File",
+            "ls.exe -la C:\\Users\\abdul\\Downloads",
+            "LS.EXE -la C:\\Users\\abdul\\Downloads",
+            "rg -n \"foo|bar\" C:\\Users\\abdul\\Downloads",
+            "cat C:\\Users\\abdul\\Downloads\\notes.txt",
+            "ipconfig /all",
+            "ipconfig /displaydns",
         ] {
             assert!(sandbox_inspection(allowed).is_ok(), "{allowed} should pass");
         }
@@ -2232,6 +2463,18 @@ mod tests {
             "git status",
             "New-Item -ItemType File x",
             "Get-Process; Start-Process calc",
+            "mkdir C:\\temp\\x",
+            "touch notes.txt",
+            "Get-ChildItem | Out-File names.txt",
+            "sort -o names.txt names.txt",
+            "rg --pre calc pattern .",
+            "cat C:\\Users\\abdul\\.ssh\\id_rsa",
+            "cat .aws\\credentials",
+            "cat C:\\Users\\abdul\\Downloads\\*.txt",
+            "C:\\tools\\ls.exe C:\\Users",
+            "sort /o names.txt names.txt",
+            "ipconfig /release",
+            "Get-Help ls -Online",
         ] {
             assert!(
                 sandbox_inspection(refused).is_err(),
@@ -2247,6 +2490,9 @@ mod tests {
             "$(Get-Process)",
             "& { Get-Process }",
             "Get-ChildItem | Tee-Object out.txt",
+            "Get-Content \"$(Get-Process)\"",
+            "Get-Content \"a`b\"",
+            "Get-Content \u{201c}notes.txt\u{201d}",
         ] {
             assert!(
                 sandbox_inspection(refused).is_err(),

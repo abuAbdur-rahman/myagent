@@ -621,14 +621,27 @@ fn sibling_files(skill_file: &std::path::Path) -> Vec<String> {
     files
 }
 
+fn unknown_skill(id: &str, skills: &[(SkillInfo, std::path::PathBuf)]) -> String {
+    let available: Vec<&str> = skills
+        .iter()
+        .filter(|(info, _)| info.enabled)
+        .map(|(info, _)| info.id.as_str())
+        .collect();
+    if available.is_empty() {
+        format!("unknown skill: {id}; no enabled skills are available")
+    } else {
+        format!("unknown skill: {id}; available: {}", available.join(", "))
+    }
+}
+
 pub fn prepare_skill(app: &AppHandle, id: &str) -> Result<String, String> {
     if !is_valid_skill_name(id) {
-        return Err("unknown skill".to_string());
+        return Err(format!("unknown skill: {id}"));
     }
-    let found = list_skills(app)
-        .into_iter()
-        .find(|(info, _)| info.id == id)
-        .ok_or_else(|| "unknown skill".to_string())?;
+    let all = list_skills(app);
+    let Some(found) = all.iter().find(|(info, _)| info.id == id) else {
+        return Err(unknown_skill(id, &all));
+    };
     if !found.0.enabled {
         return Err("skill is disabled".to_string());
     }
