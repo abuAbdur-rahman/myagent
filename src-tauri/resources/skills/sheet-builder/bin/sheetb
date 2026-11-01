@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Sheet Builder: a small JSON spec into a clean XLSX workbook."""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+MAX_SHEETS = 20
+MAX_ROWS = 5000
+MAX_COLUMNS = 100
+
+
+def fail(message: str, code: int = 2) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def openpyxl():
+    try:
+        return importlib.import_module("openpyxl")
+    except ImportError:
+        fail("missing_tool: openpyxl", 3)
+
+
+def emit(value) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def safe_name(value, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 _.-]+", "_", str(value or "")).strip(" .")
+    return cleaned[:80] or fallback
+
+
+def output_path(raw: str | None, default_name: str) -> Path:
+    base = Path(os.environ.get("OUTPUTS", "outputs")).expanduser()
+    target = Path(raw).expanduser() if raw else base / default_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def load_spec(path: str) -> dict:
+    source = Path(path).expanduser()
+    if not source.is_file():
+        fail(f"spec not found: {path}")
+    try:
+        spec = json.loads(source.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(f"spec is not valid JSON: {error}")
+    if not isinstance(spec, dict):
+        fail("spec must be a JSON object")
+    return spec
+
+
+def validate_spec(spec: dict) -> list[str]:
+    errors: list[str] = []
+    sheets = spec.get("sheets")
+    if not isinstance(sheets, list) or not sheets:
+        return ["spec needs a non-empty sheets array"]
+    if len(sheets) > MAX_SHEETS:
+        errors.append(f"too many sheets (max {MAX_SHEETS})")
+    names = set()
+    for index, sheet in enumerate(sheets):
+        label = f"sheets[{index}]"
+        if not isinstance(sheet, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        name = sheet.get("name")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or len(name) > 31
+            or any(char in name for char in "[]:*?/\\")
+        ):
+            errors.append(f"{label}.name must be 1-31 characters without []:*?/\\")
+        elif name in names:
+            errors.append(f"{label}.name repeats {name}")
+        else:
+            names.add(name)
+        columns = sheet.get("columns", [])
+        rows = sheet.get("rows", [])
+        if not isinstance(columns, list) or not isinstance(rows, list):
+            errors.append(f"{label}.columns and rows must be arrays")
+            continue
+        width = len(columns)
+        if width > MAX_COLUMNS:
+            errors.append(f"{label} has too many columns (max {MAX_COLUMNS})")
+        if len(rows) > MAX_ROWS:
+            errors.append(f"{label} has too many rows (max {MAX_ROWS})")
+        for row_index, row in enumerate(rows):
+            if not isinstance(row, list):
+                errors.append(f"{label}.rows[{row_index}] must be an array")
+            elif width and len(row) != width:
+                errors.append(
+                    f"{label}.rows[{row_index}] has {len(row)} cells, expected {width}"
+                )
+    return errors
+
+
+def cmd_new(args) -> None:
+    spec = {
+        "title": "New workbook",
+        "allow_formulas": True,
+        "sheets": [
+            {
+                "name": "Sheet1",
+                "columns": ["Item", "Units", "Price", "Total"],
+                "rows": [["Widget", 4, 2.5, "=B2*C2"]],
+                "widths": [22, 10, 10, 12],
+                "freeze": "A2",
+            }
+        ],
+    }
+    target = output_path(args.out, "spec.json")
+    target.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+    emit({"ok": True, "file": str(target)})
+
+
+def cmd_validate(args) -> None:
+    spec = load_spec(args.file)
+    errors = validate_spec(spec)
+    emit({"ok": not errors, "errors": errors})
+    if errors:
+        raise SystemExit(2)
+
+
+def cmd_build(args) -> None:
+    spec = load_spec(args.file)
+    errors = validate_spec(spec)
+    if errors:
+        fail("; ".join(errors))
+    xlsx = openpyxl()
+    styles = xlsx.styles
+    book = xlsx.Workbook()
+    book.remove(book.active)
+    for sheet in spec["sheets"]:
+        page = book.create_sheet(str(sheet["name"]))
+        columns = sheet.get("columns") or []
+        rows = sheet.get("rows") or []
+        allow_formulas = spec.get("allow_formulas") is True
+
+        def value(cell):
+            if isinstance(cell, str) and cell.startswith("=") and not allow_formulas:
+                return "'" + cell
+            return cell
+
+        if columns:
+            page.append([value(cell) for cell in columns])
+            for cell in page[1]:
+                cell.font = styles.Font(bold=True, color="FFFFFF")
+                cell.fill = styles.PatternFill("solid", fgColor="2F5D8A")
+                cell.alignment = styles.Alignment(vertical="center")
+        for row in rows:
+            page.append([value(cell) for cell in row])
+        widths = sheet.get("widths") or []
+        for index, width in enumerate(widths, start=1):
+            if isinstance(width, (int, float)) and 4 <= width <= 120:
+                page.column_dimensions[xlsx.utils.get_column_letter(index)].width = width
+        freeze = sheet.get("freeze")
+        if isinstance(freeze, str) and freeze:
+            page.freeze_panes = freeze
+        page.sheet_view.showGridLines = bool(sheet.get("gridlines", True))
+        if columns:
+            page.auto_filter.ref = page.dimensions
+    book.properties.title = str(spec.get("title", "Workbook"))
+    book.properties.creator = "MyAgent Sheet Builder"
+    target = output_path(args.out, f"{safe_name(spec.get('title'), 'workbook')}.xlsx")
+    if Path(args.file).expanduser().resolve() == target.resolve():
+        fail("refusing to overwrite the input spec; choose a new output")
+    book.save(target)
+    emit({"ok": True, "file": str(target), "sheets": len(spec["sheets"])})
+
+
+def cmd_read(args) -> None:
+    source = Path(args.file).expanduser()
+    if not source.is_file():
+        fail(f"workbook not found: {args.file}")
+    xlsx = openpyxl()
+    book = xlsx.load_workbook(source, data_only=False)
+    emit(
+        {
+            "ok": True,
+            "file": str(source),
+            "sheets": [
+                {
+                    "name": page.title,
+                    "rows": [
+                        ["" if cell is None else cell for cell in row]
+                        for row in page.iter_rows(values_only=True)
+                    ],
+                }
+                for page in book.worksheets
+            ],
+        }
+    )
+
+
+def cmd_check(args) -> None:
+    source = Path(args.file).expanduser()
+    if not source.is_file():
+        fail(f"workbook not found: {args.file}")
+    xlsx = openpyxl()
+    book = xlsx.load_workbook(source, data_only=False)
+    sheets = []
+    formulas = 0
+    for page in book.worksheets:
+        count = 0
+        for row in page.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    formulas += 1
+                count += 1
+        sheets.append({"name": page.title, "cells": count})
+    emit({"ok": True, "file": str(source), "sheets": sheets, "formulas": formulas})
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="sheetb", description="Build XLSX workbooks from JSON.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def command(name: str, handler, help_text: str):
+        item = sub.add_parser(name, help=help_text)
+        item.set_defaults(handler=handler)
+        return item
+
+    new = command("new", cmd_new, "write a starter spec")
+    new.add_argument("-o", "--out")
+
+    validate = command("validate", cmd_validate, "check a spec")
+    validate.add_argument("file")
+
+    build = command("build", cmd_build, "build an XLSX")
+    build.add_argument("file")
+    build.add_argument("-o", "--out")
+
+    read = command("read", cmd_read, "dump cells as JSON")
+    read.add_argument("file")
+
+    check = command("check", cmd_check, "reopen and inspect an XLSX")
+    check.add_argument("file")
+
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    args.handler(args)
+
+
+if __name__ == "__main__":
+    main()

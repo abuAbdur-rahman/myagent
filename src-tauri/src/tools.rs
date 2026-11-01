@@ -37,6 +37,7 @@ pub struct ArtifactPayload {
 pub struct ExecOutput {
     pub output: String,
     pub artifact: Option<ArtifactPayload>,
+    pub files: Vec<String>,
 }
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -1562,6 +1563,7 @@ pub async fn execute(
                     now.timestamp()
                 ),
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "remember" => {
@@ -1598,6 +1600,7 @@ pub async fn execute(
                 return Ok(ExecOutput {
                     output: "That note is already waiting for the user to review it.".to_string(),
                     artifact: None,
+                    files: Vec::new(),
                 });
             }
             let duplicate = if let Some(root) = memory_file_mode(app) {
@@ -1617,6 +1620,7 @@ pub async fn execute(
                 return Ok(ExecOutput {
                     output: "That is already in memory; nothing was queued.".to_string(),
                     artifact: None,
+                    files: Vec::new(),
                 });
             }
             let id = uuid::Uuid::new_v4().to_string();
@@ -1651,6 +1655,7 @@ pub async fn execute(
                     memory_preview(&content)
                 ),
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "web_search" => {
@@ -1682,6 +1687,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "recall_memory" => {
@@ -1698,6 +1704,7 @@ pub async fn execute(
                     return Ok(ExecOutput {
                         output: format!("No matching memories.\n{}", tooltext::count_report(0, 0)),
                         artifact: None,
+                        files: Vec::new(),
                     });
                 }
                 let shown = total.min(limit as usize);
@@ -1726,6 +1733,7 @@ pub async fn execute(
                 return Ok(ExecOutput {
                     output,
                     artifact: None,
+                    files: Vec::new(),
                 });
             }
             let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
@@ -1746,6 +1754,7 @@ pub async fn execute(
                 return Ok(ExecOutput {
                     output: format!("No matching memories.\n{}", tooltext::count_report(0, 0)),
                     artifact: None,
+                    files: Vec::new(),
                 });
             }
             let lines: Vec<String> = rows
@@ -1771,6 +1780,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "update_memory" => {
@@ -1827,6 +1837,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: format!("Updated memory {id}."),
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "delete_memory" => {
@@ -1866,6 +1877,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: format!("Deleted memory: {}", memory_preview(&content)),
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "run_powershell" => {
@@ -1951,6 +1963,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: shaped,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "sandbox_run" => {
@@ -1992,6 +2005,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: shaped,
                 artifact: None,
+                files: result.files.clone(),
             })
         }
         "sandbox_read" => {
@@ -2001,6 +2015,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: crate::sandbox::read_file(app, &path, start, max_chars)?,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "sandbox_glob" => {
@@ -2016,6 +2031,7 @@ pub async fn execute(
                     bounded_lines(found, OUTPUT_CAP)
                 },
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "sandbox_grep" => {
@@ -2032,6 +2048,7 @@ pub async fn execute(
                     bounded_lines(found, OUTPUT_CAP)
                 },
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "sandbox_write" => {
@@ -2040,6 +2057,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: crate::sandbox::write_file(app, &path, &content)?,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "sandbox_edit" => {
@@ -2053,6 +2071,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: crate::sandbox::edit_file(app, &path, &old, &new, replace_all)?,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "sandbox_delete" => {
@@ -2060,6 +2079,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: crate::sandbox::delete_file(app, &path)?,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "save_artifact" => {
@@ -2089,6 +2109,7 @@ pub async fn execute(
                     lang: language,
                     code: content,
                 }),
+                files: Vec::new(),
             })
         }
         "ask_user" => Err("ask_user is answered by the agent loop".to_string()),
@@ -2149,6 +2170,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: render_todos(&pool, conversation).await?,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "todo_set" => {
@@ -2186,6 +2208,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: render_todos(&pool, conversation).await?,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "web_fetch" => {
@@ -2238,6 +2261,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: shaped,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "skill" => {
@@ -2246,6 +2270,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: cap_output(&block, None),
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "read_document" => {
@@ -2298,6 +2323,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: shaped,
                 artifact: None,
+                files: Vec::new(),
             })
         }
         "describe_image" => {
@@ -2335,6 +2361,7 @@ pub async fn execute(
             Ok(ExecOutput {
                 output: cap_output(&body, None),
                 artifact: None,
+                files: Vec::new(),
             })
         }
         other => Err(format!("unknown tool: {other}")),

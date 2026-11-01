@@ -191,7 +191,7 @@ async function collectModelOptions(
 }
 
 function clampPanelWidth(width: number): number {
-  return Math.min(720, Math.max(320, Math.round(width)));
+  return Math.min(1000, Math.max(380, Math.round(width)));
 }
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -268,11 +268,24 @@ interface PanelArtifact {
   title: string;
   lang: string;
   code: string;
+  path?: string;
 }
 
 function defaultPanelTab(lang: string): PanelTab {
   const normalized = lang.toLowerCase();
-  if (normalized === "html" || normalized === "htm") return "preview";
+  if (
+    normalized === "html" ||
+    normalized === "htm" ||
+    normalized === "pdf" ||
+    normalized === "docx" ||
+    normalized === "pptx" ||
+    normalized === "xlsx" ||
+    normalized === "odt" ||
+    normalized === "ods" ||
+    normalized === "odp"
+  ) {
+    return "preview";
+  }
   if (normalized === "md" || normalized === "markdown") return "doc";
   return "code";
 }
@@ -951,7 +964,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelView, setPanelViewState] = useState<PanelView>("session");
   const [panelWidth, setPanelWidthState] = useState(() => {
     const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 480);
+    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 640);
   });
 
   const setPanelWidth = useCallback((width: number) => {
@@ -969,7 +982,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [panelOpen]);
 
   const openArtifact = useCallback((artifact: PanelArtifact) => {
-    if (!panelOpenRef.current) setPanelModeState("dock");
+    setPanelModeState((mode) => (mode === "mini" ? "dock" : mode));
     setPanelArtifact(artifact);
     setPanelViewState("artifact");
     setPanelTabState(defaultPanelTab(artifact.lang));

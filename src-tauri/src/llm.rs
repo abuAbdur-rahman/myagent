@@ -2898,7 +2898,11 @@ impl ToolRunner for RealTools<'_> {
                 } else {
                     Vec::new()
                 };
-                let files: Vec<String> = touched_path.clone().into_iter().collect();
+                let files: Vec<String> = if name == "sandbox_run" {
+                    done.files.clone()
+                } else {
+                    touched_path.clone().into_iter().collect()
+                };
                 if !domains.is_empty() || !files.is_empty() {
                     self.on_event.send(StreamEvent::ToolSources {
                         id: id.clone(),

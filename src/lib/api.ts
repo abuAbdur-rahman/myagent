@@ -398,6 +398,40 @@ export function skillsSetEnabled(id: string, enabled: boolean) {
   return invoke<SkillInfo[]>("skills_set_enabled", { id, enabled });
 }
 
+export interface SkillDraft {
+  id: string;
+  title: string;
+  version: string;
+  summary: string;
+  triggers: string[];
+  requires_tools: string[];
+  requires_python: string[];
+  requires_node: string[];
+  body: string;
+}
+
+export function skillsSaveDraft(draft: SkillDraft) {
+  return invoke<SkillInfo[]>("skills_save_draft", { draft });
+}
+
+export function skillsSaveRaw(content: string) {
+  return invoke<SkillInfo[]>("skills_save_raw", { content });
+}
+
+export function skillsImport(path: string) {
+  return invoke<SkillInfo[]>("skills_import", { path });
+}
+
+export interface ArtifactPreview {
+  absolute: string;
+  images: string[];
+  text: string;
+}
+
+export function artifactPreview(path: string) {
+  return invoke<ArtifactPreview>("sandbox_preview", { path });
+}
+
 export function skillsDoctor(id: string) {
   return invoke<SkillDoctorResult>("skills_doctor", { id });
 }

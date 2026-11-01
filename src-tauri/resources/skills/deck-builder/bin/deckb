@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""Deck Builder: a small JSON deck spec into a clean 16:9 PPTX."""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+MAX_SLIDES = 30
+SLIDE_WIDTH = 13.333
+SLIDE_HEIGHT = 7.5
+
+THEMES = {
+    "clean-light": {"bg": "F7F5F1", "text": "1E2328", "muted": "5B6670", "accent": "C45A32"},
+    "clean-dark": {"bg": "161A1D", "text": "F2F0EC", "muted": "A8B0B6", "accent": "E07A4F"},
+    "warm": {"bg": "FBF1E4", "text": "3A2A1E", "muted": "7A6353", "accent": "A63D2F"},
+}
+
+
+def fail(message: str, code: int = 2) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def pptx_modules():
+    try:
+        pptx = importlib.import_module("pptx")
+        data = importlib.import_module("pptx.chart.data")
+        charts = importlib.import_module("pptx.enum.chart")
+        units = importlib.import_module("pptx.util")
+        return pptx, data, charts, units
+    except ImportError:
+        fail("missing_tool: python-pptx", 3)
+
+
+def emit(value) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def safe_name(value, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 _.-]+", "_", str(value or "")).strip(" .")
+    return (cleaned[:80] or fallback)
+
+
+def source_file(path: str) -> Path:
+    source = Path(path).expanduser()
+    if not source.is_file():
+        fail(f"file not found: {path}")
+    return source
+
+
+def output_path(raw: str | None, default_name: str) -> Path:
+    base = Path(os.environ.get("OUTPUTS", "outputs")).expanduser()
+    target = Path(raw).expanduser() if raw else base / default_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def load_spec(path: str) -> dict:
+    try:
+        spec = json.loads(source_file(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(f"spec is not valid JSON: {error}")
+    if not isinstance(spec, dict):
+        fail("spec must be a JSON object")
+    return spec
+
+
+def validate_spec(spec: dict) -> list[str]:
+    errors: list[str] = []
+    slides = spec.get("slides")
+    if not isinstance(slides, list) or not slides:
+        return ["spec needs a non-empty slides array"]
+    meta = spec.get("meta") or {}
+    max_slides = meta.get("max_slides", MAX_SLIDES)
+    if not isinstance(max_slides, int) or max_slides < 1:
+        errors.append("meta.max_slides must be a positive integer")
+        max_slides = MAX_SLIDES
+    max_slides = min(max_slides, MAX_SLIDES)
+    if len(slides) > max_slides:
+        errors.append(f"too many slides ({len(slides)} > {max_slides})")
+    if spec.get("theme", "clean-light") not in THEMES:
+        errors.append("theme must be clean-light, clean-dark or warm")
+    allowed = {"title", "section", "bullets", "table", "chart", "image", "quote", "closing"}
+    for index, slide in enumerate(slides):
+        label = f"slides[{index}]"
+        if not isinstance(slide, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        layout = slide.get("layout")
+        if layout not in allowed:
+            errors.append(f"{label}.layout is unknown: {layout}")
+            continue
+        if layout in {"title", "section", "bullets", "table", "chart", "image", "closing"}:
+            if not isinstance(slide.get("title"), str) or not slide["title"].strip():
+                errors.append(f"{label}.title is required")
+            elif len(slide["title"]) > 120:
+                errors.append(f"{label}.title is too long")
+        if layout == "bullets":
+            bullets = slide.get("bullets")
+            if not isinstance(bullets, list) or not bullets:
+                errors.append(f"{label}.bullets must be a non-empty array")
+            elif any(not isinstance(item, str) for item in bullets):
+                errors.append(f"{label}.bullets must be strings")
+            elif len(bullets) > 7:
+                errors.append(f"{label} has too many bullets (max 7)")
+            elif any(len(item) > 220 for item in bullets):
+                errors.append(f"{label} has a bullet longer than 220 characters")
+        if layout == "quote":
+            if not isinstance(slide.get("text"), str) or not slide["text"].strip():
+                errors.append(f"{label}.text is required")
+        if layout == "table":
+            header = slide.get("header", [])
+            rows = slide.get("rows", [])
+            if not isinstance(header, list) or not isinstance(rows, list):
+                errors.append(f"{label}.header and rows must be arrays")
+            elif not header:
+                errors.append(f"{label}.header must have at least one column")
+            else:
+                for row in rows:
+                    if not isinstance(row, list) or len(row) != len(header):
+                        errors.append(f"{label}.rows must match the header width")
+                        break
+                if len(rows) > 12:
+                    errors.append(f"{label} has too many rows (max 12)")
+        if layout == "chart":
+            series = slide.get("series")
+            categories = slide.get("categories")
+            if not isinstance(series, list) or not series:
+                errors.append(f"{label}.series must be a non-empty array")
+            elif not isinstance(categories, list) or not categories:
+                errors.append(f"{label}.categories must be a non-empty array")
+            else:
+                for item in series:
+                    if not isinstance(item, dict) or not isinstance(item.get("values"), list):
+                        errors.append(f"{label}.series entries need name and values")
+                        break
+                    if len(item["values"]) != len(categories):
+                        errors.append(f"{label}.series values must match categories")
+                        break
+                    if any(
+                        not isinstance(value, (int, float)) or isinstance(value, bool)
+                        for value in item["values"]
+                    ):
+                        errors.append(f"{label}.series values must be numbers")
+                        break
+        if layout == "image":
+            image = slide.get("image")
+            if not isinstance(image, str) or not image:
+                errors.append(f"{label}.image is required")
+            elif not Path(image).expanduser().is_file():
+                errors.append(f"{label}.image does not exist: {image}")
+            if not isinstance(slide.get("alt"), str) or not slide["alt"].strip():
+                errors.append(f"{label}.alt is required for an image")
+    return errors
+
+
+def theme_of(spec: dict) -> dict:
+    return THEMES.get(spec.get("theme", "clean-light"), THEMES["clean-light"])
+
+
+def rgb(hex_value: str):
+    pptx = importlib.import_module("pptx")
+    return pptx.dml.color.RGBColor.from_string(hex_value)
+
+
+def add_text(slide, text, left, top, width, height, size, color, bold=False, font="Calibri"):
+    units = importlib.import_module("pptx.util")
+    box = slide.shapes.add_textbox(units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height))
+    frame = box.text_frame
+    frame.word_wrap = True
+    frame.text = text
+    for paragraph in frame.paragraphs:
+        for run in paragraph.runs:
+            run.font.size = units.Pt(size)
+            run.font.bold = bold
+            run.font.name = font
+            run.font.color.rgb = rgb(color)
+    return box
+
+
+def add_bullets(slide, items, left, top, width, height, color, size=20):
+    units = importlib.import_module("pptx.util")
+    oxml = importlib.import_module("pptx.oxml")
+    box = slide.shapes.add_textbox(units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height))
+    frame = box.text_frame
+    frame.word_wrap = True
+    for index, item in enumerate(items):
+        paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+        paragraph.text = item
+        paragraph.level = 0
+        pPr = paragraph._p.get_or_add_pPr()
+        pPr.append(
+            oxml.parse_xml(
+                '<a:buChar xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" char="•"/>'
+            )
+        )
+        for run in paragraph.runs:
+            run.font.size = units.Pt(size)
+            run.font.name = "Calibri"
+            run.font.color.rgb = rgb(color)
+    return box
+
+
+def add_notes(slide, notes):
+    if isinstance(notes, str) and notes.strip():
+        slide.notes_slide.notes_text_frame.text = notes
+
+
+def cmd_new(args) -> None:
+    spec = {
+        "meta": {"title": "New deck", "author": "", "lang": "en", "max_slides": 7},
+        "theme": "clean-light",
+        "slides": [
+            {"layout": "title", "title": "New deck", "subtitle": ""},
+            {"layout": "bullets", "title": "Highlights", "bullets": ["First point", "Second point"]},
+            {"layout": "closing", "title": "Thank you"},
+        ],
+    }
+    target = output_path(args.out, "spec.json")
+    target.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+    emit({"ok": True, "file": str(target)})
+
+
+def cmd_validate(args) -> None:
+    errors = validate_spec(load_spec(args.file))
+    emit({"ok": not errors, "errors": errors})
+    if errors:
+        raise SystemExit(2)
+
+
+def cmd_build(args) -> None:
+    spec = load_spec(args.file)
+    errors = validate_spec(spec)
+    if errors:
+        fail("; ".join(errors))
+    pptx, chart_data, chart_types, units = pptx_modules()
+    theme = theme_of(spec)
+    presentation = pptx.Presentation()
+    presentation.slide_width = units.Inches(SLIDE_WIDTH)
+    presentation.slide_height = units.Inches(SLIDE_HEIGHT)
+    blank = presentation.slide_layouts[6]
+    for source in spec["slides"]:
+        slide = presentation.slides.add_slide(blank)
+        background = slide.background.fill
+        background.solid()
+        background.fore_color.rgb = rgb(theme["bg"])
+        layout = source["layout"]
+        if layout == "title":
+            add_text(slide, source["title"], 0.9, 2.6, 11.5, 1.4, 40, theme["text"], bold=True)
+            if source.get("subtitle"):
+                add_text(slide, source["subtitle"], 0.9, 4.1, 11.5, 0.7, 20, theme["muted"])
+        elif layout == "section":
+            add_text(slide, source["title"], 0.9, 3.0, 11.5, 1.2, 36, theme["accent"], bold=True)
+        elif layout == "bullets":
+            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
+            add_bullets(slide, source["bullets"], 1.0, 1.9, 11.2, 5.0, theme["text"])
+        elif layout == "table":
+            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
+            header = source.get("header") or []
+            rows = source.get("rows") or []
+            table = slide.shapes.add_table(
+                len(rows) + 1, len(header), units.Inches(0.9), units.Inches(1.8), units.Inches(11.5), units.Inches(0.5 * (len(rows) + 1))
+            ).table
+            for index, value in enumerate(header):
+                table.cell(0, index).text = str(value)
+            for row_index, row in enumerate(rows, start=1):
+                for column_index, value in enumerate(row):
+                    table.cell(row_index, column_index).text = str(value)
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            run.font.size = units.Pt(14)
+                            run.font.color.rgb = rgb(theme["text"])
+        elif layout == "chart":
+            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
+            categories = source["categories"]
+            series = source["series"]
+            data = chart_data.ChartData()
+            data.categories = categories
+            for item in series:
+                data.add_series(item.get("name", "Series"), item["values"])
+            chart = slide.shapes.add_chart(
+                chart_types.XL_CHART_TYPE.COLUMN_CLUSTERED,
+                units.Inches(0.9), units.Inches(1.7), units.Inches(11.5), units.Inches(5.2), data
+            ).chart
+            chart.has_title = False
+            chart.has_legend = len(series) > 1
+        elif layout == "image":
+            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
+            picture = slide.shapes.add_picture(
+                str(Path(source["image"]).expanduser()),
+                units.Inches(2.2), units.Inches(1.7),
+                width=units.Inches(8.9), height=units.Inches(5.2),
+            )
+            picture._element.nvPicPr.cNvPr.set("descr", source["alt"])
+        elif layout == "quote":
+            add_text(slide, f"“{source['text']}”", 0.9, 2.2, 11.5, 2.0, 32, theme["text"])
+            if source.get("attribution"):
+                add_text(slide, source["attribution"], 0.9, 4.6, 11.5, 0.6, 18, theme["muted"])
+        elif layout == "closing":
+            add_text(slide, source["title"], 0.9, 3.0, 11.5, 1.2, 36, theme["accent"], bold=True)
+        add_notes(slide, source.get("notes"))
+    presentation.core_properties.title = str((spec.get("meta") or {}).get("title", "Deck"))
+    presentation.core_properties.author = str((spec.get("meta") or {}).get("author", ""))
+    title = (spec.get("meta") or {}).get("title", "deck")
+    target = output_path(args.out, f"{safe_name(title, 'deck')}.pptx")
+    inputs = [source_file(args.file).resolve()]
+    inputs.extend(
+        Path(item["image"]).expanduser().resolve()
+        for item in spec["slides"]
+        if item["layout"] == "image"
+    )
+    if target.resolve() in inputs:
+        fail("refusing to overwrite the input spec or an image; choose a new output")
+    presentation.save(target)
+    emit({"ok": True, "file": str(target), "slides": len(spec["slides"])})
+
+
+def cmd_read(args) -> None:
+    pptx, _, _, _ = pptx_modules()
+    presentation = pptx.Presentation(str(source_file(args.file)))
+    slides = []
+    for index, slide in enumerate(presentation.slides, start=1):
+        texts = []
+        tables = []
+        for shape in slide.shapes:
+            if getattr(shape, "has_text_frame", False):
+                for paragraph in shape.text_frame.paragraphs:
+                    text = "".join(run.text for run in paragraph.runs).strip()
+                    if text:
+                        texts.append(text)
+            if getattr(shape, "has_table", False):
+                tables.append([[cell.text for cell in row.cells] for row in shape.table.rows])
+        notes = ""
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text
+        slides.append({"slide": index, "text": texts, "tables": tables, "notes": notes})
+    emit({"ok": True, "file": args.file, "slides": slides})
+
+
+def cmd_check(args) -> None:
+    pptx, _, _, _ = pptx_modules()
+    presentation = pptx.Presentation(str(source_file(args.file)))
+    charts = sum(
+        1
+        for slide in presentation.slides
+        for shape in slide.shapes
+        if getattr(shape, "has_chart", False)
+    )
+    emit(
+        {
+            "ok": True,
+            "file": args.file,
+            "slides": len(presentation.slides),
+            "charts": charts,
+            "width": round(presentation.slide_width / 914400, 2),
+            "height": round(presentation.slide_height / 914400, 2),
+        }
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="deckb", description="Build PPTX decks from JSON.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def command(name: str, handler, help_text: str):
+        item = sub.add_parser(name, help=help_text)
+        item.set_defaults(handler=handler)
+        return item
+
+    new = command("new", cmd_new, "write a starter spec")
+    new.add_argument("-o", "--out")
+
+    validate = command("validate", cmd_validate, "check a spec")
+    validate.add_argument("file")
+
+    build = command("build", cmd_build, "build a PPTX")
+    build.add_argument("file")
+    build.add_argument("-o", "--out")
+
+    read = command("read", cmd_read, "dump slide text and tables")
+    read.add_argument("file")
+
+    check = command("check", cmd_check, "reopen and inspect a PPTX")
+    check.add_argument("file")
+
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    args.handler(args)
+
+
+if __name__ == "__main__":
+    main()

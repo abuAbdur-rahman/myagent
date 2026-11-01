@@ -22,6 +22,58 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.3",
+    date: "2026-11-01",
+    summary:
+      "Four built-in skills ship: PDF Workbench, Sheet Builder, DOCX Writer and Deck Builder. Create PDFs, XLSX sheets for Google Sheets or Excel, Word documents and PowerPoint decks from small JSON specs, preview PDF/Office artifacts, and add your own skills from a file or form.",
+    changes: [
+      {
+        kind: "new",
+        text: "PDF Workbench adds pdfwb: inspect, text, tables, images, render, ocr, merge, split, pages, stamp, fields, fill, encrypt, decrypt, meta, make, optimize and verify, with our 1-based page range syntax.",
+      },
+      {
+        kind: "new",
+        text: "Sheet Builder turns a JSON spec into an XLSX with header styling, widths, freeze panes and formulas; the file opens in Excel, LibreOffice and Google Sheets.",
+      },
+      {
+        kind: "new",
+        text: "DOCX Writer turns a JSON block spec into a Word document with title, headings, paragraphs, bullets, tables, quotes and page breaks.",
+      },
+      {
+        kind: "new",
+        text: "Deck Builder turns a JSON deck spec into a 16:9 PPTX with native tables and charts, speaker notes, image alt text and three original themes.",
+      },
+      {
+        kind: "new",
+        text: "PDF, DOCX, PPTX and XLSX outputs open a preview: LibreOffice converts Office files to PDF inside the sandbox, poppler renders up to three pages to images, and the panel also shows extracted text. No untrusted HTML reaches the webview.",
+      },
+      {
+        kind: "new",
+        text: "PDF Workbench writes new files to outputs/, never overwrites the input, caps input at 100 MB and OCR at 200 pages, needs a user-supplied password for encrypted files, and has no network access.",
+      },
+      {
+        kind: "new",
+        text: "Skills are bundled as an app resource, so the installer finds pdf-workbench in Settings > Skills without a manual copy.",
+      },
+      {
+        kind: "new",
+        text: "Settings > Skills can add a skill from a SKILL.md file, import a skill folder, write SKILL.md in a full-screen editor prefilled with the real format, or build one from separate id, title, summary, requirements and instruction fields.",
+      },
+      {
+        kind: "improved",
+        text: "A skill call in the tool log shows a Using skill chip with the skill name.",
+      },
+      {
+        kind: "improved",
+        text: "The artifact panel reuses the last dragged width, opens at a wider 640 px default, allows up to 1000 px, and leaves mini mode when a file is opened.",
+      },
+      {
+        kind: "fixed",
+        text: "The PDF skill's golden tests run inside the sandbox: merge, split, table CSV, form fill, encrypt/decrypt, stamp, Markdown-to-PDF with H2O, OCR of a scanned page, optimize and render.",
+      },
+    ],
+  },
+  {
     version: "0.8.2",
     date: "2026-11-01",
     summary:
