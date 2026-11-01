@@ -628,7 +628,7 @@ fn unknown_skill(id: &str, skills: &[(SkillInfo, std::path::PathBuf)]) -> String
         .map(|(info, _)| info.id.as_str())
         .collect();
     if available.is_empty() {
-        format!("unknown skill: {id}; no skills are installed")
+        format!("unknown skill: {id}; no enabled skills are available")
     } else {
         format!("unknown skill: {id}; available: {}", available.join(", "))
     }

@@ -1203,12 +1203,12 @@ fn host_words(segment: &str) -> Vec<String> {
     words
 }
 
-fn host_command_name(word: &str) -> String {
-    word.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(word)
-        .trim_end_matches(".exe")
-        .to_ascii_lowercase()
+fn host_command_name(word: &str) -> Option<String> {
+    if word.contains(['/', '\\', ':']) {
+        return None;
+    }
+    let lowered = word.to_ascii_lowercase();
+    Some(lowered.strip_suffix(".exe").unwrap_or(&lowered).to_string())
 }
 
 fn host_assignment(segment: &str) -> Option<&str> {
@@ -1223,14 +1223,10 @@ fn host_assignment(segment: &str) -> Option<&str> {
 fn host_sensitive_path(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
     [
-        "\\.ssh\\",
-        "/.ssh/",
-        "\\.aws\\",
-        "/.aws/",
-        "\\.gnupg\\",
-        "/.gnupg/",
-        "\\.kube\\",
-        "/.kube/",
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".kube",
         "id_rsa",
         "id_ed25519",
         "logins.json",
@@ -1250,10 +1246,25 @@ fn sandbox_inspection_inner(command: &str, depth: usize) -> Result<(), String> {
     let mut index = 0;
     while index < bytes.len() {
         let ch = bytes[index];
+        if matches!(
+            ch,
+            '\u{2018}' | '\u{2019}' | '\u{201c}' | '\u{201d}' | '\u{2032}' | '\u{2033}'
+        ) {
+            return Err("Unicode quote characters are not allowed in the host shell".into());
+        }
         match quote {
-            Some(mark) => {
-                if ch == mark {
+            Some('\'') => {
+                if ch == '\'' {
                     quote = None;
+                }
+            }
+            Some(_) => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '`' {
+                    return Err("backtick escaping is not allowed in the host shell".into());
+                } else if ch == '$' && bytes.get(index + 1) == Some(&'(') {
+                    return Err("subexpressions are not allowed in the host shell".into());
                 }
             }
             None => match ch {
@@ -1296,7 +1307,12 @@ fn sandbox_inspection_inner(command: &str, depth: usize) -> Result<(), String> {
         let Some(first) = words.first() else {
             continue;
         };
-        let name = host_command_name(first);
+        let Some(name) = host_command_name(first) else {
+            return Err(
+                "command paths are not allowed; use a bare command name such as ls, cat or rg"
+                    .into(),
+            );
+        };
         let allowed = HOST_READ_COMMANDS.contains(&name.as_str())
             || HOST_READ_CMDLETS.contains(&name.as_str());
         if !allowed {
@@ -1308,9 +1324,25 @@ fn sandbox_inspection_inner(command: &str, depth: usize) -> Result<(), String> {
             .iter()
             .map(|word| word.to_ascii_lowercase())
             .collect();
+        let content_reader = matches!(
+            name.as_str(),
+            "cat" | "type" | "head" | "tail" | "get-content" | "get-filehash"
+        );
+        if content_reader
+            && words[1..]
+                .iter()
+                .any(|word| word.contains('*') || word.contains('?'))
+        {
+            return Err(
+                "wildcard paths are blocked for file-reading commands; name the file or use ls or rg"
+                    .into(),
+            );
+        }
         let dangerous = match name.as_str() {
             "rg" => args.iter().any(|arg| {
-                arg == "--pre"
+                arg.starts_with('$')
+                    || arg.starts_with('@')
+                    || arg == "--pre"
                     || arg.starts_with("--pre=")
                     || arg == "--pre-glob"
                     || arg.starts_with("--pre-glob=")
@@ -1318,11 +1350,16 @@ fn sandbox_inspection_inner(command: &str, depth: usize) -> Result<(), String> {
                     || arg.starts_with("--hostname-bin=")
             }),
             "sort" => args.iter().any(|arg| {
-                arg.starts_with("-o")
+                arg.starts_with('$')
+                    || arg.starts_with('@')
+                    || arg.starts_with("/o")
                     || arg == "--output"
                     || arg.starts_with("--output=")
                     || arg == "--compress-program"
+                    || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('o'))
             }),
+            "ipconfig" => args.iter().any(|arg| arg != "/all" && arg != "/displaydns"),
+            "get-help" => args.iter().any(|arg| arg == "-online"),
             _ => false,
         };
         if dangerous {
@@ -2409,8 +2446,11 @@ mod tests {
             "Get-ChildItem -LiteralPath \"$env:USERPROFILE\\Downloads\" -File -ErrorAction SilentlyContinue",
             "$d = Join-Path $HOME 'Downloads'; Get-ChildItem $d -File",
             "ls.exe -la C:\\Users\\abdul\\Downloads",
+            "LS.EXE -la C:\\Users\\abdul\\Downloads",
             "rg -n \"foo|bar\" C:\\Users\\abdul\\Downloads",
             "cat C:\\Users\\abdul\\Downloads\\notes.txt",
+            "ipconfig /all",
+            "ipconfig /displaydns",
         ] {
             assert!(sandbox_inspection(allowed).is_ok(), "{allowed} should pass");
         }
@@ -2429,6 +2469,12 @@ mod tests {
             "sort -o names.txt names.txt",
             "rg --pre calc pattern .",
             "cat C:\\Users\\abdul\\.ssh\\id_rsa",
+            "cat .aws\\credentials",
+            "cat C:\\Users\\abdul\\Downloads\\*.txt",
+            "C:\\tools\\ls.exe C:\\Users",
+            "sort /o names.txt names.txt",
+            "ipconfig /release",
+            "Get-Help ls -Online",
         ] {
             assert!(
                 sandbox_inspection(refused).is_err(),
@@ -2444,6 +2490,9 @@ mod tests {
             "$(Get-Process)",
             "& { Get-Process }",
             "Get-ChildItem | Tee-Object out.txt",
+            "Get-Content \"$(Get-Process)\"",
+            "Get-Content \"a`b\"",
+            "Get-Content \u{201c}notes.txt\u{201d}",
         ] {
             assert!(
                 sandbox_inspection(refused).is_err(),

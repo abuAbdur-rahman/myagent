@@ -33,7 +33,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "Writes, deletes, installs, process launches, redirection, subexpressions and script blocks are still refused. Credential and secret paths such as .ssh, .aws and .env are denied.",
+        text: "Writes, deletes, installs, process launches, redirection, subexpressions and script blocks are still refused. Credential and secret paths such as .ssh, .aws and .env are filtered by name as a best-effort guard.",
       },
       {
         kind: "improved",
