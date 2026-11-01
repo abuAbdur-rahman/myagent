@@ -366,6 +366,17 @@ fn truncate_preview(text: &str) -> String {
     truncate_chars(text.trim(), 500)
 }
 
+fn created_files(text: &str) -> Vec<String> {
+    let Some(rest) = text.split("\ncreated files:\n").nth(1) else {
+        return Vec::new();
+    };
+    rest.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn domains_in(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for token in text.split(|c: char| {
@@ -2898,7 +2909,11 @@ impl ToolRunner for RealTools<'_> {
                 } else {
                     Vec::new()
                 };
-                let files: Vec<String> = touched_path.clone().into_iter().collect();
+                let files: Vec<String> = if name == "sandbox_run" {
+                    created_files(&done.output)
+                } else {
+                    touched_path.clone().into_iter().collect()
+                };
                 if !domains.is_empty() || !files.is_empty() {
                     self.on_event.send(StreamEvent::ToolSources {
                         id: id.clone(),
@@ -3327,6 +3342,16 @@ mod tests {
             false,
             &AppError::Upstream("404 Not Found".to_string())
         ));
+    }
+
+    #[test]
+    fn created_files_reads_the_output_marker() {
+        let output = "stdout:\nok\n\ncreated files:\noutputs/deck.pptx\noutputs/report.xlsx\n";
+        assert_eq!(
+            created_files(output),
+            vec!["outputs/deck.pptx", "outputs/report.xlsx"]
+        );
+        assert!(created_files("plain output").is_empty());
     }
 
     #[test]

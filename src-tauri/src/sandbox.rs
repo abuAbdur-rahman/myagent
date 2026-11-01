@@ -104,6 +104,7 @@ pub struct RunResult {
     pub exit_code: i32,
     pub checkpoint: Option<String>,
     pub sensitive: Vec<String>,
+    pub files: Vec<String>,
     pub duration_ms: u64,
 }
 
@@ -1040,6 +1041,45 @@ fn tree_after(data: &Path, root: &Path, exec_id: &str) -> Option<String> {
     Some(text(&tree.stdout))
 }
 
+fn recent_project_files(root: &Path, since: std::time::SystemTime) -> Vec<String> {
+    let cutoff = since.checked_sub(Duration::from_secs(2)).unwrap_or(since);
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                ".git" | "node_modules" | "target" | ".venv" | "__pycache__"
+            )
+        });
+    let mut files = Vec::new();
+    for entry in builder.build().filter_map(|entry| entry.ok()).take(20_000) {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified < cutoff {
+            continue;
+        }
+        let path = entry.path();
+        if let Ok(rel) = path.strip_prefix(root) {
+            files.push(rel.to_string_lossy().replace('\\', "/"));
+            if files.len() >= 100 {
+                break;
+            }
+        }
+    }
+    files
+}
+
 fn changed_between(root: &Path, base: &str, after: &str) -> Vec<String> {
     let names = git(
         &[
@@ -1370,6 +1410,16 @@ pub(crate) async fn run_inner(
         .await
         .map_err(|e| e.to_string())?
     };
+    let mut files: Vec<String> = if let Some(cp) = &checkpoint {
+        tree_after(data, root, &exec_id)
+            .map(|after| changed_between(root, &cp.tree, &after))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    files.extend(recent_project_files(root, started_at));
+    files.sort();
+    files.dedup();
     let mut text_out = String::new();
     let stdout = String::from_utf8_lossy(&stdout_bytes);
     let stderr = String::from_utf8_lossy(&stderr_bytes);
@@ -1379,11 +1429,19 @@ pub(crate) async fn run_inner(
     if !stderr.trim().is_empty() {
         text_out.push_str(&format!("stderr:\n{stderr}\n"));
     }
+    if !files.is_empty() {
+        text_out.push_str("\ncreated files:\n");
+        for file in &files {
+            text_out.push_str(file);
+            text_out.push('\n');
+        }
+    }
     Ok(RunResult {
         output: text_out,
         exit_code,
         checkpoint: checkpoint_ref,
         sensitive,
+        files,
         duration_ms,
     })
 }
