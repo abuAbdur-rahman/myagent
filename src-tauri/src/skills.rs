@@ -19,6 +19,19 @@ pub struct SkillInfo {
     pub requires_node: Vec<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct SkillDraft {
+    pub id: String,
+    pub title: String,
+    pub version: String,
+    pub summary: String,
+    pub triggers: Vec<String>,
+    pub requires_tools: Vec<String>,
+    pub requires_python: Vec<String>,
+    pub requires_node: Vec<String>,
+    pub body: String,
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct DoctorResult {
     pub skill: String,
@@ -701,6 +714,239 @@ pub async fn skill_read(app: AppHandle, id: String) -> Result<String, String> {
     prepare_skill(&app, &id)
 }
 
+fn user_skills_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("skills"))
+        .map_err(|e| format!("app data directory: {e}"))
+}
+
+fn write_user_skill(app: &AppHandle, id: &str, content: &str) -> Result<(), String> {
+    if !is_valid_skill_name(id) {
+        return Err(format!("invalid skill id: {id}"));
+    }
+    let dir = user_skills_dir(app)?.join(id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("skill folder: {e}"))?;
+    let temp = dir.join("SKILL.md.tmp");
+    std::fs::write(&temp, content).map_err(|e| format!("skill file: {e}"))?;
+    std::fs::rename(&temp, dir.join("SKILL.md")).map_err(|e| format!("skill file: {e}"))
+}
+
+fn clean_field(value: &str, name: &str, max: usize) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{name} is required"));
+    }
+    if value.chars().count() > max {
+        return Err(format!("{name} is too long (max {max})"));
+    }
+    if value.contains(['\n', '\r', '"', '\\', '[', ']', ',']) {
+        return Err(format!(
+            "{name} cannot contain quotes, brackets, commas or line breaks"
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn clean_list(values: &[String], name: &str) -> Result<Vec<String>, String> {
+    if values.len() > 40 {
+        return Err(format!("{name} has too many entries (max 40)"));
+    }
+    let mut out = Vec::new();
+    for value in values {
+        let value = clean_field(value, name, 96)?;
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn require_token(value: &str, name: &str) -> Result<(), String> {
+    let valid = !value.is_empty()
+        && value.len() <= 96
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("{name} has an invalid entry: {value}"))
+    }
+}
+
+fn draft_markdown(draft: &SkillDraft) -> Result<String, String> {
+    if !is_valid_skill_name(&draft.id) {
+        return Err("id must be lowercase letters, digits or hyphens".to_string());
+    }
+    let title = clean_field(&draft.title, "title", 120)?;
+    let version = clean_field(&draft.version, "version", 32)?;
+    let summary = clean_field(&draft.summary, "summary", 500)?;
+    let triggers = clean_list(&draft.triggers, "triggers")?;
+    let tools = clean_list(&draft.requires_tools, "requires_tools")?;
+    let python = clean_list(&draft.requires_python, "requires_python")?;
+    let node = clean_list(&draft.requires_node, "requires_node")?;
+    for tool in &tools {
+        require_token(tool, "requires_tools")?;
+    }
+    for module in python.iter().chain(&node) {
+        require_token(module, "requires_imports")?;
+    }
+    let body = draft.body.trim();
+    if body.is_empty() {
+        return Err("body is required".to_string());
+    }
+    if body.chars().count() > 200_000 {
+        return Err("body is too large (max 200000 characters)".to_string());
+    }
+    let list = |items: &[String]| {
+        items
+            .iter()
+            .map(|item| format!("\"{item}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Ok(format!(
+        "---\nid: \"{}\"\ntitle: \"{}\"\nversion: \"{}\"\ntriggers: [{}]\nrequires_tools: [{}]\nrequires_imports:\n  python: [{}]\n  node: [{}]\nnetwork: none\nwrites: [\"outputs/\"]\nsummary: \"{}\"\n---\n\n{}\n",
+        draft.id,
+        title,
+        version,
+        list(&triggers),
+        list(&tools),
+        list(&python),
+        list(&node),
+        summary,
+        body
+    ))
+}
+
+fn validate_raw_skill(content: &str) -> Result<String, String> {
+    if content.chars().count() > 300_000 {
+        return Err("skill file is too large (max 300000 characters)".to_string());
+    }
+    let meta = parse_meta(content);
+    let id = meta
+        .id
+        .filter(|id| is_valid_skill_name(id))
+        .ok_or("frontmatter needs a valid id")?;
+    if parse_skill(&id, content).is_none() {
+        return Err("frontmatter needs a summary or description".to_string());
+    }
+    Ok(id)
+}
+
+fn copy_skill_tree(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    fn walk(
+        source: &std::path::Path,
+        target: &std::path::Path,
+        files: &mut usize,
+        bytes: &mut u64,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 8 {
+            return Err("skill folder is nested too deeply".to_string());
+        }
+        for entry in std::fs::read_dir(source)
+            .map_err(|e| format!("skill folder: {e}"))?
+            .filter_map(|entry| entry.ok())
+        {
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "skill folders cannot contain symlinks: {}",
+                    path.display()
+                ));
+            }
+            let name = entry.file_name();
+            let destination = target.join(&name);
+            if metadata.is_dir() {
+                std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
+                walk(&path, &destination, files, bytes, depth + 1)?;
+            } else if metadata.is_file() {
+                *files += 1;
+                *bytes += metadata.len();
+                if *files > 200 {
+                    return Err("skill folder has too many files (max 200)".to_string());
+                }
+                if *bytes > 20 * 1024 * 1024 {
+                    return Err("skill folder is larger than 20 MB".to_string());
+                }
+                std::fs::copy(&path, &destination).map_err(|e| format!("copy skill file: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+    walk(source, target, &mut files, &mut bytes, 0)
+}
+
+#[tauri::command]
+pub async fn skills_save_draft(
+    app: AppHandle,
+    draft: SkillDraft,
+) -> Result<Vec<SkillInfo>, String> {
+    let content = draft_markdown(&draft)?;
+    write_user_skill(&app, &draft.id, &content)?;
+    skills_list(app).await
+}
+
+#[tauri::command]
+pub async fn skills_save_raw(app: AppHandle, content: String) -> Result<Vec<SkillInfo>, String> {
+    let id = validate_raw_skill(&content)?;
+    write_user_skill(&app, &id, &content)?;
+    skills_list(app).await
+}
+
+#[tauri::command]
+pub async fn skills_import(app: AppHandle, path: String) -> Result<Vec<SkillInfo>, String> {
+    let source = std::path::PathBuf::from(&path);
+    let metadata = std::fs::symlink_metadata(&source).map_err(|e| format!("skill source: {e}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("skill source cannot be a symlink".to_string());
+    }
+    if metadata.is_file() {
+        let content = std::fs::read_to_string(&source)
+            .map_err(|e| format!("skill file must be UTF-8 text: {e}"))?;
+        let id = validate_raw_skill(&content)?;
+        write_user_skill(&app, &id, &content)?;
+    } else if metadata.is_dir() {
+        let id = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .ok_or("skill folder needs a name")?;
+        if !is_valid_skill_name(&id) {
+            return Err(
+                "skill folder name must be lowercase letters, digits or hyphens".to_string(),
+            );
+        }
+        let skill_file = source.join("SKILL.md");
+        if !skill_file.is_file() {
+            return Err("skill folder needs a SKILL.md".to_string());
+        }
+        let content = std::fs::read_to_string(&skill_file)
+            .map_err(|e| format!("SKILL.md must be UTF-8 text: {e}"))?;
+        if let Some(meta_id) = parse_meta(&content).id
+            && meta_id != id
+        {
+            return Err("skill folder name must match the frontmatter id".to_string());
+        }
+        validate_raw_skill(&content)?;
+        let target = user_skills_dir(&app)?.join(&id);
+        if target == source {
+            return Err("skill is already in the user skills folder".to_string());
+        }
+        std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        copy_skill_tree(&source, &target)?;
+        write_user_skill(&app, &id, &content)?;
+    } else {
+        return Err("skill source must be a SKILL.md file or a folder".to_string());
+    }
+    skills_list(app).await
+}
+
 fn safe_requirement(value: &str, extra: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
@@ -1068,6 +1314,58 @@ mod tests {
             parse_skill("pdf-workbench", content).unwrap().1,
             "Work with PDFs."
         );
+    }
+
+    fn draft() -> SkillDraft {
+        SkillDraft {
+            id: "my-skill".into(),
+            title: "My Skill".into(),
+            version: "1.0.0".into(),
+            summary: "One line".into(),
+            triggers: vec!["pdf".into(), "merge".into()],
+            requires_tools: vec!["qpdf".into()],
+            requires_python: vec!["pypdf".into()],
+            requires_node: vec![],
+            body: "# My Skill\n\nDo the thing.".into(),
+        }
+    }
+
+    #[test]
+    fn draft_markdown_round_trips_through_the_parser() {
+        let content = draft_markdown(&draft()).unwrap();
+        let meta = parse_meta(&content);
+        assert_eq!(meta.id.as_deref(), Some("my-skill"));
+        assert_eq!(meta.title.as_deref(), Some("My Skill"));
+        assert_eq!(meta.triggers, vec!["pdf", "merge"]);
+        assert_eq!(meta.requires_python, vec!["pypdf"]);
+        assert_eq!(meta.summary.as_deref(), Some("One line"));
+        assert!(content.contains("Do the thing."));
+    }
+
+    #[test]
+    fn draft_rejects_unsafe_fields_and_bad_ids() {
+        let mut bad = draft();
+        bad.id = "Bad Id".into();
+        assert!(draft_markdown(&bad).is_err());
+        let mut bad = draft();
+        bad.title = "a \"quote\"".into();
+        assert!(draft_markdown(&bad).is_err());
+        let mut bad = draft();
+        bad.body = "   ".into();
+        assert!(draft_markdown(&bad).is_err());
+        let mut bad = draft();
+        bad.requires_tools = vec!["qpdf; rm".into()];
+        assert!(draft_markdown(&bad).is_err());
+    }
+
+    #[test]
+    fn raw_skill_needs_a_valid_id_and_summary() {
+        assert_eq!(
+            validate_raw_skill("---\nid: notes\nsummary: Notes\n---\nBody").unwrap(),
+            "notes"
+        );
+        assert!(validate_raw_skill("---\ntitle: No id\n---\nBody").is_err());
+        assert!(validate_raw_skill("---\nid: notes\n---\n").is_err());
     }
 
     #[test]

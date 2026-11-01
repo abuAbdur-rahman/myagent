@@ -40,6 +40,10 @@ export const RELEASES: readonly Release[] = [
         text: "Skills are bundled as an app resource, so the installer finds pdf-workbench in Settings > Skills without a manual copy.",
       },
       {
+        kind: "new",
+        text: "Settings > Skills can add a skill from a SKILL.md file, import a skill folder, write SKILL.md in a full-screen editor prefilled with the real format, or build one from separate id, title, summary, requirements and instruction fields.",
+      },
+      {
         kind: "improved",
         text: "A skill call in the tool log shows a Using skill chip with the skill name.",
       },
