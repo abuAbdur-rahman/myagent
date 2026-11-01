@@ -22,6 +22,26 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.5",
+    date: "2026-11-01",
+    summary:
+      "The Sandbox page is rebuilt around what you need to know: one status line, one setup path, compact toolchain cards, and advanced packages tucked away. Docker state is no longer repeated in three places.",
+    changes: [
+      {
+        kind: "improved",
+        text: "Sandbox page: a single status badge and Docker version, one clear Start Docker or Enable sandbox action, three compact toolchain cards, and packages/limits folded into Advanced.",
+      },
+      {
+        kind: "fixed",
+        text: "Docker stopped, missing and not-built states no longer repeat the same warning twice; the Start Docker button launches Docker Desktop and Recheck refreshes the page.",
+      },
+      {
+        kind: "improved",
+        text: "Once ready, the page shows the project folder, toolchain summary, rebuild action and Allow installs without the setup controls.",
+      },
+    ],
+  },
+  {
     version: "0.8.4",
     date: "2026-11-01",
     summary:
