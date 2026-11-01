@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Cpu, Download, FolderInput, ListChecks, MessageSquare, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
+import { Cpu, Download, FolderInput, Gauge, ListChecks, MessageSquare, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectColor } from "../lib/grouping";
 import { stepLabel } from "../lib/session";
@@ -27,6 +27,7 @@ export function ChatHeader() {
     togglePanel,
     panelOpen,
     openSessionPanel,
+    openContextPanel,
     todos,
     refreshConversations,
     selectConversation,
@@ -246,6 +247,13 @@ export function ChatHeader() {
           items={chatMenu}
         />
       )}
+      <IconButton
+        label="Context inspector"
+        title="System prompt, memory, checklist and token usage"
+        onClick={openContextPanel}
+      >
+        <Gauge size={16} />
+      </IconButton>
       <IconButton
         label="Toggle side panel"
         title="Progress and artifacts (Ctrl+Shift+A)"

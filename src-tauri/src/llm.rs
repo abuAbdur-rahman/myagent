@@ -1237,6 +1237,80 @@ fn summary_body(model: &str, text: &str) -> serde_json::Value {
     })
 }
 
+fn judge_body(model: &str, name: &str, summary: &str, resources: &[String]) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Decide whether an agent tool call may run without asking the user. Reply with exactly one word: ALLOW, ASK, or DENY. ALLOW only for read-only project inspection and searches with no secret exposure. ASK for writes, deletes, installs, process launches, network side effects, paths outside the project, or any credential/secret file such as .env, .ssh, .aws, keys, cookies or browser profiles. DENY only for clear exfiltration or destructive intent. When unsure reply ASK.",
+            },
+            {
+                "role": "user",
+                "content": format!("tool: {name}\ncall: {summary}\nresources:\n{}", resources.join("\n")),
+            },
+        ],
+        "max_tokens": 8,
+        "temperature": 0,
+        "stream": false,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn judge_tool_call(
+    client: &reqwest::Client,
+    app: &AppHandle,
+    connection_id: &str,
+    model: &str,
+    connection_kind: Option<&str>,
+    name: &str,
+    summary: &str,
+    resources: &[String],
+) -> Option<permissions::Effect> {
+    let base_url = connections::base_url_for(app, connection_id).await.ok()?;
+    let key = read_key(connection_id, connection_kind).ok()?;
+    let body = judge_body(model, name, summary, resources);
+    let history = body["messages"].as_array()?.clone();
+    let cancel = Notify::new();
+    let text = if responses::only(&base_url, model) {
+        post_responses_text(ResponsesText {
+            client,
+            base_url: &base_url,
+            key: &key,
+            model,
+            history: &history,
+            cancel: &cancel,
+            kind: connection_kind,
+            connection_id: Some(connection_id),
+            max_output_tokens: Some(8),
+        })
+        .await
+        .ok()?
+    } else {
+        let response = post_with_retry(
+            client,
+            &endpoint(&base_url, "chat/completions"),
+            &key,
+            &body,
+            &cancel,
+            None,
+            ProviderRoute::new(connection_kind, Some(connection_id)),
+        )
+        .await
+        .ok()?;
+        let value: serde_json::Value = response.json().await.ok()?;
+        value["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    match text.trim().to_ascii_uppercase().split_whitespace().next() {
+        Some("ALLOW") => Some(permissions::Effect::Allow),
+        Some("DENY") => Some(permissions::Effect::Deny),
+        _ => Some(permissions::Effect::Ask),
+    }
+}
+
 #[tauri::command]
 pub async fn summarize(
     mut req: SummaryRequest,
@@ -1672,6 +1746,35 @@ async fn log_decision(
         },
     )
     .await;
+}
+
+fn sensitive_resource(name: &str, resources: &[String]) -> bool {
+    if !matches!(
+        name,
+        "sandbox_read" | "sandbox_glob" | "sandbox_grep" | "read_document"
+    ) {
+        return false;
+    }
+    resources.iter().any(|resource| {
+        let lowered = resource.to_ascii_lowercase().replace('\\', "/");
+        [
+            ".env",
+            ".ssh/",
+            ".aws/",
+            ".gnupg/",
+            ".kube/",
+            "id_rsa",
+            "id_ed25519",
+            "logins.json",
+            "key4.db",
+            "login data",
+            "local state",
+            "cookies",
+            "credentials",
+        ]
+        .iter()
+        .any(|needle| lowered.contains(needle))
+    })
 }
 
 fn approval_resources(name: &str, args: &serde_json::Value) -> Vec<String> {
@@ -2505,7 +2608,13 @@ impl ToolRunner for RealTools<'_> {
             self.repeat.reset();
         }
 
-        let resources = approval_resources(&name, &args);
+        let mut resources = approval_resources(&name, &args);
+        if name == "skill"
+            && let Some(requested) = resources.first().cloned()
+            && let Some(canonical) = crate::skills::canonical_skill_id(self.app, &requested)
+        {
+            resources[0] = canonical;
+        }
         let checked =
             permissions::check(self.app, &name, &resources, self.req.project_id.as_deref()).await;
         if let Err(error) = &checked {
@@ -2523,8 +2632,37 @@ impl ToolRunner for RealTools<'_> {
             .as_ref()
             .copied()
             .unwrap_or(permissions::Effect::Ask);
+        let sensitive = sensitive_resource(&name, &resources);
+        if decision == permissions::Effect::Allow && sensitive {
+            decision = permissions::Effect::Ask;
+        }
+        if decision == permissions::Effect::Ask {
+            let summary = tools::summarize_call(&name, &args);
+            if let Ok(Some(judged)) = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                judge_tool_call(
+                    self.client,
+                    self.app,
+                    &self.req.connection_id,
+                    &self.req.model,
+                    self.req.connection_kind.as_deref(),
+                    &name,
+                    &summary,
+                    &resources,
+                ),
+            )
+            .await
+            {
+                decision = if sensitive && judged == permissions::Effect::Allow {
+                    permissions::Effect::Ask
+                } else {
+                    judged
+                };
+            }
+        }
         let sandbox_auto = checked.is_ok()
             && decision != permissions::Effect::Deny
+            && !sensitive
             && name.starts_with("sandbox_")
             && crate::sandbox::enabled(self.app);
         let (verdict, screen_failed) = if decision == permissions::Effect::Ask || sandbox_auto {

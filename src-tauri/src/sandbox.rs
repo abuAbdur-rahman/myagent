@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::process::Command;
 
 const BASE_IMAGE: &str =
@@ -32,6 +34,34 @@ const PREFLIGHT_FILES: &[&str] = &[
     "README.md",
     ".git",
 ];
+static BUILDING: AtomicBool = AtomicBool::new(false);
+static BUILD_DETAIL: OnceLock<Mutex<String>> = OnceLock::new();
+static BUILD_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn build_detail() -> &'static Mutex<String> {
+    BUILD_DETAIL.get_or_init(|| Mutex::new("Preparing Docker…".to_string()))
+}
+
+fn build_error() -> &'static Mutex<Option<String>> {
+    BUILD_ERROR.get_or_init(|| Mutex::new(None))
+}
+
+#[derive(Clone, serde::Serialize)]
+struct BuildEvent {
+    state: String,
+    detail: String,
+}
+
+fn emit_build(app: &tauri::AppHandle, state: &str, detail: &str) {
+    let _ = app.emit(
+        "sandbox-build",
+        BuildEvent {
+            state: state.to_string(),
+            detail: detail.to_string(),
+        },
+    );
+}
+
 const MAX_TIMEOUT_SECS: u64 = 900;
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_PACKAGES: usize = 80;
@@ -268,6 +298,11 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
         memory_mb: cfg.memory_mb.unwrap_or(1024),
         detail: None,
     };
+    if BUILDING.load(Ordering::Relaxed) {
+        status.state = "building".to_string();
+        status.detail = Some(build_detail().lock().map(|v| v.clone()).unwrap_or_default());
+        return status;
+    }
     let Some(bin) = docker_bin() else {
         status.detail = Some("Docker Desktop was not found".to_string());
         return status;
@@ -311,6 +346,11 @@ pub async fn status(app: &tauri::AppHandle) -> SandboxStatus {
             status.state = "no_image".to_string();
             status.detail = Some("Sandbox image has not been built".to_string());
         }
+    }
+    if status.state != "ready"
+        && let Ok(Some(error)) = build_error().lock().map(|v| v.clone())
+    {
+        status.detail = Some(error);
     }
     status
 }
@@ -554,6 +594,60 @@ fn expected_tag(cfg: &SandboxConfig) -> Result<String, String> {
     ))
 }
 
+pub async fn start_enable(
+    app: &tauri::AppHandle,
+    profile: &str,
+    packages: &[String],
+    project_root: Option<String>,
+) -> Result<SandboxStatus, String> {
+    if BUILDING.swap(true, Ordering::SeqCst) {
+        return Ok(status(app).await);
+    }
+    if let Ok(mut error) = build_error().lock() {
+        *error = None;
+    }
+    if let Ok(mut detail) = build_detail().lock() {
+        *detail = "Preparing Docker…".to_string();
+    }
+    emit_build(app, "building", "Preparing Docker…");
+    let app_handle = app.clone();
+    let profile = profile.to_string();
+    let packages = packages.to_vec();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(mut detail) = build_detail().lock() {
+            *detail = "Pulling the base image and building the toolchain…".to_string();
+        }
+        emit_build(
+            &app_handle,
+            "building",
+            "Pulling the base image and building the toolchain…",
+        );
+        let inner_app = app_handle.clone();
+        let result = tauri::async_runtime::spawn(async move {
+            enable(&inner_app, &profile, &packages, project_root).await
+        })
+        .await
+        .unwrap_or_else(|error| Err(format!("sandbox build task failed: {error}")));
+        match result {
+            Ok(_) => {
+                if let Ok(mut detail) = build_detail().lock() {
+                    *detail = "Sandbox image is ready".to_string();
+                }
+                BUILDING.store(false, Ordering::SeqCst);
+                emit_build(&app_handle, "ready", "Sandbox image is ready");
+            }
+            Err(error) => {
+                if let Ok(mut saved) = build_error().lock() {
+                    *saved = Some(error.clone());
+                }
+                BUILDING.store(false, Ordering::SeqCst);
+                emit_build(&app_handle, "failed", &error);
+            }
+        }
+    });
+    Ok(status(app).await)
+}
+
 pub async fn enable(
     app: &tauri::AppHandle,
     profile: &str,
@@ -671,6 +765,9 @@ pub async fn disable(app: &tauri::AppHandle) -> Result<SandboxStatus, String> {
     let mut cfg = config(app);
     cfg.enabled = false;
     save(app, &cfg)?;
+    if let Ok(mut error) = build_error().lock() {
+        *error = None;
+    }
     Ok(status(app).await)
 }
 
@@ -1152,6 +1249,27 @@ fn changed_unstaged(root: &Path) -> Vec<String> {
         }
     }
     paths
+}
+
+pub fn credential_path(path: &str) -> bool {
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    [
+        ".env",
+        ".ssh/",
+        ".aws/",
+        ".gnupg/",
+        ".kube/",
+        "id_rsa",
+        "id_ed25519",
+        "logins.json",
+        "key4.db",
+        "login data",
+        "local state",
+        "cookies",
+        "credentials",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 pub fn is_sensitive(path: &str) -> bool {
@@ -1749,6 +1867,9 @@ pub fn grep_files(
             continue;
         }
         let rel = display_rel(&root, entry.path());
+        if credential_path(&rel) {
+            continue;
+        }
         if let Some(matcher) = &file_matcher
             && !matcher.is_match(&rel)
         {
@@ -1965,7 +2086,7 @@ pub async fn sandbox_enable(
     packages: Vec<String>,
     project_root: Option<String>,
 ) -> Result<SandboxStatus, String> {
-    enable(&app, &profile, &packages, project_root).await
+    start_enable(&app, &profile, &packages, project_root).await
 }
 
 #[tauri::command]
@@ -1976,7 +2097,7 @@ pub async fn sandbox_disable(app: tauri::AppHandle) -> Result<SandboxStatus, Str
 #[tauri::command]
 pub async fn sandbox_rebuild(app: tauri::AppHandle) -> Result<SandboxStatus, String> {
     let cfg = config(&app);
-    enable(&app, &cfg.profile, &cfg.packages, None).await
+    start_enable(&app, &cfg.profile, &cfg.packages, None).await
 }
 
 #[tauri::command]

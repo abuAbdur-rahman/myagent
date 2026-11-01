@@ -714,7 +714,12 @@ export function summarize(
   });
 }
 
-export type SandboxState = "not_installed" | "daemon_stopped" | "no_image" | "ready";
+export type SandboxState =
+  | "not_installed"
+  | "daemon_stopped"
+  | "no_image"
+  | "building"
+  | "ready";
 
 export type SandboxStatus = {
   state: SandboxState;

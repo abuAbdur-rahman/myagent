@@ -261,7 +261,7 @@ type View = "chat" | "projects" | "project" | "outputs";
 
 export type PanelTab = "preview" | "code" | "doc" | "source";
 export type PanelMode = "dock" | "full" | "mini";
-type PanelView = "session" | "artifact";
+type PanelView = "session" | "artifact" | "context";
 
 interface PanelArtifact {
   id: string;
@@ -367,6 +367,7 @@ interface AppContextValue {
     limitKnown: boolean;
     lastIn: number | null;
     lastOut: number | null;
+    prompt: string;
   };
 
   projects: Project[];
@@ -487,6 +488,7 @@ interface AppContextValue {
   panelWidth: number;
   openArtifact: (artifact: PanelArtifact) => void;
   openSessionPanel: () => void;
+  openContextPanel: () => void;
   showSessionView: () => void;
   closePanel: () => void;
   togglePanel: () => void;
@@ -995,6 +997,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPanelOpen(true);
   }, []);
 
+  const openContextPanel = useCallback(() => {
+    if (!panelOpenRef.current) setPanelModeState("dock");
+    setPanelViewState("context");
+    setPanelOpen(true);
+  }, []);
+
   const showSessionView = useCallback(() => setPanelViewState("session"), []);
 
   const closePanel = useCallback(() => setPanelOpen(false), []);
@@ -1259,6 +1267,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         limitKnown,
         lastIn: lastUsage.prompt_tokens ?? null,
         lastOut: lastUsage.completion_tokens ?? null,
+        prompt: system ?? "",
       };
     }
     const estimated = estimateContext(
@@ -1273,6 +1282,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       limitKnown,
       lastIn: null,
       lastOut: null,
+      prompt: system ?? "",
     };
   }, [
     messages,
@@ -2690,6 +2700,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     panelWidth,
     openArtifact,
     openSessionPanel,
+    openContextPanel,
     showSessionView,
     closePanel,
     togglePanel,

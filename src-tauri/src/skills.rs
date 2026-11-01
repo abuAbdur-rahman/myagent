@@ -676,13 +676,48 @@ fn unknown_skill(id: &str, skills: &[(SkillInfo, std::path::PathBuf)]) -> String
     }
 }
 
+fn resolve_skill_id(requested: &str, skills: &[(SkillInfo, std::path::PathBuf)]) -> Option<String> {
+    let requested = requested.trim().to_ascii_lowercase();
+    if requested.is_empty() {
+        return None;
+    }
+    if let Some((info, _)) = skills.iter().find(|(info, _)| info.id == requested) {
+        return Some(info.id.clone());
+    }
+    let candidates: Vec<String> = skills
+        .iter()
+        .filter(|(info, _)| info.enabled)
+        .filter(|(info, _)| {
+            info.id.starts_with(&format!("{requested}-"))
+                || info.title.to_ascii_lowercase() == requested
+                || info
+                    .triggers
+                    .iter()
+                    .any(|trigger| trigger.trim().eq_ignore_ascii_case(&requested))
+        })
+        .map(|(info, _)| info.id.clone())
+        .collect();
+    if candidates.len() == 1 {
+        candidates.first().cloned()
+    } else {
+        None
+    }
+}
+
+pub fn canonical_skill_id(app: &AppHandle, id: &str) -> Option<String> {
+    let requested = id.trim().to_ascii_lowercase();
+    resolve_skill_id(&requested, &list_skills(app))
+}
+
 pub fn prepare_skill(app: &AppHandle, id: &str) -> Result<String, String> {
-    if !is_valid_skill_name(id) {
+    let id = id.trim().to_ascii_lowercase();
+    let all = list_skills(app);
+    let resolved = resolve_skill_id(&id, &all).ok_or_else(|| unknown_skill(&id, &all))?;
+    if !is_valid_skill_name(&resolved) {
         return Err(format!("unknown skill: {id}"));
     }
-    let all = list_skills(app);
-    let Some(found) = all.iter().find(|(info, _)| info.id == id) else {
-        return Err(unknown_skill(id, &all));
+    let Some(found) = all.iter().find(|(info, _)| info.id == resolved) else {
+        return Err(unknown_skill(&id, &all));
     };
     if !found.0.enabled {
         return Err("skill is disabled".to_string());
@@ -723,14 +758,15 @@ pub async fn skill_index(app: AppHandle) -> Result<Vec<SkillInfo>, String> {
 
 #[tauri::command]
 pub async fn skill_read(app: AppHandle, id: String) -> Result<String, String> {
-    let resources = vec![id.clone()];
+    let resolved = canonical_skill_id(&app, &id).unwrap_or(id);
+    let resources = vec![resolved.clone()];
     let effect = permissions::check(&app, "skill", &resources, None)
         .await
         .map_err(|e| e.to_string())?;
     if effect == permissions::Effect::Deny {
         return Err("skill denied by rule".to_string());
     }
-    prepare_skill(&app, &id)
+    prepare_skill(&app, &resolved)
 }
 
 fn user_skills_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -1432,6 +1468,61 @@ mod tests {
         );
         assert!(validate_raw_skill("---\ntitle: No id\n---\nBody").is_err());
         assert!(validate_raw_skill("---\nid: notes\n---\n").is_err());
+    }
+
+    #[test]
+    fn skill_aliases_resolve_from_triggers_and_prefixes() {
+        let skills = vec![
+            (
+                SkillInfo {
+                    id: "pdf-workbench".into(),
+                    name: "pdf-workbench".into(),
+                    title: "PDF Workbench".into(),
+                    version: "1.0.0".into(),
+                    summary: "PDFs".into(),
+                    description: "PDFs".into(),
+                    source: "builtin".into(),
+                    enabled: true,
+                    directory: String::new(),
+                    triggers: vec!["pdf".into()],
+                    requires_tools: Vec::new(),
+                    requires_python: Vec::new(),
+                    requires_node: Vec::new(),
+                },
+                std::path::PathBuf::new(),
+            ),
+            (
+                SkillInfo {
+                    id: "deck-builder".into(),
+                    name: "deck-builder".into(),
+                    title: "Deck Builder".into(),
+                    version: "1.0.0".into(),
+                    summary: "Decks".into(),
+                    description: "Decks".into(),
+                    source: "builtin".into(),
+                    enabled: true,
+                    directory: String::new(),
+                    triggers: vec!["pptx".into()],
+                    requires_tools: Vec::new(),
+                    requires_python: Vec::new(),
+                    requires_node: Vec::new(),
+                },
+                std::path::PathBuf::new(),
+            ),
+        ];
+        assert_eq!(
+            resolve_skill_id("pdf", &skills).as_deref(),
+            Some("pdf-workbench")
+        );
+        assert_eq!(
+            resolve_skill_id("pptx", &skills).as_deref(),
+            Some("deck-builder")
+        );
+        assert_eq!(
+            resolve_skill_id("PDF", &skills).as_deref(),
+            Some("pdf-workbench")
+        );
+        assert!(resolve_skill_id("missing", &skills).is_none());
     }
 
     #[test]

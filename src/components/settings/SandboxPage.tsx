@@ -54,6 +54,12 @@ function useSandbox() {
     void load();
   }, []);
 
+  useEffect(() => {
+    if (status?.state !== "building") return;
+    const timer = window.setInterval(() => void load(), 2500);
+    return () => window.clearInterval(timer);
+  }, [status?.state]);
+
   const run = async (label: string, work: () => Promise<SandboxStatus>) => {
     setBusy(label);
     try {
@@ -498,6 +504,11 @@ export function SandboxPage() {
       <StateNote status={status} />
       <Reason status={status} root={sandbox.root} />
       <StatusLine status={status} busy={busy} onRecheck={() => void sandbox.load()} />
+      {status.state === "building" && (
+        <div className="flex items-center gap-2 text-xs text-muted" role="status">
+          <Spinner /> {status.detail || "Building the sandbox image…"}
+        </div>
+      )}
       <FolderSection
         status={status}
         root={sandbox.root}

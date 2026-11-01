@@ -217,6 +217,51 @@ pub fn default_rules() -> Vec<Rule> {
             resource: "*".to_string(),
             effect: Effect::Allow,
         },
+        Rule {
+            action: "sandbox_read".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "sandbox_glob".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "sandbox_grep".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "skill".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "web_search".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "web_fetch".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "describe_image".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "todo_write".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
+            action: "todo_set".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
     ]
 }
 
@@ -722,16 +767,16 @@ mod tests {
     #[tokio::test]
     async fn always_allow_persists_and_stops_asking() {
         let pool = test_pool().await;
-        allow_always_from(&pool, "web_fetch", "example.com", None)
+        allow_always_from(&pool, "sandbox_write", "src/a.txt", None)
             .await
             .expect("store allow");
         let rules = load_rules_from(&pool, None).await.expect("load rules");
         assert_eq!(
-            decide("web_fetch", &["example.com".to_string()], &rules),
+            decide("sandbox_write", &["src/a.txt".to_string()], &rules),
             Effect::Allow
         );
         assert_eq!(
-            decide("web_fetch", &["other.com".to_string()], &rules),
+            decide("sandbox_write", &["src/b.txt".to_string()], &rules),
             Effect::Ask
         );
     }
@@ -749,20 +794,20 @@ mod tests {
     #[tokio::test]
     async fn tool_allow_covers_every_resource() {
         let pool = test_pool().await;
-        allow_tool_from(&pool, "web_search", None)
+        allow_tool_from(&pool, "sandbox_edit", None)
             .await
             .expect("store tool allow");
         let rules = load_rules_from(&pool, None).await.expect("load rules");
         assert_eq!(
-            decide("web_search", &["any query".to_string()], &rules),
+            decide("sandbox_edit", &["src/a.txt".to_string()], &rules),
             Effect::Allow
         );
         assert_eq!(
-            decide("web_search", &["another query".to_string()], &rules),
+            decide("sandbox_edit", &["src/b.txt".to_string()], &rules),
             Effect::Allow
         );
         assert_eq!(
-            decide("web_fetch", &["example.com".to_string()], &rules),
+            decide("sandbox_write", &["src/c.txt".to_string()], &rules),
             Effect::Ask
         );
     }
