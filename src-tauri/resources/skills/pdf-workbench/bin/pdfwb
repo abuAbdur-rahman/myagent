@@ -106,7 +106,11 @@ def page_numbers(spec: str, count: int) -> list[int]:
             pages.append(page - 1)
     if not pages:
         fail("no pages selected")
-    return pages
+    unique: list[int] = []
+    for page in pages:
+        if page not in unique:
+            unique.append(page)
+    return unique
 
 
 def reader_for(path: Path, password: str | None):
@@ -263,10 +267,26 @@ def cmd_tables(args) -> None:
     if args.format == "csv":
         for index, item in known.items():
             name = f"{stem}-p{item['page']}-t{item['table']}.csv"
-            target = output_path(args.out if len(tables) == 1 else None, name)
+            if args.out and len(tables) == 1:
+                target = Path(args.out).expanduser()
+            elif args.out:
+                directory = Path(args.out).expanduser()
+                directory.mkdir(parents=True, exist_ok=True)
+                target = directory / name
+            else:
+                target = output_path(None, name)
+            target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
-                writer.writerows(item["rows"])
+                writer.writerows(
+                    [
+                        [
+                            "'" + str(cell) if str(cell).startswith(("=", "+", "-", "@")) else cell
+                            for cell in row
+                        ]
+                        for row in item["rows"]
+                    ]
+                )
             files.append(str(target))
         emit({"ok": True, "tables": len(tables), "files": files})
         return
@@ -286,9 +306,11 @@ def cmd_images(args) -> None:
     source = input_file(args.file)
     target = output_path(args.out, f"{source.stem}-image")
     prefix = str(target)
-    run(["pdfimages", "-png", str(source), prefix], "pdfimages")
     parent = target.parent
     stem = target.name
+    for stale in parent.glob(f"{stem}*.png"):
+        stale.unlink()
+    run(["pdfimages", "-png", str(source), prefix], "pdfimages")
     files = sorted(
         str(path)
         for path in parent.iterdir()
@@ -300,6 +322,7 @@ def cmd_images(args) -> None:
 def render_pages(
     source: Path, spec: str | None, dpi: int, out: str | None, password: str | None = None
 ) -> list[str]:
+    dpi = max(50, min(600, int(dpi)))
     pypdfium2 = module("pypdfium2", "pypdfium2")
     pdf = pypdfium2.PdfDocument(str(source), password=password)
     try:
@@ -322,6 +345,8 @@ def render_pages(
 
 def cmd_render(args) -> None:
     source = input_file(args.file)
+    if args.out:
+        guard_not_input(source, Path(args.out))
     files = render_pages(source, args.pages, args.dpi, args.out, args.password)
     emit({"ok": True, "files": files})
 
@@ -423,6 +448,7 @@ def cmd_pages(args) -> None:
 
 def cmd_stamp(args) -> None:
     source = input_file(args.file)
+    args.opacity = max(0.0, min(1.0, float(args.opacity)))
     reader = reader_for(source, None)
     selected = page_numbers(args.pages, len(reader.pages)) if args.pages else list(range(len(reader.pages)))
     reportlab_canvas = module("reportlab.pdfgen.canvas", "reportlab")
@@ -579,7 +605,21 @@ def cmd_make(args) -> None:
         markdown = module("markdown", "markdown")
         html = markdown.markdown(html, extensions=["tables", "fenced_code"])
     weasyprint = module("weasyprint", "weasyprint")
-    weasyprint.HTML(string=html, base_url=str(source.parent)).write_pdf(str(target))
+    root = source.parent.resolve()
+
+    def fetch(url, *args, **kwargs):
+        from urllib.parse import unquote
+
+        if not url.startswith("file://"):
+            fail("make refuses network and non-file resources")
+        path = Path(unquote(url[7:])).resolve()
+        if path != root and root not in path.parents:
+            fail("make only reads files next to the input")
+        return weasyprint.default_url_fetcher(url, *args, **kwargs)
+
+    weasyprint.HTML(
+        string=html, base_url=str(source.parent), url_fetcher=fetch
+    ).write_pdf(str(target))
     emit({"ok": True, "file": str(target)})
 
 

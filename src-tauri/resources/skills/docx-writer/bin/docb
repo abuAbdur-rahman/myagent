@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,11 @@ def docx():
 
 def emit(value) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def safe_name(value, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 _.-]+", "_", str(value or "")).strip(" .")
+    return cleaned[:80] or fallback
 
 
 def source_file(path: str) -> Path:
@@ -87,6 +93,9 @@ def validate_spec(spec: dict) -> list[str]:
             if not isinstance(header, list) or not isinstance(rows, list):
                 errors.append(f"{label}.header and rows must be arrays")
                 continue
+            if not header:
+                errors.append(f"{label}.header must have at least one column")
+                continue
             width = len(header)
             if width > MAX_COLUMNS:
                 errors.append(f"{label} has too many columns (max {MAX_COLUMNS})")
@@ -113,7 +122,7 @@ def cmd_new(args) -> None:
             {"type": "table", "header": ["Item", "Value"], "rows": [["A", "1"]]},
         ],
     }
-    target = Path(args.out or "spec.json").expanduser()
+    target = output_path(args.out, "spec.json")
     target.write_text(json.dumps(spec, indent=2), encoding="utf-8")
     emit({"ok": True, "file": str(target)})
 
@@ -169,7 +178,9 @@ def cmd_build(args) -> None:
                     cells[index].text = str(value)
         elif kind == "page-break":
             document.add_page_break()
-    target = output_path(args.out, f"{spec.get('title', 'document')}.docx")
+    target = output_path(args.out, f"{safe_name(spec.get('title'), 'document')}.docx")
+    if Path(args.file).expanduser().resolve() == target.resolve():
+        fail("refusing to overwrite the input spec; choose a new output")
     document.save(target)
     emit({"ok": True, "file": str(target), "blocks": len(spec["blocks"])})
 

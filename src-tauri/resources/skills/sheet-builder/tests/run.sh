@@ -13,6 +13,7 @@ sheetb() {
 cat > "$WORK/spec.json" <<'JSON'
 {
   "title": "Scores",
+  "allow_formulas": true,
   "sheets": [
     {
       "name": "Scores",

@@ -58,11 +58,28 @@ pub struct SkillMeta {
 }
 
 pub fn is_valid_skill_name(name: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    ];
     !name.is_empty()
         && name.len() <= 64
+        && !RESERVED.contains(&name)
         && name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn is_reparse_meta(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
 }
 
 fn frontmatter_block(content: &str) -> Option<&str> {
@@ -543,6 +560,9 @@ pub fn sandbox_mounts(app: &AppHandle) -> Vec<(std::path::PathBuf, String)> {
         } else {
             "/opt/skills:ro"
         };
+        if mounts.iter().any(|(_, existing)| existing == target) {
+            continue;
+        }
         mounts.push((dir, target.to_string()));
     }
     mounts
@@ -669,12 +689,11 @@ pub fn prepare_skill(app: &AppHandle, id: &str) -> Result<String, String> {
     }
     let content = std::fs::read_to_string(&found.1).map_err(|e| e.to_string())?;
     let content = cap_skill_body(&content);
-    let directory = found
-        .1
-        .parent()
-        .and_then(|p| p.to_str())
-        .unwrap_or("")
-        .to_string();
+    let directory = if found.0.source == "user" {
+        format!("/opt/skills-user/{}", found.0.id)
+    } else {
+        format!("/opt/skills/{}", found.0.id)
+    };
     Ok(to_model_output(
         &found.0.name,
         &directory,
@@ -854,9 +873,9 @@ fn copy_skill_tree(source: &std::path::Path, target: &std::path::Path) -> Result
         {
             let path = entry.path();
             let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() || is_reparse_meta(&metadata) {
                 return Err(format!(
-                    "skill folders cannot contain symlinks: {}",
+                    "skill folders cannot contain links or junctions: {}",
                     path.display()
                 ));
             }
@@ -903,10 +922,13 @@ pub async fn skills_save_raw(app: AppHandle, content: String) -> Result<Vec<Skil
 pub async fn skills_import(app: AppHandle, path: String) -> Result<Vec<SkillInfo>, String> {
     let source = std::path::PathBuf::from(&path);
     let metadata = std::fs::symlink_metadata(&source).map_err(|e| format!("skill source: {e}"))?;
-    if metadata.file_type().is_symlink() {
-        return Err("skill source cannot be a symlink".to_string());
+    if metadata.file_type().is_symlink() || is_reparse_meta(&metadata) {
+        return Err("skill source cannot be a link or junction".to_string());
     }
     if metadata.is_file() {
+        if metadata.len() > 1024 * 1024 {
+            return Err("skill file is larger than 1 MB".to_string());
+        }
         let content = std::fs::read_to_string(&source)
             .map_err(|e| format!("skill file must be UTF-8 text: {e}"))?;
         let id = validate_raw_skill(&content)?;
@@ -934,13 +956,26 @@ pub async fn skills_import(app: AppHandle, path: String) -> Result<Vec<SkillInfo
             return Err("skill folder name must match the frontmatter id".to_string());
         }
         validate_raw_skill(&content)?;
-        let target = user_skills_dir(&app)?.join(&id);
-        if target == source {
+        let base = user_skills_dir(&app)?;
+        let target = base.join(&id);
+        if std::fs::canonicalize(&source).ok() == std::fs::canonicalize(&target).ok() {
             return Err("skill is already in the user skills folder".to_string());
         }
-        std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-        copy_skill_tree(&source, &target)?;
-        write_user_skill(&app, &id, &content)?;
+        let staging = base.join(format!(".import-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+        if let Err(error) = copy_skill_tree(&source, &staging) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+        let staging_file = staging.join("SKILL.md");
+        if let Err(error) = std::fs::write(&staging_file, &content) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("skill file: {error}"));
+        }
+        if target.exists() {
+            std::fs::remove_dir_all(&target).map_err(|e| format!("replace skill: {e}"))?;
+        }
+        std::fs::rename(&staging, &target).map_err(|e| format!("install skill: {e}"))?;
     } else {
         return Err("skill source must be a SKILL.md file or a folder".to_string());
     }

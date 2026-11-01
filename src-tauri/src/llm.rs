@@ -367,12 +367,19 @@ fn truncate_preview(text: &str) -> String {
 }
 
 fn created_files(text: &str) -> Vec<String> {
-    let Some(rest) = text.split("\ncreated files:\n").nth(1) else {
+    let Some((_, rest)) = text.rsplit_once("\ncreated files:\n") else {
         return Vec::new();
     };
     rest.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
+        .filter(|line| {
+            let path = std::path::Path::new(line);
+            !path.is_absolute()
+                && !path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+        })
         .map(str::to_string)
         .collect()
 }

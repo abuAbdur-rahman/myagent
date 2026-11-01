@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def pptx_modules():
 
 def emit(value) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def safe_name(value, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 _.-]+", "_", str(value or "")).strip(" .")
+    return (cleaned[:80] or fallback)
 
 
 def source_file(path: str) -> Path:
@@ -75,6 +81,7 @@ def validate_spec(spec: dict) -> list[str]:
     if not isinstance(max_slides, int) or max_slides < 1:
         errors.append("meta.max_slides must be a positive integer")
         max_slides = MAX_SLIDES
+    max_slides = min(max_slides, MAX_SLIDES)
     if len(slides) > max_slides:
         errors.append(f"too many slides ({len(slides)} > {max_slides})")
     if spec.get("theme", "clean-light") not in THEMES:
@@ -102,11 +109,18 @@ def validate_spec(spec: dict) -> list[str]:
                 errors.append(f"{label}.bullets must be strings")
             elif len(bullets) > 7:
                 errors.append(f"{label} has too many bullets (max 7)")
+            elif any(len(item) > 220 for item in bullets):
+                errors.append(f"{label} has a bullet longer than 220 characters")
+        if layout == "quote":
+            if not isinstance(slide.get("text"), str) or not slide["text"].strip():
+                errors.append(f"{label}.text is required")
         if layout == "table":
             header = slide.get("header", [])
             rows = slide.get("rows", [])
             if not isinstance(header, list) or not isinstance(rows, list):
                 errors.append(f"{label}.header and rows must be arrays")
+            elif not header:
+                errors.append(f"{label}.header must have at least one column")
             else:
                 for row in rows:
                     if not isinstance(row, list) or len(row) != len(header):
@@ -128,6 +142,12 @@ def validate_spec(spec: dict) -> list[str]:
                         break
                     if len(item["values"]) != len(categories):
                         errors.append(f"{label}.series values must match categories")
+                        break
+                    if any(
+                        not isinstance(value, (int, float)) or isinstance(value, bool)
+                        for value in item["values"]
+                    ):
+                        errors.append(f"{label}.series values must be numbers")
                         break
         if layout == "image":
             image = slide.get("image")
@@ -202,7 +222,7 @@ def cmd_new(args) -> None:
             {"layout": "closing", "title": "Thank you"},
         ],
     }
-    target = Path(args.out or "spec.json").expanduser()
+    target = output_path(args.out, "spec.json")
     target.write_text(json.dumps(spec, indent=2), encoding="utf-8")
     emit({"ok": True, "file": str(target)})
 
@@ -289,7 +309,10 @@ def cmd_build(args) -> None:
         add_notes(slide, source.get("notes"))
     presentation.core_properties.title = str((spec.get("meta") or {}).get("title", "Deck"))
     presentation.core_properties.author = str((spec.get("meta") or {}).get("author", ""))
-    target = output_path(args.out, f"{(spec.get('meta') or {}).get('title', 'deck')}.pptx")
+    title = (spec.get("meta") or {}).get("title", "deck")
+    target = output_path(args.out, f"{safe_name(title, 'deck')}.pptx")
+    if source_file(args.file).resolve() == target.resolve():
+        fail("refusing to overwrite the input spec; choose a new output")
     presentation.save(target)
     emit({"ok": True, "file": str(target), "slides": len(spec["slides"])})
 

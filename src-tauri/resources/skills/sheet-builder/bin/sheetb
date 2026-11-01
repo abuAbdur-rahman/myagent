@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,11 @@ def openpyxl():
 
 def emit(value) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def safe_name(value, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 _.-]+", "_", str(value or "")).strip(" .")
+    return cleaned[:80] or fallback
 
 
 def output_path(raw: str | None, default_name: str) -> Path:
@@ -65,8 +71,13 @@ def validate_spec(spec: dict) -> list[str]:
             errors.append(f"{label} must be an object")
             continue
         name = sheet.get("name")
-        if not isinstance(name, str) or not name.strip() or len(name) > 31:
-            errors.append(f"{label}.name must be 1-31 characters")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or len(name) > 31
+            or any(char in name for char in "[]:*?/\\")
+        ):
+            errors.append(f"{label}.name must be 1-31 characters without []:*?/\\")
         elif name in names:
             errors.append(f"{label}.name repeats {name}")
         else:
@@ -104,7 +115,7 @@ def cmd_new(args) -> None:
             }
         ],
     }
-    target = Path(args.out or "spec.json").expanduser()
+    target = output_path(args.out, "spec.json")
     target.write_text(json.dumps(spec, indent=2), encoding="utf-8")
     emit({"ok": True, "file": str(target)})
 
@@ -130,14 +141,21 @@ def cmd_build(args) -> None:
         page = book.create_sheet(str(sheet["name"]))
         columns = sheet.get("columns") or []
         rows = sheet.get("rows") or []
+        allow_formulas = bool(spec.get("allow_formulas"))
+
+        def value(cell):
+            if isinstance(cell, str) and cell.startswith("=") and not allow_formulas:
+                return "'" + cell
+            return cell
+
         if columns:
-            page.append(columns)
+            page.append([value(cell) for cell in columns])
             for cell in page[1]:
                 cell.font = styles.Font(bold=True, color="FFFFFF")
                 cell.fill = styles.PatternFill("solid", fgColor="2F5D8A")
                 cell.alignment = styles.Alignment(vertical="center")
         for row in rows:
-            page.append(row)
+            page.append([value(cell) for cell in row])
         widths = sheet.get("widths") or []
         for index, width in enumerate(widths, start=1):
             if isinstance(width, (int, float)) and 4 <= width <= 120:
@@ -150,7 +168,9 @@ def cmd_build(args) -> None:
             page.auto_filter.ref = page.dimensions
     book.properties.title = str(spec.get("title", "Workbook"))
     book.properties.creator = "MyAgent Sheet Builder"
-    target = output_path(args.out, f"{spec.get('title', 'workbook')}.xlsx")
+    target = output_path(args.out, f"{safe_name(spec.get('title'), 'workbook')}.xlsx")
+    if Path(args.file).expanduser().resolve() == target.resolve():
+        fail("refusing to overwrite the input spec; choose a new output")
     book.save(target)
     emit({"ok": True, "file": str(target), "sheets": len(spec["sheets"])})
 

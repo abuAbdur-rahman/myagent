@@ -143,9 +143,28 @@ export function ArtifactsPanel() {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize artifact panel"
+          aria-valuemin={380}
+          aria-valuemax={1000}
+          aria-valuenow={panelWidth}
+          tabIndex={0}
           title="Drag to resize"
           onPointerDown={beginDrag}
-          className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1/2 cursor-ew-resize touch-none"
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              setPanelWidth(panelWidth + 20);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              setPanelWidth(panelWidth - 20);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              setPanelWidth(380);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              setPanelWidth(1000);
+            }
+          }}
+          className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1/2 cursor-ew-resize touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         />
       )}
       <div className="flex h-12 flex-none items-center gap-2 px-2 pl-3.5">

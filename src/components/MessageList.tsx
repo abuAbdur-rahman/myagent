@@ -164,7 +164,7 @@ export function ToolLogView({
                 <ToolIcon name={entry.name} />
                 {entry.name === "skill" ? (
                   <span className="truncate rounded bg-active px-1.5 py-px text-xs text-accent">
-                    Using skill: {entry.summary.replace(/^Skill:\s*/, "")}
+                    Using skill: {entry.summary.replace(/^Skill:\s*/, "").trim() || "unknown"}
                   </span>
                 ) : (
                   <span className="truncate" title={entry.summary}>

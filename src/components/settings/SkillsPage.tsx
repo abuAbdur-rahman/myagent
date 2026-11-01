@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FileText, FolderOpen, PencilLine, Play, Plus, Sparkles, Upload } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -7,6 +7,7 @@ import type { SkillDoctorResult, SkillDraft, SkillInfo } from "../../lib/api";
 import { toast } from "../../lib/toast";
 import { errorText } from "../../lib/utils";
 import { Badge, Button, Input, Spinner, Textarea, Toggle } from "../ui";
+import { useFocusTrap } from "../../lib/useFocusTrap";
 
 const TEMPLATE = `---
 id: my-skill
@@ -154,6 +155,8 @@ function SkillDialog({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const panel = useRef<HTMLDivElement>(null);
+  useFocusTrap(panel, true, onClose);
   return (
     <div
       className="fixed inset-0 z-[130] grid place-items-center bg-black/50 p-4"
@@ -163,6 +166,7 @@ function SkillDialog({
       }}
     >
       <div
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -261,6 +265,7 @@ function RawSkillDialog({
   onClose: () => void;
 }) {
   const [content, setContent] = useState(TEMPLATE);
+  const edited = content !== TEMPLATE;
   return (
     <SkillDialog
       wide
@@ -281,7 +286,7 @@ function RawSkillDialog({
         </Button>
         <Button
           variant="primary"
-          disabled={busy || content.trim().length === 0}
+          disabled={busy || !edited}
           onClick={() => onSave(content)}
         >
           {busy ? <Spinner label="Saving" /> : "Save skill"}

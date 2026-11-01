@@ -36,6 +36,7 @@ python3 "$SKILL_DIR/bin/sheetb" build spec.json -o outputs/report.xlsx
 ```json
 {
   "title": "Q4 report",
+  "allow_formulas": true,
   "sheets": [
     {
       "name": "Summary",
@@ -52,7 +53,9 @@ python3 "$SKILL_DIR/bin/sheetb" build spec.json -o outputs/report.xlsx
 ```
 
 - `columns` becomes a bold, filled header row.
-- A string starting with `=` is written as a formula.
+- Formulas require `"allow_formulas": true` at the top level. Without it, a
+  string starting with `=` is stored as literal text so a cell cannot become a
+  live `WEBSERVICE`/DDE formula.
 - `numbers` stay numeric; everything else is text.
 - `freeze` is an openpyxl pane such as `A2`.
 - Sheet names are unique and at most 31 characters.

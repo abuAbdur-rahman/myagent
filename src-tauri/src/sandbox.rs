@@ -1418,6 +1418,7 @@ pub(crate) async fn run_inner(
         Vec::new()
     };
     files.extend(recent_project_files(root, started_at));
+    files.retain(|rel| root.join(rel).is_file());
     files.sort();
     files.dedup();
     let mut text_out = String::new();
@@ -1780,6 +1781,15 @@ pub struct ArtifactPreview {
 }
 
 const PREVIEW_PAGES: usize = 3;
+const PREVIEW_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+struct PreviewDir(std::path::PathBuf);
+
+impl Drop for PreviewDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactPreview, String> {
     use base64::Engine;
@@ -1810,21 +1820,36 @@ pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactP
         "docx" | "pptx" | "xlsx" | "odt" | "ods" | "odp"
     );
     if !office && extension != "pdf" {
-        return Err("preview supports PDF, DOCX, PPTX and XLSX".to_string());
+        return Err("preview supports PDF, DOCX, PPTX, XLSX and ODF files".to_string());
     }
+    if path.metadata().map_err(|e| e.to_string())?.len() > PREVIEW_MAX_BYTES {
+        return Err(format!(
+            "file is larger than {} MB",
+            PREVIEW_MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    let bin = docker_bin().ok_or("Docker Desktop was not found")?;
+    daemon_version(&bin).await?;
     let data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("app data directory: {e}"))?;
-    let temp = data.join("preview").join(uuid::Uuid::new_v4().to_string());
-    std::fs::create_dir_all(&temp).map_err(|e| format!("preview folder: {e}"))?;
-    let bin = docker_bin().ok_or("Docker Desktop was not found")?;
-    daemon_version(&bin).await?;
+    let temp = PreviewDir(data.join("preview").join(uuid::Uuid::new_v4().to_string()));
+    std::fs::create_dir_all(&temp.0).map_err(|e| format!("preview folder: {e}"))?;
+    let temp_path = &temp.0;
     let script = if office {
-        "lo-convert \"$PREVIEW_FILE\" /preview pdf >/dev/null 2>&1 || exit 2; pdf=$(find /preview -maxdepth 1 -name '*.pdf' | head -n 1); test -n \"$pdf\" || exit 3; pdftocairo -png -r 120 -f 1 -l 3 \"$pdf\" /preview/page || exit 4; pdftotext -layout \"$pdf\" /preview/text.txt 2>/dev/null || true"
+        format!(
+            "lo-convert \"$PREVIEW_FILE\" /preview pdf >/dev/null 2>&1 || exit 2; pdf=$(find /preview -maxdepth 1 -name '*.pdf' | head -n 1); test -n \"$pdf\" || exit 3; pdftocairo -png -r 120 -f 1 -l {PREVIEW_PAGES} \"$pdf\" /preview/page || exit 4; pdftotext -layout \"$pdf\" /preview/text.txt 2>/dev/null || true"
+        )
     } else {
-        "pdftocairo -png -r 120 -f 1 -l 3 \"$PREVIEW_FILE\" /preview/page || exit 4; pdftotext -layout \"$PREVIEW_FILE\" /preview/text.txt 2>/dev/null || true"
+        format!(
+            "pdftocairo -png -r 120 -f 1 -l {PREVIEW_PAGES} \"$PREVIEW_FILE\" /preview/page || exit 4; pdftotext -layout \"$PREVIEW_FILE\" /preview/text.txt 2>/dev/null || true"
+        )
     };
+    let container = format!(
+        "myagent-preview-{}",
+        &uuid::Uuid::new_v4().to_string()[..12]
+    );
     let args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
@@ -1843,14 +1868,22 @@ pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactP
         "HOME=/tmp".into(),
         "--env".into(),
         format!("PREVIEW_FILE=/work/{relative}"),
+        "--name".into(),
+        container.clone(),
+        "--label".into(),
+        "myagent.sandbox=1".into(),
         "--memory".into(),
         "1024m".into(),
+        "--memory-swap".into(),
+        "1024m".into(),
+        "--cpus".into(),
+        "1".into(),
         "--pids-limit".into(),
         "256".into(),
         "-v".into(),
         mount(&root, "/work:ro"),
         "-v".into(),
-        mount(&temp, "/preview:rw"),
+        mount(temp_path, "/preview:rw"),
         "-w".into(),
         "/work".into(),
         cfg.image.clone().unwrap_or_default(),
@@ -1858,26 +1891,25 @@ pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactP
         "120".into(),
         "sh".into(),
         "-c".into(),
-        script.into(),
+        script,
     ];
     let output = docker_output(&bin, &args, Duration::from_secs(180)).await;
     let output = match output {
         Ok(value) => value,
         Err(error) => {
-            let _ = std::fs::remove_dir_all(&temp);
+            kill_container(&bin, &container).await;
             return Err(error);
         }
     };
     if !output.status.success() {
         let detail = text(&output.stderr);
-        let _ = std::fs::remove_dir_all(&temp);
         return Err(if detail.is_empty() {
             "preview conversion failed".to_string()
         } else {
             format!("preview conversion failed: {detail}")
         });
     }
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&temp)
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(temp_path)
         .map_err(|e| e.to_string())?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -1886,23 +1918,25 @@ pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactP
     files.sort();
     let mut images = Vec::new();
     for file in files.into_iter().take(PREVIEW_PAGES) {
+        let Ok(metadata) = file.metadata() else {
+            continue;
+        };
+        if metadata.len() > 4 * 1024 * 1024 {
+            continue;
+        }
         let Ok(bytes) = std::fs::read(&file) else {
             continue;
         };
-        if bytes.len() > 4 * 1024 * 1024 {
-            continue;
-        }
         images.push(format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         ));
     }
-    let text = std::fs::read_to_string(temp.join("text.txt"))
+    let text = std::fs::read_to_string(temp_path.join("text.txt"))
         .unwrap_or_default()
         .chars()
         .take(8000)
         .collect();
-    let _ = std::fs::remove_dir_all(&temp);
     if images.is_empty() {
         return Err("preview produced no pages".to_string());
     }

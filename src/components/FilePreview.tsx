@@ -55,7 +55,7 @@ export function FilePreview({ path }: { path: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <span className="text-xs text-muted">
-          {preview.images.length} page{preview.images.length === 1 ? "" : "s"} converted
+          Up to {preview.images.length} page{preview.images.length === 1 ? "" : "s"} converted
         </span>
         <Button
           size="sm"
