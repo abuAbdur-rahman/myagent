@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.2",
+    date: "2026-11-01",
+    summary:
+      "With the sandbox on, PowerShell can now read and search files outside the project with ls, cat, rg and the read-only Get- commands. Writes, deletes, installs and process launches stay blocked, and a refused command is not retried blindly. Skills that are not installed now say so instead of returning a bare error.",
+    changes: [
+      {
+        kind: "improved",
+        text: "Sandbox-mode PowerShell accepts read-only inspection such as ls, cat, head, tail, rg, Get-ChildItem, Get-Content, Get-Process, Select-String and Join-Path, including quoted paths, $HOME and $env: variables and pipelines. It can read Downloads and other folders outside the project.",
+      },
+      {
+        kind: "fixed",
+        text: "Writes, deletes, installs, process launches, redirection, subexpressions and script blocks are still refused. Credential and secret paths such as .ssh, .aws and .env are denied.",
+      },
+      {
+        kind: "improved",
+        text: "A refused host command now says it is final and points at the allowed read-only commands, so the model stops retrying path variants.",
+      },
+      {
+        kind: "fixed",
+        text: "The skill tool names the requested id and lists the installed skills when a skill is missing, instead of returning only unknown skill.",
+      },
+      {
+        kind: "improved",
+        text: "The Skills page explains that the PDF and deck skills arrive in 0.9.0 instead of claiming built-in skills are already present.",
+      },
+    ],
+  },
+  {
     version: "0.8.1",
     date: "2026-10-31",
     summary:

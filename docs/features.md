@@ -305,7 +305,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** In Plan mode, write and shell tools are not even sent to the model; in Sandbox mode a host call outside the project still asks and an explicit Deny rule beats auto-allow.
 
 ## D7. Shell tool
-- **Status:** Partial (0.1.3: approval + per-segment rules + kill-on-stop; cwd still home, not project)
+- **Status:** Partial (0.1.3: approval + per-segment rules + kill-on-stop; cwd still home, not project. 0.8.2: in Sandbox mode, read-only host inspection is allowed outside the project — ls, cat, rg, Get-ChildItem, Get-Content and similar, with quoted paths, $HOME and pipelines — while writes, deletes, installs, process launches, redirection, subexpressions and credential paths stay refused)
 - **Ref:** † OpenCode parses bash with tree-sitter to apply per-command rules. Claude Code asks per command pattern.
 - **Build:** `run_powershell` goes through D4 and D5. Timeout (default 60s), working directory fixed to the project, output captured and capped (D13), kill process tree on stop. Parse the command into segments (`;`, `&&`, `|`) and evaluate each, so `ls; rm x` cannot hide behind an allowed `ls`. In Sandbox mode (D6) the host shell is inspection only: reading state (time, disk, largest files, process and network state) is allowed, and anything that creates, updates or deletes files, or runs project code, is refused with a reason that points at the sandbox (D22).
 - **Not:** Persistent shell sessions, PTY.
