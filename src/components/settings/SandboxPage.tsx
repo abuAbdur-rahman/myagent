@@ -22,6 +22,9 @@ const PROFILES = [
   { id: "full", label: "Full", detail: "CJK fonts, more OCR", size: "~2.5 GB" },
 ] as const;
 
+const IS_WINDOWS =
+  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
 const STATUS_LABEL: Record<SandboxStatus["state"], string> = {
   not_installed: "Docker missing",
   daemon_stopped: "Docker stopped",
@@ -192,16 +195,18 @@ function DockerHelp({
           Docker is installed but not running. Start it and wait for the whale to settle.
         </p>
         <div className="mt-2 flex gap-2">
-          <Button
-            size="sm"
-            onClick={() =>
-              void openPath("C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe").catch(
-                (error) => toast(errorText(error)),
-              )
-            }
-          >
-            Start Docker
-          </Button>
+          {IS_WINDOWS && (
+            <Button
+              size="sm"
+              onClick={() =>
+                void openPath("C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe").catch(
+                  (error) => toast(errorText(error)),
+                )
+              }
+            >
+              Start Docker
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={onRecheck}>
             Recheck
           </Button>
@@ -261,7 +266,13 @@ function Setup({
         <Button
           variant="primary"
           size="sm"
-          disabled={!root || busy !== null}
+          disabled={
+            !root ||
+            busy !== null ||
+            status.state === "not_installed" ||
+            status.state === "daemon_stopped" ||
+            status.state === "building"
+          }
           onClick={sandbox.enable}
         >
           {status.state === "building" || busy === "enable" ? (
@@ -356,17 +367,6 @@ export function SandboxPage() {
         <div>
           <div className="flex items-center gap-2 text-sm font-medium">
             <Shield size={16} /> Sandbox
-            <Badge
-              className={
-                status.state === "ready"
-                  ? "text-success"
-                  : status.state === "building"
-                    ? "text-accent"
-                    : "text-warn"
-              }
-            >
-              {STATUS_LABEL[status.state]}
-            </Badge>
           </div>
           <p className="mt-1 max-w-xl text-xs text-muted">
             Commands run in Docker with no internet and only this project folder. Your host shell
@@ -388,7 +388,7 @@ export function SandboxPage() {
       <StatusLine status={status} busy={busy} onRecheck={() => void sandbox.load()} />
 
       <DockerHelp status={status} onRecheck={() => void sandbox.load()} />
-      {reason && status.state !== "daemon_stopped" && (
+      {reason && status.state === "no_image" && (
         <p className="m-0 text-xs text-muted">{reason}</p>
       )}
 
