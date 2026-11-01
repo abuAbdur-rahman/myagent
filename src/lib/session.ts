@@ -7,6 +7,7 @@ export interface SessionOutput {
   title: string;
   lang: string;
   code: string;
+  path?: string;
   kind: "artifact" | "file";
 }
 
@@ -37,6 +38,7 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
           title,
           lang: extensionOf(title),
           code: "",
+          path,
           kind: "file",
         });
       }

@@ -422,6 +422,16 @@ export function skillsImport(path: string) {
   return invoke<SkillInfo[]>("skills_import", { path });
 }
 
+export interface ArtifactPreview {
+  absolute: string;
+  images: string[];
+  text: string;
+}
+
+export function artifactPreview(path: string) {
+  return invoke<ArtifactPreview>("sandbox_preview", { path });
+}
+
 export function skillsDoctor(id: string) {
   return invoke<SkillDoctorResult>("skills_doctor", { id });
 }

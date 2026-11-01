@@ -1714,6 +1714,155 @@ pub fn grep_files(
     Ok(found)
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct ArtifactPreview {
+    pub absolute: String,
+    pub images: Vec<String>,
+    pub text: String,
+}
+
+const PREVIEW_PAGES: usize = 3;
+
+pub async fn preview_file(app: &tauri::AppHandle, rel: &str) -> Result<ArtifactPreview, String> {
+    use base64::Engine;
+    let cfg = config(app);
+    if !cfg.enabled || cfg.image.is_none() {
+        return Err("Enable the sandbox to preview this file".to_string());
+    }
+    let tag =
+        expected_tag(&cfg).map_err(|error| format!("sandbox image is out of date: {error}"))?;
+    if cfg.image_tag.as_deref() != Some(tag.as_str()) {
+        return Err("Sandbox image is out of date; rebuild it to preview files".to_string());
+    }
+    let root = project_root(app)?;
+    let path = resolve_read(app, rel)?;
+    let absolute = path.display().to_string();
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| "preview file is outside the project".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let office = matches!(
+        extension.as_str(),
+        "docx" | "pptx" | "xlsx" | "odt" | "ods" | "odp"
+    );
+    if !office && extension != "pdf" {
+        return Err("preview supports PDF, DOCX, PPTX and XLSX".to_string());
+    }
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data directory: {e}"))?;
+    let temp = data.join("preview").join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&temp).map_err(|e| format!("preview folder: {e}"))?;
+    let bin = docker_bin().ok_or("Docker Desktop was not found")?;
+    daemon_version(&bin).await?;
+    let script = if office {
+        "lo-convert \"$PREVIEW_FILE\" /preview pdf >/dev/null 2>&1 || exit 2; pdf=$(find /preview -maxdepth 1 -name '*.pdf' | head -n 1); test -n \"$pdf\" || exit 3; pdftocairo -png -r 120 -f 1 -l 3 \"$pdf\" /preview/page || exit 4; pdftotext -layout \"$pdf\" /preview/text.txt 2>/dev/null || true"
+    } else {
+        "pdftocairo -png -r 120 -f 1 -l 3 \"$PREVIEW_FILE\" /preview/page || exit 4; pdftotext -layout \"$PREVIEW_FILE\" /preview/text.txt 2>/dev/null || true"
+    };
+    let args: Vec<String> = vec![
+        "run".into(),
+        "--rm".into(),
+        "--network".into(),
+        "none".into(),
+        "--read-only".into(),
+        "--tmpfs".into(),
+        "/tmp:rw,size=256m".into(),
+        "--user".into(),
+        "1000:1000".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--security-opt".into(),
+        "no-new-privileges".into(),
+        "--env".into(),
+        "HOME=/tmp".into(),
+        "--env".into(),
+        format!("PREVIEW_FILE=/work/{relative}"),
+        "--memory".into(),
+        "1024m".into(),
+        "--pids-limit".into(),
+        "256".into(),
+        "-v".into(),
+        mount(&root, "/work:ro"),
+        "-v".into(),
+        mount(&temp, "/preview:rw"),
+        "-w".into(),
+        "/work".into(),
+        cfg.image.clone().unwrap_or_default(),
+        "timeout".into(),
+        "120".into(),
+        "sh".into(),
+        "-c".into(),
+        script.into(),
+    ];
+    let output = docker_output(&bin, &args, Duration::from_secs(180)).await;
+    let output = match output {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&temp);
+            return Err(error);
+        }
+    };
+    if !output.status.success() {
+        let detail = text(&output.stderr);
+        let _ = std::fs::remove_dir_all(&temp);
+        return Err(if detail.is_empty() {
+            "preview conversion failed".to_string()
+        } else {
+            format!("preview conversion failed: {detail}")
+        });
+    }
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&temp)
+        .map_err(|e| e.to_string())?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))
+        .collect();
+    files.sort();
+    let mut images = Vec::new();
+    for file in files.into_iter().take(PREVIEW_PAGES) {
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        if bytes.len() > 4 * 1024 * 1024 {
+            continue;
+        }
+        images.push(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ));
+    }
+    let text = std::fs::read_to_string(temp.join("text.txt"))
+        .unwrap_or_default()
+        .chars()
+        .take(8000)
+        .collect();
+    let _ = std::fs::remove_dir_all(&temp);
+    if images.is_empty() {
+        return Err("preview produced no pages".to_string());
+    }
+    Ok(ArtifactPreview {
+        absolute,
+        images,
+        text,
+    })
+}
+
+#[tauri::command]
+pub async fn sandbox_preview(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<ArtifactPreview, String> {
+    preview_file(&app, &path).await
+}
+
 #[tauri::command]
 pub async fn sandbox_status(app: tauri::AppHandle) -> Result<SandboxStatus, String> {
     Ok(status(&app).await)

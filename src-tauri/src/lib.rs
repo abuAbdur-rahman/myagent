@@ -559,6 +559,7 @@ pub fn run() {
             sandbox::sandbox_reap,
             sandbox::sandbox_set_limits,
             sandbox::sandbox_set_allow_installs,
+            sandbox::sandbox_preview,
             voice::voice_status,
             voice::voice_enable,
             voice::voice_disable,

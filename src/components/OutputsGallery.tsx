@@ -5,6 +5,8 @@ import { useApp } from "../lib/store";
 import { sessionOutputs } from "../lib/session";
 import { ArtifactThumb } from "./ArtifactThumb";
 
+const PREVIEWABLE = new Set(["pdf", "docx", "pptx", "xlsx", "odt", "ods", "odp"]);
+
 export function OutputsGallery() {
   const { messages, conversations, activeConversationId, setView, openArtifact } = useApp();
   const chat = conversations.find((item) => item.id === activeConversationId) ?? null;
@@ -56,6 +58,31 @@ export function OutputsGallery() {
                     <span className="min-w-0 flex-1 truncate text-xs">{output.title}</span>
                     <span className="flex-none rounded bg-hover px-1 py-0.5 text-[10px] uppercase text-muted">
                       {output.lang || "text"}
+                    </span>
+                  </span>
+                </button>
+              ) : PREVIEWABLE.has(output.lang) ? (
+                <button
+                  key={output.key}
+                  type="button"
+                  onClick={() =>
+                    openArtifact({
+                      id: output.key,
+                      title: output.title,
+                      lang: output.lang,
+                      code: "",
+                      path: output.path,
+                    })
+                  }
+                  className="flex flex-col gap-2 rounded-card border border-border bg-surface p-2 text-left hover:border-accent/60 hover:bg-hover"
+                >
+                  <div className="grid h-[104px] place-items-center rounded-control bg-surface-2 text-muted">
+                    <FileText size={20} />
+                  </div>
+                  <span className="flex items-center gap-1.5 px-0.5">
+                    <span className="min-w-0 flex-1 truncate text-xs">{output.title}</span>
+                    <span className="flex-none rounded bg-hover px-1 py-0.5 text-[10px] uppercase text-muted">
+                      {output.lang || "file"}
                     </span>
                   </span>
                 </button>

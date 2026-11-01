@@ -1369,6 +1369,29 @@ mod tests {
     }
 
     #[test]
+    fn every_bundled_skill_parses() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/skills");
+        let mut found = 0;
+        for entry in std::fs::read_dir(root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+        {
+            let path = entry.path().join("SKILL.md");
+            if !path.is_file() {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                parse_skill(&name, &content).is_some(),
+                "{name} should parse"
+            );
+            found += 1;
+        }
+        assert!(found >= 4, "expected four bundled skills, found {found}");
+    }
+
+    #[test]
     fn bundled_pdf_skill_has_the_expected_contract() {
         let content = include_str!("../resources/skills/pdf-workbench/SKILL.md");
         let meta = parse_meta(content);

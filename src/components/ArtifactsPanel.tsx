@@ -14,6 +14,7 @@ import { useApp, type PanelMode, type PanelTab } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { Badge } from "./ui";
 import { SessionPanel } from "./SessionPanel";
+import { FilePreview } from "./FilePreview";
 import { cn, copyText, downloadText } from "../lib/utils";
 import { toast } from "../lib/toast";
 
@@ -50,6 +51,9 @@ function tabsFor(lang: string): { id: PanelTab; label: string }[] {
       { id: "doc", label: "Doc" },
       { id: "source", label: "Source" },
     ];
+  }
+  if (["pdf", "docx", "pptx", "xlsx", "odt", "ods", "odp"].includes(normalized)) {
+    return [{ id: "preview", label: "Preview" }];
   }
   return [{ id: "code", label: "Code" }];
 }
@@ -174,24 +178,28 @@ export function ArtifactsPanel() {
           ))}
         </div>
         <span className="flex-1" />
-        <button
-          type="button"
-          aria-label="Copy artifact"
-          title="Copy"
-          onClick={() => void copy()}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
-        >
-          <Copy size={16} />
-        </button>
-        <button
-          type="button"
-          aria-label="Download artifact"
-          title="Download"
-          onClick={download}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
-        >
-          <Download size={16} />
-        </button>
+        {!panelArtifact.path && (
+          <>
+            <button
+              type="button"
+              aria-label="Copy artifact"
+              title="Copy"
+              onClick={() => void copy()}
+              className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+            >
+              <Copy size={16} />
+            </button>
+            <button
+              type="button"
+              aria-label="Download artifact"
+              title="Download"
+              onClick={download}
+              className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+            >
+              <Download size={16} />
+            </button>
+          </>
+        )}
         <button
           type="button"
           aria-label={panelMode === "mini" ? "Restore panel size" : "Minimize panel"}
@@ -222,7 +230,10 @@ export function ArtifactsPanel() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "preview" && (
+        {activeTab === "preview" && panelArtifact.path && (
+          <FilePreview path={panelArtifact.path} />
+        )}
+        {activeTab === "preview" && !panelArtifact.path && (
           <iframe
             sandbox="allow-scripts"
             srcDoc={panelArtifact.code}
@@ -245,7 +256,7 @@ export function ArtifactsPanel() {
       <div className="flex-none border-t border-border px-3.5 py-2 text-xs text-muted">
         {activeTab === "preview" && (
           <span className="inline-flex items-center gap-1.5">
-            <Eye size={12} /> Sandboxed preview
+            <Eye size={12} /> {panelArtifact.path ? "Converted in the sandbox" : "Sandboxed preview"}
           </span>
         )}
         {activeTab === "doc" && (
