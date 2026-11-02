@@ -44,7 +44,7 @@ describe("buildSkillIndexBlock", () => {
   it("lists name and description per line", () => {
     const block = buildSkillIndexBlock(index);
     expect(block).toContain("## Available skills");
-    expect(block).toContain("- git-helper: Helps with git work");
+    expect(block).toContain("`git-helper`: Helps with git work");
   });
 
   it("returns empty for no skills", () => {

@@ -30,6 +30,7 @@ import { splitArtifactSegments } from "../lib/artifacts";
 import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
 import { DocAttachmentCard } from "./AttachmentCard";
 import { isKnownTool } from "../lib/tools";
+import { selectOutputFiles } from "../lib/session";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
 import { Button, IconButton } from "./ui";
@@ -385,6 +386,41 @@ function ArtifactCard({
   );
 }
 
+function isPreviewableFile(path: string): boolean {
+  return /\.(pdf|docx|pptx|xlsx|odt|ods|odp)$/i.test(path);
+}
+
+function FileCard({ path }: { path: string }) {
+  const { openArtifact } = useApp();
+  const title = path.split(/[\\/]/).pop() || path;
+  const lang = title.includes(".") ? title.split(".").pop()!.toLowerCase() : "file";
+  return (
+    <div className="my-3 flex items-center gap-3 rounded-panel border border-border bg-vault px-3 py-2.5">
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-control bg-active">
+        <FileText size={16} className="text-muted" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{title}</span>
+        <span className="block truncate text-xs text-muted">Output · {path}</span>
+      </span>
+      <Button
+        size="sm"
+        onClick={() =>
+          openArtifact({
+            id: `file:${path}`,
+            title,
+            lang,
+            code: "",
+            path,
+          })
+        }
+      >
+        Open
+      </Button>
+    </div>
+  );
+}
+
 function AssistantMessage({
   message,
   modelName,
@@ -393,6 +429,7 @@ function AssistantMessage({
   streamingId,
   resetKey,
   collapseToolCalls,
+  outputFiles,
   onRemember,
 }: {
   message: Message;
@@ -402,6 +439,7 @@ function AssistantMessage({
   streamingId: string | null;
   resetKey: string | null;
   collapseToolCalls: boolean;
+  outputFiles: string[];
   onRemember: (content: string) => Promise<void>;
 }) {
   const live = streaming && streamingId === message.id;
@@ -459,12 +497,21 @@ function AssistantMessage({
                 code={artifact.code}
               />
             ))}
+            {outputFiles.filter(isPreviewableFile).map((path) => (
+              <FileCard key={path} path={path} />
+            ))}
             {live && <span className="caret" aria-hidden="true" />}
           </>
         )}
       </div>
       {!busy && (
         <>
+          {isLast && message.finish_reason === "step_limit" && (
+            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-control border border-warn/50 bg-warn/10 px-3 py-2 text-xs text-warn">
+              <span>Paused: step limit reached. The task may be unfinished.</span>
+              <ContinueButton />
+            </div>
+          )}
           {isLast && (message.finish_reason === "length" || message.finish_reason === "interrupted") && (
             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-warn">
               <span>{message.finish_reason === "length" ? "Stopped at the token limit — the reply may be cut off." : "Stream interrupted — partial reply kept."}</span>
@@ -510,10 +557,10 @@ function ContinueButton() {
     <Button
       size="sm"
       variant="default"
-      title="Continue the cut-off reply"
+      title="Continue the unfinished task"
       onClick={() => void continueTurn()}
     >
-      Continue reply
+      Continue
     </Button>
   );
 }
@@ -604,6 +651,21 @@ export function MessageList() {
   );
 
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
+  const outputFilesByMessage = useMemo(() => {
+    const allPaths = messages.flatMap((message) =>
+      parseToolLog(message.tool_log).flatMap((entry) => entry.files ?? []),
+    );
+    const selected = new Set(selectOutputFiles(allPaths));
+    const map = new Map<string, string[]>();
+    for (const message of messages) {
+      const own = parseToolLog(message.tool_log).flatMap((entry) => entry.files ?? []);
+      map.set(
+        message.id,
+        selectOutputFiles(own).filter((path) => selected.has(path)),
+      );
+    }
+    return map;
+  }, [messages]);
   const activeConversation =
     conversations.find((c) => c.id === activeConversationId) ?? null;
   const activeModel = activeConversation?.model ?? null;
@@ -650,6 +712,7 @@ export function MessageList() {
                 streamingId={streamingId}
                 resetKey={activeConversationId}
                 collapseToolCalls={collapseToolCalls}
+                outputFiles={outputFilesByMessage.get(message.id) ?? []}
                 onRemember={remember}
               />
             </div>

@@ -38,7 +38,7 @@ export function ContextBar() {
     );
   }
 
-  const { tokens, limit, pct, real, lastIn, lastOut } = contextInfo;
+  const { tokens, limit, pct, real, limitKnown, lastIn, lastOut } = contextInfo;
 
   let labelClass = "";
   if (pct !== null && pct > 90) {
@@ -93,9 +93,14 @@ export function ContextBar() {
     );
   }
 
-  const title = real
-    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`
-    : `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
+  let title: string;
+  if (real && limitKnown) {
+    title = `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`;
+  } else if (limitKnown) {
+    title = `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
+  } else {
+    title = `≈ ${formatTokens(tokens)} tokens; window assumed ${formatTokens(limit)} because this model did not report one`;
+  }
 
   return (
     <div
@@ -103,7 +108,8 @@ export function ContextBar() {
       title={title}
     >
       <span className={cn(labelClass)}>
-        Context {pct}% used{real ? "" : " (est.)"}
+        Context {pct}% used{real && limitKnown ? "" : " (est.)"}
+        {!limitKnown && " · window assumed"}
         {usageDetail && (
           <>
             <span aria-hidden="true">{usageDetail}</span>

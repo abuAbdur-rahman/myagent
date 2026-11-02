@@ -22,6 +22,50 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.7",
+    date: "2026-11-02",
+    summary:
+      "Generated PDFs and Office files become first-class output cards with preview and download, the checklist follows the run and closes itself, and the activity pill names what the agent is doing.",
+    changes: [
+      {
+        kind: "new",
+        text: "Files written by tools appear as output cards in the reply and in Outputs. A PDF, DOCX, PPTX or XLSX card opens an inline preview and can be saved anywhere on the PC.",
+      },
+      {
+        kind: "improved",
+        text: "The checklist refreshes as `todo_write` and `todo_set` finish and closes automatically when the run ends: finished runs complete the remaining items, stopped or cut-off runs cancel them.",
+      },
+      {
+        kind: "improved",
+        text: "The activity pill sits higher above the composer and names the current tool, for example Searching the web, Working in PowerShell, Working in the sandbox or Updating the checklist.",
+      },
+      {
+        kind: "fixed",
+        text: "Interim narration from between tool calls is separated from the final answer instead of running into it as one garbled paragraph.",
+      },
+      {
+        kind: "new",
+        text: "A run that reaches the tool-step limit shows a Paused card with a Continue button instead of stopping silently.",
+      },
+      {
+        kind: "fixed",
+        text: "The context meter shows a percentage with an assumed window when a model reports no context size, instead of Context unknown, so auto-compact can still be judged.",
+      },
+      {
+        kind: "fixed",
+        text: "The system prompt lists exact skill IDs in backticks, and an unknown skill error returns the valid IDs.",
+      },
+      {
+        kind: "fixed",
+        text: "Only deliverables appear in Outputs; helper scripts, HTML and JSON stay out when a document or media file was produced in the same run.",
+      },
+      {
+        kind: "fixed",
+        text: "The reasoning selector shows No reasoning without truncation, and Used in this session no longer shows a bare count.",
+      },
+    ],
+  },
+  {
     version: "0.8.6",
     date: "2026-11-02",
     summary:

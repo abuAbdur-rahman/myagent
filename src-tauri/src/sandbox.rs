@@ -2075,6 +2075,27 @@ pub async fn sandbox_preview(
 }
 
 #[tauri::command]
+pub async fn artifact_export(
+    app: tauri::AppHandle,
+    path: String,
+    destination: String,
+) -> Result<String, String> {
+    let source = resolve_read(&app, &path)?;
+    if !source.is_file() {
+        return Err("file not found".to_string());
+    }
+    let destination = std::path::PathBuf::from(destination);
+    if destination.is_dir() {
+        return Err("destination is a folder".to_string());
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("destination: {e}"))?;
+    }
+    std::fs::copy(&source, &destination).map_err(|e| format!("copy: {e}"))?;
+    Ok(destination.display().to_string())
+}
+
+#[tauri::command]
 pub async fn sandbox_status(app: tauri::AppHandle) -> Result<SandboxStatus, String> {
     Ok(status(&app).await)
 }

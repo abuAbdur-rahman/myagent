@@ -2368,6 +2368,26 @@ pub async fn execute(
     }
 }
 
+#[tauri::command]
+pub async fn todo_finish(
+    app: tauri::AppHandle,
+    conversation_id: String,
+    complete: bool,
+) -> Result<(), String> {
+    let pool = memory_pool(&app).await.map_err(|e| e.to_string())?;
+    let status = if complete { "completed" } else { "cancelled" };
+    sqlx::query(
+        "UPDATE todos SET status = ?, updated_at = ? WHERE chat_id = ? AND status IN ('pending', 'in_progress')",
+    )
+    .bind(status)
+    .bind(now_millis())
+    .bind(&conversation_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 async fn render_todos(pool: &SqlitePool, conversation: &str) -> Result<String, String> {
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT text, status FROM todos WHERE chat_id = ? ORDER BY position ASC, created_at ASC",

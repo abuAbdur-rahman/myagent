@@ -634,7 +634,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           </button>
           <Select
             size="sm"
-            className="w-28 flex-none"
+            className="w-36 min-w-0 shrink"
             value={effortValue}
             onChange={(level) => setReasoningEffort(level)}
             aria-label="Reasoning effort"

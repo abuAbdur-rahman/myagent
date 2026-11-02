@@ -21,26 +21,25 @@ function baseName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+const DELIVERABLE_EXT =
+  /\.(pdf|docx|pptx|xlsx|odt|ods|odp|csv|tsv|md|txt|png|jpe?g|gif|webp|svg|zip|mp4|mp3)$/i;
+
+export function selectOutputFiles(paths: string[]): string[] {
+  const unique = [...new Set(paths)];
+  const hasDeliverable = unique.some((path) => DELIVERABLE_EXT.test(path));
+  return unique.filter((path) => !hasDeliverable || DELIVERABLE_EXT.test(path));
+}
+
 export function sessionOutputs(messages: Message[]): SessionOutput[] {
   const artifacts: SessionOutput[] = [];
   const files: SessionOutput[] = [];
   const artifactKeys = new Set<string>();
-  const fileKeys = new Set<string>();
+  const writtenPaths: string[] = [];
 
   for (const message of [...messages].reverse()) {
     for (const entry of parseToolLog(message.tool_log)) {
       for (const path of entry.files ?? []) {
-        if (fileKeys.has(path)) continue;
-        fileKeys.add(path);
-        const title = baseName(path);
-        files.push({
-          key: `file:${path}`,
-          title,
-          lang: extensionOf(title),
-          code: "",
-          path,
-          kind: "file",
-        });
+        if (!writtenPaths.includes(path)) writtenPaths.push(path);
       }
     }
     for (const artifact of parseDeclaredArtifacts(message.artifacts)) {
@@ -55,6 +54,18 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
         kind: "artifact",
       });
     }
+  }
+
+  for (const path of selectOutputFiles(writtenPaths)) {
+    const title = baseName(path);
+    files.push({
+      key: `file:${path}`,
+      title,
+      lang: extensionOf(title),
+      code: "",
+      path,
+      kind: "file",
+    });
   }
 
   return [...artifacts, ...files];

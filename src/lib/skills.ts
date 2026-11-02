@@ -37,10 +37,11 @@ export type SkillSummary = Pick<SkillInfo, "id" | "name" | "description">;
 
 export function buildSkillIndexBlock(skills: SkillSummary[]): string {
   if (skills.length === 0) return "";
-  const lines = skills.map(
-    (skill) => `- ${skill.name}: ${stripBoundaryTags(skill.description.trim())}`,
-  );
-  return `## Available skills\nCall the skill tool with the ID to load its instructions.\n${lines.join("\n")}`;
+  const lines = skills.map((skill) => {
+    const title = skill.name && skill.name !== skill.id ? ` (${skill.name})` : "";
+    return `- \`${skill.id}\`${title}: ${stripBoundaryTags(skill.description.trim())}`;
+  });
+  return `## Available skills\nUse the exact ID shown in backticks when calling the skill tool; do not guess or shorten it. If a call fails, the error lists the valid IDs.\n${lines.join("\n")}`;
 }
 
 export interface ResolvedMentions {

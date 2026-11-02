@@ -479,6 +479,7 @@ interface AppContextValue {
   searchEndpoint: string;
   setSearchEndpoint: (value: string) => void;
   todos: Todo[];
+  activeTool: string | null;
   refreshTodos: (conversationId: string | null) => Promise<void>;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
@@ -569,6 +570,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [fileCommands, setFileCommands] = useState<FileCommand[]>([]);
   const fileCommandsRef = useRef<FileCommand[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [activeTool, setActiveTool] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
@@ -635,6 +637,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
+  const trimNextDeltaRef = useRef(false);
   const reasoningRef = useRef("");
   const thinkingStartRef = useRef<number | null>(null);
   const thinkingMsRef = useRef<number | null>(null);
@@ -1262,7 +1265,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return {
         tokens,
         limit,
-        pct: limitKnown ? Math.min(100, Math.round((tokens / limit) * 100)) : null,
+        pct: Math.min(100, Math.round((tokens / limit) * 100)),
         real: true,
         limitKnown,
         lastIn: lastUsage.prompt_tokens ?? null,
@@ -1277,7 +1280,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
     return {
       ...estimated,
-      pct: limitKnown ? estimated.pct : null,
+      pct: estimated.pct,
       real: false,
       limitKnown,
       lastIn: null,
@@ -1528,7 +1531,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTodos([]);
       return;
     }
-    setTodos(await db.listTodos(conversationId));
+    const rows = await db.listTodos(conversationId);
+    if (convIdRef.current === conversationId) setTodos(rows);
   }, []);
 
   const removeConversation = useCallback(
@@ -1652,11 +1656,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ? messagesRef.current.find((m) => m.id === assistantMsg.id)
         : undefined;
       bufferRef.current = seed?.content ?? "";
+      trimNextDeltaRef.current = false;
       reasoningRef.current = seed?.reasoning ?? "";
       thinkingStartRef.current = null;
       thinkingMsRef.current = null;
       usageRef.current = null;
       finishRef.current = null;
+      setActiveTool(null);
       artifactsRef.current = db.parseDeclaredArtifacts(seed?.artifacts);
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
@@ -1736,7 +1742,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           (event) => {
             if (requestIdRef.current !== requestId) return;
             if (event.type === "delta") {
-              bufferRef.current += event.text;
+              const piece = trimNextDeltaRef.current ? event.text.replace(/^\s+/, "") : event.text;
+              trimNextDeltaRef.current = false;
+              bufferRef.current += piece;
               if (Date.now() - lastFlush >= 80) flush();
             } else if (event.type === "reasoning") {
               if (thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
@@ -1769,12 +1777,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
               );
             } else if (event.type === "finish") {
               finishRef.current = event.reason;
+              setActiveTool(null);
               if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
                 thinkingMsRef.current = Date.now() - thinkingStartRef.current;
               }
             } else if (event.type === "retrying") {
               toast(`Retrying (${event.attempt}/${event.max})`);
             } else if (event.type === "tool_start") {
+              if (bufferRef.current && !bufferRef.current.endsWith("\n\n")) {
+                bufferRef.current += "\n\n";
+                trimNextDeltaRef.current = true;
+                flush();
+              }
               const entry: ToolEntry = {
                 id: event.id,
                 name: event.name,
@@ -1787,6 +1801,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (index === -1) next.push(entry);
               else next[index] = entry;
               applyToolLog(next);
+              setActiveTool(event.name);
             } else if (event.type === "tool_result") {
               applyToolLog(
                 toolLogRef.current.map((entry) =>
@@ -1805,6 +1820,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     : entry,
                 ),
               );
+              setActiveTool(null);
+              const finished = toolLogRef.current.find((entry) => entry.id === event.id);
+              if (
+                finished &&
+                (finished.name === "todo_write" || finished.name === "todo_set")
+              ) {
+                void refreshTodos(conversationId);
+              }
             } else if (event.type === "tool_sources") {
               applyToolLog(
                 toolLogRef.current.map((entry) =>
@@ -1888,6 +1911,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setApproval(null);
           setQuestion(null);
           flush();
+          try {
+            const complete = finishRef.current === "stop";
+            await api.todoFinish(conversationId, complete);
+            await refreshTodos(conversationId);
+          } catch (e) {
+            reportError(e);
+          }
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
           setStreamingId(null);
@@ -2348,6 +2378,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const turns = messagesRef.current.filter((m) => m.content.length > 0);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
+    if (partial.finish_reason === "step_limit") {
+      await sendMessage(
+        "Continue from where you left off. Do not repeat work that is already done; reuse the files and checklist you already created.",
+      );
+      return;
+    }
     if (partial.finish_reason !== "length" && partial.finish_reason !== "interrupted") return;
     const payload =
       lastPayloadRef.current ??
@@ -2360,7 +2396,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       partial,
       true,
     );
-  }, [streaming, streamTurn, buildPayload]);
+  }, [streaming, streamTurn, buildPayload, sendMessage]);
 
   const retryTurn = useCallback(async () => {    const conversationId = convIdRef.current;
     const connection = connRef.current;
@@ -2542,10 +2578,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     requestIdRef.current = null;
     setStreamingId(null);
     setStreaming(false);
+    setActiveTool(null);
     api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
     const conversationId = convIdRef.current;
     assistantMsgIdRef.current = null;
+    if (conversationId) {
+      void api
+        .todoFinish(conversationId, false)
+        .then(() => refreshTodos(conversationId))
+        .catch(reportError);
+    }
     if (assistantId && conversationId) {
       finishRef.current = "stopped";
       setMessages((prev) =>
@@ -2555,7 +2598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       finalize(assistantId, conversationId);
     }
-  }, [finalize]);
+  }, [finalize, refreshTodos, reportError]);
 
   const value: AppContextValue = {
     ready,
@@ -2691,6 +2734,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     searchEndpoint,
     setSearchEndpoint,
     todos,
+    activeTool,
     refreshTodos,
     panelOpen,
     panelArtifact,
