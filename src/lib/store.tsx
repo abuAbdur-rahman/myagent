@@ -1531,7 +1531,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTodos([]);
       return;
     }
-    setTodos(await db.listTodos(conversationId));
+    const rows = await db.listTodos(conversationId);
+    if (convIdRef.current === conversationId) setTodos(rows);
   }, []);
 
   const removeConversation = useCallback(
@@ -1661,6 +1662,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       thinkingMsRef.current = null;
       usageRef.current = null;
       finishRef.current = null;
+      setActiveTool(null);
       artifactsRef.current = db.parseDeclaredArtifacts(seed?.artifacts);
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
@@ -1910,7 +1912,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setQuestion(null);
           flush();
           try {
-            const complete = finishRef.current === null || finishRef.current === "stop";
+            const complete = finishRef.current === "stop";
             await api.todoFinish(conversationId, complete);
             await refreshTodos(conversationId);
           } catch (e) {
@@ -2576,10 +2578,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     requestIdRef.current = null;
     setStreamingId(null);
     setStreaming(false);
+    setActiveTool(null);
     api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
     const conversationId = convIdRef.current;
     assistantMsgIdRef.current = null;
+    if (conversationId) {
+      void api
+        .todoFinish(conversationId, false)
+        .then(() => refreshTodos(conversationId))
+        .catch(reportError);
+    }
     if (assistantId && conversationId) {
       finishRef.current = "stopped";
       setMessages((prev) =>
@@ -2589,7 +2598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       finalize(assistantId, conversationId);
     }
-  }, [finalize]);
+  }, [finalize, refreshTodos, reportError]);
 
   const value: AppContextValue = {
     ready,
