@@ -85,6 +85,11 @@ describe("sessionOutputs", () => {
     );
   });
 
+  it("skips binary artifacts from save_artifact", () => {
+    const pptx = JSON.stringify([{ title: "deck", lang: "pptx", code: "UEsDBBQ=" }]);
+    expect(sessionOutputs([message({ artifacts: pptx })])).toEqual([]);
+  });
+
   it("adds written files as rows with their extension", () => {
     const log = toolLog([
       {

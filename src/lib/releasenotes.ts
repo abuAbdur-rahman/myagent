@@ -22,6 +22,38 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.8",
+    date: "2026-11-02",
+    summary:
+      "Deck Builder now produces designed decks with themes, cards, stats, styled charts and a render step, and the agent can look at rendered pages and extracted figures before delivering.",
+    changes: [
+      {
+        kind: "new",
+        text: "Deck Builder 2.0 adds seven themes (including ocean, forest, sunset and mono), eleven layouts, gradient backgrounds, accent shapes, stat cards, card grids, styled tables, themed charts, cropped images, page numbers and speaker notes.",
+      },
+      {
+        kind: "new",
+        text: "`deckb render` writes slide PNGs to `outputs/renders`, and `describe_image path=...` lets the agent inspect a rendered slide or an extracted figure through the vision fallback model.",
+      },
+      {
+        kind: "fixed",
+        text: "`save_artifact` rejects PDF, Office, image and zip content. The model can no longer base64 a finished PPTX into an artifact card, which removes the duplicate deck card and the slow binary round-trip.",
+      },
+      {
+        kind: "new",
+        text: "PDF Workbench adds `replace --find TEXT --with TEXT`, which covers a literal string and redraws it in place for simple fixes such as a matric number or date.",
+      },
+      {
+        kind: "improved",
+        text: "The PDF skill documents how to take a PDF apart (text, tables, images, renders) and rebuild a similar document from the extracted figures.",
+      },
+      {
+        kind: "fixed",
+        text: "Render PNGs and the working PDF under `outputs/renders` stay out of the Outputs panel, so only the real deliverable is listed.",
+      },
+    ],
+  },
+  {
     version: "0.8.7",
     date: "2026-11-02",
     summary:

@@ -1,7 +1,7 @@
 ---
 id: pdf-workbench
 title: PDF Workbench
-version: 1.0.0
+version: 1.1.0
 triggers: ["pdf", ".pdf", "merge pdf", "split pdf", "extract text", "pdf table", "ocr", "fill form", "watermark"]
 requires_tools: [python3, pdftotext, pdfimages, qpdf, tesseract, ocrmypdf]
 requires_imports:
@@ -73,6 +73,7 @@ All commands use the same 1-based syntax:
 | `stamp FILE --text TEXT [--image PNG] [--opacity 0.3] [--pages R]` | watermark |
 | `fields FILE` | list form fields |
 | `fill FILE --values JSON` | fill AcroForm fields |
+| `replace FILE --find TEXT --with TEXT` | replace simple text on a page and redraw it in place |
 | `encrypt FILE --user-password P` / `decrypt FILE --password P` | password handling |
 | `meta FILE [--set key=value ...]` | read or write metadata |
 | `make INPUT` | Markdown or HTML to PDF |
@@ -106,6 +107,41 @@ python3 "$SKILL_DIR/bin/pdfwb" verify outputs/scan.pdf --png
 - Keep the document title and language metadata set with `meta`.
 - Never deliver a generated PDF without `verify` and, for visual work,
   `render` plus a look at the PNG.
+
+## Looking at pages and figures
+
+`render` turns pages into PNGs and `images` extracts embedded figures. The
+agent can actually see them with the `describe_image` tool:
+
+```
+describe_image path=outputs/renders/page-01.png question="Is the header clear and is any text clipped?"
+describe_image path=outputs/report-img-004.png question="Describe figure 4, including colours and labels."
+```
+
+The image is sent to the configured vision fallback model (Settings → Models).
+If no fallback is set, the tool returns that error; ask the user to set one
+instead of guessing what the page looks like.
+
+## Rebuild from an existing PDF
+
+1. `inspect` the source.
+2. `text --layout` and `tables` to recover wording and numbers.
+3. `render` the pages you need and `describe_image` them to recover the look.
+4. `images` to extract figures, charts or logos.
+5. Write new HTML or Markdown that references those extracted files by path,
+   then `make` it. Keep the same palette and type scale you saw in the render.
+6. `verify --png` the new file and inspect the PNG.
+
+Do not claim a visual match from text alone. If the user asked for "similar
+aesthetic", look at the source render and the output render before answering.
+
+## Editing existing text
+
+`replace` covers simple, exact strings such as a matric number, a date or a
+name. It searches the page, covers the old box with `--cover` (default white)
+and redraws the replacement with `--ink` and `--font`. Use `--pages` to limit
+it. It cannot reflow a paragraph or preserve an unusual embedded font, so for
+larger edits rebuild the page from HTML instead and say what changed.
 
 ## Safety
 

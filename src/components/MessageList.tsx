@@ -30,7 +30,7 @@ import { splitArtifactSegments } from "../lib/artifacts";
 import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
 import { DocAttachmentCard } from "./AttachmentCard";
 import { isKnownTool } from "../lib/tools";
-import { selectOutputFiles } from "../lib/session";
+import { isBinaryArtifact, selectOutputFiles } from "../lib/session";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
 import { Button, IconButton } from "./ui";
@@ -488,7 +488,9 @@ function AssistantMessage({
                 />
               ),
             )}
-            {declared.map((artifact, position) => (
+            {declared
+              .filter((artifact) => !isBinaryArtifact(artifact.lang))
+              .map((artifact, position) => (
               <ArtifactCard
                 key={`tool-${position}`}
                 id={`${message.id}:tool:${position}`}

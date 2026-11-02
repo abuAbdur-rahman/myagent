@@ -25,9 +25,36 @@ const DELIVERABLE_EXT =
   /\.(pdf|docx|pptx|xlsx|odt|ods|odp|csv|tsv|md|txt|png|jpe?g|gif|webp|svg|zip|mp4|mp3)$/i;
 
 export function selectOutputFiles(paths: string[]): string[] {
-  const unique = [...new Set(paths)];
+  const unique = [...new Set(paths)].filter(
+    (path) => !/(^|[/\\])renders[/\\]/i.test(path),
+  );
   const hasDeliverable = unique.some((path) => DELIVERABLE_EXT.test(path));
   return unique.filter((path) => !hasDeliverable || DELIVERABLE_EXT.test(path));
+}
+
+const BINARY_ARTIFACT_LANGS = new Set([
+  "pdf",
+  "docx",
+  "doc",
+  "pptx",
+  "ppt",
+  "xlsx",
+  "xls",
+  "odt",
+  "ods",
+  "odp",
+  "zip",
+  "7z",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+]);
+
+export function isBinaryArtifact(lang: string): boolean {
+  return BINARY_ARTIFACT_LANGS.has(lang.toLowerCase());
 }
 
 export function sessionOutputs(messages: Message[]): SessionOutput[] {
@@ -43,6 +70,7 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
       }
     }
     for (const artifact of parseDeclaredArtifacts(message.artifacts)) {
+      if (isBinaryArtifact(artifact.lang)) continue;
       const key = `${artifact.title}::${artifact.lang}`;
       if (artifactKeys.has(key)) continue;
       artifactKeys.add(key);

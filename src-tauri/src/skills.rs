@@ -1553,7 +1553,7 @@ mod tests {
         let content = include_str!("../resources/skills/pdf-workbench/SKILL.md");
         let meta = parse_meta(content);
         assert_eq!(meta.id.as_deref(), Some("pdf-workbench"));
-        assert_eq!(meta.version.as_deref(), Some("1.0.0"));
+        assert_eq!(meta.version.as_deref(), Some("1.1.0"));
         assert!(meta.requires_tools.contains(&"qpdf".to_string()));
         assert!(meta.requires_python.contains(&"pypdf".to_string()));
         assert_eq!(meta.writes, vec!["outputs/"]);

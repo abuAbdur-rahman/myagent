@@ -15,6 +15,10 @@ use crate::websearch;
 
 const OUTPUT_CAP: usize = 32 * 1024;
 const ARTIFACT_CAP: usize = 200_000;
+const BINARY_ARTIFACT_LANGS: [&str; 18] = [
+    "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "odt", "ods", "odp", "zip", "7z", "png",
+    "jpg", "jpeg", "gif", "webp", "svg",
+];
 const COMMAND_CAP: usize = 8_000;
 const MEMORY_CAP: usize = 2_000;
 const MEMORY_KINDS: [&str; 4] = ["fact", "preference", "summary", "note"];
@@ -242,17 +246,19 @@ pub fn spill_image_write(
         .ok_or_else(|| "path not representable".to_string())
 }
 
-fn describe_image_args(args: &Value) -> Result<(u64, String), String> {
-    let index = args.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
-        "index is required (0-based into this turn's attached images)".to_string()
-    })?;
+fn describe_image_args(args: &Value) -> Result<(Option<u64>, Option<String>, String), String> {
+    let index = args.get("index").and_then(|v| v.as_u64());
+    let path = arg_str(args, "path");
+    if index.is_none() && path.is_none() {
+        return Err("index or path is required".to_string());
+    }
     let question = arg_str(args, "question")
         .filter(|q| !q.trim().is_empty())
         .unwrap_or_else(|| "Describe this image in detail.".to_string());
     if question.chars().count() > 1000 {
         return Err("question too long (max 1000 chars)".to_string());
     }
-    Ok((index, question))
+    Ok((index, path, question))
 }
 
 fn spill_stamp(file_name: &str) -> Option<u64> {
@@ -314,6 +320,34 @@ fn read_spill_image(
         Some("png") => "image/png",
         Some("gif") => "image/gif",
         Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    };
+    Ok((mime.to_string(), bytes))
+}
+
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+const IMAGE_READ_CAP: usize = 12 * 1024 * 1024;
+
+fn read_sandbox_image(app: &AppHandle, path: &str) -> Result<(String, Vec<u8>), String> {
+    let resolved = crate::sandbox::resolve_read(app, path)?;
+    let extension = resolved
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or("image path has no extension")?;
+    if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(format!("not an image: .{extension}"));
+    }
+    let meta = std::fs::metadata(&resolved).map_err(|e| e.to_string())?;
+    if meta.len() > IMAGE_READ_CAP as u64 {
+        return Err("image is larger than 12 MB".to_string());
+    }
+    let bytes = std::fs::read(&resolved).map_err(|e| e.to_string())?;
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
         _ => "image/jpeg",
     };
     Ok((mime.to_string(), bytes))
@@ -615,12 +649,12 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "save_artifact",
-                "description": "Open a titled code artifact in the user's side panel (with copy and download). Use for complete deliverables the user will reuse. For interactive pages use language html.",
+                "description": "Open a titled text/code artifact in the user's side panel (with copy and download). Never pass office or binary files (pdf, docx, pptx, xlsx, images, zip) or base64: write those with a skill and they appear as output cards automatically.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "title": { "type": "string" },
-                        "language": { "type": "string", "description": "Short identifier such as html, python, rust, markdown." },
+                        "language": { "type": "string", "description": "Short identifier such as html, python, rust, markdown. Text/code only." },
                         "content": { "type": "string" },
                     },
                     "required": ["title", "language", "content"],
@@ -774,14 +808,14 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "describe_image",
-                "description": "Read one attached image the current model cannot see (blind-model routing). The image is re-sent to the configured vision fallback model; the description returns as the tool result. Call once per image, with a specific question about what to look for.",
+                "description": "Look at an image and answer a question about it. Use index for an image attached this turn, or path for an image inside the project folder such as a rendered slide or a figure extracted from a PDF. The image goes to the configured vision fallback model and its answer returns as text. Use it to check generated slides, PDFs and extracted figures before delivering, and call it with a specific question.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "index": { "type": "integer", "minimum": 0, "description": "0-based index into this turn's attached images, oldest first." },
+                        "path": { "type": "string", "description": "Image path relative to the project folder, for example outputs/renders/slide-01.png." },
                         "question": { "type": "string", "description": "What to look for in the image. Defaults to a general description." },
                     },
-                    "required": ["index"],
                     "additionalProperties": false,
                 },
             },
@@ -808,7 +842,7 @@ pub fn tool_specs(
     if let Some(list) = specs.as_array_mut() {
         list.retain(|spec| {
             let name = spec["function"]["name"].as_str().unwrap_or_default();
-            (include_describe_image || name != "describe_image")
+            (include_describe_image || include_sandbox || name != "describe_image")
                 && (include_read_document || name != "read_document")
                 && (include_sandbox || !name.starts_with("sandbox_"))
         });
@@ -2087,6 +2121,11 @@ pub async fn execute(
             let language = arg_str(&args, "language")
                 .ok_or("missing language")?
                 .to_lowercase();
+            if BINARY_ARTIFACT_LANGS.contains(&language.as_str()) {
+                return Err(format!(
+                    "{language} files are outputs, not artifacts. Write the file with the skill and it will appear as an output card. save_artifact is for text and code only."
+                ));
+            }
             let content = args
                 .get("content")
                 .and_then(|v| v.as_str())
@@ -2327,8 +2366,7 @@ pub async fn execute(
             })
         }
         "describe_image" => {
-            let (index, question) = describe_image_args(&args)?;
-            let conversation = conversation_id.ok_or("no active conversation")?;
+            let (index, path, question) = describe_image_args(&args)?;
             let fallback = context
                 .vision_fallback_model
                 .filter(|m| !m.trim().is_empty())
@@ -2351,7 +2389,14 @@ pub async fn execute(
                     context.connection_id.ok_or("no provider configured")?,
                 ),
             };
-            let image = read_spill_image(app, conversation, index)?;
+            let image = match (index, path) {
+                (Some(index), _) => {
+                    let conversation = conversation_id.ok_or("no active conversation")?;
+                    read_spill_image(app, conversation, index)?
+                }
+                (None, Some(path)) => read_sandbox_image(app, &path)?,
+                _ => return Err("index or path is required".to_string()),
+            };
             let key = vault::get_api_key(connection).map_err(|e| e.to_string())?;
             let client = app.state::<reqwest::Client>();
             let body = describe_image_via_fallback(
@@ -2820,10 +2865,16 @@ mod tests {
     #[test]
     fn describe_image_args_validates() {
         assert!(describe_image_args(&serde_json::json!({})).is_err());
-        let (index, question) =
+        let (index, path, question) =
             describe_image_args(&serde_json::json!({"index": 2})).expect("defaults");
-        assert_eq!(index, 2);
+        assert_eq!(index, Some(2));
+        assert_eq!(path, None);
         assert!(question.contains("Describe"));
+        let (index, path, _) =
+            describe_image_args(&serde_json::json!({"path": "outputs/renders/slide-01.png"}))
+                .expect("path");
+        assert_eq!(index, None);
+        assert_eq!(path.as_deref(), Some("outputs/renders/slide-01.png"));
         assert!(
             describe_image_args(
                 &serde_json::json!({"index": 0, "question": "x".repeat(1001).as_str()})
