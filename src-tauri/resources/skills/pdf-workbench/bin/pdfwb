@@ -515,7 +515,7 @@ def cmd_replace(args) -> None:
     guard_not_input(source, target)
     writer = writer_for()
     replaced = 0
-    with pdfplumber.open(source) as document:
+    with pdfplumber.open(source, password=args.password) as document:
         for index, page in enumerate(reader.pages):
             if index in selected:
                 found = document.pages[index].search(

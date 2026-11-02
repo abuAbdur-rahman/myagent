@@ -185,7 +185,8 @@ def validate_spec(spec: dict) -> list[str]:
                 errors.append(f"{label} has too many stats (max 4)")
             else:
                 for item in items:
-                    if not isinstance(item, dict) or not isinstance(item.get("value"), str):
+                    value = item.get("value") if isinstance(item, dict) else None
+                    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
                         errors.append(f"{label}.items entries need a value")
                         break
         if layout == "quote":

@@ -141,7 +141,9 @@ aesthetic", look at the source render and the output render before answering.
 name. It searches the page, covers the old box with `--cover` (default white)
 and redraws the replacement with `--ink` and `--font`. Use `--pages` to limit
 it. It cannot reflow a paragraph or preserve an unusual embedded font, so for
-larger edits rebuild the page from HTML instead and say what changed.
+larger edits rebuild the page from HTML instead and say what changed. The old
+string remains in the underlying text layer: this is a visual fix, not
+redaction. Do not use it to remove secrets.
 
 ## Safety
 
