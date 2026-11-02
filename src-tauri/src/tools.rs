@@ -19,6 +19,29 @@ const BINARY_ARTIFACT_LANGS: [&str; 18] = [
     "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "odt", "ods", "odp", "zip", "7z", "png",
     "jpg", "jpeg", "gif", "webp", "svg",
 ];
+
+fn looks_binary_artifact(content: &str) -> bool {
+    let head = content.trim_start();
+    if head.starts_with("%PDF-")
+        || head.starts_with("PK\u{3}\u{4}")
+        || head.starts_with("UEsDB")
+        || head.starts_with("JVBERi0")
+        || head.starts_with("iVBOR")
+        || head.starts_with("/9j/")
+    {
+        return true;
+    }
+    if !head.contains('\n') && head.len() > 4096 {
+        let allowed = head
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+            .count();
+        if allowed * 100 >= head.chars().count() * 98 {
+            return true;
+        }
+    }
+    false
+}
 const COMMAND_CAP: usize = 8_000;
 const MEMORY_CAP: usize = 2_000;
 const MEMORY_KINDS: [&str; 4] = ["fact", "preference", "summary", "note"];
@@ -330,6 +353,11 @@ const IMAGE_READ_CAP: usize = 12 * 1024 * 1024;
 
 fn read_sandbox_image(app: &AppHandle, path: &str) -> Result<(String, Vec<u8>), String> {
     let resolved = crate::sandbox::resolve_read(app, path)?;
+    let outputs = crate::sandbox::resolve_read(app, "outputs")
+        .map_err(|_| "create outputs/ before inspecting a generated image".to_string())?;
+    if !resolved.starts_with(&outputs) {
+        return Err("describe_image can only read images inside outputs/".to_string());
+    }
     let extension = resolved
         .extension()
         .and_then(|e| e.to_str())
@@ -813,7 +841,7 @@ pub fn tool_specs(
                     "type": "object",
                     "properties": {
                         "index": { "type": "integer", "minimum": 0, "description": "0-based index into this turn's attached images, oldest first." },
-                        "path": { "type": "string", "description": "Image path relative to the project folder, for example outputs/renders/slide-01.png." },
+                        "path": { "type": "string", "description": "Image path inside outputs/, for example outputs/renders/slide-01.png." },
                         "question": { "type": "string", "description": "What to look for in the image. Defaults to a general description." },
                     },
                     "additionalProperties": false,
@@ -842,7 +870,7 @@ pub fn tool_specs(
     if let Some(list) = specs.as_array_mut() {
         list.retain(|spec| {
             let name = spec["function"]["name"].as_str().unwrap_or_default();
-            (include_describe_image || include_sandbox || name != "describe_image")
+            (include_describe_image || name != "describe_image")
                 && (include_read_document || name != "read_document")
                 && (include_sandbox || !name.starts_with("sandbox_"))
         });
@@ -2132,6 +2160,12 @@ pub async fn execute(
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty())
                 .ok_or("missing content")?;
+            if looks_binary_artifact(&content) {
+                return Err(
+                    "that looks like binary or base64 data. save_artifact is for text and code only; write office files with a skill so they appear as output cards."
+                        .to_string(),
+                );
+            }
             if title.chars().count() > 120 {
                 return Err("title too long (max 120 chars)".to_string());
             }
@@ -2860,6 +2894,16 @@ mod tests {
         assert!(decode_data_url("data:image/png,plain").is_err());
         assert!(decode_data_url("not-a-url").is_err());
         assert!(decode_data_url("data:image/png;base64,!!!").is_err());
+    }
+
+    #[test]
+    fn binary_artifact_payloads_are_detected() {
+        assert!(looks_binary_artifact("UEsDBBQAAAAI"));
+        assert!(looks_binary_artifact("%PDF-1.7"));
+        assert!(looks_binary_artifact("JVBERi0xLjQK"));
+        assert!(looks_binary_artifact(&"A".repeat(5000)));
+        assert!(!looks_binary_artifact("const answer = 42;\n"));
+        assert!(!looks_binary_artifact("# Report\n\nSome text."));
     }
 
     #[test]

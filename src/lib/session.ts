@@ -26,7 +26,7 @@ const DELIVERABLE_EXT =
 
 export function selectOutputFiles(paths: string[]): string[] {
   const unique = [...new Set(paths)].filter(
-    (path) => !/(^|[/\\])renders[/\\]/i.test(path),
+    (path) => !/(^|[/\\])outputs[/\\]renders[/\\]/i.test(path),
   );
   const hasDeliverable = unique.some((path) => DELIVERABLE_EXT.test(path));
   return unique.filter((path) => !hasDeliverable || DELIVERABLE_EXT.test(path));
@@ -70,7 +70,6 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
       }
     }
     for (const artifact of parseDeclaredArtifacts(message.artifacts)) {
-      if (isBinaryArtifact(artifact.lang)) continue;
       const key = `${artifact.title}::${artifact.lang}`;
       if (artifactKeys.has(key)) continue;
       artifactKeys.add(key);
@@ -96,7 +95,12 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
     });
   }
 
-  return [...artifacts, ...files];
+  const kept = artifacts.filter(
+    (artifact) =>
+      !isBinaryArtifact(artifact.lang) ||
+      !writtenPaths.some((path) => path.toLowerCase().endsWith(`.${artifact.lang}`)),
+  );
+  return [...kept, ...files];
 }
 
 export interface SessionToolUsage {

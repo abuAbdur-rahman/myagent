@@ -489,7 +489,13 @@ function AssistantMessage({
               ),
             )}
             {declared
-              .filter((artifact) => !isBinaryArtifact(artifact.lang))
+              .filter(
+                (artifact) =>
+                  !isBinaryArtifact(artifact.lang) ||
+                  !outputFiles.some((path) =>
+                    path.toLowerCase().endsWith(`.${artifact.lang}`),
+                  ),
+              )
               .map((artifact, position) => (
               <ArtifactCard
                 key={`tool-${position}`}

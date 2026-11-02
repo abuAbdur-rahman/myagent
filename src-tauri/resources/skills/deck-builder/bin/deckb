@@ -596,7 +596,7 @@ def build_slide(slide, source, theme, meta, page, total, gradient):
         return
 
     top = 1.95
-    if layout != "quote":
+    if layout not in {"quote", "closing"}:
         top = heading(slide, theme, source.get("title", ""), source.get("eyebrow"))
 
     if layout == "agenda":

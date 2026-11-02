@@ -85,9 +85,25 @@ describe("sessionOutputs", () => {
     );
   });
 
-  it("skips binary artifacts from save_artifact", () => {
+  it("hides a binary artifact when the real file exists", () => {
     const pptx = JSON.stringify([{ title: "deck", lang: "pptx", code: "UEsDBBQ=" }]);
-    expect(sessionOutputs([message({ artifacts: pptx })])).toEqual([]);
+    const log = toolLog([
+      {
+        id: "1",
+        name: "sandbox_run",
+        summary: "Build deck",
+        status: "ok",
+        preview: null,
+        files: ["outputs/deck.pptx"],
+      },
+    ]);
+    const outputs = sessionOutputs([message({ artifacts: pptx, tool_log: log })]);
+    expect(outputs.map((o) => o.title)).toEqual(["deck.pptx"]);
+  });
+
+  it("keeps a binary artifact when no file was written", () => {
+    const pptx = JSON.stringify([{ title: "deck", lang: "pptx", code: "UEsDBBQ=" }]);
+    expect(sessionOutputs([message({ artifacts: pptx })])).toHaveLength(1);
   });
 
   it("adds written files as rows with their extension", () => {

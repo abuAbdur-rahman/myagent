@@ -151,7 +151,10 @@ redaction. Do not use it to remove secrets.
   document.
 - Inputs are capped at 100 MB. OCR is capped at 200 pages unless `--force`.
 - Decrypt only with a password the user gave in this chat. Never brute force.
-- This skill has no network access. Never upload a file.
+- This skill has no network access and never uploads a file. Looking at a
+  render with `describe_image` is a separate app tool that sends that one
+  image to the configured vision provider; use it only when the user's data
+  may go to that provider.
 - Write only inside the project or `outputs/`. The input file is never
   overwritten.
 

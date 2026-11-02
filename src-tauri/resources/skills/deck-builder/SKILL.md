@@ -36,10 +36,9 @@ an output card automatically.
 6. `deckb check outputs/deck.pptx` — reopens the file and reports slides/charts.
 7. Optional: `deckb render outputs/deck.pptx` writes `outputs/renders/slide-*.png`
    so the user can inspect the slides without opening PowerPoint.
-8. If a vision fallback is configured, inspect the rendered cover and one
-   content slide with `describe_image path=outputs/renders/slide-01.png` and
-   `.../slide-03.png` before delivering. Fix the spec if text is clipped or a
-   slide looks empty.
+8. If a vision fallback is configured, list `outputs/renders`, then inspect the
+   cover and one content slide with `describe_image path=outputs/renders/<file>`
+   before delivering. Fix the spec if text is clipped or a slide looks empty.
 
 ## Spec
 
