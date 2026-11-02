@@ -1,0 +1,2 @@
+*.sh text eol=lf
+src-tauri/resources/skills/*/bin/* text eol=lf

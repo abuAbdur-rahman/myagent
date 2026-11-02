@@ -22,6 +22,22 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.8.6",
+    date: "2026-11-02",
+    summary:
+      "Skill self-tests now run from LF line endings on Windows-packaged skills, so deck, document, sheet and PDF checks no longer fail with 'Illegal option -' before the first command.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "Skill scripts and tests are forced to LF in git and in the installed resources; `sh` no longer sees a carriage return in `set -eu` or path values.",
+      },
+      {
+        kind: "fixed",
+        text: "Deck Builder, DOCX Writer, Sheet Builder and PDF Workbench Run self-test now execute their golden tests from the packaged app.",
+      },
+    ],
+  },
+  {
     version: "0.8.5",
     date: "2026-11-01",
     summary:
