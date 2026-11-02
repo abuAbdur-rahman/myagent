@@ -2185,23 +2185,23 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
     history: &mut Vec<serde_json::Value>,
     max_iterations: usize,
     replay_reasoning: bool,
-) -> AppResult<String> {
+) -> AppResult<(String, bool)> {
     for _ in 0..max_iterations {
         let step = match model.stream_step(history.as_slice(), true).await {
             Ok(Some(step)) => step,
-            Ok(None) => return Ok(String::new()),
+            Ok(None) => return Ok((String::new(), false)),
             Err(error)
                 if is_retryable_tools_error(&error)
                     && !is_content_blocked_error(&error)
                     && !history_has_tool_message(history) =>
             {
                 model.stream_step(history.as_slice(), false).await?;
-                return Ok(String::new());
+                return Ok((String::new(), false));
             }
             Err(error) => return Err(error),
         };
         if step.calls.is_empty() {
-            return Ok(step.text);
+            return Ok((step.text, false));
         }
         history.push(assistant_tool_message(
             &step.text,
@@ -2213,12 +2213,12 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
         for call in &step.calls {
             match tools.run(call, history).await? {
                 StepControl::Continue => {}
-                StepControl::StopTurn => return Ok(step.text),
+                StepControl::StopTurn => return Ok((step.text, false)),
             }
         }
     }
     model.stream_step(history.as_slice(), false).await?;
-    Ok(String::new())
+    Ok((String::new(), true))
 }
 
 struct RealModel<'a> {
@@ -3157,7 +3157,14 @@ async fn run_agentic(
         children: 0,
         untrusted: req.subagent,
     };
-    agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await
+    let (text, exhausted) =
+        agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await?;
+    if exhausted {
+        on_event.send(StreamEvent::Finish {
+            reason: Some("step_limit".to_string()),
+        });
+    }
+    Ok(text)
 }
 
 async fn stream_completion(

@@ -1,6 +1,6 @@
 import { Loader2, Mic } from "lucide-react";
 import { useApp } from "../lib/store";
-import { pillState, type PillState } from "../lib/activity";
+import { pillState, toolActivityLabel, type PillState } from "../lib/activity";
 import { cn } from "../lib/utils";
 
 const LABELS: Record<PillState, string> = {
@@ -16,11 +16,13 @@ const HINTS: Partial<Record<PillState, string>> = {
 };
 
 export function ActivityPill({ placement }: { placement: "center" | "inline" }) {
-  const { messages, streaming, compacting, voicePhase } = useApp();
+  const { messages, streaming, compacting, voicePhase, activeTool } = useApp();
   const state = pillState({ messages, streaming, compacting, voice: voicePhase });
   if (state === null) return null;
 
   const voice = state === "recording" || state === "transcribing";
+  const toolLabel = activeTool ? toolActivityLabel(activeTool) : null;
+  const label = toolLabel ?? LABELS[state];
 
   return (
     <div
@@ -36,7 +38,7 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
       {voice ? (
         <Mic size={13} className={state === "recording" ? "text-danger" : undefined} aria-hidden="true" />
       ) : null}
-      <span className="font-medium text-text">{LABELS[state]}</span>
+      <span className="font-medium text-text">{label}</span>
       {HINTS[state] && <span>{HINTS[state]}</span>}
       {state === "recording" ? (
         <span className="size-1.5 animate-pulse rounded-full bg-danger" aria-hidden="true" />

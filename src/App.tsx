@@ -209,7 +209,7 @@ function Shell() {
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <TurnCards />
                   {pill === "inline" && (streaming || compacting || voicePhase !== "idle") ? (
-                    <div className="mb-1.5 flex h-6 items-center justify-center">
+                    <div className="mb-3 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
                     </div>
                   ) : showContextBar ? (

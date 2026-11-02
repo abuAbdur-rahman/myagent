@@ -38,11 +38,13 @@ function Section({
   title,
   count,
   empty,
+  hideCount,
   children,
 }: {
   title: string;
   count?: number;
   empty: string;
+  hideCount?: boolean;
   children: React.ReactNode;
 }) {
   const isEmpty = count === 0;
@@ -52,8 +54,10 @@ function Section({
         <h3 className="m-0 text-[11px] font-semibold uppercase tracking-wider text-muted">
           {title}
         </h3>
-        {typeof count === "number" && count > 0 && (
-          <span className="text-[11px] tabular-nums text-muted">{count}</span>
+        {!hideCount && typeof count === "number" && count > 0 && (
+          <span className="text-[11px] tabular-nums text-muted">
+            {count} {count === 1 ? "item" : "items"}
+          </span>
         )}
       </div>
       {isEmpty ? <p className="m-0 text-xs text-muted">{empty}</p> : children}
@@ -204,6 +208,7 @@ export function SessionPanel() {
         <Section
           title="Used in this session"
           count={usage.docs.length + (usage.images > 0 ? 1 : 0) + (usage.tools.length > 0 ? 1 : 0)}
+          hideCount
           empty="Nothing used yet."
         >
           <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-xs">

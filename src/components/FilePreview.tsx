@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, FileText } from "lucide-react";
+import { Download, ExternalLink, FileText } from "lucide-react";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { save } from "@tauri-apps/plugin-dialog";
 import * as api from "../lib/api";
 import { toast } from "../lib/toast";
 import { errorText } from "../lib/utils";
@@ -30,6 +31,18 @@ export function FilePreview({ path }: { path: string }) {
     };
   }, [path]);
 
+  const download = async () => {
+    const name = path.split(/[\\/]/).pop() || "artifact";
+    try {
+      const destination = await save({ defaultPath: name });
+      if (!destination) return;
+      await api.artifactExport(path, destination);
+      toast("Saved to your PC");
+    } catch (reason) {
+      toast(errorText(reason));
+    }
+  };
+
   if (state.status === "loading") {
     return (
       <div className="flex flex-1 items-center gap-2 p-4 text-sm text-muted">
@@ -57,17 +70,22 @@ export function FilePreview({ path }: { path: string }) {
         <span className="text-xs text-muted">
           Up to {preview.images.length} page{preview.images.length === 1 ? "" : "s"} converted
         </span>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            void Promise.resolve(openPath(preview.absolute)).catch((error) =>
-              toast(errorText(error)),
-            )
-          }
-        >
-          <ExternalLink size={12} /> Open file
-        </Button>
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost" onClick={() => void download()}>
+            <Download size={12} /> Download
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              void Promise.resolve(openPath(preview.absolute)).catch((error) =>
+                toast(errorText(error)),
+              )
+            }
+          >
+            <ExternalLink size={12} /> Open file
+          </Button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-surface-2 p-3">
         <div className="mx-auto flex max-w-[900px] flex-col gap-3">

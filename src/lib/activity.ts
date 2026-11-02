@@ -10,6 +10,31 @@ export function pillPlacement(hasMessages: boolean): PillPlacement {
   return hasMessages ? "inline" : "center";
 }
 
+const TOOL_LABELS: Record<string, string> = {
+  web_search: "Searching the web",
+  web_fetch: "Reading a page",
+  research_run: "Researching",
+  run_powershell: "Working in PowerShell",
+  sandbox_run: "Working in the sandbox",
+  sandbox_read: "Reading a file",
+  sandbox_glob: "Listing files",
+  sandbox_grep: "Searching files",
+  sandbox_write: "Writing a file",
+  sandbox_edit: "Editing a file",
+  skill: "Loading a skill",
+  read_document: "Reading a document",
+  describe_image: "Looking at an image",
+  delegate_task: "Delegating a task",
+  save_artifact: "Saving an artifact",
+  todo_write: "Updating the checklist",
+  todo_set: "Updating the checklist",
+};
+
+export function toolActivityLabel(name: string | null): string | null {
+  if (!name) return null;
+  return TOOL_LABELS[name] ?? "Working";
+}
+
 export function activityState(messages: Message[], streaming: boolean): ActivityState | null {
   if (!streaming) return null;
   const last = messages[messages.length - 1];

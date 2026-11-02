@@ -92,6 +92,7 @@ vi.mock("./api", () => ({
   spillImageWrite: async () => "",
   suggestTitle: async () => null,
   summarize: async () => "",
+  todoFinish: async () => undefined,
 }));
 
 import * as api from "./api";
@@ -156,7 +157,7 @@ describe("streamTurn", () => {
 
     const assistant = app?.messages[app.messages.length - 1];
     expect(assistant?.role).toBe("assistant");
-    expect(assistant?.content).toBe("Hello world");
+    expect(assistant?.content).toBe("Hello\n\nworld");
     expect(assistant?.total_tokens).toBe(12);
     expect(assistant?.finish_reason).toBe("stop");
     expect(app?.streaming).toBe(false);

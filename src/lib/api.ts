@@ -432,6 +432,14 @@ export function artifactPreview(path: string) {
   return invoke<ArtifactPreview>("sandbox_preview", { path });
 }
 
+export function artifactExport(path: string, destination: string) {
+  return invoke<string>("artifact_export", { path, destination });
+}
+
+export function todoFinish(conversationId: string, complete: boolean) {
+  return invoke<void>("todo_finish", { conversationId, complete });
+}
+
 export function skillsDoctor(id: string) {
   return invoke<SkillDoctorResult>("skills_doctor", { id });
 }
