@@ -21,7 +21,8 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
   if (state === null) return null;
 
   const voice = state === "recording" || state === "transcribing";
-  const toolLabel = activeTool ? toolActivityLabel(activeTool) : null;
+  const toolLabel =
+    state === "thinking" || state === "writing" ? toolActivityLabel(activeTool) : null;
   const label = toolLabel ?? LABELS[state];
 
   return (

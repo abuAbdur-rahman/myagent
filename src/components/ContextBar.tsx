@@ -93,11 +93,14 @@ export function ContextBar() {
     );
   }
 
-  const title = real && limitKnown
-    ? `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`
-    : limitKnown
-      ? `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`
-      : `≈ ${formatTokens(tokens)} tokens; window assumed ${formatTokens(limit)} because this model did not report one`;
+  let title: string;
+  if (real && limitKnown) {
+    title = `${formatTokens(tokens)} / ${formatTokens(limit)} tokens (provider-reported)`;
+  } else if (limitKnown) {
+    title = `≈ ${formatTokens(tokens)} / ${formatTokens(limit)} tokens (chars/4 estimate)`;
+  } else {
+    title = `≈ ${formatTokens(tokens)} tokens; window assumed ${formatTokens(limit)} because this model did not report one`;
+  }
 
   return (
     <div

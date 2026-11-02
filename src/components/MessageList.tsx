@@ -386,6 +386,10 @@ function ArtifactCard({
   );
 }
 
+function isPreviewableFile(path: string): boolean {
+  return /\.(pdf|docx|pptx|xlsx|odt|ods|odp)$/i.test(path);
+}
+
 function FileCard({ path }: { path: string }) {
   const { openArtifact } = useApp();
   const title = path.split(/[\\/]/).pop() || path;
@@ -425,6 +429,7 @@ function AssistantMessage({
   streamingId,
   resetKey,
   collapseToolCalls,
+  outputFiles,
   onRemember,
 }: {
   message: Message;
@@ -434,6 +439,7 @@ function AssistantMessage({
   streamingId: string | null;
   resetKey: string | null;
   collapseToolCalls: boolean;
+  outputFiles: string[];
   onRemember: (content: string) => Promise<void>;
 }) {
   const live = streaming && streamingId === message.id;
@@ -441,10 +447,6 @@ function AssistantMessage({
   const fenceCount = segments.filter((s) => s.kind === "artifact").length;
   const declared = useMemo(() => parseDeclaredArtifacts(message.artifacts), [message.artifacts]);
   const toolEntries = useMemo(() => parseToolLog(message.tool_log), [message.tool_log]);
-  const outputFiles = useMemo(
-    () => selectOutputFiles(toolEntries.flatMap((entry) => entry.files ?? [])),
-    [toolEntries],
-  );
   const [rememberLabel, setRememberLabel] = useState("Remember");
   const busy = live && message.content.length === 0;
 
@@ -495,7 +497,7 @@ function AssistantMessage({
                 code={artifact.code}
               />
             ))}
-            {outputFiles.map((path) => (
+            {outputFiles.filter(isPreviewableFile).map((path) => (
               <FileCard key={path} path={path} />
             ))}
             {live && <span className="caret" aria-hidden="true" />}
@@ -649,6 +651,21 @@ export function MessageList() {
   );
 
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
+  const outputFilesByMessage = useMemo(() => {
+    const allPaths = messages.flatMap((message) =>
+      parseToolLog(message.tool_log).flatMap((entry) => entry.files ?? []),
+    );
+    const selected = new Set(selectOutputFiles(allPaths));
+    const map = new Map<string, string[]>();
+    for (const message of messages) {
+      const own = parseToolLog(message.tool_log).flatMap((entry) => entry.files ?? []);
+      map.set(
+        message.id,
+        selectOutputFiles(own).filter((path) => selected.has(path)),
+      );
+    }
+    return map;
+  }, [messages]);
   const activeConversation =
     conversations.find((c) => c.id === activeConversationId) ?? null;
   const activeModel = activeConversation?.model ?? null;
@@ -695,6 +712,7 @@ export function MessageList() {
                 streamingId={streamingId}
                 resetKey={activeConversationId}
                 collapseToolCalls={collapseToolCalls}
+                outputFiles={outputFilesByMessage.get(message.id) ?? []}
                 onRemember={remember}
               />
             </div>

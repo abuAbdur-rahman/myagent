@@ -28,11 +28,22 @@ const TOOL_LABELS: Record<string, string> = {
   save_artifact: "Saving an artifact",
   todo_write: "Updating the checklist",
   todo_set: "Updating the checklist",
+  ask_user: "Waiting for your answer",
+  get_time: "Checking the time",
+  remember: "Saving a memory",
+  memory_search: "Searching memory",
 };
 
 export function toolActivityLabel(name: string | null): string | null {
   if (!name) return null;
-  return TOOL_LABELS[name] ?? "Working";
+  const known = TOOL_LABELS[name];
+  if (known) return known;
+  const readable = name
+    .replace(/^mcp__/, "")
+    .replace(/__/g, " / ")
+    .replace(/_/g, " ")
+    .trim();
+  return readable ? `Working: ${readable}` : "Working";
 }
 
 export function activityState(messages: Message[], streaming: boolean): ActivityState | null {

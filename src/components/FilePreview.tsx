@@ -31,18 +31,6 @@ export function FilePreview({ path }: { path: string }) {
     };
   }, [path]);
 
-  const download = async () => {
-    const name = path.split(/[\\/]/).pop() || "artifact";
-    try {
-      const destination = await save({ defaultPath: name });
-      if (!destination) return;
-      await api.artifactExport(path, destination);
-      toast("Saved to your PC");
-    } catch (reason) {
-      toast(errorText(reason));
-    }
-  };
-
   if (state.status === "loading") {
     return (
       <div className="flex flex-1 items-center gap-2 p-4 text-sm text-muted">
@@ -54,7 +42,10 @@ export function FilePreview({ path }: { path: string }) {
   if (state.status === "error") {
     return (
       <div className="flex flex-1 flex-col gap-2 p-4 text-sm">
-        <p className="m-0 text-muted">{state.message}</p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="m-0 text-muted">{state.message}</p>
+          <DownloadButton path={path} />
+        </div>
         <p className="m-0 text-xs text-muted">
           Office previews use the sandbox LibreOffice image. Enable or rebuild the sandbox, then
           reopen this file.
@@ -71,9 +62,7 @@ export function FilePreview({ path }: { path: string }) {
           Up to {preview.images.length} page{preview.images.length === 1 ? "" : "s"} converted
         </span>
         <div className="flex gap-1">
-          <Button size="sm" variant="ghost" onClick={() => void download()}>
-            <Download size={12} /> Download
-          </Button>
+          <DownloadButton path={path} />
           <Button
             size="sm"
             variant="ghost"
@@ -110,5 +99,25 @@ export function FilePreview({ path }: { path: string }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function DownloadButton({ path }: { path: string }) {
+  const download = async () => {
+    const name = path.split(/[\\/]/).pop() || "artifact";
+    try {
+      const destination = await save({ defaultPath: name });
+      if (!destination) return;
+      await api.artifactExport(path, destination);
+      toast("Saved to your PC");
+    } catch (reason) {
+      toast(errorText(reason));
+    }
+  };
+
+  return (
+    <Button size="sm" variant="ghost" onClick={() => void download()}>
+      <Download size={12} /> Download
+    </Button>
   );
 }
