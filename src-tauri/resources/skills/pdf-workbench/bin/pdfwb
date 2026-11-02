@@ -500,6 +500,97 @@ def cmd_stamp(args) -> None:
     emit({"ok": True, "file": str(target), "pages": len(selected)})
 
 
+def replacement_font(font: str, text: str) -> str:
+    if font.lower().endswith(".ttf"):
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        name = Path(font).stem
+        pdfmetrics.registerFont(TTFont(name, font))
+        return name
+    if all(ord(character) < 128 for character in text):
+        return font
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            pdfmetrics.registerFont(TTFont("DeckbUnicode", candidate))
+            return "DeckbUnicode"
+    fail("replacement text needs a Unicode font; pass --font /path/font.ttf", 3)
+
+
+def cmd_replace(args) -> None:
+    source = input_file(args.file)
+    if not args.find:
+        fail("--find is required")
+    pdfplumber = module("pdfplumber")
+    reportlab_canvas = module("reportlab.pdfgen.canvas", "reportlab")
+    reportlab_lib = module("reportlab.lib.colors", "reportlab")
+    from io import BytesIO
+
+    reader = reader_for(source, args.password)
+    selected = page_numbers(args.pages, len(reader.pages)) if args.pages else list(range(len(reader.pages)))
+    target = output_path(args.out, f"{source.stem}-edited.pdf")
+    guard_not_input(source, target)
+    writer = writer_for()
+    writer.clone_document_from_reader(reader)
+    font = replacement_font(args.font, args.with_text)
+    replaced = 0
+    with pdfplumber.open(source, password=args.password) as document:
+        for index, page in enumerate(writer.pages):
+            if index not in selected:
+                continue
+            rotation = int(page.get("/Rotate", 0) or 0) % 360
+            if rotation:
+                fail(
+                    f"replace does not support rotated pages (page {index + 1} is {rotation}°); rebuild the page instead",
+                    3,
+                )
+            found = document.pages[index].search(
+                args.find, regex=False, case=args.case_sensitive
+            ) or []
+            if not found:
+                continue
+            buffer = BytesIO()
+            width = float(page.mediabox.width)
+            height = float(page.mediabox.height)
+            overlay = reportlab_canvas.Canvas(buffer, pagesize=(width, height))
+            for box in found:
+                text_height = max(6.0, float(box["bottom"]) - float(box["top"]))
+                size = text_height * 1.15
+                overlay.saveState()
+                overlay.setFillColor(reportlab_lib.HexColor(f"#{args.cover}"))
+                overlay.rect(
+                    float(box["x0"]) - 1.5,
+                    height - float(box["bottom"]) - 1.0,
+                    float(box["x1"]) - float(box["x0"]) + 3.0,
+                    text_height + 2.0,
+                    stroke=0,
+                    fill=1,
+                )
+                overlay.setFillColor(reportlab_lib.HexColor(f"#{args.ink}"))
+                overlay.setFont(font, size)
+                overlay.drawString(
+                    float(box["x0"]),
+                    height - float(box["bottom"]) + text_height * 0.18,
+                    args.with_text,
+                )
+                overlay.restoreState()
+                replaced += 1
+            overlay.save()
+            buffer.seek(0)
+            overlay_reader = module("pypdf", "pypdf").PdfReader(buffer)
+            page.merge_page(overlay_reader.pages[0])
+    writer.write(str(target))
+    emit({"ok": True, "file": str(target), "replaced": replaced})
+
+
 def cmd_fields(args) -> None:
     source = input_file(args.file)
     reader = reader_for(source, args.password)
@@ -725,6 +816,18 @@ def build_parser() -> argparse.ArgumentParser:
     fill.add_argument("--values", required=True)
     fill.add_argument("--password")
     fill.add_argument("--out")
+
+    replace = command("replace", cmd_replace, "replace literal text and keep layout")
+    replace.add_argument("file")
+    replace.add_argument("--find", required=True)
+    replace.add_argument("--with", dest="with_text", required=True)
+    replace.add_argument("--pages")
+    replace.add_argument("--password")
+    replace.add_argument("--out")
+    replace.add_argument("--cover", default="FFFFFF", help="background hex used to cover old text")
+    replace.add_argument("--ink", default="000000", help="replacement text hex")
+    replace.add_argument("--font", default="Helvetica")
+    replace.add_argument("--case-sensitive", action="store_true")
 
     encrypt = command("encrypt", cmd_encrypt, "password-protect a PDF")
     encrypt.add_argument("file")

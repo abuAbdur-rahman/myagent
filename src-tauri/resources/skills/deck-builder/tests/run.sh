@@ -22,11 +22,13 @@ PY
 
 cat > "$WORK/spec.json" <<JSON
 {
-  "meta": {"title": "Q4 review", "author": "Ada", "lang": "en", "max_slides": 8},
+  "meta": {"title": "Q4 review", "author": "Ada", "lang": "en", "max_slides": 10},
   "theme": "clean-light",
   "slides": [
     {"layout": "title", "title": "Q4 review", "subtitle": "Ada", "notes": "Welcome"},
     {"layout": "bullets", "title": "Highlights", "bullets": ["Revenue up", "Costs flat"]},
+    {"layout": "cards", "title": "Levers", "items": [{"title": "Price", "text": "Value tiers"}, {"title": "Retention", "text": "Onboarding"}]},
+    {"layout": "stats", "title": "Numbers", "items": [{"value": "38%", "label": "Growth"}, {"value": "2.1%", "label": "Churn"}]},
     {"layout": "table", "title": "Numbers", "header": ["Item", "Value"], "rows": [["A", "1"], ["B", "2"]]},
     {"layout": "chart", "title": "Trend", "categories": ["Q1", "Q2"], "series": [{"name": "Revenue", "values": [1, 2]}]},
     {"layout": "image", "title": "Map", "image": "$WORK/map.png", "alt": "Route map"},
@@ -40,7 +42,7 @@ grep -q '"ok": true' "$WORK/validate.json"
 
 deckb build "$WORK/spec.json" -o "$OUT/deck.pptx" > "$WORK/build.json"
 test -f "$OUT/deck.pptx"
-grep -q '"slides": 6' "$WORK/build.json"
+grep -q '"slides": 8' "$WORK/build.json"
 
 deckb read "$OUT/deck.pptx" > "$WORK/read.json"
 grep -q 'Welcome' "$WORK/read.json"
@@ -48,8 +50,12 @@ grep -q 'Revenue up' "$WORK/read.json"
 grep -q '"A"' "$WORK/read.json"
 
 deckb check "$OUT/deck.pptx" > "$WORK/check.json"
-grep -q '"slides": 6' "$WORK/check.json"
+grep -q '"slides": 8' "$WORK/check.json"
 grep -q '"charts": 1' "$WORK/check.json"
+
+deckb render "$OUT/deck.pptx" -o "$WORK/renders" > "$WORK/render.json"
+grep -q '"ok": true' "$WORK/render.json"
+ls "$WORK"/renders/slide-*.png > /dev/null
 
 cat > "$WORK/bad.json" <<'JSON'
 {"slides": [{"layout": "image", "title": "Map", "image": "missing.png"}]}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deck Builder: a small JSON deck spec into a clean 16:9 PPTX."""
+"""Deck Builder: a small JSON deck spec into a designed 16:9 PPTX."""
 
 from __future__ import annotations
 
@@ -8,17 +8,61 @@ import importlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 MAX_SLIDES = 30
 SLIDE_WIDTH = 13.333
 SLIDE_HEIGHT = 7.5
+MARGIN = 0.72
+CONTENT_WIDTH = SLIDE_WIDTH - MARGIN * 2
+FONT_HEAD = "Segoe UI Semibold"
+FONT_BODY = "Segoe UI"
 
 THEMES = {
-    "clean-light": {"bg": "F7F5F1", "text": "1E2328", "muted": "5B6670", "accent": "C45A32"},
-    "clean-dark": {"bg": "161A1D", "text": "F2F0EC", "muted": "A8B0B6", "accent": "E07A4F"},
-    "warm": {"bg": "FBF1E4", "text": "3A2A1E", "muted": "7A6353", "accent": "A63D2F"},
+    "clean-light": {
+        "bg": "F7F5F1", "bg2": "EFEAE2", "surface": "FFFFFF", "text": "1E2328",
+        "muted": "5B6670", "accent": "C45A32", "accent2": "2F5D62",
+        "line": "DED8D0", "on_accent": "FFFFFF", "style": "editorial",
+    },
+    "clean-dark": {
+        "bg": "14181B", "bg2": "0E1113", "surface": "1E2428", "text": "F2F0EC",
+        "muted": "A8B0B6", "accent": "E07A4F", "accent2": "5FA8A0",
+        "line": "2C3439", "on_accent": "14181B", "style": "editorial",
+    },
+    "warm": {
+        "bg": "FBF1E4", "bg2": "F3E3D0", "surface": "FFF9F0", "text": "3A2A1E",
+        "muted": "7A6353", "accent": "A63D2F", "accent2": "4E6E58",
+        "line": "E6D6C3", "on_accent": "FFF9F0", "style": "editorial",
+    },
+    "ocean": {
+        "bg": "061826", "bg2": "0B2B44", "surface": "0E2A42", "text": "EAF6FF",
+        "muted": "8FB3C9", "accent": "27C2B8", "accent2": "FFB703",
+        "line": "1B3A52", "on_accent": "04121F", "style": "bold",
+    },
+    "forest": {
+        "bg": "0E1F17", "bg2": "143126", "surface": "173A2C", "text": "EAF4EE",
+        "muted": "9DB8A9", "accent": "E0B354", "accent2": "62C28E",
+        "line": "224735", "on_accent": "0E1F17", "style": "bold",
+    },
+    "sunset": {
+        "bg": "2A1024", "bg2": "451A2C", "surface": "3A172C", "text": "FFF0E6",
+        "muted": "D3A99E", "accent": "FF8A5B", "accent2": "FFC857",
+        "line": "4E2438", "on_accent": "2A1024", "style": "bold",
+    },
+    "mono": {
+        "bg": "F4F4F2", "bg2": "E8E8E5", "surface": "FFFFFF", "text": "161616",
+        "muted": "666666", "accent": "161616", "accent2": "C9C9C5",
+        "line": "D5D5D1", "on_accent": "FFFFFF", "style": "minimal",
+    },
+}
+
+ALLOWED = {
+    "title", "section", "bullets", "cards", "stats", "table", "chart",
+    "image", "quote", "closing", "agenda",
 }
 
 
@@ -33,7 +77,10 @@ def pptx_modules():
         data = importlib.import_module("pptx.chart.data")
         charts = importlib.import_module("pptx.enum.chart")
         units = importlib.import_module("pptx.util")
-        return pptx, data, charts, units
+        shapes = importlib.import_module("pptx.enum.shapes")
+        text = importlib.import_module("pptx.enum.text")
+        dml = importlib.import_module("pptx.enum.dml")
+        return pptx, data, charts, units, shapes, text, dml
     except ImportError:
         fail("missing_tool: python-pptx", 3)
 
@@ -84,19 +131,19 @@ def validate_spec(spec: dict) -> list[str]:
     max_slides = min(max_slides, MAX_SLIDES)
     if len(slides) > max_slides:
         errors.append(f"too many slides ({len(slides)} > {max_slides})")
-    if spec.get("theme", "clean-light") not in THEMES:
-        errors.append("theme must be clean-light, clean-dark or warm")
-    allowed = {"title", "section", "bullets", "table", "chart", "image", "quote", "closing"}
+    theme = spec.get("theme", "clean-light")
+    if isinstance(theme, str) and theme not in THEMES:
+        errors.append("theme must be one of: " + ", ".join(sorted(THEMES)))
     for index, slide in enumerate(slides):
         label = f"slides[{index}]"
         if not isinstance(slide, dict):
             errors.append(f"{label} must be an object")
             continue
         layout = slide.get("layout")
-        if layout not in allowed:
+        if layout not in ALLOWED:
             errors.append(f"{label}.layout is unknown: {layout}")
             continue
-        if layout in {"title", "section", "bullets", "table", "chart", "image", "closing"}:
+        if layout in {"title", "section", "bullets", "cards", "stats", "table", "chart", "image", "closing", "agenda"}:
             if not isinstance(slide.get("title"), str) or not slide["title"].strip():
                 errors.append(f"{label}.title is required")
             elif len(slide["title"]) > 120:
@@ -107,10 +154,41 @@ def validate_spec(spec: dict) -> list[str]:
                 errors.append(f"{label}.bullets must be a non-empty array")
             elif any(not isinstance(item, str) for item in bullets):
                 errors.append(f"{label}.bullets must be strings")
-            elif len(bullets) > 7:
-                errors.append(f"{label} has too many bullets (max 7)")
-            elif any(len(item) > 220 for item in bullets):
-                errors.append(f"{label} has a bullet longer than 220 characters")
+            elif len(bullets) > 6:
+                errors.append(f"{label} has too many bullets (max 6)")
+            elif any(len(item) > 190 for item in bullets):
+                errors.append(f"{label} has a bullet longer than 190 characters")
+        if layout == "agenda":
+            items = slide.get("items")
+            if not isinstance(items, list) or not items:
+                errors.append(f"{label}.items must be a non-empty array")
+            elif any(not isinstance(item, str) for item in items):
+                errors.append(f"{label}.items must be strings")
+            elif len(items) > 6:
+                errors.append(f"{label} has too many agenda items (max 6)")
+        if layout == "cards":
+            items = slide.get("items")
+            if not isinstance(items, list) or not items:
+                errors.append(f"{label}.items must be a non-empty array")
+            elif len(items) > 4:
+                errors.append(f"{label} has too many cards (max 4)")
+            else:
+                for item in items:
+                    if not isinstance(item, dict) or not isinstance(item.get("title"), str):
+                        errors.append(f"{label}.items entries need a title")
+                        break
+        if layout == "stats":
+            items = slide.get("items")
+            if not isinstance(items, list) or not items:
+                errors.append(f"{label}.items must be a non-empty array")
+            elif len(items) > 4:
+                errors.append(f"{label} has too many stats (max 4)")
+            else:
+                for item in items:
+                    value = item.get("value") if isinstance(item, dict) else None
+                    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+                        errors.append(f"{label}.items entries need a value")
+                        break
         if layout == "quote":
             if not isinstance(slide.get("text"), str) or not slide["text"].strip():
                 errors.append(f"{label}.text is required")
@@ -126,8 +204,8 @@ def validate_spec(spec: dict) -> list[str]:
                     if not isinstance(row, list) or len(row) != len(header):
                         errors.append(f"{label}.rows must match the header width")
                         break
-                if len(rows) > 12:
-                    errors.append(f"{label} has too many rows (max 12)")
+                if len(rows) > 10:
+                    errors.append(f"{label} has too many rows (max 10)")
         if layout == "chart":
             series = slide.get("series")
             categories = slide.get("categories")
@@ -161,7 +239,11 @@ def validate_spec(spec: dict) -> list[str]:
 
 
 def theme_of(spec: dict) -> dict:
-    return THEMES.get(spec.get("theme", "clean-light"), THEMES["clean-light"])
+    theme = spec.get("theme", "clean-light")
+    base = dict(THEMES.get(theme if isinstance(theme, str) else "clean-light", THEMES["clean-light"]))
+    if isinstance(theme, dict):
+        base.update({key: str(value) for key, value in theme.items() if key in base})
+    return base
 
 
 def rgb(hex_value: str):
@@ -169,42 +251,108 @@ def rgb(hex_value: str):
     return pptx.dml.color.RGBColor.from_string(hex_value)
 
 
-def add_text(slide, text, left, top, width, height, size, color, bold=False, font="Calibri"):
+def mix(first: str, second: str, amount: float) -> str:
+    a = [int(first[index:index + 2], 16) for index in (0, 2, 4)]
+    b = [int(second[index:index + 2], 16) for index in (0, 2, 4)]
+    return "".join(f"{round(x + (y - x) * amount):02X}" for x, y in zip(a, b))
+
+
+def set_alpha(shape, alpha: float) -> None:
+    from lxml import etree
+    from pptx.oxml.ns import qn
+
+    solid = shape.fill._xPr.find(qn("a:solidFill"))
+    if solid is None:
+        return
+    color = solid.find(qn("a:srgbClr"))
+    if color is None:
+        return
+    for old in color.findall(qn("a:alpha")):
+        color.remove(old)
+    element = etree.SubElement(color, qn("a:alpha"))
+    element.set("val", str(max(0, min(100000, int(alpha * 100000)))))
+
+
+def text_box(slide, text, left, top, width, height, size, color, *, bold=False,
+             font=FONT_BODY, align=None, anchor=None, spacing=1.0, wrap=True,
+             tracking=None):
     units = importlib.import_module("pptx.util")
-    box = slide.shapes.add_textbox(units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height))
+    text_enum = importlib.import_module("pptx.enum.text")
+    box = slide.shapes.add_textbox(
+        units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height)
+    )
     frame = box.text_frame
-    frame.word_wrap = True
+    frame.word_wrap = wrap
+    frame.margin_left = 0
+    frame.margin_right = 0
+    frame.margin_top = 0
+    frame.margin_bottom = 0
+    if anchor is not None:
+        frame.vertical_anchor = anchor
     frame.text = text
     for paragraph in frame.paragraphs:
+        paragraph.line_spacing = spacing
+        if align is not None:
+            paragraph.alignment = align
         for run in paragraph.runs:
             run.font.size = units.Pt(size)
             run.font.bold = bold
             run.font.name = font
             run.font.color.rgb = rgb(color)
+            if tracking:
+                run._r.get_or_add_rPr().set("spc", str(int(tracking * 100)))
     return box
 
 
-def add_bullets(slide, items, left, top, width, height, color, size=20):
+def shape(slide, kind, left, top, width, height, fill, line=None, radius=0.08,
+          alpha=None):
+    shapes_enum = importlib.import_module("pptx.enum.shapes")
     units = importlib.import_module("pptx.util")
-    oxml = importlib.import_module("pptx.oxml")
-    box = slide.shapes.add_textbox(units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height))
-    frame = box.text_frame
+    item = slide.shapes.add_shape(
+        kind, units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height)
+    )
+    item.shadow.inherit = False
+    item.fill.solid()
+    item.fill.fore_color.rgb = rgb(fill)
+    if alpha is not None:
+        set_alpha(item, alpha)
+    if line:
+        item.line.color.rgb = rgb(line)
+        item.line.width = units.Pt(1)
+    else:
+        item.line.fill.background()
+    if kind == shapes_enum.MSO_SHAPE.ROUNDED_RECTANGLE:
+        try:
+            item.adjustments[0] = radius
+        except (IndexError, ValueError):
+            pass
+    return item
+
+
+def fill_shape_text(item, title, body, theme, *, title_size=17, body_size=13):
+    units = importlib.import_module("pptx.util")
+    frame = item.text_frame
     frame.word_wrap = True
-    for index, item in enumerate(items):
-        paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
-        paragraph.text = item
-        paragraph.level = 0
-        pPr = paragraph._p.get_or_add_pPr()
-        pPr.append(
-            oxml.parse_xml(
-                '<a:buChar xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" char="•"/>'
-            )
-        )
+    frame.margin_left = units.Inches(0.18)
+    frame.margin_right = units.Inches(0.18)
+    frame.margin_top = units.Inches(0.16)
+    frame.margin_bottom = units.Inches(0.14)
+    frame.text = title
+    first = frame.paragraphs[0]
+    first.space_after = units.Pt(4)
+    for run in first.runs:
+        run.font.size = units.Pt(title_size)
+        run.font.bold = True
+        run.font.name = FONT_HEAD
+        run.font.color.rgb = rgb(theme["text"])
+    if body:
+        paragraph = frame.add_paragraph()
+        paragraph.text = body
+        paragraph.space_before = units.Pt(2)
         for run in paragraph.runs:
-            run.font.size = units.Pt(size)
-            run.font.name = "Calibri"
-            run.font.color.rgb = rgb(color)
-    return box
+            run.font.size = units.Pt(body_size)
+            run.font.name = FONT_BODY
+            run.font.color.rgb = rgb(theme["muted"])
 
 
 def add_notes(slide, notes):
@@ -212,19 +360,400 @@ def add_notes(slide, notes):
         slide.notes_slide.notes_text_frame.text = notes
 
 
+def gradient_file(theme: dict) -> Path | None:
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    top = tuple(int(theme["bg"][index:index + 2], 16) for index in (0, 2, 4))
+    bottom = tuple(int(mix(theme["bg"], theme["accent2"], 0.10)[index:index + 2], 16) for index in (0, 2, 4))
+    strip = Image.new("RGB", (8, 256))
+    for y in range(256):
+        ratio = y / 255
+        color = tuple(round(a + (b - a) * ratio) for a, b in zip(top, bottom))
+        for x in range(8):
+            strip.putpixel((x, y), color)
+    image = strip.resize((1920, 1080), Image.BILINEAR)
+    handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    handle.close()
+    image.save(handle.name)
+    return Path(handle.name)
+
+
+def cover_picture(slide, path: str, left, top, width, height):
+    from PIL import Image
+    units = importlib.import_module("pptx.util")
+    image_width, image_height = Image.open(path).size
+    target_ratio = width / height
+    source_ratio = image_width / image_height
+    picture = slide.shapes.add_picture(
+        path, units.Inches(left), units.Inches(top), units.Inches(width), units.Inches(height)
+    )
+    if source_ratio > target_ratio:
+        crop = (1 - target_ratio / source_ratio) / 2
+        picture.crop_left = crop
+        picture.crop_right = crop
+    elif source_ratio < target_ratio:
+        crop = (1 - source_ratio / target_ratio) / 2
+        picture.crop_top = crop
+        picture.crop_bottom = crop
+    return picture
+
+
+def chrome(slide, theme, meta, page, total):
+    label = str(meta.get("title") or "")
+    text_box(slide, label[:70], MARGIN, 7.02, 7.5, 0.22, 8.5, theme["muted"])
+    text_box(slide, f"{page:02d} / {total:02d}", SLIDE_WIDTH - MARGIN - 1.2, 7.02, 1.2, 0.22,
+             8.5, theme["muted"], align=importlib.import_module("pptx.enum.text").PP_ALIGN.RIGHT)
+    line = shape(slide, importlib.import_module("pptx.enum.shapes").MSO_SHAPE.RECTANGLE,
+                 MARGIN, 6.9, CONTENT_WIDTH, 0.008, theme["line"])
+    line.line.fill.background()
+
+
+def heading(slide, theme, title, eyebrow=None, width=CONTENT_WIDTH):
+    size = 34 if len(title) <= 34 else 28 if len(title) <= 56 else 23
+    shapes_enum = importlib.import_module("pptx.enum.shapes")
+    bar = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, MARGIN, 0.78, 0.09, 0.62,
+                theme["accent"])
+    bar.line.fill.background()
+    left = MARGIN + 0.28
+    if eyebrow:
+        text_box(slide, eyebrow.upper(), left, 0.38, 7.0, 0.24, 9.5, theme["accent"],
+                 bold=True, tracking=1.4)
+    text_box(slide, title, left, 0.72, width - 0.28, 1.0, size, theme["text"], bold=True,
+             font=FONT_HEAD, spacing=0.95, tracking=-0.6 if size >= 28 else 0)
+    return 1.95
+
+
+def background(slide, theme, gradient: Path | None):
+    if gradient and gradient.is_file():
+        slide.shapes.add_picture(
+            str(gradient), 0, 0,
+            width=importlib.import_module("pptx.util").Inches(SLIDE_WIDTH),
+            height=importlib.import_module("pptx.util").Inches(SLIDE_HEIGHT),
+        )
+    else:
+        fill = slide.background.fill
+        fill.solid()
+        fill.fore_color.rgb = rgb(theme["bg"])
+
+
+def accent_orb(slide, theme, left, top, diameter, alpha=0.10):
+    shapes_enum = importlib.import_module("pptx.enum.shapes")
+    orb = shape(slide, shapes_enum.MSO_SHAPE.OVAL, left, top, diameter, diameter,
+                theme["accent"], alpha=alpha)
+    orb.line.fill.background()
+
+
+def strip_table_borders(table) -> None:
+    from pptx.oxml.ns import qn
+    from pptx.oxml.xmlchemy import OxmlElement
+
+    tbl = table._tbl
+    for element in tbl.tblPr.findall(qn("a:tableStyleId")):
+        tbl.tblPr.remove(element)
+    style = OxmlElement("a:tableStyleId")
+    style.text = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
+    tbl.tblPr.append(style)
+    for row in table.rows:
+        for cell in row.cells:
+            tcPr = cell._tc.get_or_add_tcPr()
+            for tag in ("a:lnL", "a:lnR", "a:lnT", "a:lnB"):
+                for element in tcPr.findall(qn(tag)):
+                    tcPr.remove(element)
+
+
+def style_table(table, theme_head, theme, header, rows):
+    units = importlib.import_module("pptx.util")
+    text_enum = importlib.import_module("pptx.enum.text")
+
+    table.first_row = True
+    table.horz_banding = False
+    for column, value in enumerate(header):
+        cell = table.cell(0, column)
+        cell.text = str(value)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = rgb(theme["accent"])
+        cell.margin_left = units.Inches(0.14)
+        cell.margin_right = units.Inches(0.12)
+        cell.margin_top = units.Inches(0.08)
+        cell.margin_bottom = units.Inches(0.08)
+        cell.vertical_anchor = importlib.import_module("pptx.enum.text").MSO_ANCHOR.MIDDLE
+        for paragraph in cell.text_frame.paragraphs:
+            paragraph.alignment = text_enum.PP_ALIGN.LEFT
+            for run in paragraph.runs:
+                run.font.size = units.Pt(13)
+                run.font.bold = True
+                run.font.name = FONT_HEAD
+                run.font.color.rgb = rgb(theme["on_accent"])
+    for row_index, row in enumerate(rows, start=1):
+        for column, value in enumerate(row):
+            cell = table.cell(row_index, column)
+            cell.text = str(value)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = rgb(theme["surface"] if row_index % 2 else theme_head)
+            cell.margin_left = units.Inches(0.14)
+            cell.margin_right = units.Inches(0.12)
+            cell.margin_top = units.Inches(0.07)
+            cell.margin_bottom = units.Inches(0.07)
+            cell.vertical_anchor = importlib.import_module("pptx.enum.text").MSO_ANCHOR.MIDDLE
+            for paragraph in cell.text_frame.paragraphs:
+                paragraph.alignment = text_enum.PP_ALIGN.LEFT
+                for run in paragraph.runs:
+                    run.font.size = units.Pt(14)
+                    run.font.name = FONT_BODY
+                    run.font.color.rgb = rgb(theme["text"])
+    strip_table_borders(table)
+    table.rows[0].height = units.Inches(0.6)
+    body_height = min(0.9, 3.6 / max(1, len(rows)))
+    for row in list(table.rows)[1:]:
+        row.height = units.Inches(body_height)
+
+
+def style_chart(chart, theme, series_count):
+    units = importlib.import_module("pptx.util")
+    charts = importlib.import_module("pptx.enum.chart")
+    chart.font.name = FONT_BODY
+    chart.font.size = units.Pt(12)
+    chart.font.color.rgb = rgb(theme["muted"])
+    chart.has_title = False
+    chart.has_legend = series_count > 1
+    if series_count > 1:
+        chart.legend.position = charts.XL_LEGEND_POSITION.BOTTOM
+        chart.legend.include_in_layout = False
+        chart.legend.font.size = units.Pt(11)
+        chart.legend.font.color.rgb = rgb(theme["muted"])
+    plot = chart.plots[0]
+    plot.gap_width = 55
+    plot.has_data_labels = True
+    labels = plot.data_labels
+    labels.font.size = units.Pt(10.5)
+    labels.font.name = FONT_BODY
+    labels.font.color.rgb = rgb(theme["text"])
+    labels.number_format = "General"
+    colors = [theme["accent"], theme["accent2"], mix(theme["accent"], theme["text"], 0.35),
+              mix(theme["accent2"], theme["text"], 0.35)]
+    for index, series in enumerate(chart.series):
+        series.format.fill.solid()
+        series.format.fill.fore_color.rgb = rgb(colors[index % len(colors)])
+    value_axis = chart.value_axis
+    value_axis.has_major_gridlines = False
+    value_axis.format.line.color.rgb = rgb(theme["line"])
+    value_axis.tick_labels.font.size = units.Pt(10)
+    value_axis.tick_labels.font.color.rgb = rgb(theme["muted"])
+    category_axis = chart.category_axis
+    category_axis.format.line.color.rgb = rgb(theme["line"])
+    category_axis.tick_labels.font.size = units.Pt(10.5)
+    category_axis.tick_labels.font.color.rgb = rgb(theme["muted"])
+
+
+def build_slide(slide, source, theme, meta, page, total, gradient):
+    units = importlib.import_module("pptx.util")
+    text_enum = importlib.import_module("pptx.enum.text")
+    shapes_enum = importlib.import_module("pptx.enum.shapes")
+    layout = source["layout"]
+    background(slide, theme, gradient)
+
+    if layout == "title":
+        if isinstance(source.get("image"), str) and Path(source["image"]).expanduser().is_file():
+            cover_picture(slide, str(Path(source["image"]).expanduser()), 0, 0, SLIDE_WIDTH, SLIDE_HEIGHT)
+            veil = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_WIDTH, SLIDE_HEIGHT,
+                         theme["bg"], alpha=0.72)
+            veil.line.fill.background()
+        accent_orb(slide, theme, 9.2, -1.4, 5.6, alpha=0.14)
+        accent_orb(slide, theme, 10.4, 4.0, 3.4, alpha=0.07)
+        text_box(slide, str(source.get("eyebrow") or meta.get("title") or "").upper(), MARGIN, 0.55, 9.5, 0.28, 10,
+                 theme["muted"], bold=True, tracking=1.4)
+        size = 46 if len(source["title"]) <= 30 else 38 if len(source["title"]) <= 52 else 31
+        text_box(slide, source["title"], MARGIN, 2.05, 10.6, 2.1, size, theme["text"],
+                 bold=True, font=FONT_HEAD, spacing=0.92, tracking=-0.8)
+        rule = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, MARGIN, 4.35, 1.5, 0.09,
+                    theme["accent"])
+        rule.line.fill.background()
+        if source.get("subtitle"):
+            text_box(slide, source["subtitle"], MARGIN, 4.62, 9.8, 0.9, 18, theme["muted"],
+                     spacing=1.15)
+        if meta.get("author"):
+            text_box(slide, str(meta["author"]), MARGIN, 6.35, 8.0, 0.3, 11, theme["muted"])
+        add_notes(slide, source.get("notes"))
+        return
+
+    if layout == "section":
+        band = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_WIDTH, SLIDE_HEIGHT,
+                     theme["accent"])
+        band.line.fill.background()
+        text_box(slide, f"{page:02d}", 9.8, 1.3, 2.8, 2.2, 96, theme["on_accent"],
+                 bold=True, font=FONT_HEAD, align=text_enum.PP_ALIGN.RIGHT)
+        text_box(slide, "SECTION", MARGIN, 2.05, 6.0, 0.3, 10, theme["on_accent"], bold=True,
+                 tracking=1.4)
+        size = 42 if len(source["title"]) <= 36 else 34
+        text_box(slide, source["title"], MARGIN, 2.45, 9.4, 1.7, size, theme["on_accent"],
+                 bold=True, font=FONT_HEAD, spacing=0.95, tracking=-0.6)
+        if source.get("subtitle"):
+            text_box(slide, source["subtitle"], MARGIN, 4.35, 9.0, 0.8, 16, theme["on_accent"],
+                     spacing=1.15)
+        add_notes(slide, source.get("notes"))
+        return
+
+    top = 1.95
+    if layout not in {"quote", "closing"}:
+        top = heading(slide, theme, source.get("title", ""), source.get("eyebrow"))
+
+    if layout == "agenda":
+        items = source["items"]
+        row_height = min(0.82, 4.5 / len(items))
+        for index, item in enumerate(items, start=1):
+            y = top + (index - 1) * row_height
+            text_box(slide, f"{index:02d}", MARGIN, y + 0.04, 0.7, 0.5, 15, theme["accent"],
+                     bold=True, font=FONT_HEAD)
+            text_box(slide, item, MARGIN + 0.8, y, CONTENT_WIDTH - 0.8, 0.55, 19,
+                     theme["text"], spacing=1.05)
+            line = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, MARGIN + 0.8, y + row_height - 0.12,
+                         CONTENT_WIDTH - 0.8, 0.008, theme["line"])
+            line.line.fill.background()
+
+    elif layout == "bullets":
+        bullets = source["bullets"]
+        gap = min(0.78, 4.7 / len(bullets))
+        size = 18 if len(bullets) <= 4 else 16
+        for index, item in enumerate(bullets):
+            y = top + 0.15 + index * gap
+            dot = shape(slide, shapes_enum.MSO_SHAPE.ROUNDED_RECTANGLE, MARGIN, y + 0.14, 0.14,
+                        0.14, theme["accent"], radius=0.25)
+            dot.line.fill.background()
+            text_box(slide, item, MARGIN + 0.38, y, CONTENT_WIDTH - 0.38, gap - 0.06, size,
+                     theme["text"], spacing=1.12)
+
+    elif layout == "cards":
+        items = source["items"]
+        count = len(items)
+        gap = 0.22
+        width = (CONTENT_WIDTH - gap * (count - 1)) / count
+        height = 3.9 if count <= 3 else 3.4
+        for index, item in enumerate(items):
+            x = MARGIN + index * (width + gap)
+            card = shape(slide, shapes_enum.MSO_SHAPE.ROUNDED_RECTANGLE, x, top + 0.15, width,
+                         height, theme["surface"], line=theme["line"], radius=0.06)
+            accent = shape(slide, shapes_enum.MSO_SHAPE.ROUNDED_RECTANGLE, x + 0.22, top + 0.38,
+                           0.34, 0.34, theme["accent"], radius=0.3)
+            accent.line.fill.background()
+            fill_shape_text(card, item["title"], item.get("text", ""), theme)
+            # The text starts below the icon so it does not collide with the accent block.
+            card.text_frame.vertical_anchor = importlib.import_module("pptx.enum.text").MSO_ANCHOR.TOP
+            card.text_frame.margin_top = units.Inches(0.7)
+
+    elif layout == "stats":
+        items = source["items"]
+        count = len(items)
+        gap = 0.2
+        width = (CONTENT_WIDTH - gap * (count - 1)) / count
+        for index, item in enumerate(items):
+            x = MARGIN + index * (width + gap)
+            card = shape(slide, shapes_enum.MSO_SHAPE.ROUNDED_RECTANGLE, x, top + 0.2, width,
+                         3.1, theme["surface"], line=theme["line"], radius=0.07)
+            value_size = 40 if len(str(item["value"])) <= 6 else 30
+            text_box(slide, str(item["value"]), x + 0.26, top + 0.55, width - 0.5, 0.9,
+                     value_size, theme["accent"], bold=True, font=FONT_HEAD)
+            text_box(slide, str(item.get("label", "")), x + 0.26, top + 1.55, width - 0.5, 1.2,
+                     14, theme["muted"], spacing=1.1)
+
+    elif layout == "table":
+        header = source.get("header") or []
+        rows = source.get("rows") or []
+        table = slide.shapes.add_table(
+            len(rows) + 1, len(header), units.Inches(MARGIN), units.Inches(top + 0.1),
+            units.Inches(CONTENT_WIDTH), units.Inches(0.46 * (len(rows) + 1)),
+        ).table
+        style_table(table, mix(theme["surface"], theme["bg"], 0.4), theme, header, rows)
+
+    elif layout == "chart":
+        data = importlib.import_module("pptx.chart.data").ChartData()
+        data.categories = source["categories"]
+        for item in source["series"]:
+            data.add_series(item.get("name", "Series"), item["values"])
+        chart = slide.shapes.add_chart(
+            importlib.import_module("pptx.enum.chart").XL_CHART_TYPE.COLUMN_CLUSTERED,
+            units.Inches(MARGIN), units.Inches(top + 0.05),
+            units.Inches(CONTENT_WIDTH), units.Inches(4.55), data,
+        ).chart
+        style_chart(chart, theme, len(source["series"]))
+
+    elif layout == "image":
+        frame_top = top + 0.05
+        frame_height = 4.6
+        picture = cover_picture(
+            slide, str(Path(source["image"]).expanduser()), MARGIN, frame_top,
+            CONTENT_WIDTH, frame_height,
+        )
+        picture._element.nvPicPr.cNvPr.set("descr", source["alt"])
+        if source.get("caption"):
+            text_box(slide, source["caption"], MARGIN, frame_top + frame_height + 0.12,
+                     CONTENT_WIDTH, 0.28, 10.5, theme["muted"])
+
+    elif layout == "quote":
+        text_box(slide, "“", MARGIN, 1.15, 1.6, 1.5, 110, theme["accent"], bold=True,
+                 font=FONT_HEAD)
+        size = 30 if len(source["text"]) <= 90 else 24
+        text_box(slide, source["text"], MARGIN + 0.1, top + 0.35, CONTENT_WIDTH - 0.4, 2.6,
+                 size, theme["text"], font=FONT_HEAD, spacing=1.08)
+        rule = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, MARGIN + 0.1, top + 3.05, 1.1, 0.07,
+                     theme["accent"])
+        rule.line.fill.background()
+        if source.get("attribution"):
+            text_box(slide, source["attribution"], MARGIN + 0.1, top + 3.25, 7.0, 0.4, 14,
+                     theme["muted"])
+
+    elif layout == "closing":
+        band = shape(slide, shapes_enum.MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_WIDTH, SLIDE_HEIGHT,
+                     theme["accent"])
+        band.line.fill.background()
+        accent_orb(slide, theme, -1.2, 3.8, 4.6, alpha=0.12)
+        size = 44 if len(source["title"]) <= 28 else 34
+        text_box(slide, source["title"], MARGIN, 2.5, 10.4, 1.6, size, theme["on_accent"],
+                 bold=True, font=FONT_HEAD, spacing=0.95, tracking=-0.6)
+        if source.get("subtitle"):
+            text_box(slide, source["subtitle"], MARGIN, 4.3, 9.5, 0.9, 17, theme["on_accent"],
+                     spacing=1.12)
+        if meta.get("author"):
+            text_box(slide, str(meta["author"]), MARGIN, 6.3, 8.0, 0.3, 11, theme["on_accent"])
+
+    if layout not in {"title", "section", "closing"}:
+        chrome(slide, theme, meta, page, total)
+    add_notes(slide, source.get("notes"))
+
+
+def cmd_themes(args) -> None:
+    emit({
+        "ok": True,
+        "themes": {
+            name: {key: value for key, value in theme.items() if key in
+                   {"bg", "surface", "text", "muted", "accent", "accent2", "style"}}
+            for name, theme in THEMES.items()
+        },
+    })
+
+
 def cmd_new(args) -> None:
+    theme = args.theme or "clean-light"
+    if theme not in THEMES:
+        fail("theme must be one of: " + ", ".join(sorted(THEMES)))
     spec = {
-        "meta": {"title": "New deck", "author": "", "lang": "en", "max_slides": 7},
-        "theme": "clean-light",
+        "meta": {"title": "New deck", "author": "", "lang": "en", "max_slides": 8},
+        "theme": theme,
         "slides": [
-            {"layout": "title", "title": "New deck", "subtitle": ""},
-            {"layout": "bullets", "title": "Highlights", "bullets": ["First point", "Second point"]},
-            {"layout": "closing", "title": "Thank you"},
+            {"layout": "title", "title": "New deck", "subtitle": "A short, sharp subtitle"},
+            {"layout": "agenda", "title": "What we will cover", "items": ["Context", "Findings", "Next steps"]},
+            {"layout": "cards", "title": "Three ideas", "items": [
+                {"title": "First", "text": "Explain the first idea in one line."},
+                {"title": "Second", "text": "Explain the second idea in one line."},
+                {"title": "Third", "text": "Explain the third idea in one line."},
+            ]},
+            {"layout": "closing", "title": "Thank you", "subtitle": "Questions and discussion"},
         ],
     }
     target = output_path(args.out, "spec.json")
     target.write_text(json.dumps(spec, indent=2), encoding="utf-8")
-    emit({"ok": True, "file": str(target)})
+    emit({"ok": True, "file": str(target), "theme": theme})
 
 
 def cmd_validate(args) -> None:
@@ -239,105 +768,53 @@ def cmd_build(args) -> None:
     errors = validate_spec(spec)
     if errors:
         fail("; ".join(errors))
-    pptx, chart_data, chart_types, units = pptx_modules()
+    pptx, _, _, units, _, _, _ = pptx_modules()
     theme = theme_of(spec)
     presentation = pptx.Presentation()
     presentation.slide_width = units.Inches(SLIDE_WIDTH)
     presentation.slide_height = units.Inches(SLIDE_HEIGHT)
     blank = presentation.slide_layouts[6]
-    for source in spec["slides"]:
-        slide = presentation.slides.add_slide(blank)
-        background = slide.background.fill
-        background.solid()
-        background.fore_color.rgb = rgb(theme["bg"])
-        layout = source["layout"]
-        if layout == "title":
-            add_text(slide, source["title"], 0.9, 2.6, 11.5, 1.4, 40, theme["text"], bold=True)
-            if source.get("subtitle"):
-                add_text(slide, source["subtitle"], 0.9, 4.1, 11.5, 0.7, 20, theme["muted"])
-        elif layout == "section":
-            add_text(slide, source["title"], 0.9, 3.0, 11.5, 1.2, 36, theme["accent"], bold=True)
-        elif layout == "bullets":
-            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
-            add_bullets(slide, source["bullets"], 1.0, 1.9, 11.2, 5.0, theme["text"])
-        elif layout == "table":
-            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
-            header = source.get("header") or []
-            rows = source.get("rows") or []
-            table = slide.shapes.add_table(
-                len(rows) + 1, len(header), units.Inches(0.9), units.Inches(1.8), units.Inches(11.5), units.Inches(0.5 * (len(rows) + 1))
-            ).table
-            for index, value in enumerate(header):
-                table.cell(0, index).text = str(value)
-            for row_index, row in enumerate(rows, start=1):
-                for column_index, value in enumerate(row):
-                    table.cell(row_index, column_index).text = str(value)
-            for row in table.rows:
-                for cell in row.cells:
-                    for paragraph in cell.text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            run.font.size = units.Pt(14)
-                            run.font.color.rgb = rgb(theme["text"])
-        elif layout == "chart":
-            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
-            categories = source["categories"]
-            series = source["series"]
-            data = chart_data.ChartData()
-            data.categories = categories
-            for item in series:
-                data.add_series(item.get("name", "Series"), item["values"])
-            chart = slide.shapes.add_chart(
-                chart_types.XL_CHART_TYPE.COLUMN_CLUSTERED,
-                units.Inches(0.9), units.Inches(1.7), units.Inches(11.5), units.Inches(5.2), data
-            ).chart
-            chart.has_title = False
-            chart.has_legend = len(series) > 1
-        elif layout == "image":
-            add_text(slide, source["title"], 0.9, 0.6, 11.5, 1.0, 30, theme["text"], bold=True)
-            picture = slide.shapes.add_picture(
-                str(Path(source["image"]).expanduser()),
-                units.Inches(2.2), units.Inches(1.7),
-                width=units.Inches(8.9), height=units.Inches(5.2),
-            )
-            picture._element.nvPicPr.cNvPr.set("descr", source["alt"])
-        elif layout == "quote":
-            add_text(slide, f"“{source['text']}”", 0.9, 2.2, 11.5, 2.0, 32, theme["text"])
-            if source.get("attribution"):
-                add_text(slide, source["attribution"], 0.9, 4.6, 11.5, 0.6, 18, theme["muted"])
-        elif layout == "closing":
-            add_text(slide, source["title"], 0.9, 3.0, 11.5, 1.2, 36, theme["accent"], bold=True)
-        add_notes(slide, source.get("notes"))
-    presentation.core_properties.title = str((spec.get("meta") or {}).get("title", "Deck"))
-    presentation.core_properties.author = str((spec.get("meta") or {}).get("author", ""))
-    title = (spec.get("meta") or {}).get("title", "deck")
-    target = output_path(args.out, f"{safe_name(title, 'deck')}.pptx")
-    inputs = [source_file(args.file).resolve()]
-    inputs.extend(
-        Path(item["image"]).expanduser().resolve()
-        for item in spec["slides"]
-        if item["layout"] == "image"
-    )
-    if target.resolve() in inputs:
-        fail("refusing to overwrite the input spec or an image; choose a new output")
-    presentation.save(target)
-    emit({"ok": True, "file": str(target), "slides": len(spec["slides"])})
+    meta = spec.get("meta") or {}
+    gradient = gradient_file(theme)
+    try:
+        total = len(spec["slides"])
+        for page, source in enumerate(spec["slides"], start=1):
+            slide = presentation.slides.add_slide(blank)
+            build_slide(slide, source, theme, meta, page, total, gradient)
+        presentation.core_properties.title = str(meta.get("title", "Deck"))
+        presentation.core_properties.author = str(meta.get("author", ""))
+        title = meta.get("title", "deck")
+        target = output_path(args.out, f"{safe_name(title, 'deck')}.pptx")
+        inputs = [source_file(args.file).resolve()]
+        inputs.extend(
+            Path(item["image"]).expanduser().resolve()
+            for item in spec["slides"]
+            if item.get("layout") == "image" and item.get("image")
+        )
+        if target.resolve() in inputs:
+            fail("refusing to overwrite the input spec or an image; choose a new output")
+        presentation.save(target)
+    finally:
+        if gradient and gradient.is_file():
+            gradient.unlink(missing_ok=True)
+    emit({"ok": True, "file": str(target), "slides": total, "theme": spec.get("theme", "clean-light")})
 
 
 def cmd_read(args) -> None:
-    pptx, _, _, _ = pptx_modules()
+    pptx, _, _, _, _, _, _ = pptx_modules()
     presentation = pptx.Presentation(str(source_file(args.file)))
     slides = []
     for index, slide in enumerate(presentation.slides, start=1):
         texts = []
         tables = []
-        for shape in slide.shapes:
-            if getattr(shape, "has_text_frame", False):
-                for paragraph in shape.text_frame.paragraphs:
+        for item in slide.shapes:
+            if getattr(item, "has_text_frame", False):
+                for paragraph in item.text_frame.paragraphs:
                     text = "".join(run.text for run in paragraph.runs).strip()
                     if text:
                         texts.append(text)
-            if getattr(shape, "has_table", False):
-                tables.append([[cell.text for cell in row.cells] for row in shape.table.rows])
+            if getattr(item, "has_table", False):
+                tables.append([[cell.text for cell in row.cells] for row in item.table.rows])
         notes = ""
         if slide.has_notes_slide:
             notes = slide.notes_slide.notes_text_frame.text
@@ -346,37 +823,67 @@ def cmd_read(args) -> None:
 
 
 def cmd_check(args) -> None:
-    pptx, _, _, _ = pptx_modules()
+    pptx, _, _, _, _, _, _ = pptx_modules()
     presentation = pptx.Presentation(str(source_file(args.file)))
     charts = sum(
-        1
-        for slide in presentation.slides
-        for shape in slide.shapes
-        if getattr(shape, "has_chart", False)
+        1 for slide in presentation.slides for item in slide.shapes
+        if getattr(item, "has_chart", False)
     )
-    emit(
-        {
-            "ok": True,
-            "file": args.file,
-            "slides": len(presentation.slides),
-            "charts": charts,
-            "width": round(presentation.slide_width / 914400, 2),
-            "height": round(presentation.slide_height / 914400, 2),
-        }
+    emit({
+        "ok": True,
+        "file": args.file,
+        "slides": len(presentation.slides),
+        "charts": charts,
+        "width": round(presentation.slide_width / 914400, 2),
+        "height": round(presentation.slide_height / 914400, 2),
+    })
+
+
+def cmd_render(args) -> None:
+    source = source_file(args.file)
+    if not shutil.which("lo-convert") or not shutil.which("pdftocairo"):
+        emit({"ok": False, "reason": "no_libreoffice"})
+        return
+    base = Path(os.environ.get("OUTPUTS", "outputs")).expanduser()
+    outdir = Path(args.out).expanduser() if args.out else base / "renders"
+    outdir.mkdir(parents=True, exist_ok=True)
+    for stale in outdir.glob("slide-*.png"):
+        stale.unlink()
+    try:
+        subprocess.run(["lo-convert", str(source), str(outdir), "pdf"], check=True, timeout=240)
+        pdf = outdir / f"{source.stem}.pdf"
+        subprocess.run(
+            ["pdftocairo", "-png", "-r", str(args.dpi), str(pdf), str(outdir / "slide")],
+            check=True, timeout=240,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        emit({"ok": False, "reason": f"render failed: {error}"})
+        raise SystemExit(3)
+    pages = sorted(
+        outdir.glob("slide-*.png"),
+        key=lambda item: int(re.sub(r"\D", "", item.stem) or 0),
     )
+    emit({
+        "ok": True,
+        "pdf": str(outdir / f"{source.stem}.pdf"),
+        "renders": [str(page) for page in pages],
+    })
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="deckb", description="Build PPTX decks from JSON.")
+    parser = argparse.ArgumentParser(prog="deckb", description="Build designed PPTX decks from JSON.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def command(name: str, handler, help_text: str):
+    def command(name, handler, help_text):
         item = sub.add_parser(name, help=help_text)
         item.set_defaults(handler=handler)
         return item
 
     new = command("new", cmd_new, "write a starter spec")
     new.add_argument("-o", "--out")
+    new.add_argument("--theme")
+
+    command("themes", cmd_themes, "list theme palettes")
 
     validate = command("validate", cmd_validate, "check a spec")
     validate.add_argument("file")
@@ -390,6 +897,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = command("check", cmd_check, "reopen and inspect a PPTX")
     check.add_argument("file")
+
+    render = command("render", cmd_render, "render slides to PNG for visual QA")
+    render.add_argument("file")
+    render.add_argument("-o", "--out")
+    render.add_argument("--dpi", type=int, default=110)
 
     return parser
 
