@@ -918,6 +918,47 @@ export function memoryWriteRaw(
   });
 }
 
+interface MemorySearchHit {
+  id: string;
+  text: string;
+  kind: string;
+  date: string;
+  scope: string;
+  score: number;
+  trusted: boolean;
+}
+
+interface MemoryFillReport {
+  scanned: number;
+  embedded: number;
+  skipped: number;
+  removed: number;
+  vectors: boolean;
+  errors: string[];
+}
+
+export interface MemoryModelStatus {
+  installed: boolean;
+  bytes: number;
+  dir: string;
+}
+
+export function memorySearch(query: string, projectId: string | null, limit = 8) {
+  return invoke<MemorySearchHit[]>("memory_search", { query, projectId, limit });
+}
+
+export function memoryReindex() {
+  return invoke<MemoryFillReport>("memory_reindex");
+}
+
+export function memoryModelStatus() {
+  return invoke<MemoryModelStatus>("memory_model_status");
+}
+
+export function memoryModelInstall() {
+  return invoke<MemoryModelStatus>("memory_model_install");
+}
+
 export function memoryProjectDelete(projectId: string) {
   return invoke<void>("memory_project_delete", { projectId });
 }

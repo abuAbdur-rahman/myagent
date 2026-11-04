@@ -1,6 +1,7 @@
 # Plan: memory v2 (retrieval, write path, knowledge, episodic)
 
-Status: design, not started. Target: 1.0.0 (P0/P1) and 1.1.0 (P2).
+Status: retrieval shipped (slice 5); knowledge chunks, episodic search and
+consolidation remain. Target: 1.0.0 (P0/P1) and 1.1.0 (P2).
 Baseline: `main` after 0.8.4. Scope: design only; no code in this change.
 
 Parent context: `docs/features.md` E1-E8, `docs/later.md` Phase 6.
@@ -76,7 +77,25 @@ Slice 4 (write path) partially shipped:
   (token overlap >= 0.85).
 - `memory_pending` tool, an inline pending card in the transcript with Save /
   Edit / Skip, and a pending badge on Settings.
-- Not yet: Undo for an instant save, a pending status column, a pause switch.
+- Undo for an instant save and a pause switch shipped in the same release.
+- Not yet: a pending status column.
+
+Slice 5 (hybrid retrieval) shipped:
+
+- `memory/index.rs` derives `memory_fts` (FTS5), `memory_docs` and
+  `memory_vectors`. The markdown files stay the source of truth; the index is
+  rebuilt from them at startup, after every write, and on demand.
+- FTS5 BM25 and MiniLM cosine are fused with RRF (k = 60). When keyword search
+  finds nothing, a vector-only hit must clear cosine 0.88 to count.
+- Each send ranks up to four notes for the current message (`memory_search`) and
+  injects them as `## Relevant memory for this turn`. Paused memory skips both
+  ranking and injection.
+- Untrusted notes are excluded from automatic recall and labelled in tool
+  results; editing or deleting a recalled note uses the same id.
+- The Settings memory page reports model status, installs the 23 MB MiniLM
+  model, and rebuilds the index. The ONNX session is shared with voice.
+- Not yet: recency/trust priors, consolidation, knowledge chunks, episodic
+  search, jev verifier.
 
 ## Goals
 

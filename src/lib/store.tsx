@@ -385,6 +385,7 @@ interface AppContextValue {
   projectMemories: Memory[];
   globalSentMemories: Memory[];
   projectSentMemories: Memory[];
+  recalledMemories: Memory[];
   pendingMemories: PendingMemory[];
   memoryOmitted: number;
   memoryPaused: boolean;
@@ -645,6 +646,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingMemoriesRef = useRef<PendingMemory[]>([]);
   const globalSentRef = useRef<Set<string> | null>(null);
   const projectSentRef = useRef<Set<string> | null>(null);
+  const relevantMemoriesRef = useRef<Memory[]>([]);
   const globalSentMemories = useMemo(
     () => (memoryPaused ? [] : sentMemories(globalMemories, globalSentRef.current)),
     [globalMemories, memoryPaused],
@@ -653,6 +655,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (memoryPaused ? [] : sentMemories(projectMemories, projectSentRef.current)),
     [projectMemories, memoryPaused],
   );
+  const [recalledMemories, setRecalledMemories] = useState<Memory[]>([]);
+  const memoryPausedRef = useRef(memoryPaused);
+  useEffect(() => {
+    memoryPausedRef.current = memoryPaused;
+  }, [memoryPaused]);
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
@@ -739,6 +746,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshMemories = useCallback(async () => {
     const projectId = projectRef.current?.id ?? null;
+    setRecalledMemories([]);
     let read: Awaited<ReturnType<typeof api.memoryRead>>;
     try {
       read = await api.memoryRead(projectId);
@@ -1269,6 +1277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       globalMemories,
       project: activeProject,
       projectMemories,
+      relevantMemories: relevantMemoriesRef.current,
       userName: displayName || undefined,
       standingPrompt: standingPrompt || undefined,
       chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
@@ -1645,6 +1654,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         projectMemories: memoryPaused
           ? []
           : sentMemories(projectMemoriesRef.current, projectSentRef.current),
+        relevantMemories: memoryPaused ? [] : relevantMemoriesRef.current,
         userName: displayNameRef.current || undefined,
         standingPrompt: standingPromptRef.current || undefined,
         chatPrompt: chatPromptRef.current ?? undefined,
@@ -2366,6 +2376,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
         imagesForPayload.length > 0 ? buildUserContent(sendText, imagesForPayload) : sendText,
         documentBlock,
       );
+      try {
+        if (memoryPausedRef.current) {
+          relevantMemoriesRef.current = [];
+          setRecalledMemories([]);
+        } else {
+          const hits = await api.memorySearch(
+            sendText,
+            projectRef.current?.id ?? null,
+            4,
+          );
+          const recalled = hits
+            .filter((hit) => hit.trusted)
+            .map((hit) => {
+              const project = hit.scope.startsWith("project:")
+                ? hit.scope.slice("project:".length)
+                : null;
+              const kind = (
+                ["fact", "preference", "summary", "note"] as const
+              ).includes(hit.kind as "fact" | "preference" | "summary" | "note")
+                ? (hit.kind as Memory["kind"])
+                : "note";
+              const stamp = Date.parse(hit.date) || Date.now();
+              return {
+                id: hit.id,
+                scope: project ? ("project" as const) : ("global" as const),
+                project_id: project,
+                kind,
+                content: hit.text,
+                created_at: stamp,
+                updated_at: stamp,
+              } satisfies Memory;
+            });
+          relevantMemoriesRef.current = recalled;
+          setRecalledMemories(recalled);
+        }
+      } catch {
+        relevantMemoriesRef.current = [];
+        setRecalledMemories([]);
+      }
       outgoing.push({ role: "user", content: userContent });
       const payload = buildPayload(conversationId, outgoing);
 
@@ -2703,6 +2752,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     projectMemories,
     globalSentMemories,
     projectSentMemories,
+    recalledMemories,
     pendingMemories,
     memoryOmitted,
     memoryPaused,

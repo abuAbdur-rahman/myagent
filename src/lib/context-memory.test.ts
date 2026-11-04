@@ -73,3 +73,38 @@ describe("buildSystemPrompt memory scoping", () => {
     expect(system).not.toContain("Project memory");
   });
 });
+
+describe("buildSystemPrompt relevant memory", () => {
+  const RANKED: Memory = {
+    id: "r1",
+    scope: "project",
+    project_id: "pa",
+    kind: "note",
+    content: "Checkout uses the hosted payment page.",
+    created_at: 0,
+    updated_at: 0,
+  };
+
+  it("adds ranked notes under their own heading", () => {
+    const system = buildSystemPrompt({
+      globalMemories: [],
+      project: PROJECT_A,
+      projectMemories: [],
+      relevantMemories: [RANKED],
+    });
+    expect(system).toContain("## Relevant memory for this turn");
+    expect(system).toContain("Checkout uses the hosted payment page.");
+  });
+
+  it("does not repeat a note that is already sent in full", () => {
+    const system = buildSystemPrompt({
+      globalMemories: [GLOBAL],
+      project: null,
+      projectMemories: [],
+      relevantMemories: [GLOBAL],
+    });
+    const hits = system?.match(/Always answer with TypeScript examples\./g) ?? [];
+    expect(hits).toHaveLength(1);
+    expect(system).not.toContain("## Relevant memory for this turn");
+  });
+});

@@ -3864,6 +3864,8 @@ export function MemoryPage() {
   const [rawBusy, setRawBusy] = useState(false);
   const [rawError, setRawError] = useState<string | null>(null);
   const [unassigned, setUnassigned] = useState<api.UnassignedMemory[]>([]);
+  const [searchModel, setSearchModel] = useState<api.MemoryModelStatus | null>(null);
+  const [indexBusy, setIndexBusy] = useState(false);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -3873,6 +3875,38 @@ export function MemoryPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    void api
+      .memoryModelStatus()
+      .then(setSearchModel)
+      .catch(() => setSearchModel(null));
+  }, []);
+
+  const installModel = async () => {
+    setIndexBusy(true);
+    try {
+      setSearchModel(await api.memoryModelInstall());
+      await api.memoryReindex();
+      toast("Meaning-based search is ready");
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setIndexBusy(false);
+    }
+  };
+
+  const rebuildIndex = async () => {
+    setIndexBusy(true);
+    try {
+      const report = await api.memoryReindex();
+      toast(`Indexed ${report.scanned} notes, ${report.embedded} newly embedded`);
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setIndexBusy(false);
+    }
+  };
 
   const keepUnassigned = async (id: string) => {
     try {
@@ -4144,6 +4178,35 @@ export function MemoryPage() {
               Every saved note fits in the current send budget.
             </p>
           )}
+        </div>
+
+        <div className="rounded-card border border-border bg-surface p-3">
+          <div className="flex items-center justify-between gap-2">
+            <b className="text-sm">Search quality</b>
+            <span className={searchModel?.installed ? "text-xs text-success" : "text-xs text-muted"}>
+              {searchModel?.installed ? "Meaning-based" : "Keywords only"}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            {searchModel?.installed
+              ? "Recall matches notes by meaning as well as wording, and up to four notes that fit this message are added automatically."
+              : "Recall currently matches exact words. Install the small local model to also match meaning, so a note can surface even when the wording differs."}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {!searchModel?.installed && (
+              <Button size="sm" onClick={() => void installModel()} disabled={indexBusy}>
+                {indexBusy ? "Installing…" : "Install model (23 MB)"}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void rebuildIndex()}
+              disabled={indexBusy}
+            >
+              {indexBusy ? "Rebuilding…" : "Rebuild index"}
+            </Button>
+          </div>
         </div>
 
         <div className="rounded-card border border-border bg-surface p-3">

@@ -12,6 +12,8 @@ export interface ContextInput {
   globalMemories: Memory[];
   project: Project | null;
   projectMemories: Memory[];
+  /** Notes ranked for the current turn by the hybrid memory index. */
+  relevantMemories?: Memory[];
   userName?: string;
   knowledgeBlock?: string;
   skillIndexBlock?: string;
@@ -90,6 +92,15 @@ export function buildSystemPrompt(input: ContextInput): string | null {
 
   const chat = input.chatPrompt?.trim();
   if (chat) blocks.push(`## This chat\n${chat}`);
+
+  const relevant = renderMemories(
+    (input.relevantMemories ?? []).filter(
+      (memory) =>
+        !input.globalMemories.some((sent) => sent.id === memory.id) &&
+        !input.projectMemories.some((sent) => sent.id === memory.id),
+    ),
+  );
+  if (relevant) blocks.push(`## Relevant memory for this turn\n${relevant}`);
 
   const base = blocks.join("\n\n");
   const skills = input.skillIndexBlock?.trim();
