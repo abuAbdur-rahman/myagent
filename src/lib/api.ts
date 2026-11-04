@@ -928,7 +928,7 @@ interface MemorySearchHit {
   trusted: boolean;
 }
 
-interface MemoryFillReport {
+export interface MemoryFillReport {
   scanned: number;
   embedded: number;
   skipped: number;

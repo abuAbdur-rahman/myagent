@@ -3866,6 +3866,7 @@ export function MemoryPage() {
   const [unassigned, setUnassigned] = useState<api.UnassignedMemory[]>([]);
   const [searchModel, setSearchModel] = useState<api.MemoryModelStatus | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
+  const [statusFailed, setStatusFailed] = useState(false);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -3879,16 +3880,32 @@ export function MemoryPage() {
   useEffect(() => {
     void api
       .memoryModelStatus()
-      .then(setSearchModel)
-      .catch(() => setSearchModel(null));
+      .then((status) => {
+        setSearchModel(status);
+        setStatusFailed(false);
+      })
+      .catch(() => {
+        setSearchModel(null);
+        setStatusFailed(true);
+      });
   }, []);
+
+  const reportIndex = (report: api.MemoryFillReport, done: string) => {
+    if (report.errors.length > 0) {
+      setActionError(
+        `Indexed ${report.scanned} notes, but ${report.errors.length} could not be embedded: ${report.errors[0]}`,
+      );
+      return;
+    }
+    toast(done);
+  };
 
   const installModel = async () => {
     setIndexBusy(true);
     try {
       setSearchModel(await api.memoryModelInstall());
-      await api.memoryReindex();
-      toast("Meaning-based search is ready");
+      const report = await api.memoryReindex();
+      reportIndex(report, "Meaning-based search is ready");
     } catch (e) {
       setActionError(errorText(e));
     } finally {
@@ -3900,7 +3917,10 @@ export function MemoryPage() {
     setIndexBusy(true);
     try {
       const report = await api.memoryReindex();
-      toast(`Indexed ${report.scanned} notes, ${report.embedded} newly embedded`);
+      reportIndex(
+        report,
+        `Indexed ${report.scanned} notes, ${report.embedded} newly embedded`,
+      );
     } catch (e) {
       setActionError(errorText(e));
     } finally {
@@ -4184,16 +4204,22 @@ export function MemoryPage() {
           <div className="flex items-center justify-between gap-2">
             <b className="text-sm">Search quality</b>
             <span className={searchModel?.installed ? "text-xs text-success" : "text-xs text-muted"}>
-              {searchModel?.installed ? "Meaning-based" : "Keywords only"}
+              {statusFailed
+                ? "Status unavailable"
+                : searchModel?.installed
+                  ? "Meaning-based"
+                  : "Keywords only"}
             </span>
           </div>
           <p className="mt-1 text-xs text-muted">
-            {searchModel?.installed
-              ? "Recall matches notes by meaning as well as wording, and up to four notes that fit this message are added automatically."
-              : "Recall currently matches exact words. Install the small local model to also match meaning, so a note can surface even when the wording differs."}
+            {statusFailed
+              ? "Could not read the search model status. Reopen this page to try again."
+              : searchModel?.installed
+                ? "Recall matches notes by meaning as well as wording, and up to four notes that fit this message are added automatically."
+                : "Recall currently matches exact words. Install the small local model to also match meaning, so a note can surface even when the wording differs."}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {!searchModel?.installed && (
+            {!statusFailed && !searchModel?.installed && (
               <Button size="sm" onClick={() => void installModel()} disabled={indexBusy}>
                 {indexBusy ? "Installing…" : "Install model (23 MB)"}
               </Button>

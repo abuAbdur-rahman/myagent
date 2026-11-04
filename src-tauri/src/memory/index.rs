@@ -290,6 +290,17 @@ pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillR
         }
     }
 
+    for note in &pending {
+        if vectors.contains_key(&note.id) {
+            continue;
+        }
+        sqlx::query("DELETE FROM memory_vectors WHERE id = ?")
+            .bind(&note.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| format!("drop stale memory vector: {error}"))?;
+    }
+
     for (id, vector) in &vectors {
         let Some(note) = notes.get(id) else { continue };
         sqlx::query(
