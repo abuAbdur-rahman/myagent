@@ -3852,6 +3852,8 @@ export function MemoryPage() {
     conversations,
     memoryCompat,
     memoryOmitted,
+    memoryPaused,
+    setMemoryPaused,
     refreshMemories,
   } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -4113,6 +4115,15 @@ export function MemoryPage() {
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-active">
             <div className="h-full bg-accent" style={{ width: `${budgetPct}%` }} />
           </div>
+          <label className="mt-3 flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted">Send memory with chats</span>
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={!memoryPaused}
+              onChange={(event) => setMemoryPaused(!event.target.checked)}
+            />
+          </label>
           <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-xs">
             <dt className="text-muted">Stored notes</dt>
             <dd className="m-0">{memories.length}</dd>

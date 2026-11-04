@@ -387,6 +387,8 @@ interface AppContextValue {
   projectSentMemories: Memory[];
   pendingMemories: PendingMemory[];
   memoryOmitted: number;
+  memoryPaused: boolean;
+  setMemoryPaused: (value: boolean) => void;
   memoryCompat: boolean;
   memoryReport: api.MemoryMigrationReport | null;
   dismissMemoryReport: () => void;
@@ -563,6 +565,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [projectMemories, setProjectMemories] = useState<Memory[]>([]);
   const [pendingMemories, setPendingMemories] = useState<PendingMemory[]>([]);
   const [memoryOmitted, setMemoryOmitted] = useState(0);
+  const [memoryPaused, setMemoryPausedState] = useState(
+    () => localStorage.getItem("memoryPaused") === "1",
+  );
+  const setMemoryPaused = useCallback((value: boolean) => {
+    setMemoryPausedState(value);
+    localStorage.setItem("memoryPaused", value ? "1" : "0");
+  }, []);
   const [memoryCompat, setMemoryCompat] = useState(false);
   const [memoryReport, setMemoryReport] = useState<api.MemoryMigrationReport | null>(null);
 
@@ -637,12 +646,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const globalSentRef = useRef<Set<string> | null>(null);
   const projectSentRef = useRef<Set<string> | null>(null);
   const globalSentMemories = useMemo(
-    () => sentMemories(globalMemories, globalSentRef.current),
-    [globalMemories],
+    () => (memoryPaused ? [] : sentMemories(globalMemories, globalSentRef.current)),
+    [globalMemories, memoryPaused],
   );
   const projectSentMemories = useMemo(
-    () => sentMemories(projectMemories, projectSentRef.current),
-    [projectMemories],
+    () => (memoryPaused ? [] : sentMemories(projectMemories, projectSentRef.current)),
+    [projectMemories, memoryPaused],
   );
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
@@ -1629,16 +1638,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const systemPromptFromRefs = useCallback(
     () =>
       buildSystemPrompt({
-        globalMemories: sentMemories(globalMemoriesRef.current, globalSentRef.current),
+        globalMemories: memoryPaused
+          ? []
+          : sentMemories(globalMemoriesRef.current, globalSentRef.current),
         project: projectRef.current,
-        projectMemories: sentMemories(projectMemoriesRef.current, projectSentRef.current),
+        projectMemories: memoryPaused
+          ? []
+          : sentMemories(projectMemoriesRef.current, projectSentRef.current),
         userName: displayNameRef.current || undefined,
         standingPrompt: standingPromptRef.current || undefined,
         chatPrompt: chatPromptRef.current ?? undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
         skillIndexBlock: skillIndexRef.current || undefined,
       }),
-    [],
+    [memoryPaused],
   );
 
   const withSystem = useCallback(
@@ -2692,6 +2705,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     projectSentMemories,
     pendingMemories,
     memoryOmitted,
+    memoryPaused,
+    setMemoryPaused,
     memoryCompat,
     memoryReport,
     dismissMemoryReport: () => setMemoryReport(null),

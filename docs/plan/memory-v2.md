@@ -494,12 +494,12 @@ Shipped in 0.8.9:
 - Sidebar: a pending count badge on Settings.
 - Context inspector: the sent notes, labelled G or P, instead of only counts.
 - An instant save shows a "Memory saved" toast with Undo.
+- A per-scope pause switch stops memory injection without deleting anything.
 - Memory approvals use plain language ("Delete this saved memory?") and never
   offer "Always allow", because the rule is scoped to one note id.
 
 Still open:
 
-- A pause switch per scope.
 - "Why this note" (last used, score) once the index lands.
 - A dedicated empty state for a project with no memory and no documents.
 
