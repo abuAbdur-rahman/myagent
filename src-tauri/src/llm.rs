@@ -189,6 +189,20 @@ pub struct ChatMessage {
     pub reasoning: Option<String>,
 }
 
+fn last_user_text(messages: &[ChatMessage]) -> Option<&str> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .and_then(|message| match &message.content {
+            MessageContent::Text(text) => Some(text.as_str()),
+            MessageContent::Parts(parts) => parts.iter().find_map(|part| match part {
+                ContentPart::Text { text } => Some(text.as_str()),
+                ContentPart::ImageUrl { .. } => None,
+            }),
+        })
+}
+
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub request_id: String,
@@ -2987,6 +3001,7 @@ impl ToolRunner for RealTools<'_> {
         } else {
             None
         };
+        let last_user_message = last_user_text(&self.req.messages);
 
         match match crate::mcp::try_execute(
             self.app,
@@ -3013,6 +3028,7 @@ impl ToolRunner for RealTools<'_> {
                         connection_id: Some(self.req.connection_id.as_str()),
                         vision_fallback_model: self.req.vision_fallback_model.as_deref(),
                         vision_fallback_connection: self.req.vision_fallback_connection.as_deref(),
+                        last_user_message,
                         untrusted_source: self.untrusted,
                     },
                     self.cancel,

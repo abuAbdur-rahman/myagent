@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../lib/store";
 import { projectInputSchema, type Memory } from "../lib/types";
 import { MemoryEditor } from "./MemoryEditor";
+import { PendingMemoryBar } from "./PendingMemoryBar";
 import { confirmDialog } from "./ConfirmDialog";
 import { Button, Dialog, Input, Textarea } from "./ui";
 
@@ -144,7 +145,9 @@ export function ProjectDialog({
         <div>
           <h3 className="mb-2 text-sm font-semibold text-text-primary">Project memory</h3>
           {currentId ? (
-            <MemoryEditor
+            <>
+              <PendingMemoryBar projectId={currentId} />
+              <MemoryEditor
               memories={memories}
               emptyHint="No memory for this project yet."
               onAdd={async (draft) => {
@@ -160,6 +163,7 @@ export function ProjectDialog({
                 await reloadMemories(currentId);
               }}
             />
+            </>
           ) : (
             <p className="rounded-control border border-vault-line px-3 py-3 text-xs text-text-faint">
               Save the project first, then add memory to it.

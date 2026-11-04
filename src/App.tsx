@@ -14,6 +14,7 @@ import { Composer } from "./components/Composer";
 import { ActivityPill } from "./components/ActivityPill";
 import { pillPlacement } from "./lib/activity";
 import { TurnCards } from "./components/TurnCards";
+import { PendingMemoryBar } from "./components/PendingMemoryBar";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { OnboardingDialog } from "./components/OnboardingDialog";
@@ -207,6 +208,7 @@ function Shell() {
               </div>
               <div className="flex-none px-4 pb-2">
                 <div className="relative mx-auto w-full max-w-[760px]">
+                  <PendingMemoryBar />
                   <TurnCards />
                   {pill === "inline" && (streaming || compacting || voicePhase !== "idle") ? (
                     <div className="mb-3 flex h-6 items-center justify-center">

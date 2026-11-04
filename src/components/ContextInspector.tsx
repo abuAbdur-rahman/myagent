@@ -43,6 +43,7 @@ export function ContextInspector() {
     activeProject,
     globalMemories,
     projectMemories,
+    pendingMemories,
     standingPrompt,
     chatPrompt,
     contextInfo,
@@ -171,11 +172,32 @@ export function ContextInspector() {
           </pre>
         </Section>
 
-        <Section title="Memory" tokens={estimate(globalMemories.concat(projectMemories).map((m) => m.content).join("\n"))}>
-          <div className="flex flex-wrap gap-1 text-xs text-muted">
-            <Badge>{globalMemories.length} global</Badge>
-            <Badge>{projectMemories.length} project</Badge>
-          </div>
+        <Section
+          title="Memory"
+          tokens={estimate(globalMemories.concat(projectMemories).map((m) => m.content).join("\n"))}
+          count={globalMemories.length + projectMemories.length}
+        >
+          {globalMemories.length + projectMemories.length === 0 ? (
+            <p className="m-0 text-xs text-muted">No memory is sent this turn.</p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {[...globalMemories, ...projectMemories].map((memory) => (
+                <li key={memory.id} className="flex min-w-0 gap-1.5">
+                  <span className="flex-none text-muted">
+                    {memory.scope === "global" ? "G" : "P"}
+                  </span>
+                  <span className="min-w-0 truncate text-muted" title={memory.content}>
+                    {memory.content}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {pendingMemories.length > 0 && (
+            <p className="mt-2 text-xs text-warn">
+              {pendingMemories.length} waiting for review.
+            </p>
+          )}
         </Section>
 
         <Section title="Project">

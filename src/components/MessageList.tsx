@@ -83,6 +83,7 @@ function ToolIcon({ name }: { name: string }) {
       return <FileCode {...props} />;
     case "remember":
     case "recall_memory":
+    case "memory_pending":
       return <FileText {...props} />;
     case "update_memory":
       return <Pencil {...props} />;

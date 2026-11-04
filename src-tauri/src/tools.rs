@@ -476,17 +476,26 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "remember",
-                "description": "Propose a durable fact about the user. Use only when the user asks to remember something or states a lasting preference. The user reviews and approves the note before it is stored, so do not claim it is saved.",
+                "description": "Propose a durable fact about the user. Use only when the user asks to remember something or states a lasting preference. An explicit request is saved immediately and the user can undo it; anything else waits for approval in an inline card, so do not claim it is saved.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "content": { "type": "string", "description": "The fact, one or two sentences." },
                         "kind": { "type": "string", "enum": ["fact", "preference", "summary", "note"] },
                         "scope": { "type": "string", "enum": ["global", "project"], "description": "project = current project only, global = every chat." },
+                        "explicit": { "type": "boolean", "description": "True only when the user explicitly asked to remember this in their last message (for example \"remember this\" or \"don't forget\")." },
                     },
                     "required": ["content"],
                     "additionalProperties": false,
                 },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_pending",
+                "description": "List memories waiting for the user to approve. Use it when the user asks whether something was saved, or when you need the review state.",
+                "parameters": { "type": "object", "properties": {}, "additionalProperties": false },
             },
         },
         {
@@ -1012,14 +1021,24 @@ fn normalized_memory(text: &str) -> String {
         .to_lowercase()
 }
 
-fn file_memory_has(root: &Path, project_id: Option<&str>, text: &str) -> bool {
+fn file_memory_similar(root: &Path, project_id: Option<&str>, text: &str) -> Option<String> {
     let needle = normalized_memory(text);
-    crate::memory::store::read(root, project_id)
-        .map(|doc| {
-            doc.entries()
-                .any(|entry| normalized_memory(&entry.text) == needle)
+    let mut docs = Vec::new();
+    if let Some(pid) = project_id
+        && let Ok(doc) = crate::memory::store::read(root, Some(pid))
+    {
+        docs.push(doc);
+    }
+    if let Ok(doc) = crate::memory::store::read(root, None) {
+        docs.push(doc);
+    }
+    docs.iter()
+        .flat_map(|doc| doc.entries())
+        .find(|entry| {
+            normalized_memory(&entry.text) == needle
+                || crate::memory::similarity(&entry.text, text) >= 0.85
         })
-        .unwrap_or(false)
+        .map(|entry| entry.id.clone())
 }
 
 async fn find_memory_content(
@@ -1599,6 +1618,7 @@ pub struct ExecContext<'a> {
     pub connection_id: Option<&'a str>,
     pub vision_fallback_model: Option<&'a str>,
     pub vision_fallback_connection: Option<&'a str>,
+    pub last_user_message: Option<&'a str>,
     pub untrusted_source: bool,
 }
 
@@ -1633,6 +1653,12 @@ pub async fn execute(
             if content.chars().count() > MEMORY_CAP {
                 return Err("content too long (max 2000 chars)".to_string());
             }
+            if crate::memory::looks_like_meta(&content) {
+                return Err(
+                    "That is a note about memory itself, not a fact. Nothing was queued."
+                        .to_string(),
+                );
+            }
             let kind = arg_str(&args, "kind").unwrap_or_else(|| "fact".to_string());
             if !MEMORY_KINDS.contains(&kind.as_str()) {
                 return Err("kind must be fact, preference, summary or note".to_string());
@@ -1648,6 +1674,14 @@ pub async fn execute(
                 return Err(crate::memory::secret_message().to_string());
             }
             let target_project = if scope == "project" { project_id } else { None };
+            let explicit = args
+                .get("explicit")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                && context
+                    .last_user_message
+                    .map(crate::memory::explicit_memory_request)
+                    .unwrap_or(false);
             let needle = normalized_memory(&content);
             let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
             let seen: Vec<String> = sqlx::query_scalar(
@@ -1658,15 +1692,18 @@ pub async fn execute(
             .fetch_all(&pool)
             .await
             .map_err(|e| format!("database: {e}"))?;
-            if seen.iter().any(|row| normalized_memory(row) == needle) {
+            if seen.iter().any(|row| {
+                normalized_memory(row) == needle || crate::memory::similarity(row, &content) >= 0.85
+            }) {
                 return Ok(ExecOutput {
-                    output: "That note is already waiting for the user to review it.".to_string(),
+                    output: "A similar note is already waiting for the user to review it."
+                        .to_string(),
                     artifact: None,
                     files: Vec::new(),
                 });
             }
             let duplicate = if let Some(root) = memory_file_mode(app) {
-                file_memory_has(&root, target_project, &content)
+                file_memory_similar(&root, target_project, &content)
             } else {
                 let rows: Vec<String> = sqlx::query_scalar(
                     "SELECT content FROM memories WHERE scope = ? AND project_id IS ?",
@@ -1676,9 +1713,14 @@ pub async fn execute(
                 .fetch_all(&pool)
                 .await
                 .map_err(|e| format!("database: {e}"))?;
-                rows.iter().any(|row| normalized_memory(row) == needle)
+                rows.iter()
+                    .find(|row| {
+                        normalized_memory(row) == needle
+                            || crate::memory::similarity(row, &content) >= 0.85
+                    })
+                    .cloned()
             };
-            if duplicate {
+            if duplicate.is_some() {
                 return Ok(ExecOutput {
                     output: "That is already in memory; nothing was queued.".to_string(),
                     artifact: None,
@@ -1692,6 +1734,44 @@ pub async fn execute(
             } else {
                 "trusted"
             };
+            if explicit {
+                if let Some(root) = memory_file_mode(app) {
+                    let kind_value = crate::memory::file::Kind::parse(&kind)
+                        .unwrap_or(crate::memory::file::Kind::Fact);
+                    crate::memory::store::append(
+                        &root,
+                        target_project,
+                        &id,
+                        &content,
+                        kind_value,
+                        &crate::memory::file::today(),
+                        untrusted_source,
+                    )?;
+                } else {
+                    sqlx::query(
+                        "INSERT INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(&id)
+                    .bind(&scope)
+                    .bind(target_project)
+                    .bind(&kind)
+                    .bind(&content)
+                    .bind(conversation_id)
+                    .bind(now)
+                    .bind(now)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| format!("database: {e}"))?;
+                }
+                return Ok(ExecOutput {
+                    output: format!(
+                        "Saved: {}. The user can undo it from the memory card.",
+                        memory_preview(&content)
+                    ),
+                    artifact: None,
+                    files: Vec::new(),
+                });
+            }
             sqlx::query(
                 "INSERT INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
@@ -1841,6 +1921,49 @@ pub async fn execute(
             }
             Ok(ExecOutput {
                 output,
+                artifact: None,
+                files: Vec::new(),
+            })
+        }
+        "memory_pending" => {
+            let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+            let rows: Vec<(String, String, Option<String>, String, String, String)> =
+                sqlx::query_as(
+                    "SELECT id, scope, project_id, kind, content, trust FROM pending_memories WHERE (? IS NULL OR conversation_id = ?) ORDER BY created_at DESC LIMIT 20",
+                )
+                .bind(conversation_id)
+                .bind(conversation_id)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| format!("database: {e}"))?;
+            if rows.is_empty() {
+                return Ok(ExecOutput {
+                    output: "No memories are waiting for review.".to_string(),
+                    artifact: None,
+                    files: Vec::new(),
+                });
+            }
+            let total = rows.len();
+            let lines: Vec<String> = rows
+                .into_iter()
+                .map(|(id, scope, pid, kind, content, trust)| {
+                    let where_ = if scope == "project" && pid.as_deref() == project_id {
+                        "this project"
+                    } else {
+                        "global"
+                    };
+                    format!(
+                        "- [{id}] ({kind}, {where_}, {trust}) {}",
+                        memory_preview(&content)
+                    )
+                })
+                .collect();
+            Ok(ExecOutput {
+                output: format!(
+                    "{}\n{}",
+                    lines.join("\n"),
+                    tooltext::count_report(total, total)
+                ),
                 artifact: None,
                 files: Vec::new(),
             })

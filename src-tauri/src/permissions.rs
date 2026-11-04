@@ -188,6 +188,11 @@ pub fn default_rules() -> Vec<Rule> {
             effect: Effect::Allow,
         },
         Rule {
+            action: "memory_pending".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
             action: "remember".to_string(),
             resource: "*".to_string(),
             effect: Effect::Allow,

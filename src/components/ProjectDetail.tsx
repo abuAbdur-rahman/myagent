@@ -4,6 +4,7 @@ import { useApp } from "../lib/store";
 import { projectInputSchema, type Conversation } from "../lib/types";
 import { deleteKnowledgeDoc, listKnowledgeDocs, type KnowledgeDocRow } from "../lib/db";
 import { MemoryEditor } from "./MemoryEditor";
+import { PendingMemoryBar } from "./PendingMemoryBar";
 import { Button, Input, Textarea } from "./ui";
 import { confirmDialog } from "./ConfirmDialog";
 import { errorText } from "../lib/utils";
@@ -299,6 +300,7 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
               {projectMemories.length} note{projectMemories.length === 1 ? "" : "s"} · sent with
               every chat here
             </p>
+            <PendingMemoryBar projectId={project.id} />
             <MemoryEditor
               memories={projectMemories}
               emptyHint="No memory for this project yet."

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ShieldQuestion, CircleQuestionMark } from "lucide-react";
 import { useApp } from "../lib/store";
-import { approvalFootnote, approvalSubtitle, screenNote } from "../lib/approvals";
+import { approvalFootnote, approvalSubtitle, isMemoryApproval, screenNote } from "../lib/approvals";
 import type { ScreenVerdict } from "../lib/types";
 import { Button, Input } from "./ui";
 
@@ -30,10 +30,11 @@ function inEditable(target: EventTarget | null): boolean {
 function approvalKey(
   key: string,
   blocked: boolean,
+  memory: boolean,
   reply: (reply: "once" | "always" | "deny") => Promise<void>,
 ) {
   if (key === "1") void reply("once");
-  else if (key === "2" && !blocked) void reply("always");
+  else if (key === "2" && !blocked && !memory) void reply("always");
   else if (key === "Escape") void reply("deny");
 }
 
@@ -81,8 +82,9 @@ function ApprovalCard() {
   useEffect(() => {
     if (!approval) return;
     const blocked = approval.screen?.suggest_deny === true || approval.screenFailed;
+    const memory = isMemoryApproval(approval.tool);
     const onKey = (e: KeyboardEvent) => {
-      if (!inEditable(e.target)) approvalKey(e.key, blocked, replyApproval);
+      if (!inEditable(e.target)) approvalKey(e.key, blocked, memory, replyApproval);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -91,6 +93,7 @@ function ApprovalCard() {
   if (!approval) return null;
   const flagged = approval.screen?.suggest_deny === true;
   const blocked = flagged || approval.screenFailed;
+  const memory = isMemoryApproval(approval.tool);
   const footnote = footnoteFor(
     approval.tool,
     approval.cwd,
@@ -108,7 +111,17 @@ function ApprovalCard() {
       <div className="flex items-center gap-2">
         <ShieldQuestion size={16} className="flex-none text-warn" />
         <div id="approval-title" className="font-medium">
-          Allow <span className="font-mono">{approval.tool}</span> to run?
+          {memory ? (
+            approval.tool === "delete_memory" ? (
+              "Delete this saved memory?"
+            ) : (
+              "Update this saved memory?"
+            )
+          ) : (
+            <>
+              Allow <span className="font-mono">{approval.tool}</span> to run?
+            </>
+          )}
         </div>
       </div>
       <div className="mt-0.5 pl-6 text-xs text-muted">
@@ -125,14 +138,16 @@ function ApprovalCard() {
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
           Allow once <Kbd>1</Kbd>
         </Button>
-        <Button
-          size="sm"
-          variant="default"
-          disabled={blocked}
-          onClick={() => void replyApproval("always")}
-        >
-          Always allow <Kbd>2</Kbd>
-        </Button>
+        {!memory && (
+          <Button
+            size="sm"
+            variant="default"
+            disabled={blocked}
+            onClick={() => void replyApproval("always")}
+          >
+            Always allow <Kbd>2</Kbd>
+          </Button>
+        )}
         <span className="flex-1" />
         <Button size="sm" variant="danger" onClick={() => void replyApproval("deny")}>
           Deny <Kbd>Esc</Kbd>

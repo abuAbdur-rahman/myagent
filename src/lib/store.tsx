@@ -388,7 +388,7 @@ interface AppContextValue {
   memoryCompat: boolean;
   memoryReport: api.MemoryMigrationReport | null;
   dismissMemoryReport: () => void;
-  refreshMemories: () => Promise<void>;
+  refreshMemories: () => Promise<{ global: Memory[]; project: Memory[] }>;
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
@@ -399,7 +399,7 @@ interface AppContextValue {
     projectId?: string | null,
   ) => Promise<void>;
   deleteMemory: (id: string, scope?: MemoryScope, projectId?: string | null) => Promise<void>;
-  approvePendingMemory: (id: string) => Promise<void>;
+  approvePendingMemory: (id: string, content?: string) => Promise<void>;
   dismissPendingMemory: (id: string) => Promise<void>;
   undoApprovedMemory: (id: string) => Promise<void>;
 
@@ -725,22 +725,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       read = await api.memoryRead(projectId);
     } catch (e) {
       reportError(e);
-      return;
+      return { global: [], project: [] };
     }
     if (read.available) {
-      setGlobalMemories(
-        read.global.entries.map((entry) => memoryFromEntry(entry, "global", null)),
+      const global = read.global.entries.map((entry) =>
+        memoryFromEntry(entry, "global", null),
       );
-      setProjectMemories(
-        (read.project?.entries ?? []).map((entry) =>
-          memoryFromEntry(entry, "project", projectId),
-        ),
+      const project = (read.project?.entries ?? []).map((entry) =>
+        memoryFromEntry(entry, "project", projectId),
       );
+      setGlobalMemories(global);
+      setProjectMemories(project);
       setMemoryCompat(false);
       setMemoryOmitted(read.global.omitted + (read.project?.omitted ?? 0));
       globalSentRef.current = new Set(read.global.sent);
       projectSentRef.current = new Set(read.project?.sent ?? []);
-      return;
+      return { global, project };
     }
     const [global, project] = await Promise.all([
       db.listMemories("global", null),
@@ -752,6 +752,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMemoryOmitted(0);
     globalSentRef.current = null;
     projectSentRef.current = null;
+    return { global, project };
   }, []);
 
   const refreshPendingMemories = useCallback(async () => {
@@ -1425,23 +1426,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const approvePendingMemory = useCallback(
-    async (id: string) => {
+    async (id: string, content?: string) => {
+      const edited = content?.trim();
       if (memoryCompat) {
+        if (edited) await db.updatePendingMemory(id, edited);
         await db.approvePendingMemory(id);
       } else {
         const rows = await db.listPendingMemories();
         const row = rows.find((pending) => pending.id === id);
         if (!row) throw new Error("That memory is already gone");
+        const text = edited || row.content;
         await api.memoryAppend({
           scope: row.scope,
           projectId: row.project_id,
-          text: row.content,
+          text,
           kind: row.kind,
           id: row.id,
           date: undefined,
           trust: row.trust,
         });
-        approvedMemoryRef.current.set(id, row);
+        approvedMemoryRef.current.set(id, { ...row, content: text });
         await db.dismissPendingMemory(id);
       }
       await Promise.all([refreshMemories(), refreshPendingMemories()]);
@@ -1652,6 +1656,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       requestIdRef.current = requestId;
       lastPayloadRef.current = payload;
       setCanRetry(false);
+      const memoryIdsBefore = new Set(
+        [...globalMemoriesRef.current, ...projectMemoriesRef.current].map(
+          (memory) => memory.id,
+        ),
+      );
       const seed = keepSeed
         ? messagesRef.current.find((m) => m.id === assistantMsg.id)
         : undefined;
@@ -1890,12 +1899,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await refreshTodos(conversationId);
         if (toolLogRef.current.some((entry) => MEMORY_WRITE_TOOLS.has(entry.name))) {
           const waiting = pendingMemoriesRef.current.length;
-          const [, rows] = await Promise.all([refreshMemories(), refreshPendingMemories()]);
+          const [read, rows] = await Promise.all([
+            refreshMemories(),
+            refreshPendingMemories(),
+          ]);
           const added = rows.length - waiting;
           if (added > 0) {
             toast(`${added} ${added === 1 ? "memory is" : "memories are"} waiting for review`, {
               actions: [{ label: "Review", run: () => setSettingsPage("memory") }],
             });
+          } else {
+            const saved = [...read.global, ...read.project]
+              .filter((memory) => !memoryIdsBefore.has(memory.id))
+              .sort((a, b) => b.created_at - a.created_at)[0];
+            if (saved) {
+              toast("Memory saved", {
+                actions: [
+                  {
+                    label: "Undo",
+                    run: () => {
+                      void deleteMemory(saved.id, saved.scope, saved.project_id);
+                    },
+                  },
+                ],
+              });
+            }
           }
         }
       } catch (e) {
@@ -1937,6 +1965,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshTodos,
       refreshMemories,
       refreshPendingMemories,
+      deleteMemory,
       searchBackend,
       searchEndpoint,
     ],
