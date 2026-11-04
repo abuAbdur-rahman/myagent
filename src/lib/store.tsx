@@ -383,6 +383,8 @@ interface AppContextValue {
 
   globalMemories: Memory[];
   projectMemories: Memory[];
+  globalSentMemories: Memory[];
+  projectSentMemories: Memory[];
   pendingMemories: PendingMemory[];
   memoryOmitted: number;
   memoryCompat: boolean;
@@ -634,6 +636,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingMemoriesRef = useRef<PendingMemory[]>([]);
   const globalSentRef = useRef<Set<string> | null>(null);
   const projectSentRef = useRef<Set<string> | null>(null);
+  const globalSentMemories = useMemo(
+    () => sentMemories(globalMemories, globalSentRef.current),
+    [globalMemories],
+  );
+  const projectSentMemories = useMemo(
+    () => sentMemories(projectMemories, projectSentRef.current),
+    [projectMemories],
+  );
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
@@ -2678,6 +2688,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshProjects,
     globalMemories,
     projectMemories,
+    globalSentMemories,
+    projectSentMemories,
     pendingMemories,
     memoryOmitted,
     memoryCompat,

@@ -41,8 +41,8 @@ export function ContextInspector() {
   const {
     messages,
     activeProject,
-    globalMemories,
-    projectMemories,
+    globalSentMemories,
+    projectSentMemories,
     pendingMemories,
     standingPrompt,
     chatPrompt,
@@ -156,7 +156,7 @@ export function ContextInspector() {
             <dd className="m-0">{chatPrompt?.trim() ? "Set" : "None"}</dd>
             <dt className="text-muted">Memory</dt>
             <dd className="m-0">
-              {globalMemories.length} global · {projectMemories.length} project
+              {globalSentMemories.length} global · {projectSentMemories.length} project
             </dd>
           </dl>
         </Section>
@@ -174,14 +174,14 @@ export function ContextInspector() {
 
         <Section
           title="Memory"
-          tokens={estimate(globalMemories.concat(projectMemories).map((m) => m.content).join("\n"))}
-          count={globalMemories.length + projectMemories.length}
+          tokens={estimate(globalSentMemories.concat(projectSentMemories).map((m) => m.content).join("\n"))}
+          count={globalSentMemories.length + projectSentMemories.length}
         >
-          {globalMemories.length + projectMemories.length === 0 ? (
+          {globalSentMemories.length + projectSentMemories.length === 0 ? (
             <p className="m-0 text-xs text-muted">No memory is sent this turn.</p>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
-              {[...globalMemories, ...projectMemories].map((memory) => (
+              {[...globalSentMemories, ...projectSentMemories].map((memory) => (
                 <li key={memory.id} className="flex min-w-0 gap-1.5">
                   <span className="flex-none text-muted">
                     {memory.scope === "global" ? "G" : "P"}

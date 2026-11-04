@@ -3995,7 +3995,7 @@ export function MemoryPage() {
                 Nothing is stored until you save it.
               </span>
             </div>
-            <PendingMemoryList rows={globalPending} />
+            <PendingMemoryList rows={globalPending} onChanged={() => void reload()} />
           </div>
         )}
 

@@ -11,7 +11,10 @@ export function pendingForConversation<T extends { conversation_id: string | nul
 
 const VISIBLE = 3;
 
-export function PendingMemoryBar({ projectId }: { projectId?: string } = {}) {
+export function PendingMemoryBar({
+  projectId,
+  onChanged,
+}: { projectId?: string; onChanged?: () => void } = {}) {
   const { pendingMemories, activeConversationId, setSettingsPage } = useApp();
   const rows = projectId
     ? pendingMemories.filter(
@@ -48,7 +51,7 @@ export function PendingMemoryBar({ projectId }: { projectId?: string } = {}) {
         )}
       </div>
       <div className="mt-2">
-        <PendingMemoryList rows={shown} compact />
+        <PendingMemoryList rows={shown} compact onChanged={onChanged} />
       </div>
     </div>
   );

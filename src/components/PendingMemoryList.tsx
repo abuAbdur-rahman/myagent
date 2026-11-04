@@ -6,9 +6,11 @@ import { Button } from "./ui";
 export function PendingMemoryList({
   rows,
   compact = false,
+  onChanged,
 }: {
   rows: PendingMemory[];
   compact?: boolean;
+  onChanged?: () => void;
 }) {
   const { approvePendingMemory, dismissPendingMemory } = useApp();
   const [editing, setEditing] = useState<string | null>(null);
@@ -24,6 +26,7 @@ export function PendingMemoryList({
     try {
       await action();
       setEditing(null);
+      onChanged?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

@@ -146,7 +146,10 @@ export function ProjectDialog({
           <h3 className="mb-2 text-sm font-semibold text-text-primary">Project memory</h3>
           {currentId ? (
             <>
-              <PendingMemoryBar projectId={currentId} />
+              <PendingMemoryBar
+                projectId={currentId}
+                onChanged={() => void reloadMemories(currentId)}
+              />
               <MemoryEditor
               memories={memories}
               emptyHint="No memory for this project yet."
