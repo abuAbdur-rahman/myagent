@@ -1,0 +1,15 @@
+{
+  "mcp": {
+    "servers": {
+      "softr": {
+        "type": "remote",
+        "url": "https://mcp.softr.io/mcp",
+        "headers": {
+          "Authorization": "Bearer pat_qkhYmLTsXDSzgH634r6mwIVgIrP_baC1y92QWQmN"
+        },
+        "disabled": false
+      }
+    }
+  }
+  
+}

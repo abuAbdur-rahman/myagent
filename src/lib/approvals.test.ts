@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { approvalFootnote, approvalKind, approvalSubtitle, screenNote } from "./approvals";
+import { approvalFootnote, approvalKind, approvalSubtitle, isMemoryApproval, screenNote } from "./approvals";
 
 describe("approvalKind", () => {
   it("classifies shell tools as commands", () => {
@@ -22,7 +22,8 @@ describe("approvalKind", () => {
 describe("approvalSubtitle", () => {
   it("says command only for shell tools", () => {
     expect(approvalSubtitle("run_powershell")).toContain("this command");
-    expect(approvalSubtitle("delete_memory")).toContain("this call");
+    expect(approvalSubtitle("update_memory")).toContain("Memory is sent with future chats");
+    expect(approvalSubtitle("delete_memory")).toContain("Deleting a note");
     expect(approvalSubtitle("web_fetch")).toContain("this call");
   });
 });
@@ -54,7 +55,13 @@ describe("approvalFootnote", () => {
 
   it("drops cwd for non-shell tools and says this call", () => {
     const line = approvalFootnote("delete_memory", "saved memory", "Delete memory 3f2a");
-    expect(line).toBe("Always allows this delete_memory call · Delete memory 3f2a");
+    expect(line).toBe("Applies once · memory approvals are never saved as a rule");
+  });
+
+  it("marks memory tools as one-off approvals", () => {
+    expect(isMemoryApproval("delete_memory")).toBe(true);
+    expect(isMemoryApproval("update_memory")).toBe(true);
+    expect(isMemoryApproval("remember")).toBe(false);
   });
 
   it("omits the trailing separator when there is no command text", () => {

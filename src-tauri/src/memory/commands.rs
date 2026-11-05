@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use std::fs;
 use std::path::PathBuf;
 
 use super::file::{self, Kind};
-use super::{migrate, store};
+use super::{index, migrate, store};
 use crate::tools::memory_pool;
 
 #[derive(Serialize)]
@@ -41,7 +41,9 @@ fn kind_of(value: &str) -> Result<Kind, String> {
 pub async fn memory_migrate(app: AppHandle) -> Result<migrate::MigrationReport, String> {
     let root = store::root(&app)?;
     let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
-    migrate::run(&pool, &root, env!("CARGO_PKG_VERSION")).await
+    let report = migrate::run(&pool, &root, env!("CARGO_PKG_VERSION")).await?;
+    index::refresh(&app);
+    Ok(report)
 }
 
 #[tauri::command]
@@ -98,6 +100,7 @@ pub fn memory_append(app: AppHandle, input: AppendInput) -> Result<store::EntryV
     let untrusted = input.trust.as_deref() == Some("untrusted");
     let root = store::root(&app)?;
     let entry = store::append(&root, project, &id, &input.text, kind, &date, untrusted)?;
+    index::refresh(&app);
     Ok(store::EntryView::from(&entry))
 }
 
@@ -127,7 +130,11 @@ pub fn memory_update(
         None => None,
     };
     let root = store::root(&app)?;
-    store::update(&root, project, &id, text.as_deref(), kind)
+    let changed = store::update(&root, project, &id, text.as_deref(), kind)?;
+    if changed {
+        index::refresh(&app);
+    }
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -139,7 +146,11 @@ pub fn memory_forget(
 ) -> Result<bool, String> {
     let project = target(&scope, project_id.as_deref())?;
     let root = store::root(&app)?;
-    store::forget(&root, project, &id)
+    let changed = store::forget(&root, project, &id)?;
+    if changed {
+        index::refresh(&app);
+    }
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -154,13 +165,53 @@ pub fn memory_write_raw(
     let project = target(&scope, project_id.as_deref())?;
     let root = store::root(&app)?;
     let (mtime, len) = store::write_raw(&root, project, &markdown, mtime, len)?;
+    index::refresh(&app);
     Ok(MetaView { mtime, len })
 }
 
 #[tauri::command]
-pub fn memory_project_delete(app: AppHandle, project_id: String) -> Result<(), String> {
+pub async fn memory_search(
+    app: AppHandle,
+    query: String,
+    project_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<index::SearchHit>, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    index::search(
+        &pool,
+        &app,
+        &query,
+        project_id.as_deref(),
+        limit.unwrap_or(8),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_reindex(app: AppHandle) -> Result<index::FillReport, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    index::fill_embeddings(&pool, &app).await
+}
+
+#[tauri::command]
+pub fn memory_model_status(app: AppHandle) -> super::embed::ModelStatus {
+    super::embed::status(&app)
+}
+
+#[tauri::command]
+pub async fn memory_model_install(app: AppHandle) -> Result<super::embed::ModelStatus, String> {
+    let client = app.state::<reqwest::Client>();
+    super::embed::install(&app, &client).await
+}
+
+#[tauri::command]
+pub async fn memory_project_delete(app: AppHandle, project_id: String) -> Result<(), String> {
     let root = store::root(&app)?;
-    store::delete_project(&root, &project_id)
+    store::delete_project(&root, &project_id)?;
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    index::purge_project(&pool, &project_id).await?;
+    index::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -173,6 +224,7 @@ pub async fn memory_reset(app: AppHandle) -> Result<(), String> {
         .execute(&pool)
         .await
         .map_err(|error| format!("clear memory marker: {error}"))?;
+    index::refresh(&app);
     Ok(())
 }
 
@@ -274,7 +326,9 @@ pub fn memory_assign_unassigned(
         false,
     )?;
     file.rows.remove(index);
-    save_unassigned(&root, &file)
+    save_unassigned(&root, &file)?;
+    index::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]

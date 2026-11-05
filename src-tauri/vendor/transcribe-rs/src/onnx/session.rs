@@ -22,16 +22,27 @@ use std::sync::OnceLock;
 
 use crate::accel::{get_ort_accelerator, OrtAccelerator};
 
-static ENV: OnceLock<Environment> = OnceLock::new();
+static ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
 
-fn environment() -> &'static Environment {
-    ENV.get_or_init(|| {
-        ort::init()
-            .with_name("transcribe-rs")
-            .with_telemetry(false)
-            .build()
-            .expect("failed to initialize ONNX Runtime")
-    })
+fn build_environment() -> Result<Environment, String> {
+    ort::init()
+        .with_name("myagent")
+        .with_telemetry(false)
+        .build()
+        .map_err(|error| format!("failed to initialize ONNX Runtime: {error}"))
+}
+
+/// The one ONNX Runtime environment for this process, or the reason it failed.
+///
+/// ORT allows a single environment per process, so every model in the app —
+/// voice, memory embeddings and content screening — must share this one.
+pub fn try_environment() -> Result<&'static Environment, String> {
+    ENV.get_or_init(build_environment).as_ref().map_err(Clone::clone)
+}
+
+/// The shared environment, for callers that cannot degrade gracefully.
+pub fn environment() -> &'static Environment {
+    try_environment().expect("failed to initialize ONNX Runtime")
 }
 
 /// Build the execution provider list based on the global accelerator preference.

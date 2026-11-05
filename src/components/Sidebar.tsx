@@ -238,6 +238,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     setView,
     groupByDate,
     messages,
+    pendingMemories,
   } = useApp();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -434,12 +435,23 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         <div className="flex flex-col items-center gap-1">
           <button
             type="button"
-            aria-label="Settings"
+            aria-label={
+              pendingMemories.length > 0
+                ? `Settings, ${pendingMemories.length} ${
+                    pendingMemories.length === 1 ? "memory" : "memories"
+                  } waiting for review`
+                : "Settings"
+            }
             title="Settings (Ctrl+,)"
             onClick={() => setSettingsPage("general")}
-            className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+            className="relative grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
           >
             <Settings size={16} />
+            {pendingMemories.length > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-contrast">
+                {pendingMemories.length > 9 ? "9+" : pendingMemories.length}
+              </span>
+            )}
           </button>
           <Avatar initials={initialsOf(displayName)} />
         </div>
@@ -671,12 +683,23 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
       <div className="flex items-center gap-1.5 border-t border-border p-2">
         <button
           type="button"
-          aria-label="Settings"
+          aria-label={
+            pendingMemories.length > 0
+              ? `Settings, ${pendingMemories.length} ${
+                  pendingMemories.length === 1 ? "memory" : "memories"
+                } waiting for review`
+              : "Settings"
+          }
           title="Settings (Ctrl+,)"
           onClick={() => setSettingsPage("general")}
-          className="grid h-8 w-8 flex-none place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+          className="relative grid h-8 w-8 flex-none place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
         >
           <Settings size={16} />
+          {pendingMemories.length > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-contrast">
+              {pendingMemories.length > 9 ? "9+" : pendingMemories.length}
+            </span>
+          )}
         </button>
         <DropdownMenu
           align="start"

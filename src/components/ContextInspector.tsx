@@ -41,8 +41,11 @@ export function ContextInspector() {
   const {
     messages,
     activeProject,
-    globalMemories,
-    projectMemories,
+    globalSentMemories,
+    projectSentMemories,
+    recalledMemories,
+    pendingMemories,
+    memoryPaused,
     standingPrompt,
     chatPrompt,
     contextInfo,
@@ -155,7 +158,8 @@ export function ContextInspector() {
             <dd className="m-0">{chatPrompt?.trim() ? "Set" : "None"}</dd>
             <dt className="text-muted">Memory</dt>
             <dd className="m-0">
-              {globalMemories.length} global · {projectMemories.length} project
+              {globalSentMemories.length} global · {projectSentMemories.length} project
+              {recalledMemories.length > 0 ? ` · ${recalledMemories.length} recalled` : ""}
             </dd>
           </dl>
         </Section>
@@ -171,11 +175,61 @@ export function ContextInspector() {
           </pre>
         </Section>
 
-        <Section title="Memory" tokens={estimate(globalMemories.concat(projectMemories).map((m) => m.content).join("\n"))}>
-          <div className="flex flex-wrap gap-1 text-xs text-muted">
-            <Badge>{globalMemories.length} global</Badge>
-            <Badge>{projectMemories.length} project</Badge>
-          </div>
+        <Section
+          title="Memory"
+          tokens={estimate(globalSentMemories.concat(projectSentMemories).map((m) => m.content).join("\n"))}
+          count={globalSentMemories.length + projectSentMemories.length}
+        >
+          {memoryPaused ? (
+            <p className="m-0 text-xs text-warn">
+              Memory is paused. No notes are sent with this turn.
+            </p>
+          ) : globalSentMemories.length + projectSentMemories.length === 0 ? (
+            <p className="m-0 text-xs text-muted">No memory is sent this turn.</p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {[...globalSentMemories, ...projectSentMemories].map((memory) => (
+                <li key={memory.id} className="flex min-w-0 gap-1.5">
+                  <span className="flex-none text-muted">
+                    {memory.scope === "global" ? "G" : "P"}
+                  </span>
+                  <span className="min-w-0 truncate text-muted" title={memory.content}>
+                    {memory.content}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {pendingMemories.length > 0 && (
+            <p className="mt-2 text-xs text-warn">
+              {pendingMemories.length} waiting for review.
+            </p>
+          )}
+        </Section>
+
+        <Section
+          title="Recalled for this turn"
+          tokens={estimate(recalledMemories.map((m) => m.content).join("\n"))}
+          count={recalledMemories.length}
+        >
+          {recalledMemories.length === 0 ? (
+            <p className="m-0 text-xs text-muted">
+              Nothing extra was recalled for this message.
+            </p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {recalledMemories.map((memory) => (
+                <li key={memory.id} className="flex min-w-0 gap-1.5">
+                  <span className="flex-none text-muted">
+                    {memory.scope === "global" ? "G" : "P"}
+                  </span>
+                  <span className="min-w-0 truncate text-muted" title={memory.content}>
+                    {memory.content}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Section>
 
         <Section title="Project">

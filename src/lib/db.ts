@@ -881,6 +881,11 @@ export async function dismissPendingMemory(id: string): Promise<void> {
   await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
 }
 
+export async function updatePendingMemory(id: string, content: string): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE pending_memories SET content = $1 WHERE id = $2", [content, id]);
+}
+
 export async function addPendingMemory(memory: PendingMemory): Promise<void> {
   const db = await getDb();
   await db.execute(

@@ -12,6 +12,8 @@ export interface ContextInput {
   globalMemories: Memory[];
   project: Project | null;
   projectMemories: Memory[];
+  /** Notes ranked for the current turn by the hybrid memory index. */
+  relevantMemories?: Memory[];
   userName?: string;
   knowledgeBlock?: string;
   skillIndexBlock?: string;
@@ -38,6 +40,17 @@ function renderMemories(memories: Memory[]): string {
     .filter(({ content }) => content.length > 0)
     .map(({ kind, content }) => `- (${kind}) ${content}`)
     .join("\n");
+}
+
+/**
+ * The notes `renderMemories` actually prints, so the per-turn filter only
+ * dedupes against what the model really sees.
+ */
+function renderedIds(memories: Memory[]): string[] {
+  return memories
+    .slice(0, MAX_MEMORIES)
+    .filter((memory) => memory.content.trim().length > 0)
+    .map((memory) => memory.id);
 }
 
 function identityBlocks(userName?: string): string[] {
@@ -75,6 +88,18 @@ function appendWithinBudget(base: string, knowledge?: string, skills?: string): 
 }
 
 export function buildSystemPrompt(input: ContextInput): string | null {
+  const sent = new Set([
+    ...renderedIds(input.globalMemories),
+    ...(input.project ? renderedIds(input.projectMemories) : []),
+  ]);
+  const relevantText = renderMemories(
+    (input.relevantMemories ?? []).filter((memory) => !sent.has(memory.id)),
+  );
+  const relevant = relevantText
+    ? `## Relevant memory for this turn\n${relevantText}`
+    : "";
+  const reserve = relevant ? relevant.length + 2 : 0;
+
   const blocks = identityBlocks(input.userName);
 
   const standing = input.standingPrompt?.trim();
@@ -92,12 +117,15 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   if (chat) blocks.push(`## This chat\n${chat}`);
 
   const base = blocks.join("\n\n");
+  const head = reserve > 0 ? base.slice(0, Math.max(0, MAX_CHARS - reserve)) : base;
+  const combined = relevant ? [head, relevant].filter(Boolean).join("\n\n") : head;
+
   const skills = input.skillIndexBlock?.trim();
   const knowledge = input.knowledgeBlock?.trim();
 
-  if (knowledge || skills) return appendWithinBudget(base, knowledge, skills);
-  if (!base) return null;
-  return base.slice(0, MAX_CHARS);
+  if (knowledge || skills) return appendWithinBudget(combined, knowledge, skills);
+  if (!combined) return null;
+  return combined.slice(0, MAX_CHARS);
 }
 
 export function buildChildSystemPrompt(

@@ -23,7 +23,8 @@ import { applyVisionOverride, type ConnectionModelOption, type VisionFallback } 
 import * as api from "../../lib/api";
 import { SEARCH_KEY_ACCOUNT } from "../../lib/api";
 import * as db from "../../lib/db";
-import { MemoryEditor, KindChip } from "../MemoryEditor";
+import { MemoryEditor } from "../MemoryEditor";
+import { PendingMemoryList } from "../PendingMemoryList";
 import {
   Badge,
   Button,
@@ -46,6 +47,7 @@ import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
 import type { AuditLog, Connection, ExportScope, Memory } from "../../lib/types";
+import { MEMORY_KINDS } from "../../lib/types";
 import { mcpSummary, mcpSummaryText, type McpSummary } from "../../lib/mcp-summary";
 import {
   mcpConfigFromDraft,
@@ -618,6 +620,7 @@ function McpIdentity({
   probe,
   state,
   onReconnect,
+  onSignIn,
   onEdit,
   onApprove,
 }: {
@@ -625,12 +628,14 @@ function McpIdentity({
   probe: api.McpProbe | undefined;
   state: McpState;
   onReconnect: (id: string) => void;
+  onSignIn: (id: string) => void;
   onEdit: () => void;
   onApprove: (id: string) => void;
 }) {
   const { text, title } = mcpTargetText(server);
   const failed = state.label === "Failed";
   const review = state.label === "Review needed";
+  const signIn = state.label === "Sign in" && server.auth_type === "oauth";
   return (
     <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -659,6 +664,21 @@ function McpIdentity({
             onClick={() => onApprove(server.id)}
           >
             Approve tools
+          </button>
+        </div>
+      )}
+      {signIn && (
+        <div className="mt-1.5 flex items-start gap-1.5 text-xs text-warn">
+          <TriangleAlert size={13} className="mt-0.5 flex-none" aria-hidden />
+          <span className="min-w-0 break-words">
+            {mcpProbeError(probe) || "This server needs an OAuth sign-in."}
+          </span>
+          <button
+            type="button"
+            className="flex-none underline hover:no-underline"
+            onClick={() => onSignIn(server.id)}
+          >
+            Sign in
           </button>
         </div>
       )}
@@ -758,6 +778,7 @@ function McpServerCard({
   onEdit,
   onRemove,
   onReconnect,
+  onSignIn,
   onLogs,
   onApprove,
   onDecision,
@@ -772,6 +793,7 @@ function McpServerCard({
   onEdit: (server: api.McpServerRow) => void;
   onRemove: (server: api.McpServerRow) => void;
   onReconnect: (id: string) => void;
+  onSignIn: (id: string) => void;
   onLogs: (server: api.McpServerRow) => void;
   onApprove: (id: string) => void;
   onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
@@ -804,6 +826,7 @@ function McpServerCard({
           probe={probe}
           state={state}
           onReconnect={onReconnect}
+          onSignIn={onSignIn}
           onEdit={() => onEdit(server)}
           onApprove={onApprove}
         />
@@ -1588,7 +1611,22 @@ function useMcpServers(projectId: string | null) {
       .finally(() => setProbing((current) => ({ ...current, [id]: false })));
   }, []);
 
-  return { servers, probes, probing, status, run, reconnect, refresh: reload };
+  const signIn = useCallback((id: string) => {
+    setProbing((current) => ({ ...current, [id]: true }));
+    void api
+      .mcpBeginAuth(id)
+      .then(() => api.mcpProbe(id))
+      .then((probe) => {
+        setProbes((current) => ({ ...current, [id]: probe }));
+        setStatus(
+          probe.status === "needs_auth" ? "Sign-in did not complete. Try again." : null,
+        );
+      })
+      .catch((e: unknown) => setStatus(errorText(e)))
+      .finally(() => setProbing((current) => ({ ...current, [id]: false })));
+  }, []);
+
+  return { servers, probes, probing, status, run, reconnect, signIn, refresh: reload };
 }
 
 function AuditEntry({ row }: { row: AuditLog }) {
@@ -1790,6 +1828,7 @@ function McpDetailsDialog({
   probing,
   onClose,
   onReconnect,
+  onSignIn,
   onApprove,
   onDecision,
 }: {
@@ -1798,6 +1837,7 @@ function McpDetailsDialog({
   probing: boolean;
   onClose: () => void;
   onReconnect: (id: string) => void;
+  onSignIn: (id: string) => void;
   onApprove: (id: string) => void;
   onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
 }) {
@@ -1944,6 +1984,11 @@ function McpDetailsDialog({
             </dl>
           )}
           <div className="flex justify-end gap-2">
+            {server.auth_type === "oauth" && (
+              <Button size="sm" disabled={probing} onClick={() => onSignIn(server.id)}>
+                {server.has_token ? "Reconnect" : "Sign in"}
+              </Button>
+            )}
             {state?.label === "Review needed" && (
               <Button size="sm" onClick={() => onApprove(server.id)}>
                 Approve tools
@@ -2007,7 +2052,8 @@ function McpLogsDialog({
 export function McpPage() {
   const { activeProject } = useApp();
   const projectId = mcpProjectId(activeProject);
-  const { servers, probes, probing, status, run, reconnect, refresh } = useMcpServers(projectId);
+  const { servers, probes, probing, status, run, reconnect, signIn, refresh } =
+    useMcpServers(projectId);
   const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
   const [importing, setImporting] = useState(false);
   const [detailsFor, setDetailsFor] = useState<api.McpServerRow | null>(null);
@@ -2163,6 +2209,7 @@ export function McpPage() {
               onEdit={(target) => setDialog({ open: true, editing: target, seed: null })}
               onRemove={(target) => void remove(target)}
               onReconnect={reconnect}
+              onSignIn={signIn}
               onLogs={(target) => void openLogs(target)}
               onApprove={approve}
               onDecision={decide}
@@ -2200,6 +2247,7 @@ export function McpPage() {
         probing={detailsFor ? probing[detailsFor.id] === true : false}
         onClose={() => setDetailsFor(null)}
         onReconnect={reconnect}
+        onSignIn={signIn}
         onApprove={approve}
         onDecision={decide}
       />
@@ -3847,23 +3895,24 @@ export function MemoryPage() {
     editMemory,
     deleteMemory,
     pendingMemories,
-    approvePendingMemory,
-    dismissPendingMemory,
-    undoApprovedMemory,
     conversations,
     memoryCompat,
     memoryOmitted,
+    memoryPaused,
+    setMemoryPaused,
     refreshMemories,
   } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [raw, setRaw] = useState<{ markdown: string; mtime: number; len: number } | null>(null);
   const [rawText, setRawText] = useState("");
   const [rawBusy, setRawBusy] = useState(false);
   const [rawError, setRawError] = useState<string | null>(null);
   const [unassigned, setUnassigned] = useState<api.UnassignedMemory[]>([]);
+  const [searchModel, setSearchModel] = useState<api.MemoryModelStatus | null>(null);
+  const [indexBusy, setIndexBusy] = useState(false);
+  const [statusFailed, setStatusFailed] = useState(false);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -3873,6 +3922,58 @@ export function MemoryPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    void api
+      .memoryModelStatus()
+      .then((status) => {
+        setSearchModel(status);
+        setStatusFailed(false);
+      })
+      .catch(() => {
+        setSearchModel(null);
+        setStatusFailed(true);
+      });
+  }, []);
+
+  const reportIndex = (report: api.MemoryFillReport, done: string) => {
+    if (report.errors.length > 0) {
+      setActionError(
+        `Indexed ${report.scanned} notes, but ${report.errors.length} could not be indexed: ${report.errors[0]}`,
+      );
+      return;
+    }
+    setActionError(null);
+    toast(done);
+  };
+
+  const installModel = async () => {
+    setIndexBusy(true);
+    try {
+      setSearchModel(await api.memoryModelInstall());
+      const report = await api.memoryReindex();
+      reportIndex(report, "Meaning-based search is ready");
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setIndexBusy(false);
+    }
+  };
+
+  const rebuildIndex = async () => {
+    setIndexBusy(true);
+    try {
+      const report = await api.memoryReindex();
+      reportIndex(
+        report,
+        `Indexed ${report.scanned} notes, ${report.embedded} newly embedded`,
+      );
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setIndexBusy(false);
+    }
+  };
 
   const keepUnassigned = async (id: string) => {
     try {
@@ -3896,11 +3997,6 @@ export function MemoryPage() {
   const chatName = (conversationId: string | null) => {
     if (!conversationId) return null;
     return conversations.find((item) => item.id === conversationId)?.title ?? null;
-  };
-
-  const chatLabel = (conversationId: string | null) => {
-    const name = chatName(conversationId);
-    return name ? `from "${name}"` : "from a chat";
   };
 
   const visible = filterMemories(memories, query);
@@ -3955,41 +4051,6 @@ export function MemoryPage() {
     else setActionError("Clipboard is not available.");
   };
 
-  const approve = async (id: string) => {
-    setBusyId(id);
-    try {
-      await approvePendingMemory(id);
-      await reload();
-      setActionError(null);
-      toast("Memory saved", {
-        actions: [
-          {
-            label: "Undo",
-            run: () => {
-              void undoApprovedMemory(id).then(reload);
-            },
-          },
-        ],
-      });
-    } catch (e) {
-      setActionError(errorText(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const dismiss = async (id: string) => {
-    setBusyId(id);
-    try {
-      await dismissPendingMemory(id);
-      setActionError(null);
-    } catch (e) {
-      setActionError(errorText(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
   const clearAll = async () => {
     const confirmed = await confirmDialog({
       title: "Clear all global memory?",
@@ -4003,198 +4064,279 @@ export function MemoryPage() {
     }
     await reload();
   };
+  const [kindFilter, setKindFilter] = useState<string>("all");
+  const visibleByKind =
+    kindFilter === "all" ? visible : visible.filter((memory) => memory.kind === kindFilter);
+  const sent = memoryPaused ? 0 : Math.max(0, memories.length - memoryOmitted);
+  const budgetPct = memories.length === 0 ? 0 : Math.round((sent / memories.length) * 100);
 
   return (
-    <div>
-      {memoryCompat && (
-        <div className="mb-3 rounded-control border border-warn/40 p-3" role="status">
-          <p className="text-xs font-medium">Memory is still in the database.</p>
-          <p className="mt-1 text-xs text-muted">
-            The file migration did not run, so notes keep working but MEMORY.md is not in use.
-            Restart the app to retry.
-          </p>
-        </div>
-      )}
-      {memoryOmitted > 0 && (
-        <p className="mb-2 text-xs text-warn" data-setting-term="Memory budget">
-          {memoryOmitted} {memoryOmitted === 1 ? "note is" : "notes are"} saved but not sent:
-          each scope sends at most 2500 characters. Remove or shorten notes to make room.
-        </p>
-      )}
-      {!memoryCompat && unassigned.length > 0 && (
-        <div className="mb-3 rounded-control border border-warn/40 p-3">
-          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <span className="text-xs font-medium">
-              {unassigned.length} {unassigned.length === 1 ? "note" : "notes"} lost their project
-            </span>
-            <span className="text-xs text-muted">
-              Saved from 0.4.1; the project no longer exists.
-            </span>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_250px]">
+      <div className="min-w-0 space-y-3">
+        {memoryCompat && (
+          <div className="rounded-control border border-warn/40 p-3" role="status">
+            <p className="text-xs font-medium">Memory is still in the database.</p>
+            <p className="mt-1 text-xs text-muted">
+              The file migration did not run, so notes keep working but MEMORY.md is not in use.
+              Restart the app to retry.
+            </p>
           </div>
-          <div className="space-y-1.5">
-            {unassigned.map((row) => (
-              <div
-                key={row.id}
-                className="flex items-start justify-between gap-3 rounded-control border border-vault-line px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <p className="whitespace-pre-wrap text-sm text-text-primary">{row.content}</p>
-                  <p className="mt-0.5 text-xs text-text-faint">
-                    {row.kind} · {timeAgo(row.created_at)}
-                  </p>
-                </div>
-                <div className="flex shrink-0 gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void discardUnassigned(row.id)}
-                  >
-                    Discard
-                  </Button>
-                  <Button size="sm" onClick={() => void keepUnassigned(row.id)}>
-                    Keep as global
-                  </Button>
-                </div>
-              </div>
-            ))}
+        )}
+
+        {pendingMemories.length > 0 && (
+          <div
+            className="rounded-card border border-warn/40 bg-surface p-3"
+            data-setting-term="Pending memory"
+          >
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-sm font-medium">
+                {pendingMemories.length}{" "}
+                {pendingMemories.length === 1 ? "memory" : "memories"} waiting for review
+              </span>
+              <span className="text-xs text-muted">
+                Nothing is stored until you save it.
+              </span>
+            </div>
+            <PendingMemoryList rows={pendingMemories} onChanged={() => void reload()} />
           </div>
-        </div>
-      )}
-      {pendingMemories.length > 0 && (
-        <div
-          className="mb-3 rounded-control border border-warn/40 p-3"
-          data-setting-term="Pending memory"
-        >
-          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <span className="text-xs font-medium">
-              {pendingMemories.length} {pendingMemories.length === 1 ? "memory" : "memories"}{" "}
-              waiting for review
-            </span>
-            <span className="text-xs text-text-muted">
-              Nothing is stored until you save it.
-            </span>
-          </div>
-          <div className="space-y-1.5">
-            {pendingMemories.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-control border border-vault-line px-3 py-2"
-              >
-                <div className="flex items-start justify-between gap-3">
+        )}
+
+        {!memoryCompat && unassigned.length > 0 && (
+          <div className="rounded-card border border-warn/40 bg-surface p-3">
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-sm font-medium">
+                {unassigned.length} {unassigned.length === 1 ? "note" : "notes"} lost their project
+              </span>
+              <span className="text-xs text-muted">
+                Saved from 0.4.1; the project no longer exists.
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {unassigned.map((row) => (
+                <div
+                  key={row.id}
+                  className="flex items-start justify-between gap-3 rounded-control border border-border px-3 py-2"
+                >
                   <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <KindChip kind={item.kind} />
-                      {item.trust === "untrusted" && (
-                        <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[11px] font-medium text-warn">
-                          Web or document
-                        </span>
-                      )}
-                      <span className="text-xs text-text-faint">
-                        {item.scope === "global" ? "Every chat" : "This project"} ·{" "}
-                        {chatLabel(item.conversation_id)} · {timeAgo(item.created_at)}
-                      </span>
-                    </div>
-                    {item.trust === "untrusted" && (
-                      <p className="mt-1 text-xs text-warn">
-                        Came from a web page or document. Read it before saving.
-                      </p>
-                    )}
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
-                      {item.content}
+                    <p className="whitespace-pre-wrap text-sm text-text-primary">{row.content}</p>
+                    <p className="mt-0.5 text-xs text-text-faint">
+                      {row.kind} · {timeAgo(row.created_at)}
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => void dismiss(item.id)}
-                      disabled={busyId !== null}
+                      onClick={() => void discardUnassigned(row.id)}
                     >
-                      Dismiss
+                      Discard
                     </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => void approve(item.id)}
-                      disabled={busyId !== null}
-                    >
-                      Save
+                    <Button size="sm" onClick={() => void keepUnassigned(row.id)}>
+                      Keep as global
                     </Button>
                   </div>
                 </div>
-              </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {actionError && (
+          <p className="text-xs text-alarm" role="alert">
+            {actionError}
+          </p>
+        )}
+
+        <div className="rounded-card border border-border bg-surface p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Saved memory</span>
+            <span className="text-xs text-muted">
+              {visibleByKind.length === memories.length
+                ? `${memories.length} ${memories.length === 1 ? "note" : "notes"}`
+                : `${visibleByKind.length} of ${memories.length}`}
+            </span>
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search memory"
+              aria-label="Search memory"
+              className="ml-auto h-7 w-44 text-xs"
+            />
+          </div>
+          <div className="mb-2 flex flex-wrap gap-1" role="group" aria-label="Filter by kind">
+            {["all", ...MEMORY_KINDS].map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => setKindFilter(kind)}
+                aria-pressed={kindFilter === kind}
+                className={
+                  kindFilter === kind
+                    ? "rounded-full border border-accent bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent"
+                    : "rounded-full border border-border px-2 py-0.5 text-[11px] text-muted hover:bg-hover"
+                }
+              >
+                {kind === "all" ? "All" : kind}
+              </button>
             ))}
           </div>
+          <MemoryEditor
+            memories={visibleByKind}
+            emptyHint={
+              query.trim() || kindFilter !== "all"
+                ? "Nothing matches these filters."
+                : "No global memory yet. These notes are sent with every chat."
+            }
+            meta={(memory) => memoryMeta(memory)}
+            onAdd={async (draft) => {
+              await addMemory({ scope: "global", project_id: null, ...draft });
+              await reload();
+            }}
+            onUpdate={async (id, draft) => {
+              await editMemory(id, draft, "global", null);
+              await reload();
+            }}
+            onDelete={async (id) => {
+              await deleteMemory(id, "global", null);
+              await reload();
+            }}
+          />
         </div>
-      )}
-      {actionError && (
-        <p className="mb-2 text-xs text-alarm" role="alert">
-          {actionError}
-        </p>
-      )}
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium">Saved memory</span>
-        <span className="text-xs text-text-muted">
-          {visible.length === memories.length
-            ? `${memories.length} ${memories.length === 1 ? "note" : "notes"}`
-            : `${visible.length} of ${memories.length}`}
-        </span>
-        <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search memory"
-          aria-label="Search memory"
-          className="ml-auto h-7 w-44 text-xs"
-        />
-        {!memoryCompat && (
-          <Button variant="ghost" size="sm" onClick={() => void openRaw()}>
-            Edit file
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void copyExport()}
-          disabled={memories.length === 0 && pendingMemories.length === 0}
-        >
-          Copy JSON
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => downloadText("memory.json", exportJson(), "application/json")}
-          disabled={memories.length === 0 && pendingMemories.length === 0}
-        >
-          Download
-        </Button>
       </div>
-      <MemoryEditor
-        memories={visible}
-        emptyHint={
-          query.trim()
-            ? `Nothing matches "${query.trim()}".`
-            : "No global memory yet. These notes are sent with every chat."
-        }
-        meta={(memory) => memoryMeta(memory)}
-        onAdd={async (draft) => {
-          await addMemory({ scope: "global", project_id: null, ...draft });
-          await reload();
-        }}
-        onUpdate={async (id, draft) => {
-          await editMemory(id, draft, "global", null);
-          await reload();
-        }}
-        onDelete={async (id) => {
-          await deleteMemory(id, "global", null);
-          await reload();
-        }}
-      />
-      {memories.length > 0 && (
-        <div className="mt-3 flex justify-end">
-          <Button variant="danger" size="sm" onClick={() => void clearAll()}>
-            Clear all
-          </Button>
+
+      <aside className="space-y-3">
+        <div className="rounded-card border border-border bg-surface p-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <b className="text-sm">Memory health</b>
+            <span className="text-xs text-muted">
+              {sent}/{memories.length} sent
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-active">
+            <div className="h-full bg-accent" style={{ width: `${budgetPct}%` }} />
+          </div>
+          <label className="mt-3 flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted">Send memory with chats</span>
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={!memoryPaused}
+              onChange={(event) => setMemoryPaused(!event.target.checked)}
+            />
+          </label>
+          <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-xs">
+            <dt className="text-muted">Stored notes</dt>
+            <dd className="m-0">{memories.length}</dd>
+            <dt className="text-muted">Sent every turn</dt>
+            <dd className="m-0">{sent}</dd>
+            <dt className="text-muted">Waiting for review</dt>
+            <dd className="m-0">{pendingMemories.length}</dd>
+            <dt className="text-muted">Over budget</dt>
+            <dd className={memoryOmitted > 0 ? "m-0 text-warn" : "m-0"}>{memoryOmitted}</dd>
+          </dl>
+          {memoryOmitted > 0 ? (
+            <p className="mt-2 text-xs text-warn">
+              Each scope sends at most 2,500 characters. Shorten or merge notes, or move
+              reference material into project documents.
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-muted">
+              Every saved note fits in the current send budget.
+            </p>
+          )}
         </div>
-      )}
+
+        <div className="rounded-card border border-border bg-surface p-3">
+          <div className="flex items-center justify-between gap-2">
+            <b className="text-sm">Search quality</b>
+            <span className={searchModel?.installed ? "text-xs text-success" : "text-xs text-muted"}>
+              {statusFailed
+                ? "Status unavailable"
+                : searchModel?.installed
+                  ? "Meaning-based"
+                  : "Keywords only"}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            {statusFailed
+              ? "Could not read the search model status. Reopen this page to try again."
+              : searchModel?.installed
+                ? "Recall matches notes by meaning as well as wording, and up to four notes that fit this message are added automatically."
+                : "Recall currently matches exact words. Install the small local model to also match meaning, so a note can surface even when the wording differs."}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {!statusFailed && !searchModel?.installed && (
+              <Button size="sm" onClick={() => void installModel()} disabled={indexBusy}>
+                {indexBusy ? "Installing…" : "Install model (23 MB)"}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void rebuildIndex()}
+              disabled={indexBusy}
+            >
+              {indexBusy ? "Rebuilding…" : "Rebuild index"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-card border border-border bg-surface p-3">
+          <b className="text-sm">Actions</b>
+          <div className="mt-2 flex flex-col gap-1">
+            {!memoryCompat && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="justify-start"
+                onClick={() => void openRaw()}
+              >
+                Edit memory file
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="justify-start"
+              onClick={() => void copyExport()}
+              disabled={memories.length === 0 && pendingMemories.length === 0}
+            >
+              Copy as JSON
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="justify-start"
+              onClick={() =>
+                downloadText("memory.json", exportJson(), "application/json")
+              }
+              disabled={memories.length === 0 && pendingMemories.length === 0}
+            >
+              Download JSON
+            </Button>
+          </div>
+          {memories.length > 0 && (
+            <Button
+              variant="danger"
+              size="sm"
+              className="mt-2 w-full"
+              onClick={() => void clearAll()}
+            >
+              Clear all global memory
+            </Button>
+          )}
+        </div>
+
+        <div className="rounded-card border border-border bg-surface p-3">
+          <b className="text-sm">How it works</b>
+          <p className="mt-1 text-xs text-muted">
+            Notes are sent with every chat in this scope. Pending notes wait for your
+            approval. The markdown file is the source of truth; the list above is a view
+            of it.
+          </p>
+        </div>
+      </aside>
+
       <Dialog open={raw !== null} onClose={() => setRaw(null)} title="Edit MEMORY.md">
         <p className="mb-2 text-xs text-muted">
           The file is the source of truth. Keep the four headings. A line without an id

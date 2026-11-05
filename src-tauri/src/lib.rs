@@ -455,6 +455,19 @@ pub fn run() {
                     eprintln!("sandbox: reaping orphans failed: {error}");
                 }
             });
+            let index_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::tools::memory_pool(&index_handle).await {
+                    Ok(pool) => {
+                        if let Err(error) =
+                            crate::memory::index::fill_embeddings(&pool, &index_handle).await
+                        {
+                            eprintln!("memory: initial index failed: {error}");
+                        }
+                    }
+                    Err(error) => eprintln!("memory: index skipped: {error}"),
+                }
+            });
             Ok(())
         })
         .manage(
@@ -488,6 +501,10 @@ pub fn run() {
             memory::commands::memory_forget,
             memory::commands::memory_write_raw,
             memory::commands::memory_project_delete,
+            memory::commands::memory_search,
+            memory::commands::memory_reindex,
+            memory::commands::memory_model_status,
+            memory::commands::memory_model_install,
             memory::commands::memory_reset,
             memory::commands::memory_unassigned,
             memory::commands::memory_assign_unassigned,
