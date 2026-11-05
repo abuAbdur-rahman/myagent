@@ -2,6 +2,7 @@ const KNOWN_TOOLS = [
   "get_time",
   "remember",
   "recall_memory",
+  "conversation_search",
   "memory_pending",
   "update_memory",
   "delete_memory",

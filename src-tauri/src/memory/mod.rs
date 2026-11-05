@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod embed;
+pub mod episodes;
 pub mod file;
 pub mod index;
 pub mod knowledge;

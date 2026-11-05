@@ -188,6 +188,11 @@ pub fn default_rules() -> Vec<Rule> {
             effect: Effect::Allow,
         },
         Rule {
+            action: "conversation_search".to_string(),
+            resource: "*".to_string(),
+            effect: Effect::Allow,
+        },
+        Rule {
             action: "memory_pending".to_string(),
             resource: "*".to_string(),
             effect: Effect::Allow,
@@ -726,6 +731,10 @@ mod tests {
         );
         assert_eq!(
             decide("recall_memory", &["*".to_string()], &rules),
+            Effect::Allow
+        );
+        assert_eq!(
+            decide("conversation_search", &["*".to_string()], &rules),
             Effect::Allow
         );
         assert_eq!(

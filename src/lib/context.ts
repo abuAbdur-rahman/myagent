@@ -14,6 +14,8 @@ export interface ContextInput {
   projectMemories: Memory[];
   /** Notes ranked for the current turn by the hybrid memory index. */
   relevantMemories?: Memory[];
+  /** Past-chat snippets ranked for the current turn. */
+  episodicBlock?: string;
   userName?: string;
   knowledgeBlock?: string;
   skillIndexBlock?: string;
@@ -87,6 +89,12 @@ function appendWithinBudget(base: string, knowledge?: string, skills?: string): 
     .slice(0, MAX_CHARS);
 }
 
+/** Drop a trailing partial line so a memory note is never cut in half. */
+function dropPartialLine(text: string): string {
+  const cut = text.lastIndexOf("\n");
+  return cut > 0 ? text.slice(0, cut) : "";
+}
+
 export function buildSystemPrompt(input: ContextInput): string | null {
   const sent = new Set([
     ...renderedIds(input.globalMemories),
@@ -98,7 +106,9 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   const relevant = relevantText
     ? `## Relevant memory for this turn\n${relevantText}`
     : "";
-  const reserve = relevant ? relevant.length + 2 : 0;
+  const episodes = input.episodicBlock?.trim() ?? "";
+  const reserve =
+    (relevant ? relevant.length + 2 : 0) + (episodes ? episodes.length + 2 : 0);
 
   const blocks = identityBlocks(input.userName);
 
@@ -117,8 +127,12 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   if (chat) blocks.push(`## This chat\n${chat}`);
 
   const base = blocks.join("\n\n");
-  const head = reserve > 0 ? base.slice(0, Math.max(0, MAX_CHARS - reserve)) : base;
-  const combined = relevant ? [head, relevant].filter(Boolean).join("\n\n") : head;
+  const room = Math.max(0, MAX_CHARS - reserve);
+  const head =
+    reserve > 0 && base.length > room ? dropPartialLine(base.slice(0, room)) : base;
+  const combined = [head, relevant, episodes]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
 
   const skills = input.skillIndexBlock?.trim();
   const knowledge = input.knowledgeBlock?.trim();

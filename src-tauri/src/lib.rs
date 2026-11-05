@@ -468,6 +468,7 @@ pub fn run() {
                     Err(error) => eprintln!("memory: index skipped: {error}"),
                 }
             });
+            crate::memory::episodes::backfill_async(app.handle());
             Ok(())
         })
         .manage(
@@ -508,6 +509,9 @@ pub fn run() {
             memory::commands::knowledge_index_refresh,
             memory::commands::knowledge_purge_doc,
             memory::commands::knowledge_purge_project,
+            memory::commands::conversation_search,
+            memory::commands::episodic_recall,
+            memory::commands::conversation_reindex,
             memory::commands::memory_model_status,
             memory::commands::memory_model_install,
             memory::commands::memory_reset,

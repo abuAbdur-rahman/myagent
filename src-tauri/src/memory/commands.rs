@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::file::{self, Kind};
-use super::{index, knowledge, migrate, store};
+use super::{episodes, index, knowledge, migrate, store};
 use crate::tools::memory_pool;
 
 #[derive(Serialize)]
@@ -231,6 +231,47 @@ pub async fn knowledge_purge_doc(app: AppHandle, doc_id: String) -> Result<(), S
 pub async fn knowledge_purge_project(app: AppHandle, project_id: String) -> Result<(), String> {
     let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
     knowledge::purge_project(&pool, &project_id).await
+}
+
+#[tauri::command]
+pub async fn conversation_search(
+    app: AppHandle,
+    query: String,
+    project_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<episodes::EpisodeHit>, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    episodes::search(
+        &pool,
+        &query,
+        project_id.as_deref(),
+        None,
+        limit.unwrap_or(5),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn episodic_recall(
+    app: AppHandle,
+    query: String,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+) -> Result<Vec<episodes::EpisodeHit>, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    episodes::recall(
+        &pool,
+        &query,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn conversation_reindex(app: AppHandle) -> Result<(), String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    episodes::reindex(&pool).await
 }
 
 #[tauri::command]

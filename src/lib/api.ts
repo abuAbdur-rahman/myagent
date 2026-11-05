@@ -989,6 +989,28 @@ export function knowledgePurgeProject(projectId: string) {
   return invoke<void>("knowledge_purge_project", { projectId });
 }
 
+export interface EpisodeHit {
+  message_id: string;
+  conversation_id: string;
+  title: string;
+  date: string;
+  role: string;
+  snippet: string;
+  created_at: number;
+}
+
+export function episodicRecall(
+  query: string,
+  projectId: string | null,
+  conversationId: string | null,
+) {
+  return invoke<EpisodeHit[]>("episodic_recall", { query, projectId, conversationId });
+}
+
+export function conversationReindex() {
+  return invoke<void>("conversation_reindex");
+}
+
 export function memoryModelStatus() {
   return invoke<MemoryModelStatus>("memory_model_status");
 }

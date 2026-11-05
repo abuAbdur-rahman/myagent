@@ -479,6 +479,15 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 
 ---
 
+## E9. Past-chat search
+- **Status:** Have (`message_fts` is an FTS5 external-content index over `messages`, kept current by insert/delete/update triggers, so no frontend write path changes. The first launch backfills existing chats once behind a `meta` marker, and Settings → Memory rebuilds it on demand. `conversation_search` returns title, date, role, message id and a snippet windowed around the match; a project chat reads that project plus chats outside any project, a global chat never reads project messages. Up to two snippets (1,600 chars) are injected as `## Earlier conversations` for project chats, after relevant memory and before knowledge, gated on two query terms and one message per chat, with a "Search past chats" switch that defaults on)
+- **Ref:** Claude app can search past chats; OpenWebUI keeps history retrieval optional.
+- **Build:** Index is derived and rebuildable; the message table stays the source of truth. Scope is enforced in SQL, not in the UI. Snippets are data, never instructions.
+- **Not:** Semantic chat embeddings, cross-project search from a global chat, or indexing temporary chats.
+- **Done:** Tests cover trigger indexing, a global chat never reading project messages, a project chat reading its own plus global chats, excluding the current chat, the two-term gate, one hit per chat, and a one-shot backfill.
+
+---
+
 # F. Rendering and files
 
 ## F1. Artifact drawer
