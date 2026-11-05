@@ -11,7 +11,7 @@ import {
 import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, summarySystemTurn } from "./context";
-import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
+import { buildUserContent, resolveImageSend, searchKnowledgeWithHits, withFinalTurnImages } from "./knowledge";
 import { buildEpisodeBlock } from "./episodes";
 import {
   buildDocumentBlock,
@@ -387,6 +387,9 @@ interface AppContextValue {
   globalSentMemories: Memory[];
   projectSentMemories: Memory[];
   recalledMemories: Memory[];
+  recalledDetails: { id: string; score: number }[];
+  knowledgeSummary: api.KnowledgeHit[];
+  episodeSummary: api.EpisodeHit[];
   pendingMemories: PendingMemory[];
   memoryOmitted: number;
   memoryPaused: boolean;
@@ -582,6 +585,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       recallRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       setRecalledMemories([]);
+      setRecalledDetails([]);
     }
     localStorage.setItem("memoryPaused", value ? "1" : "0");
   }, []);
@@ -599,6 +603,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   const [memoryCompat, setMemoryCompat] = useState(false);
   const [memoryReport, setMemoryReport] = useState<api.MemoryMigrationReport | null>(null);
+  const [recalledDetails, setRecalledDetails] = useState<
+    { id: string; score: number }[]
+  >([]);
+  const [knowledgeSummary, setKnowledgeSummary] = useState<api.KnowledgeHit[]>([]);
+  const [episodeSummary, setEpisodeSummary] = useState<api.EpisodeHit[]>([]);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -856,11 +865,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         relevantMemoriesRef.current = recalled;
         setRecalledMemories(recalled);
+        setRecalledDetails(
+          recalled.map((memory) => ({
+            id: memory.id,
+            score: hits.find((hit) => hit.id === memory.id)?.score ?? 0,
+          })),
+        );
         return recalled;
       } catch (error) {
         console.warn("memory: recall failed", error);
         relevantMemoriesRef.current = [];
         setRecalledMemories([]);
+        setRecalledDetails([]);
         return [];
       }
     },
@@ -876,26 +892,100 @@ export function AppProvider({ children }: { children: ReactNode }) {
       text: string,
       projectId: string | null,
       conversationId: string | null,
-    ): Promise<string> => {
+    ): Promise<api.EpisodeHit[]> => {
       const request = ++episodeRequestRef.current;
       if (!projectId || !episodicRecallRef.current) {
         episodicBlockRef.current = "";
-        return "";
+        setEpisodeSummary([]);
+        return [];
       }
       try {
         const hits = await api.episodicRecall(text, projectId, conversationId);
-        if (request !== episodeRequestRef.current) return "";
-        if (!episodicRecallRef.current) return "";
-        if ((projectRef.current?.id ?? null) !== projectId) return "";
-        if (conversationId !== null && convIdRef.current !== conversationId) return "";
-        const block = buildEpisodeBlock(hits);
-        episodicBlockRef.current = block;
-        return block;
+        if (request !== episodeRequestRef.current) return [];
+        if (!episodicRecallRef.current) return [];
+        if ((projectRef.current?.id ?? null) !== projectId) return [];
+        if (conversationId !== null && convIdRef.current !== conversationId) return [];
+        episodicBlockRef.current = buildEpisodeBlock(hits);
+        setEpisodeSummary(hits);
+        return hits;
       } catch (error) {
         console.warn("episodes: recall failed", error);
-        if (request === episodeRequestRef.current) episodicBlockRef.current = "";
-        return "";
+        if (request === episodeRequestRef.current) {
+          episodicBlockRef.current = "";
+          setEpisodeSummary([]);
+        }
+        return [];
       }
+    },
+    [],
+  );
+
+  /** Record what this turn actually injected, for the inspector and the audit. */
+  const auditTurn = useCallback(
+    (
+      conversationId: string,
+      query: string,
+      recalled: Memory[],
+      knowledge: api.KnowledgeHit[],
+      episodes: api.EpisodeHit[],
+    ) => {
+      const items: {
+        source: string;
+        item_id: string;
+        label: string;
+        score?: number;
+        trust?: string;
+      }[] = [];
+      for (const memory of sentMemories(
+        globalMemoriesRef.current,
+        globalSentRef.current,
+      )) {
+        items.push({
+          source: "durable",
+          item_id: memory.id,
+          label: memory.content.slice(0, 120),
+          trust: "trusted",
+        });
+      }
+      for (const memory of sentMemories(
+        projectMemoriesRef.current,
+        projectSentRef.current,
+      )) {
+        items.push({
+          source: "durable",
+          item_id: memory.id,
+          label: memory.content.slice(0, 120),
+          trust: "trusted",
+        });
+      }
+      for (const memory of recalled) {
+        items.push({
+          source: "recalled",
+          item_id: memory.id,
+          label: memory.content.slice(0, 120),
+          trust: "trusted",
+        });
+      }
+      for (const hit of knowledge) {
+        items.push({
+          source: "knowledge",
+          item_id: `${hit.doc_id}:${hit.ord}`,
+          label: `${hit.name}${hit.heading ? ` — ${hit.heading}` : ""}`,
+          score: hit.score,
+        });
+      }
+      for (const hit of episodes) {
+        items.push({
+          source: "episode",
+          item_id: hit.message_id,
+          label: `${hit.title} (${hit.date})`,
+          score: hit.score,
+        });
+      }
+      if (items.length === 0) return;
+      void api
+        .memoryAuditWrite({ conversationId, query, items })
+        .catch((error: unknown) => console.warn("audit: write failed", error));
     },
     [],
   );
@@ -1471,6 +1561,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       relevantMemoriesRef.current = [];
       episodicBlockRef.current = "";
       setRecalledMemories([]);
+      setRecalledDetails([]);
+      setKnowledgeSummary([]);
+      setEpisodeSummary([]);
       lastPayloadRef.current = null;
     },
     [],
@@ -1666,6 +1759,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     relevantMemoriesRef.current = [];
     episodicBlockRef.current = "";
     setRecalledMemories([]);
+    setRecalledDetails([]);
+    setKnowledgeSummary([]);
+    setEpisodeSummary([]);
     lastPayloadRef.current = null;
     setActiveProjectId(
       id ? (conversationsRef.current.find((c) => c.id === id)?.project_id ?? null) : null,
@@ -1693,6 +1789,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     relevantMemoriesRef.current = [];
     episodicBlockRef.current = "";
     setRecalledMemories([]);
+    setRecalledDetails([]);
+    setKnowledgeSummary([]);
+    setEpisodeSummary([]);
     lastPayloadRef.current = null;
   }, []);
 
@@ -1753,6 +1852,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       relevantMemoriesRef.current = [];
       episodicBlockRef.current = "";
       setRecalledMemories([]);
+      setRecalledDetails([]);
+      setKnowledgeSummary([]);
+      setEpisodeSummary([]);
       lastPayloadRef.current = null;
       if (moved) {
         projectMemoriesRef.current = [];
@@ -2458,13 +2560,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       skillIndexRef.current = skillBlock;
       let knowledge = "";
+      let knowledgeHits: api.KnowledgeHit[] = [];
       try {
         if (projectRef.current) {
-          knowledge = await searchKnowledge(projectRef.current.id, text);
+          const found = await searchKnowledgeWithHits(projectRef.current.id, text);
+          knowledge = found.block;
+          knowledgeHits = found.hits;
         }
       } catch {
         knowledge = "";
       }
+      setKnowledgeSummary(knowledgeHits);
       const vision = canSeeImages(connRef.current?.id ?? null, modelRef.current);
       const toolsOn = resolveTools();
       const fallback = knownVisionFallback(visionFallbackRef.current, connections);
@@ -2534,12 +2640,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         imagesForPayload.length > 0 ? buildUserContent(sendText, imagesForPayload) : sendText,
         documentBlock,
       );
-      await recallFor(sendText, projectRef.current?.id ?? null);
-      await recallEpisodes(
+      const recalled = await recallFor(sendText, projectRef.current?.id ?? null);
+      const episodes = await recallEpisodes(
         sendText,
         projectRef.current?.id ?? null,
         convIdRef.current,
       );
+      auditTurn(conversationId, sendText, recalled, knowledgeHits, episodes);
       outgoing.push({ role: "user", content: userContent });
       const payload = buildPayload(conversationId, outgoing);
 
@@ -2768,11 +2875,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setView("chat");
         setMessages([userMsg, assistantMsg]);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
-        await recallFor(trimmed, projectId);
-        await recallEpisodes(trimmed, projectId, created.id);
-        knowledgeBlockRef.current = await searchKnowledge(projectId, trimmed).catch(
-          () => "",
-        );
+        const recalled = await recallFor(trimmed, projectId);
+        const episodes = await recallEpisodes(trimmed, projectId, created.id);
+        const found = await searchKnowledgeWithHits(projectId, trimmed).catch(() => ({
+          block: "",
+          hits: [] as api.KnowledgeHit[],
+        }));
+        knowledgeBlockRef.current = found.block;
+        setKnowledgeSummary(found.hits);
+        auditTurn(created.id, trimmed, recalled, found.hits, episodes);
         const firstTurns = [{ role: "user", content: trimmed }];
         await streamTurn(
           created.id,
@@ -2886,6 +2997,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     globalSentMemories,
     projectSentMemories,
     recalledMemories,
+    recalledDetails,
+    knowledgeSummary,
+    episodeSummary,
     pendingMemories,
     memoryOmitted,
     memoryPaused,

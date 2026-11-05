@@ -130,6 +130,19 @@ Slice 7 (episodic search) shipped:
   "Search past chats" switch in Settings → Memory.
 - Not yet: consolidation, jev verifier.
 
+Slice 8 (observability + eval) shipped:
+
+- `memory/audit.rs` writes one row per injected item (`durable`, `recalled`,
+  `knowledge`, `episode`) with its score and trust, keeps 30 days and sweeps on
+  the next write. Settings → Memory lists the newest rows.
+- The context inspector shows the recalled notes with their RRF score, the
+  knowledge chunks with document and section, the past chats with title and
+  date, and why a section is empty (paused, no match, over budget, project-only).
+- `fixtures/memory/probes.json` plus `memory/eval.rs` gate recall@5 at 0.85 from
+  one command (`npm run eval:memory`). Semantic probes are reported but not
+  gated, because only the app can load the MiniLM model.
+- Not yet: consolidation, jev verifier.
+
 ## Goals
 
 - Any saved note is retrievable by meaning and by keyword, at any position in the

@@ -486,6 +486,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Not:** Semantic chat embeddings, cross-project search from a global chat, or indexing temporary chats.
 - **Done:** Tests cover trigger indexing, a global chat never reading project messages, a project chat reading its own plus global chats, excluding the current chat, the two-term gate, one hit per chat, and a one-shot backfill.
 
+## E10. Retrieval audit and probe gate
+- **Status:** Have (`memory_retrieval_audit` records one row per injected item — durable note, recalled note, knowledge chunk or past chat — with its score and trust, sweeps rows past 30 days on the next write, and Settings → Memory lists the newest. The context inspector names what was injected with its score and says why a section is empty: paused, no match, over budget, or project-only. `fixtures/memory/probes.json` plus `memory/eval.rs` gate recall@5 at 0.85 from `npm run eval:memory`; semantic probes are reported but not gated because only the app can load the MiniLM model)
+- **Ref:** Every injection explainable; no vendor leaderboard.
+- **Build:** The audit is append-only and derived; deleting it loses history, never notes. The probe gate runs on every change to retrieval, scoring or chunking.
+- **Not:** A hosted eval service, jev calibration, or per-candidate BM25/vector ranks in the audit (only the fused score is stored).
+- **Done:** The gate prints recall@5 and MRR per probe and fails below 0.85; the audit round-trip and 30-day sweep are tested.
+
 ---
 
 # F. Rendering and files

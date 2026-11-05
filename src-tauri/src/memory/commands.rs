@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::file::{self, Kind};
-use super::{episodes, index, knowledge, migrate, store};
+use super::{audit, episodes, index, knowledge, migrate, store};
 use crate::tools::memory_pool;
 
 #[derive(Serialize)]
@@ -272,6 +272,21 @@ pub async fn episodic_recall(
 pub async fn conversation_reindex(app: AppHandle) -> Result<(), String> {
     let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
     episodes::reindex(&pool).await
+}
+
+#[tauri::command]
+pub async fn memory_audit_write(app: AppHandle, write: audit::AuditWrite) -> Result<(), String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    audit::record(&pool, &write).await
+}
+
+#[tauri::command]
+pub async fn memory_audit_recent(
+    app: AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<audit::AuditRow>, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    audit::recent(&pool, limit.unwrap_or(20)).await
 }
 
 #[tauri::command]

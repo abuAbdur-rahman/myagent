@@ -3915,6 +3915,14 @@ export function MemoryPage() {
   const [searchModel, setSearchModel] = useState<api.MemoryModelStatus | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
   const [statusFailed, setStatusFailed] = useState(false);
+  const [audit, setAudit] = useState<api.AuditRow[]>([]);
+
+  useEffect(() => {
+    api
+      .memoryAuditRecent(6)
+      .then(setAudit)
+      .catch(() => setAudit([]));
+  }, []);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -4220,6 +4228,34 @@ export function MemoryPage() {
       </div>
 
       <aside className="space-y-3">
+        <div className="rounded-card border border-border bg-surface p-3">
+          <b className="text-sm">Recent injections</b>
+          <p className="mb-2 mt-1 text-xs text-muted">
+            What the last sends actually carried. Kept 30 days.
+          </p>
+          {audit.length === 0 ? (
+            <p className="m-0 text-xs text-muted">Nothing recorded yet.</p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {audit.map((row, index) => (
+                <li
+                  key={`${row.item_id}-${row.created_at}-${index}`}
+                  className="flex min-w-0 gap-1.5"
+                  title={row.label}
+                >
+                  <span className="flex-none rounded-full bg-hover px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                    {row.source}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-muted">{row.label}</span>
+                  <span className="flex-none tabular-nums text-text-faint">
+                    {row.score === null ? "" : row.score.toFixed(3)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         <div className="rounded-card border border-border bg-surface p-3">
           <div className="flex items-baseline justify-between gap-2">
             <b className="text-sm">Memory health</b>

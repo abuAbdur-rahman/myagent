@@ -128,15 +128,26 @@ export function withFinalTurnImages<
 }
 
 export async function searchKnowledge(projectId: string, query: string): Promise<string> {
+  return (await searchKnowledgeWithHits(projectId, query)).block;
+}
+
+/**
+ * Same search, plus the hits that produced the block so the context inspector
+ * and the audit can name them. The fallback path has no hits.
+ */
+export async function searchKnowledgeWithHits(
+  projectId: string,
+  query: string,
+): Promise<{ block: string; hits: KnowledgeHit[] }> {
   const trimmed = query.trim();
-  if (trimmed.length === 0) return "";
+  if (trimmed.length === 0) return { block: "", hits: [] };
   try {
     const hits = await knowledgeSearch(projectId, trimmed, MAX_FILES_PER_QUERY);
-    if (hits.length > 0) return buildChunkBlock(hits);
+    if (hits.length > 0) return { block: buildChunkBlock(hits), hits };
   } catch (error) {
     console.warn("knowledge: chunk search failed, using excerpts", error);
   }
-  return excerptKnowledge(projectId, trimmed);
+  return { block: await excerptKnowledge(projectId, trimmed), hits: [] };
 }
 
 async function excerptKnowledge(projectId: string, query: string): Promise<string> {

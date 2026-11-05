@@ -105,6 +105,8 @@ Exit: memory writes only bio, preferences, or explicit asks; thread summary stay
 |---|---|---|---|---|---|
 | [x] | E1 | Scoped memory recall | Partial | S | H1 |
 | [x] | E6 | Write-only-what-matters memory + thread roll-up | Missing | S | E2 |
+| [x] | E9 | Past-chat search | Have | S | E1 |
+| [x] | E10 | Retrieval audit and probe gate | Have | S | E1 |
 
 ---
 

@@ -1,6 +1,9 @@
+pub mod audit;
 pub mod commands;
 pub mod embed;
 pub mod episodes;
+#[cfg(test)]
+mod eval;
 pub mod file;
 pub mod index;
 pub mod knowledge;
