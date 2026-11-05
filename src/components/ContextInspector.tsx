@@ -44,8 +44,13 @@ export function ContextInspector() {
     globalSentMemories,
     projectSentMemories,
     recalledMemories,
+    recalledDetails,
+    knowledgeSummary,
+    episodeSummary,
     pendingMemories,
     memoryPaused,
+    memoryOmitted,
+    episodicRecall,
     standingPrompt,
     chatPrompt,
     contextInfo,
@@ -214,23 +219,104 @@ export function ContextInspector() {
         >
           {recalledMemories.length === 0 ? (
             <p className="m-0 text-xs text-muted">
-              Nothing extra was recalled for this message.
+              {memoryPaused
+                ? "Memory is paused, so nothing was ranked."
+                : "No note cleared the relevance floor, or the ones that matched were already sent in full."}
             </p>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
-              {recalledMemories.map((memory) => (
-                <li key={memory.id} className="flex min-w-0 gap-1.5">
-                  <span className="flex-none text-muted">
-                    {memory.scope === "global" ? "G" : "P"}
+              {recalledMemories.map((memory) => {
+                const score = recalledDetails.find((detail) => detail.id === memory.id)?.score;
+                return (
+                  <li key={memory.id} className="flex min-w-0 gap-1.5">
+                    <span className="flex-none text-muted">
+                      {memory.scope === "global" ? "G" : "P"}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-muted" title={memory.content}>
+                      {memory.content}
+                    </span>
+                    <span className="flex-none tabular-nums text-text-faint">
+                      {score === undefined ? "" : score.toFixed(3)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Section>
+
+        <Section
+          title="Project knowledge"
+          tokens={estimate(
+            knowledgeSummary.map((hit) => hit.text).join("\n"),
+          )}
+          count={knowledgeSummary.length}
+        >
+          {knowledgeSummary.length === 0 ? (
+            <p className="m-0 text-xs text-muted">
+              {activeProject
+                ? "No document chunk matched this message."
+                : "Knowledge is project-scoped; this chat has no project."}
+            </p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {knowledgeSummary.map((hit) => (
+                <li
+                  key={`${hit.doc_id}:${hit.ord}`}
+                  className="flex min-w-0 gap-1.5"
+                  title={hit.text}
+                >
+                  <span className="min-w-0 flex-1 truncate text-muted">
+                    {hit.name}
+                    {hit.heading ? ` · ${hit.heading}` : ""} · #{hit.ord + 1}
                   </span>
-                  <span className="min-w-0 truncate text-muted" title={memory.content}>
-                    {memory.content}
+                  <span className="flex-none tabular-nums text-text-faint">
+                    {hit.score.toFixed(3)}
                   </span>
                 </li>
               ))}
             </ul>
           )}
         </Section>
+
+        <Section
+          title="Earlier conversations"
+          tokens={estimate(
+            episodeSummary.map((hit) => hit.snippet).join("\n"),
+          )}
+          count={episodeSummary.length}
+        >
+          {episodeSummary.length === 0 ? (
+            <p className="m-0 text-xs text-muted">
+              {!activeProject
+                ? "Past-chat recall runs in project chats only."
+                : episodicRecall
+                  ? "No earlier chat matched strongly enough."
+                  : "Past-chat recall is switched off in Settings."}
+            </p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {episodeSummary.map((hit) => (
+                <li key={hit.message_id} className="flex min-w-0 gap-1.5" title={hit.snippet}>
+                  <span className="flex-none text-muted">{hit.date}</span>
+                  <span className="min-w-0 flex-1 truncate text-muted">{hit.title}</span>
+                  <span className="flex-none tabular-nums text-text-faint">
+                    {hit.score.toFixed(3)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        {memoryOmitted > 0 && (
+          <Section title="Dropped">
+            <p className="m-0 text-xs text-warn">
+              {memoryOmitted} global note{memoryOmitted === 1 ? "" : "s"} over the 2,500-character
+              send budget. Shorten or merge them in Settings → Memory.
+            </p>
+          </Section>
+        )}
 
         <Section title="Project">
           <p className="m-0 text-xs text-muted">

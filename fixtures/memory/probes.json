@@ -1,0 +1,32 @@
+{
+  "notes": [
+    { "id": "n01", "kind": "fact", "text": "CES billing uses Xero as the accounting source of truth for invoices." },
+    { "id": "n02", "kind": "fact", "text": "The CES monthly billing automation uploads invoice and bill PDFs to Drive every cycle." },
+    { "id": "n03", "kind": "note", "text": "District-level portal billing visibility is a known historical gap with little precedent." },
+    { "id": "n04", "kind": "preference", "text": "The user prefers short, scannable answers with the next step first." },
+    { "id": "n05", "kind": "fact", "text": "Convert Clicks deploys a Softr app over an Airtable base." },
+    { "id": "n06", "kind": "fact", "text": "The myagent desktop app ships on Windows only and never adds a macOS branch." },
+    { "id": "n07", "kind": "note", "text": "CES test invisibility depends on both district scope and provider assignment, not the TEST name." },
+    { "id": "n08", "kind": "fact", "text": "Airtable API tokens live in the Windows Credential Manager, never in SQLite or the webview." },
+    { "id": "n09", "kind": "note", "text": "Invoices historically lived as drafts in Airtable while final versions were stored in Xero." },
+    { "id": "n10", "kind": "preference", "text": "Use pnpm rather than npm for this project." },
+    { "id": "n11", "kind": "note", "text": "The request flow moves to QA, then Client Review, then Done." },
+    { "id": "n12", "kind": "fact", "text": "Project memory is scoped to one project and never reaches a global chat." }
+  ],
+  "probes": [
+    { "query": "Xero invoices source of truth", "expect": "n01" },
+    { "query": "billing automation uploads PDFs to Drive", "expect": "n02" },
+    { "query": "district portal billing visibility gap", "expect": "n03" },
+    { "query": "short scannable answers preference", "expect": "n04" },
+    { "query": "Convert Clicks Softr Airtable deploy", "expect": "n05" },
+    { "query": "Windows only no macOS branch", "expect": "n06" },
+    { "query": "test invisibility provider assignment", "expect": "n07" },
+    { "query": "Airtable token Credential Manager", "expect": "n08" },
+    { "query": "pnpm instead of npm", "expect": "n10" },
+    { "query": "QA then Client Review then Done", "expect": "n11" },
+    { "query": "project memory global chat scope", "expect": "n12" },
+    { "query": "who keeps the final invoice copies?", "expect": "n09", "semantic": true },
+    { "query": "what does the owner dislike about long replies?", "expect": "n04", "semantic": true },
+    { "query": "where is the API key stored?", "expect": "n08", "semantic": true }
+  ]
+}

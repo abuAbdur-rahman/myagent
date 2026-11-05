@@ -997,6 +997,7 @@ export interface EpisodeHit {
   role: string;
   snippet: string;
   created_at: number;
+  score: number;
 }
 
 export function episodicRecall(
@@ -1009,6 +1010,36 @@ export function episodicRecall(
 
 export function conversationReindex() {
   return invoke<void>("conversation_reindex");
+}
+
+export interface AuditItem {
+  source: string;
+  item_id: string;
+  label: string;
+  score?: number;
+  trust?: string;
+}
+
+export interface AuditRow {
+  source: string;
+  item_id: string;
+  label: string;
+  score: number | null;
+  trust: string | null;
+  created_at: number;
+}
+
+export function memoryAuditWrite(write: {
+  conversation_id: string;
+  turn_id?: string;
+  query: string;
+  items: AuditItem[];
+}) {
+  return invoke<void>("memory_audit_write", { write });
+}
+
+export function memoryAuditRecent(limit = 20) {
+  return invoke<AuditRow[]>("memory_audit_recent", { limit });
 }
 
 export function memoryModelStatus() {

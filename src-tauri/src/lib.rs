@@ -512,6 +512,8 @@ pub fn run() {
             memory::commands::conversation_search,
             memory::commands::episodic_recall,
             memory::commands::conversation_reindex,
+            memory::commands::memory_audit_write,
+            memory::commands::memory_audit_recent,
             memory::commands::memory_model_status,
             memory::commands::memory_model_install,
             memory::commands::memory_reset,

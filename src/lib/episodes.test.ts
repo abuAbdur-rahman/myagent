@@ -11,6 +11,7 @@ const hit = (overrides: Partial<EpisodeHit> = {}): EpisodeHit => ({
   role: "assistant",
   snippet: "Checkout uses the hosted payment page.",
   created_at: 1_700_000_000_000,
+  score: 0.4,
   ...overrides,
 });
 

@@ -53,14 +53,28 @@ function attr(value: string): string {
   return value.replace(/["<>\r\n]/g, " ").trim().slice(0, 120);
 }
 
+/** Hits that actually fit the block budget, in ranking order. */
+function selectChunkHits(hits: KnowledgeHit[]): KnowledgeHit[] {
+  const kept: KnowledgeHit[] = [];
+  let budget = MAX_CHUNK_CHARS;
+  for (const hit of hits.slice(0, MAX_FILES_PER_QUERY)) {
+    if (budget <= 0) break;
+    const body = hit.text.replace(/<\/?source[^>]*>/gi, "").trim();
+    if (body.length === 0) continue;
+    budget -= Math.min(body.length, budget);
+    kept.push(hit);
+  }
+  return kept;
+}
+
 /** Render retrieved chunks so the model can cite the document and the section. */
 export function buildChunkBlock(hits: KnowledgeHit[]): string {
   if (hits.length === 0) return "";
   const parts: string[] = [];
   let budget = MAX_CHUNK_CHARS;
-  for (const hit of hits) {
+  for (const hit of selectChunkHits(hits)) {
     if (budget <= 0) break;
-    const body = hit.text.replace(/<\/source>/gi, "").trim();
+    const body = hit.text.replace(/<\/?source[^>]*>/gi, "").trim();
     if (body.length === 0) continue;
     const text = body.length > budget ? `${body.slice(0, budget)}…` : body;
     budget -= text.length;
@@ -128,20 +142,37 @@ export function withFinalTurnImages<
 }
 
 export async function searchKnowledge(projectId: string, query: string): Promise<string> {
+  return (await searchKnowledgeWithHits(projectId, query)).block;
+}
+
+/**
+ * Same search, plus the hits that produced the block so the context inspector
+ * and the audit can name them. The excerpt fallback reports the documents it
+ * used as pseudo-hits, marked with `ord: -1`.
+ */
+export async function searchKnowledgeWithHits(
+  projectId: string,
+  query: string,
+): Promise<{ block: string; hits: KnowledgeHit[] }> {
   const trimmed = query.trim();
-  if (trimmed.length === 0) return "";
+  if (trimmed.length === 0) return { block: "", hits: [] };
   try {
     const hits = await knowledgeSearch(projectId, trimmed, MAX_FILES_PER_QUERY);
-    if (hits.length > 0) return buildChunkBlock(hits);
+    if (hits.length > 0) {
+      return { block: buildChunkBlock(hits), hits: selectChunkHits(hits) };
+    }
   } catch (error) {
     console.warn("knowledge: chunk search failed, using excerpts", error);
   }
   return excerptKnowledge(projectId, trimmed);
 }
 
-async function excerptKnowledge(projectId: string, query: string): Promise<string> {
+async function excerptKnowledge(
+  projectId: string,
+  query: string,
+): Promise<{ block: string; hits: KnowledgeHit[] }> {
   const rows = await listKnowledgeDocs(projectId, query);
-  if (rows.length === 0) return "";
+  if (rows.length === 0) return { block: "", hits: [] };
   const reads = await Promise.allSettled(
     rows.map(async (row) => ({
       name: row.name,
@@ -151,5 +182,14 @@ async function excerptKnowledge(projectId: string, query: string): Promise<strin
   const withExcerpts = reads.flatMap((result) =>
     result.status === "fulfilled" ? [result.value] : [],
   );
-  return buildKnowledgeBlock(rankDocs(withExcerpts, query));
+  const ranked = rankDocs(withExcerpts, query);
+  const hits: KnowledgeHit[] = ranked.map((doc) => ({
+    doc_id: `excerpt:${doc.name}`,
+    name: doc.name,
+    ord: -1,
+    heading: null,
+    text: doc.excerpt,
+    score: 0,
+  }));
+  return { block: buildKnowledgeBlock(ranked), hits };
 }

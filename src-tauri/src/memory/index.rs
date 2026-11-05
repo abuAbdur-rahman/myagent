@@ -88,7 +88,7 @@ static FILL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Split a user query into safe FTS5 terms. Every term is quoted, so operators
 /// and punctuation in the query cannot change the meaning of the expression.
-fn fts_query(query: &str) -> String {
+pub fn fts_query(query: &str) -> String {
     let mut tokens: Vec<String> = Vec::new();
     for token in query.split(|value: char| !value.is_alphanumeric()) {
         let token = token.to_lowercase();
@@ -406,7 +406,7 @@ pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillR
     Ok(report)
 }
 
-async fn fts_candidates(
+pub async fn fts_candidates(
     pool: &SqlitePool,
     expression: &str,
     scope: &str,

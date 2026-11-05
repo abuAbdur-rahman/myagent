@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::file::{self, Kind};
-use super::{episodes, index, knowledge, migrate, store};
+use super::{audit, episodes, index, knowledge, migrate, store};
 use crate::tools::memory_pool;
 
 #[derive(Serialize)]
@@ -275,6 +275,21 @@ pub async fn conversation_reindex(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn memory_audit_write(app: AppHandle, write: audit::AuditWrite) -> Result<(), String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    audit::record(&pool, &write).await
+}
+
+#[tauri::command]
+pub async fn memory_audit_recent(
+    app: AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<audit::AuditRow>, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    audit::recent(&pool, limit.unwrap_or(20)).await
+}
+
+#[tauri::command]
 pub fn memory_model_status(app: AppHandle) -> super::embed::ModelStatus {
     super::embed::status(&app)
 }
@@ -305,6 +320,11 @@ pub async fn memory_reset(app: AppHandle) -> Result<(), String> {
         .execute(&pool)
         .await
         .map_err(|error| format!("clear memory marker: {error}"))?;
+    audit::ensure_schema(&pool).await?;
+    sqlx::query("DELETE FROM memory_retrieval_audit")
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("clear retrieval audit: {error}"))?;
     index::refresh(&app);
     Ok(())
 }

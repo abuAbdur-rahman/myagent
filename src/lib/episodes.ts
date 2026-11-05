@@ -9,6 +9,24 @@ function attr(value: string): string {
   return value.replace(/["<>\r\n]/g, " ").trim().slice(0, 120);
 }
 
+function bodyOf(hit: EpisodeHit): string {
+  return hit.snippet.replace(/<\/?source[^>]*>/gi, "").trim();
+}
+
+/** Hits that actually fit the block budget, in ranking order. */
+export function selectEpisodeHits(hits: EpisodeHit[]): EpisodeHit[] {
+  const kept: EpisodeHit[] = [];
+  let budget = MAX_EPISODE_CHARS;
+  for (const hit of hits.slice(0, MAX_EPISODE_HITS)) {
+    if (budget <= 0) break;
+    const body = bodyOf(hit);
+    if (body.length === 0) continue;
+    budget -= Math.min(body.length, budget);
+    kept.push(hit);
+  }
+  return kept;
+}
+
 /**
  * Render past-chat snippets as citable data.
  *
@@ -19,14 +37,14 @@ export function buildEpisodeBlock(hits: EpisodeHit[]): string {
   if (hits.length === 0) return "";
   const parts: string[] = [];
   let budget = MAX_EPISODE_CHARS;
-  for (const hit of hits.slice(0, MAX_EPISODE_HITS)) {
+  for (const hit of selectEpisodeHits(hits)) {
     if (budget <= 0) break;
-    const text = hit.snippet.replace(/<\/?source[^>]*>/gi, "").trim();
-    if (text.length === 0) continue;
-    const body = text.length > budget ? `${text.slice(0, budget)}…` : text;
-    budget -= body.length;
+    const body = bodyOf(hit);
+    if (body.length === 0) continue;
+    const text = body.length > budget ? `${body.slice(0, budget)}…` : body;
+    budget -= text.length;
     parts.push(
-      `<source chat="${attr(hit.title)}" date="${attr(hit.date)}" role="${attr(hit.role)}">${body}</source>`,
+      `<source chat="${attr(hit.title)}" date="${attr(hit.date)}" role="${attr(hit.role)}">${text}</source>`,
     );
   }
   if (parts.length === 0) return "";
