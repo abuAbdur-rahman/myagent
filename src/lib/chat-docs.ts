@@ -1,4 +1,9 @@
-import { attachmentIngest, documentRead, documentsWipeUnreferenced } from "./api";
+import {
+  attachmentIngest,
+  documentRead,
+  documentsWipeUnreferenced,
+  knowledgeIndexRefresh,
+} from "./api";
 import {
   addChatDoc,
   addKnowledgeDoc,
@@ -105,6 +110,9 @@ async function linkProjectDoc(
       sha256: doc.sha256,
       path: doc.path,
       size: doc.size,
+    });
+    void knowledgeIndexRefresh(projectId).catch((error: unknown) => {
+      console.warn("documents: knowledge index refresh failed", error);
     });
   } catch (error) {
     console.warn("documents: project reference failed", error);

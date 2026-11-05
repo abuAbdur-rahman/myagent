@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::file::{self, Kind};
-use super::{index, migrate, store};
+use super::{index, knowledge, migrate, store};
 use crate::tools::memory_pool;
 
 #[derive(Serialize)]
@@ -191,6 +191,46 @@ pub async fn memory_search(
 pub async fn memory_reindex(app: AppHandle) -> Result<index::FillReport, String> {
     let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
     index::fill_embeddings(&pool, &app).await
+}
+
+#[tauri::command]
+pub async fn knowledge_search(
+    app: AppHandle,
+    project_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<knowledge::KnowledgeHit>, String> {
+    if project_id.is_empty() {
+        return Err("project knowledge needs a project id".to_string());
+    }
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    knowledge::search(&pool, &app, &query, &project_id, limit.unwrap_or(4)).await
+}
+
+#[tauri::command]
+pub async fn knowledge_reindex(
+    app: AppHandle,
+    project_id: String,
+) -> Result<knowledge::KnowledgeFillReport, String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    knowledge::fill_embeddings(&pool, &app, &project_id).await
+}
+
+#[tauri::command]
+pub fn knowledge_index_refresh(app: AppHandle, project_id: String) {
+    knowledge::refresh(&app, &project_id);
+}
+
+#[tauri::command]
+pub async fn knowledge_purge_doc(app: AppHandle, doc_id: String) -> Result<(), String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    knowledge::purge_doc(&pool, &doc_id).await
+}
+
+#[tauri::command]
+pub async fn knowledge_purge_project(app: AppHandle, project_id: String) -> Result<(), String> {
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    knowledge::purge_project(&pool, &project_id).await
 }
 
 #[tauri::command]

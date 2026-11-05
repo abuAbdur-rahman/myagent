@@ -2,6 +2,7 @@ pub mod commands;
 pub mod embed;
 pub mod file;
 pub mod index;
+pub mod knowledge;
 pub mod migrate;
 pub mod store;
 

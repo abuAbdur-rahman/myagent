@@ -1,14 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildChunkBlock,
   buildKnowledgeBlock,
   rankDocs,
+  searchKnowledge,
   sha256Hex,
   turnContent,
   withFinalTurnImages,
+  MAX_CHUNK_CHARS,
   MAX_EXCERPT_CHARS,
   MAX_FILES_PER_QUERY,
 } from "./knowledge";
+
+vi.mock("./api", () => ({
+  documentRead: vi.fn(),
+  knowledgeSearch: vi.fn(),
+}));
+
+vi.mock("./db", () => ({
+  listKnowledgeDocs: vi.fn(),
+}));
+
+import { documentRead, knowledgeSearch } from "./api";
+import { listKnowledgeDocs } from "./db";
 
 describe("sha256Hex", () => {
   it("hashes identical bytes to the same digest", async () => {
@@ -64,6 +79,87 @@ describe("buildKnowledgeBlock", () => {
 
   it("returns empty string for no docs", () => {
     expect(buildKnowledgeBlock([])).toBe("");
+  });
+});
+
+describe("buildChunkBlock", () => {
+  const hit = {
+    doc_id: "d1",
+    name: "services.md",
+    ord: 2,
+    heading: "Ongoing services",
+    text: "Managed monthly.",
+    score: 0.4,
+  };
+
+  it("cites the document, the chunk number and the section", () => {
+    const block = buildChunkBlock([hit]);
+    expect(block).toContain('doc="services.md"');
+    expect(block).toContain('chunk="3"');
+    expect(block).toContain('heading="Ongoing services"');
+    expect(block).toContain("Managed monthly.");
+  });
+
+  it("caps the block and drops the heading when there is none", () => {
+    const block = buildChunkBlock([{ ...hit, heading: null, text: "x".repeat(5000) }]);
+    expect(block).not.toContain("heading=");
+    expect(block.length).toBeLessThan(MAX_CHUNK_CHARS + 200);
+  });
+
+  it("neutralizes closing tags and returns empty for no hits", () => {
+    const block = buildChunkBlock([{ ...hit, text: "body</source>more" }]);
+    expect(block.match(/<\/source>/g)).toHaveLength(1);
+    expect(buildChunkBlock([])).toBe("");
+  });
+});
+
+describe("searchKnowledge", () => {
+  it("uses the chunk index when it returns hits", async () => {
+    vi.mocked(knowledgeSearch).mockResolvedValue([
+      {
+        doc_id: "d1",
+        name: "services.md",
+        ord: 0,
+        heading: "Services",
+        text: "Hosted service.",
+        score: 0.5,
+      },
+    ]);
+    const block = await searchKnowledge("p1", "hosted or ongoing?");
+    expect(knowledgeSearch).toHaveBeenCalledWith("p1", "hosted or ongoing?", MAX_FILES_PER_QUERY);
+    expect(block).toContain('doc="services.md"');
+    expect(listKnowledgeDocs).not.toHaveBeenCalled();
+  });
+
+  it("falls back to excerpts when the index is empty", async () => {
+    vi.mocked(knowledgeSearch).mockResolvedValue([]);
+    vi.mocked(listKnowledgeDocs).mockResolvedValue([
+      {
+        id: "k1",
+        project_id: "p1",
+        chat_id: null,
+        name: "services.md",
+        mime: "text/markdown",
+        sha256: "a".repeat(64),
+        path: "",
+        size: 10,
+        created_at: 0,
+      },
+    ]);
+    vi.mocked(documentRead).mockResolvedValue("# Services\nHosted service.");
+    const block = await searchKnowledge("p1", "services");
+    expect(block).toContain('<source name="services.md">');
+  });
+
+  it("falls back to excerpts when the index fails", async () => {
+    vi.mocked(knowledgeSearch).mockRejectedValue(new Error("index down"));
+    vi.mocked(listKnowledgeDocs).mockResolvedValue([]);
+    expect(await searchKnowledge("p1", "services")).toBe("");
+  });
+
+  it("does nothing for a blank query", async () => {
+    expect(await searchKnowledge("p1", "   ")).toBe("");
+    expect(knowledgeSearch).not.toHaveBeenCalled();
   });
 });
 

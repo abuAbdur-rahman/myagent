@@ -951,6 +951,44 @@ export function memoryReindex() {
   return invoke<MemoryFillReport>("memory_reindex");
 }
 
+export interface KnowledgeHit {
+  doc_id: string;
+  name: string;
+  ord: number;
+  heading: string | null;
+  text: string;
+  score: number;
+}
+
+export interface KnowledgeFillReport {
+  documents: number;
+  chunks: number;
+  embedded: number;
+  removed: number;
+  vectors: boolean;
+  errors: string[];
+}
+
+export function knowledgeSearch(projectId: string, query: string, limit = 4) {
+  return invoke<KnowledgeHit[]>("knowledge_search", { projectId, query, limit });
+}
+
+export function knowledgeReindex(projectId: string) {
+  return invoke<KnowledgeFillReport>("knowledge_reindex", { projectId });
+}
+
+export function knowledgeIndexRefresh(projectId: string) {
+  return invoke<void>("knowledge_index_refresh", { projectId });
+}
+
+export function knowledgePurgeDoc(docId: string) {
+  return invoke<void>("knowledge_purge_doc", { docId });
+}
+
+export function knowledgePurgeProject(projectId: string) {
+  return invoke<void>("knowledge_purge_project", { projectId });
+}
+
 export function memoryModelStatus() {
   return invoke<MemoryModelStatus>("memory_model_status");
 }
