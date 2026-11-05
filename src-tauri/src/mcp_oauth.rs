@@ -509,7 +509,7 @@ async fn probe_challenge(url: &str) -> Option<String> {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-06-18",
             "capabilities": {},
             "clientInfo": {
                 "name": "MyAgent",
@@ -528,7 +528,10 @@ async fn probe_challenge(url: &str) -> Option<String> {
         .await
     {
         Ok(response) => {
-            if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+            let status = response.status();
+            if status != reqwest::StatusCode::UNAUTHORIZED
+                && status != reqwest::StatusCode::FORBIDDEN
+            {
                 return None;
             }
             response
@@ -550,40 +553,59 @@ async fn run_authorization(
     redirect_uri: &str,
     listener: TcpListener,
 ) -> Result<(), String> {
-    let mut state = OAuthState::new(url, None).await.map_err(auth_error)?;
+    let mut state = OAuthState::new(url, None)
+        .await
+        .map_err(|e| step("discovery", auth_error(e)))?;
     match &mut state {
         OAuthState::Unauthorized(manager) => {
             manager.set_credential_store(VaultCredentialStore::new(server_id));
         }
         _ => return Err("oauth state is not ready".to_string()),
     }
-    let mut request = AuthorizationRequest::new(redirect_uri)
-        .with_client_name("MyAgent")
-        .with_application_type("native");
-    if let Some(challenge) = probe_challenge(url).await {
-        request = request.with_challenge(challenge);
+    let challenge = probe_challenge(url).await;
+    let request = |challenge: Option<String>| {
+        let request = AuthorizationRequest::new(redirect_uri)
+            .with_client_name("MyAgent")
+            .with_application_type("native");
+        match challenge {
+            Some(challenge) => request.with_challenge(challenge),
+            None => request,
+        }
+    };
+    if let Err(error) = state.start_authorization(request(challenge)).await {
+        eprintln!("mcp oauth: challenge discovery failed ({error}); retrying without it");
+        state
+            .start_authorization(request(None))
+            .await
+            .map_err(|e| step("registration", auth_error(e)))?;
     }
-    state
-        .start_authorization(request)
+    let auth_url = state
+        .get_authorization_url()
         .await
-        .map_err(auth_error)?;
-    let auth_url = state.get_authorization_url().await.map_err(auth_error)?;
+        .map_err(|e| step("registration", auth_error(e)))?;
     validate_authorization_url(&auth_url, url)?;
     tauri_plugin_opener::open_url(&auth_url, None::<&str>)
-        .map_err(|e| format!("could not open the browser: {e}"))?;
+        .map_err(|e| step("browser", format!("could not open the browser: {e}")))?;
     let callback_url = wait_for_callback(listener, redirect_uri).await?;
     state
         .handle_callback_url(&callback_url)
         .await
-        .map_err(auth_error)?;
+        .map_err(|e| step("callback", auth_error(e)))?;
     let manager = state
         .into_authorization_manager()
         .ok_or_else(|| "authorization did not complete".to_string())?;
-    manager.get_access_token().await.map_err(auth_error)?;
+    manager
+        .get_access_token()
+        .await
+        .map_err(|e| step("token", auth_error(e)))?;
     if !has_credentials(server_id) {
         return Err("authorization did not store credentials".to_string());
     }
     Ok(())
+}
+
+fn step(name: &str, error: String) -> String {
+    format!("oauth {name}: {error}")
 }
 
 async fn wait_for_callback(listener: TcpListener, redirect_uri: &str) -> Result<String, String> {

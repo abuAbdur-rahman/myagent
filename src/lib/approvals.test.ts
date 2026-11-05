@@ -22,7 +22,8 @@ describe("approvalKind", () => {
 describe("approvalSubtitle", () => {
   it("says command only for shell tools", () => {
     expect(approvalSubtitle("run_powershell")).toContain("this command");
-    expect(approvalSubtitle("delete_memory")).toContain("Memory is sent with future chats");
+    expect(approvalSubtitle("update_memory")).toContain("Memory is sent with future chats");
+    expect(approvalSubtitle("delete_memory")).toContain("Deleting a note");
     expect(approvalSubtitle("web_fetch")).toContain("this call");
   });
 });

@@ -67,6 +67,18 @@ fn file_ok(path: &PathBuf, file: ModelFile) -> bool {
     }
 }
 
+/// A same-size corrupt file would otherwise be trusted forever, so an existing
+/// model file is hashed before `install` skips it.
+fn file_matches(path: &PathBuf, file: ModelFile) -> bool {
+    if !file_ok(path, file) {
+        return false;
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => sha256(&bytes) == file.sha256,
+        Err(_) => false,
+    }
+}
+
 pub fn status(app: &AppHandle) -> ModelStatus {
     let dir = dir(app).unwrap_or_default();
     let installed = FILES
@@ -93,7 +105,7 @@ pub async fn install(app: &AppHandle, client: &reqwest::Client) -> Result<ModelS
     std::fs::create_dir_all(&dir).map_err(|error| format!("create {dir:?}: {error}"))?;
     for file in FILES {
         let target = dir.join(file.name);
-        if file_ok(&target, file) {
+        if file_matches(&target, file) {
             continue;
         }
         let url = format!("{HF_BASE}/{}", file.remote);

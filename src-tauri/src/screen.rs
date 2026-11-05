@@ -38,16 +38,20 @@ impl Screener for FakeScreener {
     }
 }
 
-static ENV: LazyLock<Option<Environment>> = LazyLock::new(|| {
+/// The process-wide ORT environment, shared with voice and memory embeddings.
+/// ORT refuses a second environment, so screening must never build its own.
+fn environment() -> Option<&'static Environment> {
     if !avx2() {
         return None;
     }
-    ort::init()
-        .with_name("myagent-screen")
-        .with_telemetry(false)
-        .build()
-        .ok()
-});
+    match transcribe_rs::onnx::session::try_environment() {
+        Ok(environment) => Some(environment),
+        Err(error) => {
+            eprintln!("screen: {error}");
+            None
+        }
+    }
+}
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn avx2() -> bool {
@@ -67,7 +71,7 @@ pub struct OnnxScreener {
 
 impl OnnxScreener {
     pub fn load(model: &Path, tokenizer: &Path) -> Result<Self, String> {
-        let env = ENV.as_ref().ok_or_else(|| {
+        let env = environment().ok_or_else(|| {
             "screening unavailable: CPU lacks AVX2 or platform is unsupported".to_string()
         })?;
         let tokenizer = Tokenizer::from_file(tokenizer).map_err(|e| e.to_string())?;
@@ -343,6 +347,17 @@ pub fn init_for_app(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screening_shares_the_process_ort_environment() {
+        let shared = transcribe_rs::onnx::session::try_environment().expect("ort environment");
+        if let Some(screened) = environment() {
+            assert!(
+                std::ptr::eq(shared, screened),
+                "screening built its own ONNX Runtime environment"
+            );
+        }
+    }
 
     #[test]
     fn chunks_long_text_within_limits() {

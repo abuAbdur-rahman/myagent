@@ -435,7 +435,13 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         <div className="flex flex-col items-center gap-1">
           <button
             type="button"
-            aria-label="Settings"
+            aria-label={
+              pendingMemories.length > 0
+                ? `Settings, ${pendingMemories.length} ${
+                    pendingMemories.length === 1 ? "memory" : "memories"
+                  } waiting for review`
+                : "Settings"
+            }
             title="Settings (Ctrl+,)"
             onClick={() => setSettingsPage("general")}
             className="relative grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
@@ -677,7 +683,13 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
       <div className="flex items-center gap-1.5 border-t border-border p-2">
         <button
           type="button"
-          aria-label="Settings"
+          aria-label={
+            pendingMemories.length > 0
+              ? `Settings, ${pendingMemories.length} ${
+                  pendingMemories.length === 1 ? "memory" : "memories"
+                } waiting for review`
+              : "Settings"
+          }
           title="Settings (Ctrl+,)"
           onClick={() => setSettingsPage("general")}
           className="relative grid h-8 w-8 flex-none place-items-center rounded-control text-muted hover:bg-hover hover:text-text"

@@ -48,7 +48,7 @@ static META: OnceLock<Regex> = OnceLock::new();
 fn meta_pattern() -> &'static Regex {
     META.get_or_init(|| {
         Regex::new(
-            r"(?i)(queued for (the user to )?review|queued as|approve the memory prompts?|memory prompts?|not saved until|nothing is stored until|waiting for review|nothing was queued|already in memory|the user sees a card|i'?ve saved|i have saved)",
+            r"(?i)(queued for (the user to )?review|queued as|approve the memory prompts?|memory prompts?|not saved until|nothing is stored until|waiting for review|nothing was queued|already in memory|the user sees a card|i'?ve saved (it|that|this)|i have saved (it|that|this))",
         )
         .expect("meta pattern compiles")
     })
@@ -66,6 +66,9 @@ pub fn similarity(a: &str, b: &str) -> f32 {
             .map(str::to_string)
             .collect()
     }
+    if negated(a) != negated(b) {
+        return 0.0;
+    }
     let left = tokens(a);
     let right = tokens(b);
     if left.is_empty() || right.is_empty() {
@@ -74,6 +77,32 @@ pub fn similarity(a: &str, b: &str) -> f32 {
     let shared = left.intersection(&right).count() as f32;
     let smallest = left.len().min(right.len()) as f32;
     shared / smallest
+}
+
+static NEGATION: OnceLock<Regex> = OnceLock::new();
+
+/// True when the text negates its own claim, so the opposite wording is not a
+/// duplicate of it.
+fn negated(text: &str) -> bool {
+    NEGATION
+        .get_or_init(|| {
+            Regex::new(r"(?i)\b(not|never|no longer|no|cannot|can'?t|don'?t|doesn'?t|isn'?t|aren'?t|won'?t|shouldn'?t)\b")
+                .expect("negation pattern compiles")
+        })
+        .is_match(text)
+}
+
+static NEGATED_REQUEST: OnceLock<Regex> = OnceLock::new();
+
+fn negated_request(text: &str) -> bool {
+    NEGATED_REQUEST
+        .get_or_init(|| {
+            Regex::new(
+                r"(?i)\b(don'?t|do not|doesn'?t|does not|never|no need to|stop)\b[^.?!;]{0,30}?\b(remember|save (this|that)|keep in mind|note that)\b",
+            )
+            .expect("negated request pattern compiles")
+        })
+        .is_match(text)
 }
 
 pub fn explicit_memory_request(text: &str) -> bool {
@@ -86,11 +115,7 @@ pub fn explicit_memory_request(text: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    let lower = trimmed.to_lowercase();
-    if trimmed.ends_with('?')
-        && !lower.contains("remember this")
-        && !lower.contains("remember that")
-    {
+    if trimmed.ends_with('?') || negated_request(trimmed) {
         return false;
     }
     pattern.is_match(trimmed)
@@ -148,7 +173,7 @@ mod tests {
 
     #[test]
     fn near_duplicates_are_measured_by_token_overlap() {
-        assert!(similarity("uses pnpm instead of npm", "uses pnpm not npm") > 0.5);
+        assert!(similarity("uses pnpm instead of npm", "uses pnpm rather than npm") > 0.5);
         assert!(
             similarity(
                 "CES billing uses Xero as the accounting source of truth",
@@ -174,5 +199,48 @@ mod tests {
         assert!(!explicit_memory_request(
             "What's the difference between services?"
         ));
+    }
+
+    #[test]
+    fn questions_never_count_as_explicit_saves() {
+        assert!(!explicit_memory_request("Can you remember that for me?"));
+        assert!(!explicit_memory_request(
+            "Could you keep in mind that CES uses Xero?"
+        ));
+        assert!(!explicit_memory_request("Remember this?"));
+    }
+
+    #[test]
+    fn negated_requests_do_not_count_as_explicit_saves() {
+        assert!(!explicit_memory_request(
+            "Don't remember this, it was wrong."
+        ));
+        assert!(!explicit_memory_request(
+            "Do not save this, I was only testing."
+        ));
+        assert!(!explicit_memory_request(
+            "Never note that the billing window is Monday."
+        ));
+        assert!(explicit_memory_request("Don't forget the billing window."));
+    }
+
+    #[test]
+    fn negated_notes_are_not_duplicates_of_their_originals() {
+        assert_eq!(
+            similarity(
+                "The deploy target is Windows only",
+                "The deploy target is not Windows only"
+            ),
+            0.0
+        );
+        assert!(similarity("Prefers dark mode", "Prefers dark mode") > 0.99);
+    }
+
+    #[test]
+    fn meta_detection_needs_a_saved_subject() {
+        assert!(looks_like_meta("I've saved that for you."));
+        assert!(looks_like_meta("I have saved it to memory."));
+        assert!(!looks_like_meta("I've saved three invoices this week."));
+        assert!(!looks_like_meta("I have saved for a new laptop."));
     }
 }

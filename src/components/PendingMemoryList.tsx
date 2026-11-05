@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PendingMemory } from "../lib/types";
 import { useApp } from "../lib/store";
+import { toast } from "../lib/toast";
 import { Button } from "./ui";
 
 export function PendingMemoryList({
@@ -12,7 +13,7 @@ export function PendingMemoryList({
   compact?: boolean;
   onChanged?: () => void;
 }) {
-  const { approvePendingMemory, dismissPendingMemory } = useApp();
+  const { approvePendingMemory, dismissPendingMemory, undoApprovedMemory } = useApp();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -33,6 +34,23 @@ export function PendingMemoryList({
       setBusy(null);
     }
   };
+
+  const approve = (id: string, content?: string) =>
+    run(id, async () => {
+      await approvePendingMemory(id, content);
+      toast("Memory saved", {
+        actions: [
+          {
+            label: "Undo",
+            run: () => {
+              void undoApprovedMemory(id).catch((cause) => {
+                setError(cause instanceof Error ? cause.message : String(cause));
+              });
+            },
+          },
+        ],
+      });
+    });
 
   return (
     <div className="space-y-1.5">
@@ -93,9 +111,7 @@ export function PendingMemoryList({
                   size="sm"
                   disabled={busy !== null || draft.trim().length === 0}
                   onClick={() =>
-                    void run(memory.id, () =>
-                      approvePendingMemory(memory.id, draft),
-                    )
+                    void approve(memory.id, draft)
                   }
                 >
                   Save
@@ -118,7 +134,7 @@ export function PendingMemoryList({
                   size="sm"
                   disabled={busy !== null}
                   onClick={() =>
-                    void run(memory.id, () => approvePendingMemory(memory.id))
+                    void approve(memory.id)
                   }
                 >
                   Save

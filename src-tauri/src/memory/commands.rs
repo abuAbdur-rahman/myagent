@@ -205,9 +205,11 @@ pub async fn memory_model_install(app: AppHandle) -> Result<super::embed::ModelS
 }
 
 #[tauri::command]
-pub fn memory_project_delete(app: AppHandle, project_id: String) -> Result<(), String> {
+pub async fn memory_project_delete(app: AppHandle, project_id: String) -> Result<(), String> {
     let root = store::root(&app)?;
     store::delete_project(&root, &project_id)?;
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    index::purge_project(&pool, &project_id).await?;
     index::refresh(&app);
     Ok(())
 }

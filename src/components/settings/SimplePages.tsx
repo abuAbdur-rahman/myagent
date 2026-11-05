@@ -620,6 +620,7 @@ function McpIdentity({
   probe,
   state,
   onReconnect,
+  onSignIn,
   onEdit,
   onApprove,
 }: {
@@ -627,12 +628,14 @@ function McpIdentity({
   probe: api.McpProbe | undefined;
   state: McpState;
   onReconnect: (id: string) => void;
+  onSignIn: (id: string) => void;
   onEdit: () => void;
   onApprove: (id: string) => void;
 }) {
   const { text, title } = mcpTargetText(server);
   const failed = state.label === "Failed";
   const review = state.label === "Review needed";
+  const signIn = state.label === "Sign in" && server.auth_type === "oauth";
   return (
     <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -661,6 +664,21 @@ function McpIdentity({
             onClick={() => onApprove(server.id)}
           >
             Approve tools
+          </button>
+        </div>
+      )}
+      {signIn && (
+        <div className="mt-1.5 flex items-start gap-1.5 text-xs text-warn">
+          <TriangleAlert size={13} className="mt-0.5 flex-none" aria-hidden />
+          <span className="min-w-0 break-words">
+            {mcpProbeError(probe) || "This server needs an OAuth sign-in."}
+          </span>
+          <button
+            type="button"
+            className="flex-none underline hover:no-underline"
+            onClick={() => onSignIn(server.id)}
+          >
+            Sign in
           </button>
         </div>
       )}
@@ -760,6 +778,7 @@ function McpServerCard({
   onEdit,
   onRemove,
   onReconnect,
+  onSignIn,
   onLogs,
   onApprove,
   onDecision,
@@ -774,6 +793,7 @@ function McpServerCard({
   onEdit: (server: api.McpServerRow) => void;
   onRemove: (server: api.McpServerRow) => void;
   onReconnect: (id: string) => void;
+  onSignIn: (id: string) => void;
   onLogs: (server: api.McpServerRow) => void;
   onApprove: (id: string) => void;
   onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
@@ -806,6 +826,7 @@ function McpServerCard({
           probe={probe}
           state={state}
           onReconnect={onReconnect}
+          onSignIn={onSignIn}
           onEdit={() => onEdit(server)}
           onApprove={onApprove}
         />
@@ -1590,7 +1611,22 @@ function useMcpServers(projectId: string | null) {
       .finally(() => setProbing((current) => ({ ...current, [id]: false })));
   }, []);
 
-  return { servers, probes, probing, status, run, reconnect, refresh: reload };
+  const signIn = useCallback((id: string) => {
+    setProbing((current) => ({ ...current, [id]: true }));
+    void api
+      .mcpBeginAuth(id)
+      .then(() => api.mcpProbe(id))
+      .then((probe) => {
+        setProbes((current) => ({ ...current, [id]: probe }));
+        setStatus(
+          probe.status === "needs_auth" ? "Sign-in did not complete. Try again." : null,
+        );
+      })
+      .catch((e: unknown) => setStatus(errorText(e)))
+      .finally(() => setProbing((current) => ({ ...current, [id]: false })));
+  }, []);
+
+  return { servers, probes, probing, status, run, reconnect, signIn, refresh: reload };
 }
 
 function AuditEntry({ row }: { row: AuditLog }) {
@@ -1792,6 +1828,7 @@ function McpDetailsDialog({
   probing,
   onClose,
   onReconnect,
+  onSignIn,
   onApprove,
   onDecision,
 }: {
@@ -1800,6 +1837,7 @@ function McpDetailsDialog({
   probing: boolean;
   onClose: () => void;
   onReconnect: (id: string) => void;
+  onSignIn: (id: string) => void;
   onApprove: (id: string) => void;
   onDecision: (server: api.McpServerRow, tool: string, decision: McpDecision) => void;
 }) {
@@ -1946,6 +1984,11 @@ function McpDetailsDialog({
             </dl>
           )}
           <div className="flex justify-end gap-2">
+            {server.auth_type === "oauth" && (
+              <Button size="sm" disabled={probing} onClick={() => onSignIn(server.id)}>
+                {server.has_token ? "Reconnect" : "Sign in"}
+              </Button>
+            )}
             {state?.label === "Review needed" && (
               <Button size="sm" onClick={() => onApprove(server.id)}>
                 Approve tools
@@ -2009,7 +2052,8 @@ function McpLogsDialog({
 export function McpPage() {
   const { activeProject } = useApp();
   const projectId = mcpProjectId(activeProject);
-  const { servers, probes, probing, status, run, reconnect, refresh } = useMcpServers(projectId);
+  const { servers, probes, probing, status, run, reconnect, signIn, refresh } =
+    useMcpServers(projectId);
   const [dialog, setDialog] = useState<McpDialogState>(CLOSED_MCP_DIALOG);
   const [importing, setImporting] = useState(false);
   const [detailsFor, setDetailsFor] = useState<api.McpServerRow | null>(null);
@@ -2165,6 +2209,7 @@ export function McpPage() {
               onEdit={(target) => setDialog({ open: true, editing: target, seed: null })}
               onRemove={(target) => void remove(target)}
               onReconnect={reconnect}
+              onSignIn={signIn}
               onLogs={(target) => void openLogs(target)}
               onApprove={approve}
               onDecision={decide}
@@ -2202,6 +2247,7 @@ export function McpPage() {
         probing={detailsFor ? probing[detailsFor.id] === true : false}
         onClose={() => setDetailsFor(null)}
         onReconnect={reconnect}
+        onSignIn={signIn}
         onApprove={approve}
         onDecision={decide}
       />
@@ -3893,10 +3939,11 @@ export function MemoryPage() {
   const reportIndex = (report: api.MemoryFillReport, done: string) => {
     if (report.errors.length > 0) {
       setActionError(
-        `Indexed ${report.scanned} notes, but ${report.errors.length} could not be embedded: ${report.errors[0]}`,
+        `Indexed ${report.scanned} notes, but ${report.errors.length} could not be indexed: ${report.errors[0]}`,
       );
       return;
     }
+    setActionError(null);
     toast(done);
   };
 
@@ -4017,11 +4064,10 @@ export function MemoryPage() {
     }
     await reload();
   };
-  const globalPending = pendingMemories.filter((item) => item.scope === "global");
   const [kindFilter, setKindFilter] = useState<string>("all");
   const visibleByKind =
     kindFilter === "all" ? visible : visible.filter((memory) => memory.kind === kindFilter);
-  const sent = Math.max(0, memories.length - memoryOmitted);
+  const sent = memoryPaused ? 0 : Math.max(0, memories.length - memoryOmitted);
   const budgetPct = memories.length === 0 ? 0 : Math.round((sent / memories.length) * 100);
 
   return (
@@ -4037,21 +4083,21 @@ export function MemoryPage() {
           </div>
         )}
 
-        {globalPending.length > 0 && (
+        {pendingMemories.length > 0 && (
           <div
             className="rounded-card border border-warn/40 bg-surface p-3"
             data-setting-term="Pending memory"
           >
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <span className="text-sm font-medium">
-                {globalPending.length}{" "}
-                {globalPending.length === 1 ? "memory" : "memories"} waiting for review
+                {pendingMemories.length}{" "}
+                {pendingMemories.length === 1 ? "memory" : "memories"} waiting for review
               </span>
               <span className="text-xs text-muted">
                 Nothing is stored until you save it.
               </span>
             </div>
-            <PendingMemoryList rows={globalPending} onChanged={() => void reload()} />
+            <PendingMemoryList rows={pendingMemories} onChanged={() => void reload()} />
           </div>
         )}
 
@@ -4184,7 +4230,7 @@ export function MemoryPage() {
             <dt className="text-muted">Sent every turn</dt>
             <dd className="m-0">{sent}</dd>
             <dt className="text-muted">Waiting for review</dt>
-            <dd className="m-0">{globalPending.length}</dd>
+            <dd className="m-0">{pendingMemories.length}</dd>
             <dt className="text-muted">Over budget</dt>
             <dd className={memoryOmitted > 0 ? "m-0 text-warn" : "m-0"}>{memoryOmitted}</dd>
           </dl>

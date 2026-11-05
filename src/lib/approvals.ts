@@ -17,6 +17,9 @@ export function approvalKind(tool: string): ApprovalKind {
 }
 
 export function approvalSubtitle(tool: string): string {
+  if (tool === "delete_memory") {
+    return "Deleting a note changes what future chats know. Review it before allowing.";
+  }
   if (isMemoryApproval(tool)) {
     return "Memory is sent with future chats. Review the note before allowing.";
   }

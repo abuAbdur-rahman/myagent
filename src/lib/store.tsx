@@ -571,10 +571,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const memoryPausedRef = useRef(memoryPaused);
   const relevantMemoriesRef = useRef<Memory[]>([]);
+  const recallRequestRef = useRef(0);
   const setMemoryPaused = useCallback((value: boolean) => {
     memoryPausedRef.current = value;
     setMemoryPausedState(value);
     if (value) {
+      recallRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       setRecalledMemories([]);
     }
@@ -767,7 +769,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setGlobalMemories(global);
       setProjectMemories(project);
       setMemoryCompat(false);
-      setMemoryOmitted(read.global.omitted + (read.project?.omitted ?? 0));
+      setMemoryOmitted(read.global.omitted);
       globalSentRef.current = new Set(read.global.sent);
       projectSentRef.current = new Set(read.project?.sent ?? []);
       return { global, project };
@@ -790,6 +792,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPendingMemories(rows);
     return rows;
   }, []);
+
+  /**
+   * Rank notes for this turn. The result is discarded if the request is
+   * superseded, memory is paused, or the active project changed mid-flight.
+   */
+  const recallFor = useCallback(
+    async (text: string, projectId: string | null): Promise<Memory[]> => {
+      const request = ++recallRequestRef.current;
+      if (memoryPausedRef.current) {
+        relevantMemoriesRef.current = [];
+        setRecalledMemories([]);
+        return [];
+      }
+      try {
+        const hits = await api.memorySearch(text, projectId, 20);
+        if (request !== recallRequestRef.current) return [];
+        if (memoryPausedRef.current) return [];
+        if ((projectRef.current?.id ?? null) !== projectId) return [];
+        const alreadySent = new Set([
+          ...(globalSentRef.current ?? []),
+          ...(projectSentRef.current ?? []),
+        ]);
+        const recalled: Memory[] = [];
+        for (const hit of hits) {
+          if (recalled.length >= 4) break;
+          if (!hit.trusted) continue;
+          if (alreadySent.has(hit.id)) continue;
+          if (recalled.some((memory) => memory.id === hit.id)) continue;
+          const inProject =
+            projectId !== null && hit.scope === `project:${projectId}`;
+          if (hit.scope !== "global" && !inProject) continue;
+          const kind = (
+            ["fact", "preference", "summary", "note"] as const
+          ).includes(hit.kind as "fact" | "preference" | "summary" | "note")
+            ? (hit.kind as Memory["kind"])
+            : "note";
+          const stamp = Date.parse(hit.date) || Date.now();
+          recalled.push({
+            id: hit.id,
+            scope: inProject ? "project" : "global",
+            project_id: inProject ? projectId : null,
+            kind,
+            content: hit.text,
+            created_at: stamp,
+            updated_at: stamp,
+          });
+        }
+        relevantMemoriesRef.current = recalled;
+        setRecalledMemories(recalled);
+        return recalled;
+      } catch (error) {
+        console.warn("memory: recall failed", error);
+        relevantMemoriesRef.current = [];
+        setRecalledMemories([]);
+        return [];
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     (async () => {
@@ -1277,9 +1338,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const contextInfo = useMemo(() => {
     const system = buildSystemPrompt({
-      globalMemories,
+      globalMemories: globalSentMemories,
       project: activeProject,
-      projectMemories,
+      projectMemories: projectSentMemories,
       relevantMemories: memoryPaused ? [] : recalledMemories,
       userName: displayName || undefined,
       standingPrompt: standingPrompt || undefined,
@@ -1321,9 +1382,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [
     messages,
-    globalMemories,
+    globalSentMemories,
     activeProject,
-    projectMemories,
+    projectSentMemories,
     recalledMemories,
     memoryPaused,
     displayName,
@@ -1355,6 +1416,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages([]);
       setError(null);
       setView(id ? "project" : "chat");
+      recallRequestRef.current += 1;
+      relevantMemoriesRef.current = [];
+      setRecalledMemories([]);
+      lastPayloadRef.current = null;
     },
     [],
   );
@@ -1543,6 +1608,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveConversationId(id);
     setError(null);
     setView("chat");
+    recallRequestRef.current += 1;
+    relevantMemoriesRef.current = [];
+    setRecalledMemories([]);
+    lastPayloadRef.current = null;
     setActiveProjectId(
       id ? (conversationsRef.current.find((c) => c.id === id)?.project_id ?? null) : null,
     );
@@ -1564,6 +1633,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTodos([]);
     setError(null);
     setView("chat");
+    recallRequestRef.current += 1;
+    relevantMemoriesRef.current = [];
+    setRecalledMemories([]);
+    lastPayloadRef.current = null;
   }, []);
 
   const refreshTodos = useCallback(async (conversationId: string | null) => {
@@ -1616,9 +1689,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await db.touchConversation(id, { project_id: projectId });
     setConversations(await db.listConversations());
     if (convIdRef.current === id) {
+      const moved = (projectRef.current?.id ?? null) !== projectId;
       setActiveProjectId(projectId);
+      recallRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       setRecalledMemories([]);
+      lastPayloadRef.current = null;
+      if (moved) {
+        projectMemoriesRef.current = [];
+        projectSentRef.current = null;
+        setProjectMemories([]);
+      }
     }
   }, []);
 
@@ -1964,7 +2045,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   {
                     label: "Undo",
                     run: () => {
-                      void deleteMemory(saved.id, saved.scope, saved.project_id);
+                      void deleteMemory(saved.id, saved.scope, saved.project_id).catch(
+                        reportError,
+                      );
                     },
                   },
                 ],
@@ -2389,49 +2472,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         imagesForPayload.length > 0 ? buildUserContent(sendText, imagesForPayload) : sendText,
         documentBlock,
       );
-      try {
-        if (memoryPausedRef.current) {
-          relevantMemoriesRef.current = [];
-          setRecalledMemories([]);
-        } else {
-          const currentProjectId = projectRef.current?.id ?? null;
-          const hits = await api.memorySearch(sendText, currentProjectId, 12);
-          const alreadySent = new Set([
-            ...(globalSentRef.current ?? []),
-            ...(projectSentRef.current ?? []),
-          ]);
-          const recalled: Memory[] = [];
-          for (const hit of hits) {
-            if (recalled.length >= 4) break;
-            if (!hit.trusted) continue;
-            if (alreadySent.has(hit.id)) continue;
-            if (recalled.some((memory) => memory.id === hit.id)) continue;
-            const inProject =
-              currentProjectId !== null && hit.scope === `project:${currentProjectId}`;
-            if (hit.scope !== "global" && !inProject) continue;
-            const kind = (
-              ["fact", "preference", "summary", "note"] as const
-            ).includes(hit.kind as "fact" | "preference" | "summary" | "note")
-              ? (hit.kind as Memory["kind"])
-              : "note";
-            const stamp = Date.parse(hit.date) || Date.now();
-            recalled.push({
-              id: hit.id,
-              scope: inProject ? "project" : "global",
-              project_id: inProject ? currentProjectId : null,
-              kind,
-              content: hit.text,
-              created_at: stamp,
-              updated_at: stamp,
-            });
-          }
-          relevantMemoriesRef.current = recalled;
-          setRecalledMemories(recalled);
-        }
-      } catch {
-        relevantMemoriesRef.current = [];
-        setRecalledMemories([]);
-      }
+      await recallFor(sendText, projectRef.current?.id ?? null);
       outgoing.push({ role: "user", content: userContent });
       const payload = buildPayload(conversationId, outgoing);
 
@@ -2448,6 +2489,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       conversations,
       finalize,
       messages,
+      recallFor,
       streaming,
       streamTurn,
       buildPayload,
@@ -2657,6 +2699,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setActiveProjectId(projectId);
         setView("chat");
         setMessages([userMsg, assistantMsg]);
+        projectRef.current = projects.find((item) => item.id === projectId) ?? null;
+        await recallFor(trimmed, projectId);
         const firstTurns = [{ role: "user", content: trimmed }];
         await streamTurn(
           created.id,
@@ -2672,7 +2716,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [streaming, streamTurn, buildPayload, maybeGenerateTitle],
+    [projects, streaming, streamTurn, buildPayload, maybeGenerateTitle, recallFor],
   );
 
   const clearActiveConversation = useCallback(async () => {

@@ -4,7 +4,7 @@
 //! two SQLite tables and one FTS5 table so `recall_memory` can rank notes by
 //! meaning instead of substring matching.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -82,13 +82,17 @@ fn project_ids(root: &Path) -> Vec<String> {
     ids
 }
 
+/// Serializes fills so a snapshot read before a delete cannot commit after the
+/// newer one and restore removed notes.
+static FILL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Split a user query into safe FTS5 terms. Every term is quoted, so operators
 /// and punctuation in the query cannot change the meaning of the expression.
 fn fts_query(query: &str) -> String {
     let mut tokens: Vec<String> = Vec::new();
     for token in query.split(|value: char| !value.is_alphanumeric()) {
         let token = token.to_lowercase();
-        if token.len() >= 2
+        if !token.is_empty()
             && !matches!(token.as_str(), "or" | "and" | "not" | "near")
             && !tokens.contains(&token)
         {
@@ -163,12 +167,55 @@ pub async fn ensure_schema(pool: &SqlitePool) -> Result<(), String> {
     Ok(())
 }
 
+/// Ids already indexed for scopes whose markdown could not be read. Their rows
+/// survive the rewrite so a transient read error does not hide them from recall.
+async fn protected_ids(
+    pool: &SqlitePool,
+    failed_scopes: &[String],
+) -> Result<HashSet<String>, String> {
+    if failed_scopes.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let placeholders = vec!["?"; failed_scopes.len()].join(",");
+    let sql = format!("SELECT id FROM memory_docs WHERE scope IN ({placeholders})");
+    let mut builder = sqlx::query_scalar::<_, String>(&sql);
+    for scope in failed_scopes {
+        builder = builder.bind(scope);
+    }
+    builder
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("read protected memory ids: {error}"))
+        .map(|ids| ids.into_iter().collect())
+}
+
+/// Drop a deleted project's derived rows while holding the fill lock, so a fill
+/// that read the markdown before the delete cannot commit them back.
+pub async fn purge_project(pool: &SqlitePool, project_id: &str) -> Result<(), String> {
+    let _guard = FILL_LOCK.lock().await;
+    ensure_schema(pool).await?;
+    let scope = format!("project:{project_id}");
+    for sql in [
+        "DELETE FROM memory_fts WHERE id IN (SELECT id FROM memory_docs WHERE scope = ?)",
+        "DELETE FROM memory_vectors WHERE id IN (SELECT id FROM memory_docs WHERE scope = ?)",
+        "DELETE FROM memory_docs WHERE scope = ?",
+    ] {
+        sqlx::query(sql)
+            .bind(&scope)
+            .execute(pool)
+            .await
+            .map_err(|error| format!("purge {scope}: {error}"))?;
+    }
+    Ok(())
+}
+
 /// Rebuild the text index and embed every note whose text changed.
 ///
 /// The markdown files are read first, then the database is rewritten in one
 /// transaction. A note that fails to embed is still indexed for FTS5 and will
 /// be retried on the next fill because its vector hash stays stale.
 pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillReport, String> {
+    let _guard = FILL_LOCK.lock().await;
     ensure_schema(pool).await?;
     let root = store::root(app)?;
     let mut report = FillReport {
@@ -177,16 +224,34 @@ pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillR
     };
 
     let mut notes: HashMap<String, Note> = HashMap::new();
+    let mut failed_scopes: Vec<String> = Vec::new();
     let mut scopes: Vec<(Option<String>, String)> = vec![(None, "global".to_string())];
     for id in project_ids(&root) {
         scopes.push((Some(id.clone()), format!("project:{id}")));
     }
     for (project, scope) in &scopes {
-        let Ok(doc) = store::read(&root, project.as_deref()) else {
-            continue;
+        let doc = match store::read(&root, project.as_deref()) {
+            Ok(doc) => doc,
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("read {scope}: {error}; keeping its indexed notes"));
+                failed_scopes.push(scope.clone());
+                continue;
+            }
         };
         for entry in doc.entries() {
             report.scanned += 1;
+            let collides = notes
+                .get(&entry.id)
+                .is_some_and(|existing| existing.scope != *scope);
+            if collides {
+                report.errors.push(format!(
+                    "duplicate memory id {} in {scope}; kept the earlier scope",
+                    entry.id
+                ));
+                continue;
+            }
             notes.insert(
                 entry.id.clone(),
                 Note {
@@ -200,6 +265,11 @@ pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillR
                 },
             );
         }
+    }
+
+    let protected = protected_ids(pool, &failed_scopes).await?;
+    for id in &protected {
+        notes.remove(id);
     }
 
     let existing: HashMap<String, String> = sqlx::query("SELECT id, hash FROM memory_vectors")
@@ -248,11 +318,24 @@ pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillR
         .begin()
         .await
         .map_err(|error| format!("memory index tx: {error}"))?;
-    sqlx::query("DELETE FROM memory_docs")
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| format!("clear memory docs: {error}"))?;
-    sqlx::query("DELETE FROM memory_fts")
+    if protected.is_empty() {
+        sqlx::query("DELETE FROM memory_docs")
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| format!("clear memory docs: {error}"))?;
+    } else {
+        let placeholders = vec!["?"; protected.len()].join(",");
+        let sql = format!("DELETE FROM memory_docs WHERE id NOT IN ({placeholders})");
+        let mut builder = sqlx::query(&sql);
+        for id in &protected {
+            builder = builder.bind(id);
+        }
+        builder
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| format!("clear memory docs: {error}"))?;
+    }
+    sqlx::query("DELETE FROM memory_fts WHERE id NOT IN (SELECT id FROM memory_docs)")
         .execute(&mut *tx)
         .await
         .map_err(|error| format!("clear memory fts: {error}"))?;
@@ -280,7 +363,7 @@ pub async fn fill_embeddings(pool: &SqlitePool, app: &AppHandle) -> Result<FillR
     }
 
     for id in existing.keys() {
-        if !notes.contains_key(id) {
+        if !notes.contains_key(id) && !protected.contains(id) {
             sqlx::query("DELETE FROM memory_vectors WHERE id = ?")
                 .bind(id)
                 .execute(&mut *tx)
@@ -360,16 +443,20 @@ pub async fn search(
 ) -> Result<Vec<SearchHit>, String> {
     ensure_schema(pool).await?;
     let limit = limit.clamp(1, 20);
-    let expression = fts_query(query);
-    if expression.is_empty() {
+    if query.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let expression = fts_query(query);
     let scope = match project_id {
         Some(id) => format!("project:{id}"),
         None => String::new(),
     };
 
-    let fts = fts_candidates(pool, &expression, &scope).await?;
+    let fts = if expression.is_empty() {
+        Vec::new()
+    } else {
+        fts_candidates(pool, &expression, &scope).await?
+    };
 
     let mut vectors: Vec<String> = Vec::new();
     if embed::available(app)
@@ -472,6 +559,7 @@ mod tests {
             fts_query("Convert Clicks OR project"),
             "\"convert\" OR \"clicks\" OR \"project\""
         );
+        assert_eq!(fts_query("C++"), "\"c\"");
         assert_eq!(fts_query("  ??"), "");
     }
 

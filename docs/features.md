@@ -424,7 +424,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # E. Memory and instructions
 
 ## E1. Global memory
-- **Status:** Partial (0.8.9: retrieval is hybrid — FTS5 BM25 plus local MiniLM vectors fused with RRF over a derived index; each send ranks up to four notes for the current message and injects them as `## Relevant memory for this turn`, skipping untrusted and already-sent notes. The durable block is still the first 24 notes in file order, capped at 2500 characters, with an “N not sent” counter in Settings. 0.5.0: notes live in `MEMORY.md` and are sent from there. 0.3.6: the model can update and delete a memory by the id `recall_memory` prints)
+- **Status:** Partial (retrieval is hybrid — FTS5 BM25 plus local MiniLM vectors fused with RRF over a derived index; each send ranks up to four notes for the current message and injects them as `## Relevant memory for this turn`, skipping untrusted and already-sent notes. The durable block is still the first 24 notes in file order, capped at 2500 characters, with an “N not sent” counter in Settings. 0.5.0: notes live in `MEMORY.md` and are sent from there. 0.3.6: the model can update and delete a memory by the id `recall_memory` prints)
 - **Ref:** Claude app memory; † Claude Code `/memory` edits memory files and auto-memory. † OpenWebUI injects only retrieved memories per turn (`add_memory_context`).
 - **Build:** A list of short facts the user can view, edit and delete. Per turn, retrieve by the current user text (keyword match, top-k), char-cap the block, and replace the previous turn's block — never dump all memories. Unrelated memories must not reach the model.
 - **Not:** Sending every memory every turn.

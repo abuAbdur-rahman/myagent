@@ -275,6 +275,8 @@ Automatic recall (before every send):
 
 - Query = last user message + last assistant message (for follow-ups).
 - Run hybrid search, take the top 4 above a calibrated floor (start 0.012 RRF).
+- Drop hits with `trust=untrusted` before the top-4 cut, and skip notes already
+  sent this turn.
 - Dedupe against pinned notes.
 - Cap at 600 tokens.
 - Skip entirely when the message is a greeting or under 12 characters.
@@ -319,6 +321,10 @@ Explicit save:
 - Triggered by the `remember` tool with `explicit: true` **and** a deterministic
   intent match on the last user message:
   `/\b(remember|save (this|that)|don'?t forget|keep in mind|note that)\b/i`.
+- The match must be affirmative and non-interrogative: a message that ends in
+  `?` or negates the request ("don't remember this") never counts.
+- An explicit save is still refused when the turn read a web page or document,
+  so untrusted content can only queue for review.
 - Writes immediately as `user-stated`, returns `{status:"saved", id}`.
 - The UI shows a saved card with Undo for 10 seconds; Undo restores the file.
 - Still visible in Settings → Memory.

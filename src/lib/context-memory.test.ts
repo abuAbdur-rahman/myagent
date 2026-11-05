@@ -107,4 +107,46 @@ describe("buildSystemPrompt relevant memory", () => {
     expect(hits).toHaveLength(1);
     expect(system).not.toContain("## Relevant memory for this turn");
   });
+
+  it("still sends a recalled note that the durable block truncated away", () => {
+    const many: Memory[] = Array.from({ length: 30 }, (_, index) => ({
+      id: `g${index}`,
+      scope: "global" as const,
+      project_id: null,
+      kind: "note" as const,
+      content: `Stored note number ${index}.`,
+      created_at: 0,
+      updated_at: 0,
+    }));
+    const truncated = { ...RANKED, id: "g29", content: "Stored note number 29." };
+    const system = buildSystemPrompt({
+      globalMemories: many,
+      project: null,
+      projectMemories: [],
+      relevantMemories: [truncated],
+    });
+    expect(system).toContain("## Relevant memory for this turn");
+    expect(system).toContain("- (note) Stored note number 29.");
+  });
+
+  it("keeps recalled notes when durable memory fills the budget", () => {
+    const bulky: Memory[] = Array.from({ length: 24 }, (_, index) => ({
+      id: `b${index}`,
+      scope: "global" as const,
+      project_id: null,
+      kind: "note" as const,
+      content: `${index}: ${"x".repeat(240)}`,
+      created_at: 0,
+      updated_at: 0,
+    }));
+    const system = buildSystemPrompt({
+      globalMemories: bulky,
+      project: PROJECT_A,
+      projectMemories: [],
+      relevantMemories: [RANKED],
+    });
+    expect(system).toContain("## Relevant memory for this turn");
+    expect(system).toContain("Checkout uses the hosted payment page.");
+    expect(system?.length ?? 0).toBeLessThanOrEqual(6000);
+  });
 });
