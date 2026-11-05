@@ -221,7 +221,7 @@ export function ContextInspector() {
             <p className="m-0 text-xs text-muted">
               {memoryPaused
                 ? "Memory is paused, so nothing was ranked."
-                : "No note cleared the relevance floor for this message."}
+                : "No note cleared the relevance floor, or the ones that matched were already sent in full."}
             </p>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
@@ -300,6 +300,9 @@ export function ContextInspector() {
                 <li key={hit.message_id} className="flex min-w-0 gap-1.5" title={hit.snippet}>
                   <span className="flex-none text-muted">{hit.date}</span>
                   <span className="min-w-0 flex-1 truncate text-muted">{hit.title}</span>
+                  <span className="flex-none tabular-nums text-text-faint">
+                    {hit.score.toFixed(3)}
+                  </span>
                 </li>
               ))}
             </ul>

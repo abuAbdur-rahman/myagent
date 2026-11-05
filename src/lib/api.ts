@@ -1030,7 +1030,8 @@ export interface AuditRow {
 }
 
 export function memoryAuditWrite(write: {
-  conversationId: string;
+  conversation_id: string;
+  turn_id?: string;
   query: string;
   items: AuditItem[];
 }) {

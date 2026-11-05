@@ -141,7 +141,7 @@ async fn probe_gate() {
     );
     if semantic_total > 0 {
         println!(
-            "semantic probes (needs the installed MiniLM model, not gated): {}/{}",
+            "semantic probes matched by keywords only (not gated; the app checks meaning): {}/{}",
             semantic_hits, semantic_total
         );
     }

@@ -3916,13 +3916,24 @@ export function MemoryPage() {
   const [indexBusy, setIndexBusy] = useState(false);
   const [statusFailed, setStatusFailed] = useState(false);
   const [audit, setAudit] = useState<api.AuditRow[]>([]);
+  const [auditFailed, setAuditFailed] = useState(false);
 
-  useEffect(() => {
+  const loadAudit = useCallback(() => {
     api
       .memoryAuditRecent(6)
-      .then(setAudit)
-      .catch(() => setAudit([]));
+      .then((rows) => {
+        setAudit(rows);
+        setAuditFailed(false);
+      })
+      .catch(() => {
+        setAudit([]);
+        setAuditFailed(true);
+      });
   }, []);
+
+  useEffect(() => {
+    loadAudit();
+  }, [loadAudit]);
 
   const reload = useCallback(async () => {
     setMemories(await loadMemories("global", null));
@@ -4229,11 +4240,24 @@ export function MemoryPage() {
 
       <aside className="space-y-3">
         <div className="rounded-card border border-border bg-surface p-3">
-          <b className="text-sm">Recent injections</b>
+          <div className="flex items-baseline justify-between gap-2">
+            <b className="text-sm">Recent injections</b>
+            <button
+              type="button"
+              onClick={loadAudit}
+              className="text-xs text-accent hover:underline"
+            >
+              Refresh
+            </button>
+          </div>
           <p className="mb-2 mt-1 text-xs text-muted">
             What the last sends actually carried. Kept 30 days.
           </p>
-          {audit.length === 0 ? (
+          {auditFailed ? (
+            <p className="m-0 text-xs text-danger" role="alert">
+              Could not read the audit. Reload the page to try again.
+            </p>
+          ) : audit.length === 0 ? (
             <p className="m-0 text-xs text-muted">Nothing recorded yet.</p>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">

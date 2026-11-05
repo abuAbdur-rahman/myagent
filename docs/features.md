@@ -491,7 +491,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Ref:** Every injection explainable; no vendor leaderboard.
 - **Build:** The audit is append-only and derived; deleting it loses history, never notes. The probe gate runs on every change to retrieval, scoring or chunking.
 - **Not:** A hosted eval service, jev calibration, or per-candidate BM25/vector ranks in the audit (only the fused score is stored).
-- **Done:** The gate prints recall@5 and MRR per probe and fails below 0.85; the audit round-trip and 30-day sweep are tested.
+- **Done:** The gate prints each probe's rank, then recall@5 and MRR once in aggregate, and fails below 0.85; the audit round-trip and 30-day sweep are tested.
 
 ---
 

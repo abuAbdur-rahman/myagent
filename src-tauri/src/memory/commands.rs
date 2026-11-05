@@ -320,6 +320,11 @@ pub async fn memory_reset(app: AppHandle) -> Result<(), String> {
         .execute(&pool)
         .await
         .map_err(|error| format!("clear memory marker: {error}"))?;
+    audit::ensure_schema(&pool).await?;
+    sqlx::query("DELETE FROM memory_retrieval_audit")
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("clear retrieval audit: {error}"))?;
     index::refresh(&app);
     Ok(())
 }

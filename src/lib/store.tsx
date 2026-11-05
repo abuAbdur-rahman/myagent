@@ -12,7 +12,7 @@ import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledgeWithHits, withFinalTurnImages } from "./knowledge";
-import { buildEpisodeBlock } from "./episodes";
+import { buildEpisodeBlock, selectEpisodeHits } from "./episodes";
 import {
   buildDocumentBlock,
   commitChatDocs,
@@ -578,13 +578,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const memoryPausedRef = useRef(memoryPaused);
   const relevantMemoriesRef = useRef<Memory[]>([]);
   const recallRequestRef = useRef(0);
+  const knowledgeRequestRef = useRef(0);
   const setMemoryPaused = useCallback((value: boolean) => {
     memoryPausedRef.current = value;
     setMemoryPausedState(value);
     if (value) {
       recallRequestRef.current += 1;
+    knowledgeRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       setRecalledMemories([]);
+      recalledDetailsRef.current = [];
       setRecalledDetails([]);
     }
     localStorage.setItem("memoryPaused", value ? "1" : "0");
@@ -598,7 +601,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setEpisodicRecall = useCallback((value: boolean) => {
     episodicRecallRef.current = value;
     setEpisodicRecallState(value);
-    if (!value) episodicBlockRef.current = "";
+    if (!value) {
+      episodicBlockRef.current = "";
+      setEpisodeSummary([]);
+    }
     localStorage.setItem("episodicRecall", value ? "1" : "0");
   }, []);
   const [memoryCompat, setMemoryCompat] = useState(false);
@@ -606,8 +612,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [recalledDetails, setRecalledDetails] = useState<
     { id: string; score: number }[]
   >([]);
+  const recalledDetailsRef = useRef<{ id: string; score: number }[]>([]);
   const [knowledgeSummary, setKnowledgeSummary] = useState<api.KnowledgeHit[]>([]);
   const [episodeSummary, setEpisodeSummary] = useState<api.EpisodeHit[]>([]);
+  const knowledgeSummaryRef = useRef<api.KnowledgeHit[]>([]);
+  const episodeSummaryRef = useRef<api.EpisodeHit[]>([]);
+  useEffect(() => {
+    knowledgeSummaryRef.current = knowledgeSummary;
+  }, [knowledgeSummary]);
+  useEffect(() => {
+    episodeSummaryRef.current = episodeSummary;
+  }, [episodeSummary]);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -865,17 +880,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         relevantMemoriesRef.current = recalled;
         setRecalledMemories(recalled);
-        setRecalledDetails(
-          recalled.map((memory) => ({
-            id: memory.id,
-            score: hits.find((hit) => hit.id === memory.id)?.score ?? 0,
-          })),
-        );
+        const details = recalled.map((memory) => ({
+          id: memory.id,
+          score: hits.find((hit) => hit.id === memory.id)?.score ?? 0,
+        }));
+        recalledDetailsRef.current = details;
+        setRecalledDetails(details);
         return recalled;
       } catch (error) {
         console.warn("memory: recall failed", error);
         relevantMemoriesRef.current = [];
         setRecalledMemories([]);
+        recalledDetailsRef.current = [];
         setRecalledDetails([]);
         return [];
       }
@@ -905,9 +921,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!episodicRecallRef.current) return [];
         if ((projectRef.current?.id ?? null) !== projectId) return [];
         if (conversationId !== null && convIdRef.current !== conversationId) return [];
-        episodicBlockRef.current = buildEpisodeBlock(hits);
-        setEpisodeSummary(hits);
-        return hits;
+        const rendered = selectEpisodeHits(hits);
+        episodicBlockRef.current = buildEpisodeBlock(rendered);
+        setEpisodeSummary(rendered);
+        return rendered;
       } catch (error) {
         console.warn("episodes: recall failed", error);
         if (request === episodeRequestRef.current) {
@@ -929,6 +946,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       knowledge: api.KnowledgeHit[],
       episodes: api.EpisodeHit[],
     ) => {
+      const scores = new Map(
+        recalledDetailsRef.current.map((detail) => [detail.id, detail.score]),
+      );
       const items: {
         source: string;
         item_id: string;
@@ -936,35 +956,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
         score?: number;
         trust?: string;
       }[] = [];
-      for (const memory of sentMemories(
-        globalMemoriesRef.current,
-        globalSentRef.current,
-      )) {
-        items.push({
-          source: "durable",
-          item_id: memory.id,
-          label: memory.content.slice(0, 120),
-          trust: "trusted",
-        });
-      }
-      for (const memory of sentMemories(
-        projectMemoriesRef.current,
-        projectSentRef.current,
-      )) {
-        items.push({
-          source: "durable",
-          item_id: memory.id,
-          label: memory.content.slice(0, 120),
-          trust: "trusted",
-        });
-      }
-      for (const memory of recalled) {
-        items.push({
-          source: "recalled",
-          item_id: memory.id,
-          label: memory.content.slice(0, 120),
-          trust: "trusted",
-        });
+      if (!memoryPausedRef.current) {
+        for (const memory of sentMemories(
+          globalMemoriesRef.current,
+          globalSentRef.current,
+        )) {
+          items.push({
+            source: "durable",
+            item_id: memory.id,
+            label: memory.content.slice(0, 120),
+          });
+        }
+        for (const memory of sentMemories(
+          projectMemoriesRef.current,
+          projectSentRef.current,
+        )) {
+          items.push({
+            source: "durable",
+            item_id: memory.id,
+            label: memory.content.slice(0, 120),
+          });
+        }
+        for (const memory of recalled) {
+          items.push({
+            source: "recalled",
+            item_id: memory.id,
+            label: memory.content.slice(0, 120),
+            score: scores.get(memory.id),
+          });
+        }
       }
       for (const hit of knowledge) {
         items.push({
@@ -984,7 +1004,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       if (items.length === 0) return;
       void api
-        .memoryAuditWrite({ conversationId, query, items })
+        .memoryAuditWrite({ conversation_id: conversationId, query, items })
         .catch((error: unknown) => console.warn("audit: write failed", error));
     },
     [],
@@ -1557,12 +1577,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(null);
       setView(id ? "project" : "chat");
       recallRequestRef.current += 1;
+    knowledgeRequestRef.current += 1;
       episodeRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       episodicBlockRef.current = "";
       setRecalledMemories([]);
+      recalledDetailsRef.current = [];
       setRecalledDetails([]);
-      setKnowledgeSummary([]);
+      knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
       setEpisodeSummary([]);
       lastPayloadRef.current = null;
     },
@@ -1755,12 +1778,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setError(null);
     setView("chat");
     recallRequestRef.current += 1;
+    knowledgeRequestRef.current += 1;
     episodeRequestRef.current += 1;
     relevantMemoriesRef.current = [];
     episodicBlockRef.current = "";
     setRecalledMemories([]);
+    recalledDetailsRef.current = [];
     setRecalledDetails([]);
-    setKnowledgeSummary([]);
+    knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
     setEpisodeSummary([]);
     lastPayloadRef.current = null;
     setActiveProjectId(
@@ -1785,12 +1811,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setError(null);
     setView("chat");
     recallRequestRef.current += 1;
+    knowledgeRequestRef.current += 1;
     episodeRequestRef.current += 1;
     relevantMemoriesRef.current = [];
     episodicBlockRef.current = "";
     setRecalledMemories([]);
+    recalledDetailsRef.current = [];
     setRecalledDetails([]);
-    setKnowledgeSummary([]);
+    knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
     setEpisodeSummary([]);
     lastPayloadRef.current = null;
   }, []);
@@ -1814,6 +1843,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (activeConversationId === id) {
         setActiveConversationId(null);
         setMessages([]);
+        relevantMemoriesRef.current = [];
+        recalledDetailsRef.current = [];
+        setRecalledMemories([]);
+        setRecalledDetails([]);
+        knowledgeBlockRef.current = "";
+        knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
+        episodicBlockRef.current = "";
+        setEpisodeSummary([]);
       }
     },
     [activeConversationId],
@@ -1848,12 +1886,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const moved = (projectRef.current?.id ?? null) !== projectId;
       setActiveProjectId(projectId);
       recallRequestRef.current += 1;
+    knowledgeRequestRef.current += 1;
       episodeRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       episodicBlockRef.current = "";
       setRecalledMemories([]);
+      recalledDetailsRef.current = [];
       setRecalledDetails([]);
-      setKnowledgeSummary([]);
+      knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
       setEpisodeSummary([]);
       lastPayloadRef.current = null;
       if (moved) {
@@ -2561,16 +2602,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       skillIndexRef.current = skillBlock;
       let knowledge = "";
       let knowledgeHits: api.KnowledgeHit[] = [];
+      let knowledgeFresh = false;
       try {
         if (projectRef.current) {
+          const request = knowledgeRequestRef.current;
           const found = await searchKnowledgeWithHits(projectRef.current.id, text);
-          knowledge = found.block;
-          knowledgeHits = found.hits;
+          if (request === knowledgeRequestRef.current) {
+            knowledge = found.block;
+            knowledgeHits = found.hits;
+            knowledgeFresh = true;
+          }
         }
-      } catch {
+      } catch (error) {
+        console.warn("knowledge: search failed for this turn", error);
         knowledge = "";
       }
-      setKnowledgeSummary(knowledgeHits);
+      if (knowledgeFresh) {
+        setKnowledgeSummary(knowledgeHits);
+      }
       const vision = canSeeImages(connRef.current?.id ?? null, modelRef.current);
       const toolsOn = resolveTools();
       const fallback = knownVisionFallback(visionFallbackRef.current, connections);
@@ -2697,6 +2746,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     setMessages([...kept, assistantMsg]);
+    const lastUser = [...kept].reverse().find((message) => message.role === "user");
+    auditTurn(
+      conversationId,
+      lastUser?.content ?? "",
+      relevantMemoriesRef.current,
+      knowledgeSummaryRef.current,
+      episodeSummaryRef.current,
+    );
     await streamTurn(
       conversationId,
       connection,
@@ -2704,7 +2761,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       buildPayload(conversationId, await withDocumentBlock(kept, projectRef.current?.id ?? null)),
       assistantMsg,
     );
-  }, [streaming, streamTurn, buildPayload]);
+  }, [auditTurn, streaming, streamTurn, buildPayload]);
 
   const continueTurn = useCallback(async () => {
     const conversationId = convIdRef.current;
@@ -2802,6 +2859,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
       setMessages([...kept, assistantMsg]);
+      auditTurn(
+        conversationId,
+        trimmed,
+        relevantMemoriesRef.current,
+        knowledgeSummaryRef.current,
+        episodeSummaryRef.current,
+      );
       await streamTurn(
         conversationId,
         connection,
@@ -2814,7 +2878,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       return true;
     },
-    [streaming, streamTurn, buildPayload],
+    [auditTurn, streaming, streamTurn, buildPayload],
   );
 
   const branchFrom = useCallback(
@@ -2834,6 +2898,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await copyChatDocs(conversationId, branched.id);
         const rows = await db.listMessages(branched.id);
         setMessages(rows);
+        relevantMemoriesRef.current = [];
+        recalledDetailsRef.current = [];
+        setRecalledMemories([]);
+        setRecalledDetails([]);
+        knowledgeBlockRef.current = "";
+        knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
+        episodicBlockRef.current = "";
+        setEpisodeSummary([]);
+        lastPayloadRef.current = null;
         toast("Branched into new chat");
       } catch (e) {
         reportError(e);
@@ -2912,6 +2986,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       setMessages([]);
       await db.touchConversation(id, {});
+      relevantMemoriesRef.current = [];
+      recalledDetailsRef.current = [];
+      setRecalledMemories([]);
+      setRecalledDetails([]);
+      knowledgeBlockRef.current = "";
+      knowledgeBlockRef.current = "";
+setKnowledgeSummary([]);
+      episodicBlockRef.current = "";
+      setEpisodeSummary([]);
+      lastPayloadRef.current = null;
     } catch (e) {
       reportError(e);
     }
