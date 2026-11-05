@@ -2951,10 +2951,10 @@ setKnowledgeSummary([]);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
         const recalled = await recallFor(trimmed, projectId);
         const episodes = await recallEpisodes(trimmed, projectId, created.id);
-        const found = await searchKnowledgeWithHits(projectId, trimmed).catch(() => ({
-          block: "",
-          hits: [] as api.KnowledgeHit[],
-        }));
+        const found = await searchKnowledgeWithHits(projectId, trimmed).catch((error) => {
+          console.warn("knowledge: first-turn search failed", error);
+          return { block: "", hits: [] as api.KnowledgeHit[] };
+        });
         knowledgeBlockRef.current = found.block;
         setKnowledgeSummary(found.hits);
         auditTurn(created.id, trimmed, recalled, found.hits, episodes);
