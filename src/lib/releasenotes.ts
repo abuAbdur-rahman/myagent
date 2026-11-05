@@ -22,6 +22,42 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.9.0",
+    date: "2026-11-05",
+    summary:
+      "Memory is now a hybrid index: notes are found by meaning as well as wording, project documents answer with citations, and earlier chats can be recalled. Voice transcription and MCP sign-in are fixed.",
+    changes: [
+      {
+        kind: "new",
+        text: "Memory search fuses FTS5 keyword ranking with local MiniLM vectors (RRF, k=60). Each send ranks up to four notes for the current message and injects them as `## Relevant memory for this turn`, skipping untrusted and already-sent notes.",
+      },
+      {
+        kind: "new",
+        text: "Project documents are split at headings and 1,000-character windows, indexed the same way, and injected as `## Attached knowledge` with `doc`, `chunk` and `heading` attributes so answers can cite them. The Docs panel reindexes on demand.",
+      },
+      {
+        kind: "new",
+        text: "Past-chat search indexes every message with FTS5 triggers, backfills existing chats once, and adds a `conversation_search` tool. Project chats get up to two earlier snippets as `## Earlier conversations`; a global chat never reads project chats.",
+      },
+      {
+        kind: "new",
+        text: "The context inspector names what each turn carried with its score, and Settings → Memory lists the newest injections. `npm run eval:memory` gates recall@5 at 0.85 over fixture probes.",
+      },
+      {
+        kind: "improved",
+        text: "The memory write gate refuses negated and interrogative requests, ignores attached-document text, never saves explicitly from an untrusted turn, and no longer loses an explicit save to another chat's pending row.",
+      },
+      {
+        kind: "fixed",
+        text: "Voice transcription no longer fails after recording: screening, voice and memory embeddings share one ONNX Runtime environment instead of building a second one.",
+      },
+      {
+        kind: "fixed",
+        text: "MCP OAuth sign-in completes: the probe uses protocol 2025-06-18, accepts a 403 challenge, retries discovery without it, and sign-in is reachable from the server row and details dialog.",
+      },
+    ],
+  },
+  {
     version: "0.8.8",
     date: "2026-11-02",
     summary:
