@@ -475,7 +475,15 @@ pub async fn authorize(server_id: &str, url: &str) -> Result<(), String> {
         _ = cancel_rx => Err("authorization cancelled".to_string()),
         result = tokio::time::timeout(
             CALLBACK_TIMEOUT,
-            run_authorization(server_id, url, &redirect_uri, listener),
+            run_authorization(
+                url,
+                &redirect_uri,
+                listener,
+                VaultCredentialStore::new(server_id),
+                |auth_url| {
+                    tauri_plugin_opener::open_url(auth_url, None::<&str>).map_err(|e| e.to_string())
+                },
+            ),
         ) => match result {
             Ok(result) => result,
             Err(_) => Err("timed out waiting for the browser".to_string()),
@@ -547,18 +555,19 @@ async fn probe_challenge(url: &str) -> Option<String> {
     }
 }
 
-async fn run_authorization(
-    server_id: &str,
+async fn run_authorization<S: CredentialStore + Clone + 'static>(
     url: &str,
     redirect_uri: &str,
     listener: TcpListener,
+    store: S,
+    open: impl Fn(&str) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut state = OAuthState::new(url, None)
         .await
         .map_err(|e| step("discovery", auth_error(e)))?;
     match &mut state {
         OAuthState::Unauthorized(manager) => {
-            manager.set_credential_store(VaultCredentialStore::new(server_id));
+            manager.set_credential_store(store.clone());
         }
         _ => return Err("oauth state is not ready".to_string()),
     }
@@ -584,8 +593,7 @@ async fn run_authorization(
         .await
         .map_err(|e| step("registration", auth_error(e)))?;
     validate_authorization_url(&auth_url, url)?;
-    tauri_plugin_opener::open_url(&auth_url, None::<&str>)
-        .map_err(|e| step("browser", format!("could not open the browser: {e}")))?;
+    open(&auth_url).map_err(|e| step("browser", format!("could not open the browser: {e}")))?;
     let callback_url = wait_for_callback(listener, redirect_uri).await?;
     state
         .handle_callback_url(&callback_url)
@@ -598,7 +606,12 @@ async fn run_authorization(
         .get_access_token()
         .await
         .map_err(|e| step("token", auth_error(e)))?;
-    if !has_credentials(server_id) {
+    if store
+        .load()
+        .await
+        .map_err(|e| step("token", auth_error(e)))?
+        .is_none()
+    {
         return Err("authorization did not store credentials".to_string());
     }
     Ok(())
@@ -880,5 +893,407 @@ mod tests {
             html_escape("<script>alert(\"x\")</script>"),
             "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"
         );
+    }
+
+    #[tokio::test]
+    async fn callback_ignores_a_favicon_before_the_redirect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("address");
+        let client = tokio::spawn(async move {
+            let mut icon = TcpStream::connect(addr).await.expect("icon client");
+            icon.write_all(b"GET /favicon.ico HTTP/1.1\r\nHost: x\r\n\r\n")
+                .await
+                .expect("icon request");
+            let mut page = String::new();
+            icon.read_to_string(&mut page).await.expect("icon response");
+            assert!(page.starts_with("HTTP/1.1 404 Not Found"));
+
+            let mut callback = TcpStream::connect(addr).await.expect("callback client");
+            callback
+                .write_all(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\nHost: x\r\n\r\n")
+                .await
+                .expect("callback request");
+            let mut body = String::new();
+            callback
+                .read_to_string(&mut body)
+                .await
+                .expect("callback response");
+            assert!(body.starts_with("HTTP/1.1 200 OK"));
+        });
+        let target = wait_for_callback(listener, "http://127.0.0.1:9999/callback")
+            .await
+            .expect("callback");
+        assert_eq!(target, "http://127.0.0.1:9999/callback?code=abc&state=xyz");
+        client.await.expect("client task");
+    }
+
+    #[tokio::test]
+    async fn callback_reports_a_denied_authorization() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("address");
+        let client = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(addr).await.expect("client");
+            stream
+                .write_all(
+                    b"GET /callback?error=access_denied&error_description=User%20cancelled HTTP/1.1\r\nHost: x\r\n\r\n",
+                )
+                .await
+                .expect("request");
+            let mut page = String::new();
+            stream.read_to_string(&mut page).await.expect("response");
+            assert!(page.starts_with("HTTP/1.1 200 OK"));
+            assert!(page.contains("Authorization failed: access_denied: User cancelled"));
+        });
+        let error = wait_for_callback(listener, "http://127.0.0.1:9999/callback")
+            .await
+            .expect_err("denied authorization");
+        assert_eq!(error, "authorization failed: access_denied: User cancelled");
+        client.await.expect("client task");
+    }
+
+    #[derive(Clone)]
+    struct MemoryStore {
+        value: std::sync::Arc<Mutex<Option<StoredCredentials>>>,
+    }
+
+    impl MemoryStore {
+        fn new() -> Self {
+            Self {
+                value: std::sync::Arc::new(Mutex::new(None)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CredentialStore for MemoryStore {
+        async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+            Ok(self.value.lock().expect("store").clone())
+        }
+
+        async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+            *self.value.lock().expect("store") = Some(credentials);
+            Ok(())
+        }
+
+        async fn clear(&self) -> Result<(), AuthError> {
+            *self.value.lock().expect("store") = None;
+            Ok(())
+        }
+
+        async fn on_refresh_token_rejected(
+            &self,
+            _credentials: &StoredCredentials,
+        ) -> Result<(), AuthError> {
+            Ok(())
+        }
+    }
+
+    struct MockAuthServer {
+        base: String,
+        code_verifier_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl MockAuthServer {
+        async fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("mock listener");
+            let addr = listener.local_addr().expect("mock address");
+            let base = format!("http://127.0.0.1:{}", addr.port());
+            let verifier = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let seen = verifier.clone();
+            let serving = base.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut socket, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let base = serving.clone();
+                    let seen = seen.clone();
+                    tokio::spawn(async move {
+                        let Some(request) = read_http_request(&mut socket).await else {
+                            return;
+                        };
+                        let (status, location, body) =
+                            route_mock_request(&base, &request, &seen).await;
+                        let _ =
+                            respond_mock(&mut socket, &base, status, location.as_deref(), &body)
+                                .await;
+                    });
+                }
+            });
+            Self {
+                base,
+                code_verifier_seen: verifier,
+            }
+        }
+
+        fn mcp_url(&self) -> String {
+            format!("{}/mcp", self.base)
+        }
+    }
+
+    struct MockRequest {
+        method: String,
+        target: String,
+        body: String,
+    }
+
+    async fn read_http_request(socket: &mut TcpStream) -> Option<MockRequest> {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            let read = socket.read(&mut byte).await.ok()?;
+            if read == 0 {
+                return None;
+            }
+            head.push(byte[0]);
+            if head.len() > 16_384 {
+                return None;
+            }
+        }
+        let text = String::from_utf8_lossy(&head).to_string();
+        let mut lines = text.split("\r\n");
+        let mut start = lines.next()?.split_whitespace();
+        let method = start.next()?.to_string();
+        let target = start.next()?.to_string();
+        let length = lines
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = vec![0u8; length];
+        if length > 0 {
+            socket.read_exact(&mut body).await.ok()?;
+        }
+        Some(MockRequest {
+            method,
+            target,
+            body: String::from_utf8_lossy(&body).to_string(),
+        })
+    }
+
+    async fn route_mock_request(
+        base: &str,
+        request: &MockRequest,
+        verifier_seen: &std::sync::atomic::AtomicBool,
+    ) -> (u16, Option<String>, String) {
+        let path = request.target.split('?').next().unwrap_or("");
+        let query = request.target.split_once('?').map(|(_, q)| q).unwrap_or("");
+        match (request.method.as_str(), path) {
+            ("POST", "/mcp") => (401, None, String::new()),
+            ("GET", "/.well-known/oauth-protected-resource") => (
+                200,
+                None,
+                serde_json::json!({
+                    "resource": format!("{base}/mcp"),
+                    "authorization_servers": [base],
+                    "scopes_supported": ["data.records:read"],
+                })
+                .to_string(),
+            ),
+            ("GET", "/.well-known/oauth-authorization-server") => (
+                200,
+                None,
+                serde_json::json!({
+                    "issuer": base,
+                    "authorization_endpoint": format!("{base}/authorize"),
+                    "token_endpoint": format!("{base}/token"),
+                    "registration_endpoint": format!("{base}/register"),
+                    "response_types_supported": ["code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "code_challenge_methods_supported": ["S256"],
+                    "token_endpoint_auth_methods_supported": ["none"],
+                })
+                .to_string(),
+            ),
+            ("POST", "/register") => (
+                201,
+                None,
+                serde_json::json!({
+                    "client_id": "mock-client",
+                    "client_name": "MyAgent",
+                    "redirect_uris": [],
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"],
+                    "token_endpoint_auth_method": "none",
+                })
+                .to_string(),
+            ),
+            ("GET", "/authorize") => {
+                let mut state = String::new();
+                let mut challenge = String::new();
+                let mut redirect = String::new();
+                let mut resource = String::new();
+                for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+                    match key.as_ref() {
+                        "state" => state = value.into_owned(),
+                        "code_challenge_method" => {
+                            assert_eq!(value.as_ref(), "S256", "PKCE method");
+                        }
+                        "code_challenge" => challenge = value.into_owned(),
+                        "redirect_uri" => redirect = value.into_owned(),
+                        "resource" => resource = value.into_owned(),
+                        _ => {}
+                    }
+                }
+                assert!(
+                    !challenge.is_empty(),
+                    "authorize url carries a PKCE challenge"
+                );
+                assert_eq!(
+                    resource,
+                    format!("{base}/mcp"),
+                    "authorize url names the resource"
+                );
+                assert!(
+                    !redirect.is_empty(),
+                    "authorize url carries the redirect uri"
+                );
+                (
+                    302,
+                    Some(format!("{redirect}?code=mock-code&state={state}")),
+                    String::new(),
+                )
+            }
+            ("POST", "/token") => {
+                let mut verifier = String::new();
+                let mut code = String::new();
+                let mut resource = String::new();
+                for (key, value) in url::form_urlencoded::parse(request.body.as_bytes()) {
+                    match key.as_ref() {
+                        "code_verifier" => verifier = value.into_owned(),
+                        "code" => code = value.into_owned(),
+                        "resource" => resource = value.into_owned(),
+                        _ => {}
+                    }
+                }
+                assert!(
+                    !verifier.is_empty(),
+                    "token request carries the PKCE verifier"
+                );
+                assert_eq!(code, "mock-code");
+                assert_eq!(resource, format!("{base}/mcp"));
+                verifier_seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                (
+                    200,
+                    None,
+                    serde_json::json!({
+                        "access_token": "mock-access-token",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "refresh_token": "mock-refresh-token",
+                        "scope": "data.records:read",
+                    })
+                    .to_string(),
+                )
+            }
+            _ => (404, None, String::new()),
+        }
+    }
+
+    async fn respond_mock(
+        socket: &mut TcpStream,
+        base: &str,
+        status: u16,
+        location: Option<&str>,
+        body: &str,
+    ) -> std::io::Result<()> {
+        if let Some(location) = location {
+            socket
+                .write_all(
+                    format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await?;
+            return socket.shutdown().await;
+        }
+        if status == 401 {
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            return socket.shutdown().await;
+        }
+        let reason = match status {
+            200 => "OK",
+            201 => "Created",
+            _ => "Not Found",
+        };
+        let headers = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(headers.as_bytes()).await?;
+        socket.write_all(body.as_bytes()).await?;
+        socket.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn authorization_runs_from_challenge_to_stored_token() {
+        let server = MockAuthServer::start().await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("callback listener");
+        let addr = listener.local_addr().expect("callback address");
+        let redirect_uri = format!("http://127.0.0.1:{}/callback", addr.port());
+        let store = MemoryStore::new();
+        let opened = std::sync::Arc::new(Mutex::new(None::<String>));
+        let recorded = opened.clone();
+        let result = run_authorization(
+            &server.mcp_url(),
+            &redirect_uri,
+            listener,
+            store.clone(),
+            |auth_url| {
+                *recorded.lock().expect("opened") = Some(auth_url.to_string());
+                let auth_url = auth_url.to_string();
+                tokio::spawn(async move {
+                    let client = reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .expect("browser client");
+                    let landing = client.get(&auth_url).send().await.expect("authorize page");
+                    let location = landing
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .expect("redirect")
+                        .to_str()
+                        .expect("location")
+                        .to_string();
+                    client.get(&location).send().await.expect("callback");
+                });
+                Ok(())
+            },
+        )
+        .await;
+        result.expect("authorization completes");
+        assert!(
+            server
+                .code_verifier_seen
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "the token request carried the PKCE verifier"
+        );
+        let stored = store
+            .value
+            .lock()
+            .expect("store")
+            .clone()
+            .expect("credentials stored");
+        assert!(!stored.client_id.is_empty(), "the client id was stored");
+        assert!(
+            stored.token_response.is_some(),
+            "a token response was stored"
+        );
+        let opened = opened
+            .lock()
+            .expect("opened")
+            .clone()
+            .expect("browser opened");
+        assert!(opened.contains("code_challenge_method=S256"));
     }
 }
