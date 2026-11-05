@@ -3900,6 +3900,8 @@ export function MemoryPage() {
     memoryOmitted,
     memoryPaused,
     setMemoryPaused,
+    episodicRecall,
+    setEpisodicRecall,
     refreshMemories,
   } = useApp();
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -3968,6 +3970,19 @@ export function MemoryPage() {
         report,
         `Indexed ${report.scanned} notes, ${report.embedded} newly embedded`,
       );
+    } catch (e) {
+      setActionError(errorText(e));
+    } finally {
+      setIndexBusy(false);
+    }
+  };
+
+  const rebuildChatIndex = async () => {
+    setIndexBusy(true);
+    try {
+      await api.conversationReindex();
+      setActionError(null);
+      toast("Chat index rebuilt");
     } catch (e) {
       setActionError(errorText(e));
     } finally {
@@ -4224,6 +4239,15 @@ export function MemoryPage() {
               onChange={(event) => setMemoryPaused(!event.target.checked)}
             />
           </label>
+          <label className="mt-2 flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted">Search past chats</span>
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={episodicRecall}
+              onChange={(event) => setEpisodicRecall(event.target.checked)}
+            />
+          </label>
           <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-xs">
             <dt className="text-muted">Stored notes</dt>
             <dd className="m-0">{memories.length}</dd>
@@ -4277,6 +4301,14 @@ export function MemoryPage() {
               disabled={indexBusy}
             >
               {indexBusy ? "Rebuilding…" : "Rebuild index"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void rebuildChatIndex()}
+              disabled={indexBusy}
+            >
+              {indexBusy ? "Rebuilding…" : "Rebuild chat index"}
             </Button>
           </div>
         </div>

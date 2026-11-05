@@ -149,4 +149,42 @@ describe("buildSystemPrompt relevant memory", () => {
     expect(system).toContain("Checkout uses the hosted payment page.");
     expect(system?.length ?? 0).toBeLessThanOrEqual(6000);
   });
+
+  it("places past-chat snippets after relevant memory and before knowledge", () => {
+    const system = buildSystemPrompt({
+      globalMemories: [GLOBAL],
+      project: PROJECT_A,
+      projectMemories: [],
+      relevantMemories: [RANKED],
+      episodicBlock: '## Earlier conversations\n<source chat="Billing">old answer</source>',
+      knowledgeBlock: "## Attached knowledge\n<source doc=\"a.md\">doc body</source>",
+    });
+    const relevant = system?.indexOf("## Relevant memory for this turn") ?? -1;
+    const episodes = system?.indexOf("## Earlier conversations") ?? -1;
+    const knowledge = system?.indexOf("## Attached knowledge") ?? -1;
+    expect(relevant).toBeGreaterThan(-1);
+    expect(episodes).toBeGreaterThan(relevant);
+    expect(knowledge).toBeGreaterThan(episodes);
+  });
+
+  it("keeps past-chat snippets when durable memory fills the budget", () => {
+    const bulky: Memory[] = Array.from({ length: 24 }, (_, index) => ({
+      id: `e${index}`,
+      scope: "global" as const,
+      project_id: null,
+      kind: "note" as const,
+      content: `${index}: ${"y".repeat(240)}`,
+      created_at: 0,
+      updated_at: 0,
+    }));
+    const system = buildSystemPrompt({
+      globalMemories: bulky,
+      project: PROJECT_A,
+      projectMemories: [],
+      episodicBlock: '## Earlier conversations\n<source chat="Billing">old answer</source>',
+    });
+    expect(system).toContain("## Earlier conversations");
+    expect(system).toContain("old answer");
+    expect(system?.length ?? 0).toBeLessThanOrEqual(6000);
+  });
 });

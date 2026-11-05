@@ -109,7 +109,24 @@ Slice 6 (project knowledge) shipped:
   nothing, so a fresh project still answers before its first fill.
 - Uploads reindex in the background; the Docs panel reindexes on demand; a doc
   delete and a project delete purge their rows and vectors before returning.
-- Not yet: episodic search, consolidation, jev verifier.
+- Not yet: consolidation, jev verifier.
+
+Slice 7 (episodic search) shipped:
+
+- `memory/episodes.rs` derives `message_fts`, an FTS5 external-content table over
+  `messages`, kept current by insert/delete/update triggers so the frontend's
+  SQLite writes need no extra call. `rebuild` recreates it from stored rows.
+- The first launch after the update backfills every existing chat once, marked in
+  `meta` (`message_index.built`), and Settings → Memory can rebuild it again.
+- `conversation_search` returns chat title, date, role, message id and a snippet
+  windowed around the match. A project chat reads that project plus chats outside
+  any project; a global chat never reads project messages.
+- Automatic recall injects up to two snippets (1,600 chars) as
+  `## Earlier conversations`, after relevant memory and before knowledge, for
+  project chats only. A hit needs two query terms (one for a single-word query)
+  and only the newest message per chat is kept. On by default, with a
+  "Search past chats" switch in Settings → Memory.
+- Not yet: consolidation, jev verifier.
 
 ## Goals
 

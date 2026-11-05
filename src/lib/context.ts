@@ -14,6 +14,8 @@ export interface ContextInput {
   projectMemories: Memory[];
   /** Notes ranked for the current turn by the hybrid memory index. */
   relevantMemories?: Memory[];
+  /** Past-chat snippets ranked for the current turn. */
+  episodicBlock?: string;
   userName?: string;
   knowledgeBlock?: string;
   skillIndexBlock?: string;
@@ -98,7 +100,9 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   const relevant = relevantText
     ? `## Relevant memory for this turn\n${relevantText}`
     : "";
-  const reserve = relevant ? relevant.length + 2 : 0;
+  const episodes = input.episodicBlock?.trim() ?? "";
+  const reserve =
+    (relevant ? relevant.length + 2 : 0) + (episodes ? episodes.length + 2 : 0);
 
   const blocks = identityBlocks(input.userName);
 
@@ -118,7 +122,9 @@ export function buildSystemPrompt(input: ContextInput): string | null {
 
   const base = blocks.join("\n\n");
   const head = reserve > 0 ? base.slice(0, Math.max(0, MAX_CHARS - reserve)) : base;
-  const combined = relevant ? [head, relevant].filter(Boolean).join("\n\n") : head;
+  const combined = [head, relevant, episodes]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
 
   const skills = input.skillIndexBlock?.trim();
   const knowledge = input.knowledgeBlock?.trim();

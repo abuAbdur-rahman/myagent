@@ -517,6 +517,22 @@ pub fn tool_specs(
         {
             "type": "function",
             "function": {
+                "name": "conversation_search",
+                "description": "Search earlier chats by keyword and get the chat title, date and a snippet. A project chat searches that project plus chats outside any project; a global chat never sees project chats. Use it when the user refers to something discussed before.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 20, "description": "How many snippets to return (default 5)." },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "update_memory",
                 "description": "Change a saved memory by id: new wording, a different kind, or both. Get the id from recall_memory. Scope cannot be moved, and only the fields you pass change.",
                 "parameters": {
@@ -1468,6 +1484,10 @@ pub fn summarize_call(name: &str, args: &Value) -> String {
             })
             .unwrap_or_else(|| "Remember a fact".to_string()),
         "recall_memory" => format!("Recall: {}", arg_str(args, "query").unwrap_or_default()),
+        "conversation_search" => format!(
+            "Search chats: {}",
+            arg_str(args, "query").unwrap_or_default()
+        ),
         "update_memory" => format!("Update memory {}", memory_id_prefix(args)),
         "delete_memory" => format!("Delete memory {}", memory_id_prefix(args)),
         "run_powershell" => {
@@ -1848,6 +1868,43 @@ pub async fn execute(
             }
             Ok(ExecOutput {
                 output,
+                artifact: None,
+                files: Vec::new(),
+            })
+        }
+        "conversation_search" => {
+            let query = arg_str(&args, "query").ok_or("missing query")?;
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5)
+                .clamp(1, 20) as usize;
+            let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+            let hits =
+                crate::memory::episodes::search(&pool, &query, project_id, conversation_id, limit)
+                    .await?;
+            if hits.is_empty() {
+                return Ok(ExecOutput {
+                    output: format!("No earlier chats match.\n{}", tooltext::count_report(0, 0)),
+                    artifact: None,
+                    files: Vec::new(),
+                });
+            }
+            let lines: Vec<String> = hits
+                .iter()
+                .map(|hit| {
+                    format!(
+                        "- [{}] \"{}\" ({}) [{}] {}",
+                        hit.date, hit.title, hit.role, hit.message_id, hit.snippet
+                    )
+                })
+                .collect();
+            Ok(ExecOutput {
+                output: format!(
+                    "{}\n{}",
+                    lines.join("\n"),
+                    tooltext::count_report(hits.len(), hits.len())
+                ),
                 artifact: None,
                 files: Vec::new(),
             })

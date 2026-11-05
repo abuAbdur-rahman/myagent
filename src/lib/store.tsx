@@ -12,6 +12,7 @@ import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledge, withFinalTurnImages } from "./knowledge";
+import { buildEpisodeBlock } from "./episodes";
 import {
   buildDocumentBlock,
   commitChatDocs,
@@ -390,6 +391,8 @@ interface AppContextValue {
   memoryOmitted: number;
   memoryPaused: boolean;
   setMemoryPaused: (value: boolean) => void;
+  episodicRecall: boolean;
+  setEpisodicRecall: (value: boolean) => void;
   memoryCompat: boolean;
   memoryReport: api.MemoryMigrationReport | null;
   dismissMemoryReport: () => void;
@@ -581,6 +584,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setRecalledMemories([]);
     }
     localStorage.setItem("memoryPaused", value ? "1" : "0");
+  }, []);
+  const [episodicRecall, setEpisodicRecallState] = useState(
+    () => localStorage.getItem("episodicRecall") !== "0",
+  );
+  const episodicRecallRef = useRef(episodicRecall);
+  const episodicBlockRef = useRef("");
+  const setEpisodicRecall = useCallback((value: boolean) => {
+    episodicRecallRef.current = value;
+    setEpisodicRecallState(value);
+    if (!value) episodicBlockRef.current = "";
+    localStorage.setItem("episodicRecall", value ? "1" : "0");
   }, []);
   const [memoryCompat, setMemoryCompat] = useState(false);
   const [memoryReport, setMemoryReport] = useState<api.MemoryMigrationReport | null>(null);
@@ -847,6 +861,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
         relevantMemoriesRef.current = [];
         setRecalledMemories([]);
         return [];
+      }
+    },
+    [],
+  );
+
+  /**
+   * Rank past-chat snippets for this turn. Project chats only, and the result
+   * is dropped when the switch is off or the project changed mid-flight.
+   */
+  const recallEpisodes = useCallback(
+    async (
+      text: string,
+      projectId: string | null,
+      conversationId: string | null,
+    ): Promise<string> => {
+      if (!projectId || !episodicRecallRef.current) {
+        episodicBlockRef.current = "";
+        return "";
+      }
+      try {
+        const hits = await api.episodicRecall(text, projectId, conversationId);
+        if (!episodicRecallRef.current) return "";
+        if ((projectRef.current?.id ?? null) !== projectId) return "";
+        const block = buildEpisodeBlock(hits);
+        episodicBlockRef.current = block;
+        return block;
+      } catch (error) {
+        console.warn("episodes: recall failed", error);
+        episodicBlockRef.current = "";
+        return "";
       }
     },
     [],
@@ -1342,6 +1386,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       project: activeProject,
       projectMemories: projectSentMemories,
       relevantMemories: memoryPaused ? [] : recalledMemories,
+      episodicBlock: episodicRecall ? episodicBlockRef.current || undefined : undefined,
       userName: displayName || undefined,
       standingPrompt: standingPrompt || undefined,
       chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
@@ -1387,6 +1432,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     projectSentMemories,
     recalledMemories,
     memoryPaused,
+    episodicRecall,
     displayName,
     standingPrompt,
     conversations,
@@ -1611,6 +1657,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setView("chat");
     recallRequestRef.current += 1;
     relevantMemoriesRef.current = [];
+    episodicBlockRef.current = "";
     setRecalledMemories([]);
     lastPayloadRef.current = null;
     setActiveProjectId(
@@ -1636,6 +1683,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setView("chat");
     recallRequestRef.current += 1;
     relevantMemoriesRef.current = [];
+    episodicBlockRef.current = "";
     setRecalledMemories([]);
     lastPayloadRef.current = null;
   }, []);
@@ -1694,6 +1742,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveProjectId(projectId);
       recallRequestRef.current += 1;
       relevantMemoriesRef.current = [];
+      episodicBlockRef.current = "";
       setRecalledMemories([]);
       lastPayloadRef.current = null;
       if (moved) {
@@ -1750,6 +1799,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ? []
           : sentMemories(projectMemoriesRef.current, projectSentRef.current),
         relevantMemories: memoryPausedRef.current ? [] : relevantMemoriesRef.current,
+        episodicBlock: episodicRecallRef.current
+          ? episodicBlockRef.current || undefined
+          : undefined,
         userName: displayNameRef.current || undefined,
         standingPrompt: standingPromptRef.current || undefined,
         chatPrompt: chatPromptRef.current ?? undefined,
@@ -2474,6 +2526,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         documentBlock,
       );
       await recallFor(sendText, projectRef.current?.id ?? null);
+      await recallEpisodes(
+        sendText,
+        projectRef.current?.id ?? null,
+        convIdRef.current,
+      );
       outgoing.push({ role: "user", content: userContent });
       const payload = buildPayload(conversationId, outgoing);
 
@@ -2491,6 +2548,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       finalize,
       messages,
       recallFor,
+      recallEpisodes,
       streaming,
       streamTurn,
       buildPayload,
@@ -2702,6 +2760,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages([userMsg, assistantMsg]);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
         await recallFor(trimmed, projectId);
+        await recallEpisodes(trimmed, projectId, created.id);
         knowledgeBlockRef.current = await searchKnowledge(projectId, trimmed).catch(
           () => "",
         );
@@ -2720,7 +2779,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [projects, streaming, streamTurn, buildPayload, maybeGenerateTitle, recallFor],
+    [projects, streaming, streamTurn, buildPayload, maybeGenerateTitle, recallFor, recallEpisodes],
   );
 
   const clearActiveConversation = useCallback(async () => {
@@ -2822,6 +2881,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     memoryOmitted,
     memoryPaused,
     setMemoryPaused,
+    episodicRecall,
+    setEpisodicRecall,
     memoryCompat,
     memoryReport,
     dismissMemoryReport: () => setMemoryReport(null),
