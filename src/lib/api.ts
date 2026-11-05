@@ -996,6 +996,7 @@ export interface EpisodeHit {
   date: string;
   role: string;
   snippet: string;
+  created_at: number;
 }
 
 export function episodicRecall(

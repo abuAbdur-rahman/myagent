@@ -89,6 +89,12 @@ function appendWithinBudget(base: string, knowledge?: string, skills?: string): 
     .slice(0, MAX_CHARS);
 }
 
+/** Drop a trailing partial line so a memory note is never cut in half. */
+function dropPartialLine(text: string): string {
+  const cut = text.lastIndexOf("\n");
+  return cut > 0 ? text.slice(0, cut) : "";
+}
+
 export function buildSystemPrompt(input: ContextInput): string | null {
   const sent = new Set([
     ...renderedIds(input.globalMemories),
@@ -121,7 +127,9 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   if (chat) blocks.push(`## This chat\n${chat}`);
 
   const base = blocks.join("\n\n");
-  const head = reserve > 0 ? base.slice(0, Math.max(0, MAX_CHARS - reserve)) : base;
+  const room = Math.max(0, MAX_CHARS - reserve);
+  const head =
+    reserve > 0 && base.length > room ? dropPartialLine(base.slice(0, room)) : base;
   const combined = [head, relevant, episodes]
     .filter((part) => part.length > 0)
     .join("\n\n");

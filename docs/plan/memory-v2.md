@@ -117,7 +117,9 @@ Slice 7 (episodic search) shipped:
   `messages`, kept current by insert/delete/update triggers so the frontend's
   SQLite writes need no extra call. `rebuild` recreates it from stored rows.
 - The first launch after the update backfills every existing chat once, marked in
-  `meta` (`message_index.built`), and Settings → Memory can rebuild it again.
+  `meta` (`message_index.built`); a search retries the backfill when the marker
+  is missing, so an upgrade that ran before migrations still indexes, and
+  Settings → Memory can rebuild it again.
 - `conversation_search` returns chat title, date, role, message id and a snippet
   windowed around the match. A project chat reads that project plus chats outside
   any project; a global chat never reads project messages.

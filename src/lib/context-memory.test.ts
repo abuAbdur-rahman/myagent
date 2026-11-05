@@ -186,5 +186,9 @@ describe("buildSystemPrompt relevant memory", () => {
     expect(system).toContain("## Earlier conversations");
     expect(system).toContain("old answer");
     expect(system?.length ?? 0).toBeLessThanOrEqual(6000);
+    const longestRun = Math.max(
+      ...(system?.match(/y+/g) ?? []).map((run) => run.length),
+    );
+    expect(longestRun).toBeLessThanOrEqual(240);
   });
 });

@@ -4,6 +4,8 @@
 //! sync by triggers so the frontend's SQLite writes need no extra call. The
 //! index is derived: `rebuild` recreates it from the rows that are there.
 
+use std::collections::{HashMap, HashSet};
+
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use tauri::AppHandle;
@@ -25,27 +27,16 @@ pub struct EpisodeHit {
     pub role: String,
     pub snippet: String,
     pub score: f64,
+    pub created_at: i64,
 }
 
 pub async fn ensure_schema(pool: &SqlitePool) -> Result<(), String> {
-    sqlx::raw_sql(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-             content, content='messages', content_rowid='rowid', tokenize='unicode61'
-         );
-         CREATE TRIGGER IF NOT EXISTS message_fts_ai AFTER INSERT ON messages BEGIN
-             INSERT INTO message_fts(rowid, content) VALUES (new.rowid, new.content);
-         END;
-         CREATE TRIGGER IF NOT EXISTS message_fts_ad AFTER DELETE ON messages BEGIN
-             INSERT INTO message_fts(message_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-         END;
-         CREATE TRIGGER IF NOT EXISTS message_fts_au AFTER UPDATE ON messages BEGIN
-             INSERT INTO message_fts(message_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-             INSERT INTO message_fts(rowid, content) VALUES (new.rowid, new.content);
-         END;",
-    )
-    .execute(pool)
-    .await
-    .map_err(|error| format!("message index schema: {error}"))?;
+    for statement in SCHEMA_STATEMENTS {
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .map_err(|error| format!("message index schema: {error}"))?;
+    }
     Ok(())
 }
 
@@ -58,19 +49,53 @@ async fn marker(pool: &SqlitePool) -> Result<bool, String> {
     Ok(value.is_some())
 }
 
+const SCHEMA_STATEMENTS: [&str; 4] = [
+    "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+         content, content='messages', content_rowid='rowid', tokenize='unicode61'
+     )",
+    "CREATE TRIGGER IF NOT EXISTS message_fts_ai AFTER INSERT ON messages BEGIN
+         INSERT INTO message_fts(rowid, content) VALUES (new.rowid, new.content);
+     END",
+    "CREATE TRIGGER IF NOT EXISTS message_fts_ad AFTER DELETE ON messages BEGIN
+         INSERT INTO message_fts(message_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+     END",
+    "CREATE TRIGGER IF NOT EXISTS message_fts_au AFTER UPDATE ON messages BEGIN
+         INSERT INTO message_fts(message_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+         INSERT INTO message_fts(rowid, content) VALUES (new.rowid, new.content);
+     END",
+];
+
 /// Index the chats that existed before the triggers did, once.
+///
+/// The triggers, the rebuild and the marker commit together, so a crash can
+/// leave the index untouched but never half-built.
 pub async fn backfill(pool: &SqlitePool) -> Result<bool, String> {
-    ensure_schema(pool).await?;
-    if marker(pool).await? {
+    if marker(pool).await.unwrap_or(false) {
         return Ok(false);
     }
-    reindex(pool).await?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| format!("message index tx: {error}"))?;
+    for statement in SCHEMA_STATEMENTS {
+        sqlx::query(statement)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| format!("message index schema: {error}"))?;
+    }
+    sqlx::query("INSERT INTO message_fts(message_fts) VALUES('rebuild')")
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| format!("rebuild message index: {error}"))?;
     sqlx::query("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .bind(MARKER_KEY)
         .bind("1")
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|error| format!("write message index marker: {error}"))?;
+    tx.commit()
+        .await
+        .map_err(|error| format!("message index commit: {error}"))?;
     Ok(true)
 }
 
@@ -119,19 +144,26 @@ fn fts_query(query: &str) -> String {
 }
 
 fn terms_of(query: &str) -> Vec<String> {
-    query
-        .split(|value: char| !value.is_alphanumeric())
-        .map(str::to_lowercase)
-        .filter(|token| token.len() >= 3)
-        .collect()
+    let mut terms: Vec<String> = Vec::new();
+    for token in query.split(|value: char| !value.is_alphanumeric()) {
+        let token = token.to_lowercase();
+        if token.len() >= 3 && !terms.contains(&token) {
+            terms.push(token);
+        }
+    }
+    terms
 }
 
-/// How many distinct query terms a snippet actually contains.
+/// How many distinct query terms a snippet contains as whole words.
 fn matched_terms(text: &str, terms: &[String]) -> usize {
     let lower = text.to_lowercase();
+    let words: HashSet<&str> = lower
+        .split(|value: char| !value.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
     terms
         .iter()
-        .filter(|term| lower.contains(term.as_str()))
+        .filter(|term| words.contains(term.as_str()))
         .count()
 }
 
@@ -146,7 +178,16 @@ fn snippet_of(text: &str, terms: &[String]) -> String {
         .iter()
         .filter_map(|term| lower.find(term.as_str()))
         .min()
-        .map(|index| index.saturating_sub(SNIPPET_CHARS / 3))
+        .map(|byte| {
+            let mut cut = byte.min(flat.len());
+            while cut > 0 && !flat.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            flat[..cut]
+                .chars()
+                .count()
+                .saturating_sub(SNIPPET_CHARS / 3)
+        })
         .unwrap_or(0);
     let mut chars = flat.chars().skip(start);
     let body: String = chars.by_ref().take(SNIPPET_CHARS).collect();
@@ -164,6 +205,9 @@ pub async fn search(
     exclude_conversation: Option<&str>,
     limit: usize,
 ) -> Result<Vec<EpisodeHit>, String> {
+    if !marker(pool).await.unwrap_or(false) {
+        backfill(pool).await?;
+    }
     ensure_schema(pool).await?;
     let expression = fts_query(query);
     if expression.is_empty() {
@@ -188,7 +232,7 @@ pub async fn search(
     .bind(project_id)
     .bind(exclude_conversation)
     .bind(exclude_conversation)
-    .bind(CANDIDATES as i64)
+    .bind(limit as i64)
     .fetch_all(pool)
     .await
     .map_err(|error| format!("message search: {error}"))?;
@@ -211,6 +255,7 @@ pub async fn search(
             role: row.get("role"),
             snippet: snippet_of(&content, &terms),
             score,
+            created_at: created,
         });
     }
     hits.sort_by(|left, right| {
@@ -225,8 +270,8 @@ pub async fn search(
 /// Rank the past chats worth injecting on this turn.
 ///
 /// A hit must contain at least two query terms, or one when the query is a
-/// single word, and only the newest message of a chat is kept so two snippets
-/// never come from the same conversation.
+/// single word. Only the newest qualifying message of a chat is kept, so two
+/// snippets never come from the same conversation.
 pub async fn recall(
     pool: &SqlitePool,
     query: &str,
@@ -239,22 +284,25 @@ pub async fn recall(
     }
     let required = if terms.len() == 1 { 1 } else { 2 };
     let hits = search(pool, query, project_id, conversation_id, CANDIDATES).await?;
-    let mut kept: Vec<EpisodeHit> = Vec::new();
+    let mut newest: HashMap<String, EpisodeHit> = HashMap::new();
     for hit in hits {
-        if kept.len() >= AUTO_HITS {
-            break;
-        }
         if matched_terms(&hit.snippet, &terms) < required {
             continue;
         }
-        if kept
-            .iter()
-            .any(|seen| seen.conversation_id == hit.conversation_id)
-        {
-            continue;
+        match newest.get(&hit.conversation_id) {
+            Some(seen) if seen.created_at >= hit.created_at => {}
+            _ => {
+                newest.insert(hit.conversation_id.clone(), hit);
+            }
         }
-        kept.push(hit);
     }
+    let mut kept: Vec<EpisodeHit> = newest.into_values().collect();
+    kept.sort_by(|left, right| {
+        left.score
+            .partial_cmp(&right.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    kept.truncate(AUTO_HITS);
     Ok(kept)
 }
 
@@ -402,5 +450,59 @@ mod tests {
         assert!(snippet.contains("invoices"));
         assert!(snippet.chars().count() <= SNIPPET_CHARS + 2);
         assert!(snippet.starts_with('…'));
+    }
+
+    #[test]
+    fn snippets_cut_on_a_character_boundary_for_multibyte_text() {
+        let text = format!("{}invoices {}", "😀".repeat(400), "b".repeat(400));
+        let snippet = snippet_of(&text, &["invoices".to_string()]);
+        assert!(snippet.contains("invoices"));
+        assert!(snippet.chars().count() <= SNIPPET_CHARS + 2);
+    }
+
+    #[test]
+    fn terms_are_deduplicated_and_matched_as_whole_words() {
+        let terms = terms_of("invoice invoice checkouts");
+        assert_eq!(terms, vec!["invoice".to_string(), "checkouts".to_string()]);
+        assert_eq!(matched_terms("an invoice is here", &terms), 1);
+        assert_eq!(
+            matched_terms("checkouts are off but invoice stands", &terms),
+            2
+        );
+        let single = vec!["invoice".to_string()];
+        assert_eq!(matched_terms("invoices everywhere", &single), 0);
+    }
+
+    #[tokio::test]
+    async fn recall_keeps_the_newest_message_of_a_chat() {
+        let pool = seeded().await;
+        sqlx::query("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ('m10','p1','user','invoices checkout later note',1700000900000)")
+            .execute(&pool)
+            .await
+            .expect("insert");
+        let hits = recall(&pool, "invoices checkout", Some("alpha"), None)
+            .await
+            .expect("recall");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "m10");
+    }
+
+    #[tokio::test]
+    async fn search_backfills_when_the_marker_was_lost() {
+        let pool = seeded().await;
+        backfill(&pool).await.expect("first");
+        sqlx::query("DELETE FROM meta WHERE key = ?")
+            .bind(MARKER_KEY)
+            .execute(&pool)
+            .await
+            .expect("drop marker");
+        sqlx::query("DELETE FROM message_fts")
+            .execute(&pool)
+            .await
+            .expect("empty index");
+        let hits = search(&pool, "invoices", None, None, 5)
+            .await
+            .expect("search");
+        assert!(hits.iter().any(|hit| hit.message_id == "m1"));
     }
 }

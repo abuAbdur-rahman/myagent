@@ -590,6 +590,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const episodicRecallRef = useRef(episodicRecall);
   const episodicBlockRef = useRef("");
+  const episodeRequestRef = useRef(0);
   const setEpisodicRecall = useCallback((value: boolean) => {
     episodicRecallRef.current = value;
     setEpisodicRecallState(value);
@@ -876,20 +877,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       projectId: string | null,
       conversationId: string | null,
     ): Promise<string> => {
+      const request = ++episodeRequestRef.current;
       if (!projectId || !episodicRecallRef.current) {
         episodicBlockRef.current = "";
         return "";
       }
       try {
         const hits = await api.episodicRecall(text, projectId, conversationId);
+        if (request !== episodeRequestRef.current) return "";
         if (!episodicRecallRef.current) return "";
         if ((projectRef.current?.id ?? null) !== projectId) return "";
+        if (conversationId !== null && convIdRef.current !== conversationId) return "";
         const block = buildEpisodeBlock(hits);
         episodicBlockRef.current = block;
         return block;
       } catch (error) {
         console.warn("episodes: recall failed", error);
-        episodicBlockRef.current = "";
+        if (request === episodeRequestRef.current) episodicBlockRef.current = "";
         return "";
       }
     },
@@ -1463,7 +1467,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(null);
       setView(id ? "project" : "chat");
       recallRequestRef.current += 1;
+      episodeRequestRef.current += 1;
       relevantMemoriesRef.current = [];
+      episodicBlockRef.current = "";
       setRecalledMemories([]);
       lastPayloadRef.current = null;
     },
@@ -1656,6 +1662,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setError(null);
     setView("chat");
     recallRequestRef.current += 1;
+    episodeRequestRef.current += 1;
     relevantMemoriesRef.current = [];
     episodicBlockRef.current = "";
     setRecalledMemories([]);
@@ -1682,6 +1689,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setError(null);
     setView("chat");
     recallRequestRef.current += 1;
+    episodeRequestRef.current += 1;
     relevantMemoriesRef.current = [];
     episodicBlockRef.current = "";
     setRecalledMemories([]);
@@ -1741,6 +1749,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const moved = (projectRef.current?.id ?? null) !== projectId;
       setActiveProjectId(projectId);
       recallRequestRef.current += 1;
+      episodeRequestRef.current += 1;
       relevantMemoriesRef.current = [];
       episodicBlockRef.current = "";
       setRecalledMemories([]);

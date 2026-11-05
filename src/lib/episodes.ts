@@ -21,7 +21,7 @@ export function buildEpisodeBlock(hits: EpisodeHit[]): string {
   let budget = MAX_EPISODE_CHARS;
   for (const hit of hits.slice(0, MAX_EPISODE_HITS)) {
     if (budget <= 0) break;
-    const text = hit.snippet.replace(/<\/source>/gi, "").trim();
+    const text = hit.snippet.replace(/<\/?source[^>]*>/gi, "").trim();
     if (text.length === 0) continue;
     const body = text.length > budget ? `${text.slice(0, budget)}…` : text;
     budget -= body.length;

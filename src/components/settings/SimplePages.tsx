@@ -4240,7 +4240,7 @@ export function MemoryPage() {
             />
           </label>
           <label className="mt-2 flex items-center justify-between gap-2 text-xs">
-            <span className="text-muted">Search past chats</span>
+            <span className="text-muted">Recall past chats automatically</span>
             <input
               type="checkbox"
               className="h-4 w-4"
