@@ -1,9 +1,10 @@
-import { documentRead } from "./api";
+import { documentRead, knowledgeSearch, type KnowledgeHit } from "./api";
 import { listKnowledgeDocs } from "./db";
 import { parseImageAttachments } from "./attachments";
 
 export const MAX_FILES_PER_QUERY = 3;
 export const MAX_EXCERPT_CHARS = 4000;
+export const MAX_CHUNK_CHARS = 2400;
 
 export interface KnowledgeDoc {
   name: string;
@@ -45,6 +46,30 @@ export function buildKnowledgeBlock(docs: KnowledgeDoc[]): string {
     const body = excerptOf(doc.excerpt).replace(/<\/source>/gi, "");
     return `<source name="${safeName}">${body}</source>`;
   });
+  return `## Attached knowledge\n${parts.join("\n\n")}`;
+}
+
+function attr(value: string): string {
+  return value.replace(/["<>\r\n]/g, " ").trim().slice(0, 120);
+}
+
+/** Render retrieved chunks so the model can cite the document and the section. */
+export function buildChunkBlock(hits: KnowledgeHit[]): string {
+  if (hits.length === 0) return "";
+  const parts: string[] = [];
+  let budget = MAX_CHUNK_CHARS;
+  for (const hit of hits) {
+    if (budget <= 0) break;
+    const body = hit.text.replace(/<\/source>/gi, "").trim();
+    if (body.length === 0) continue;
+    const text = body.length > budget ? `${body.slice(0, budget)}…` : body;
+    budget -= text.length;
+    const heading = hit.heading ? ` heading="${attr(hit.heading)}"` : "";
+    parts.push(
+      `<source doc="${attr(hit.name)}" chunk="${hit.ord + 1}"${heading}>${text}</source>`,
+    );
+  }
+  if (parts.length === 0) return "";
   return `## Attached knowledge\n${parts.join("\n\n")}`;
 }
 
@@ -105,7 +130,17 @@ export function withFinalTurnImages<
 export async function searchKnowledge(projectId: string, query: string): Promise<string> {
   const trimmed = query.trim();
   if (trimmed.length === 0) return "";
-  const rows = await listKnowledgeDocs(projectId, trimmed);
+  try {
+    const hits = await knowledgeSearch(projectId, trimmed, MAX_FILES_PER_QUERY);
+    if (hits.length > 0) return buildChunkBlock(hits);
+  } catch (error) {
+    console.warn("knowledge: chunk search failed, using excerpts", error);
+  }
+  return excerptKnowledge(projectId, trimmed);
+}
+
+async function excerptKnowledge(projectId: string, query: string): Promise<string> {
+  const rows = await listKnowledgeDocs(projectId, query);
   if (rows.length === 0) return "";
   const reads = await Promise.allSettled(
     rows.map(async (row) => ({

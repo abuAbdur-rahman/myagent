@@ -1447,6 +1447,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!memoryCompat) {
         await api.memoryProjectDelete(id).catch(reportError);
       }
+      await api.knowledgePurgeProject(id).catch(reportError);
       await db.deleteProject(id);
       if (activeProjectId === id) setActiveProjectId(null);
       await refreshProjects();
@@ -2701,6 +2702,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages([userMsg, assistantMsg]);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
         await recallFor(trimmed, projectId);
+        knowledgeBlockRef.current = await searchKnowledge(projectId, trimmed).catch(
+          () => "",
+        );
         const firstTurns = [{ role: "user", content: trimmed }];
         await streamTurn(
           created.id,

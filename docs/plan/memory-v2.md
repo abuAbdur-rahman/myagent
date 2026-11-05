@@ -94,8 +94,22 @@ Slice 5 (hybrid retrieval) shipped:
   results; editing or deleting a recalled note uses the same id.
 - The Settings memory page reports model status, installs the 23 MB MiniLM
   model, and rebuilds the index. The ONNX session is shared with voice.
-- Not yet: recency/trust priors, consolidation, knowledge chunks, episodic
-  search, jev verifier.
+- Not yet: recency/trust priors, consolidation, episodic search, jev verifier.
+
+Slice 6 (project knowledge) shipped:
+
+- `memory/knowledge.rs` splits each project document at Markdown headings and
+  windows long sections at 1,000 chars with 150 of overlap, then derives
+  `knowledge_chunks`, `knowledge_chunks_fts` and `knowledge_vectors`.
+- The same RRF fusion ranks chunks inside one project; a chunk that only the
+  vector side found must clear cosine 0.88. Results carry `doc`, `chunk` and
+  `heading` so the model can cite them.
+- Up to three chunks (2,400 chars) are injected as `## Attached knowledge` on
+  each send. The old name/excerpt path stays as the fallback when the index has
+  nothing, so a fresh project still answers before its first fill.
+- Uploads reindex in the background; the Docs panel reindexes on demand; a doc
+  delete and a project delete purge their rows and vectors before returning.
+- Not yet: episodic search, consolidation, jev verifier.
 
 ## Goals
 

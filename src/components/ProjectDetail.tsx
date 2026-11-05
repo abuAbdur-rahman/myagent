@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, ArrowUp, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectInputSchema, type Conversation } from "../lib/types";
+import * as api from "../lib/api";
 import { deleteKnowledgeDoc, listKnowledgeDocs, type KnowledgeDocRow } from "../lib/db";
 import { MemoryEditor } from "./MemoryEditor";
 import { PendingMemoryBar } from "./PendingMemoryBar";
@@ -38,17 +39,31 @@ function DocsPanel({
   loaded,
   error,
   removingId,
+  rebuilding,
+  onRebuild,
   onRemove,
 }: {
   docs: KnowledgeDocRow[];
   loaded: boolean;
   error: string | null;
   removingId: string | null;
+  rebuilding: boolean;
+  onRebuild: () => void;
   onRemove: (doc: KnowledgeDocRow) => void;
 }) {
   return (
     <div className="rounded-card border border-border bg-surface p-3">
-      <b className="text-sm">Docs</b>
+      <div className="flex items-baseline justify-between gap-2">
+        <b className="text-sm">Docs</b>
+        <button
+          type="button"
+          onClick={onRebuild}
+          disabled={rebuilding || docs.length === 0}
+          className="text-xs text-accent hover:underline disabled:text-faint disabled:no-underline"
+        >
+          {rebuilding ? "Reindexing…" : "Reindex"}
+        </button>
+      </div>
       <p className="mb-2 mt-1 text-xs text-muted">
         {docs.length} file{docs.length === 1 ? "" : "s"} · searched on every send here
       </p>
@@ -117,6 +132,7 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const [docsLoaded, setDocsLoaded] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
 
   useEffect(() => {
     setName(activeProject?.name ?? "");
@@ -195,11 +211,37 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
     setRemovingId(doc.id);
     try {
       await deleteKnowledgeDoc(doc.id, project.id, doc.sha256);
+      await api.knowledgePurgeDoc(doc.id).catch((e: unknown) => console.warn(
+        "knowledge: chunk cleanup failed",
+        e,
+      ));
       setDocs((prev) => prev.filter((row) => row.id !== doc.id));
     } catch (e) {
       setStatus(errorText(e));
     } finally {
       setRemovingId(null);
+    }
+  };
+
+  const reindexDocs = async () => {
+    setRebuilding(true);
+    try {
+      const report: api.KnowledgeFillReport = await api.knowledgeReindex(project.id);
+      if (report.errors.length > 0) {
+        setStatus(
+          `Indexed ${report.chunks} chunks, but ${report.errors.length} could not be indexed: ${report.errors[0]}`,
+        );
+      } else {
+        setStatus(
+          `Indexed ${report.chunks} chunks from ${report.documents} document${
+            report.documents === 1 ? "" : "s"
+          }.`,
+        );
+      }
+    } catch (e) {
+      setStatus(errorText(e));
+    } finally {
+      setRebuilding(false);
     }
   };
 
@@ -315,6 +357,8 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
             loaded={docsLoaded}
             error={docsError}
             removingId={removingId}
+            rebuilding={rebuilding}
+            onRebuild={() => void reindexDocs()}
             onRemove={(doc) => void removeDoc(doc)}
           />
 

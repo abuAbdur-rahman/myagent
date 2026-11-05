@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { attachmentIngest, documentRead, documentsWipeUnreferenced } from "./api";
+import { attachmentIngest, documentRead, documentsWipeUnreferenced, knowledgeIndexRefresh } from "./api";
 import { addChatDoc, addKnowledgeDoc, findChatDoc, knowledgeShaExists, listChatDocs } from "./db";
 import {
   base64FromBytes,
@@ -24,6 +24,7 @@ vi.mock("./api", () => ({
   attachmentIngest: vi.fn(),
   documentRead: vi.fn(),
   documentsWipeUnreferenced: vi.fn(async () => 1),
+  knowledgeIndexRefresh: vi.fn(async () => undefined),
 }));
 
 vi.mock("./db", () => ({
@@ -47,6 +48,7 @@ const readText = vi.mocked(documentRead);
 const wipeUnreferenced = vi.mocked(documentsWipeUnreferenced);
 const insertChatDoc = vi.mocked(addChatDoc);
 const insertProjectDoc = vi.mocked(addKnowledgeDoc);
+const refreshKnowledge = vi.mocked(knowledgeIndexRefresh);
 const findDoc = vi.mocked(findChatDoc);
 const shaInProject = vi.mocked(knowledgeShaExists);
 const listDocs = vi.mocked(listChatDocs);
@@ -192,11 +194,14 @@ describe("commitChatDocs", () => {
     expect(insertProjectDoc).toHaveBeenCalledWith(
       expect.objectContaining({ project_id: "p1", chat_id: "c1", sha256: SHA, path: doc.path }),
     );
+    expect(refreshKnowledge).toHaveBeenCalledWith("p1");
 
     insertProjectDoc.mockClear();
+    refreshKnowledge.mockClear();
     shaInProject.mockResolvedValue(true);
     await commitChatDocs("c1", [doc], "p1");
     expect(insertProjectDoc).not.toHaveBeenCalled();
+    expect(refreshKnowledge).not.toHaveBeenCalled();
   });
 
   it("keeps the document when the project reference fails", async () => {
