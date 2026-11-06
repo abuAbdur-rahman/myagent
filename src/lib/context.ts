@@ -81,6 +81,11 @@ function projectMemoryBlock(projectMemories: Memory[]): string | null {
 
 type BlockKind = "instruction" | "data";
 
+interface Block {
+  text: string;
+  kind: BlockKind;
+}
+
 /** Drop a trailing partial line so an instruction or a note is never cut in half. */
 function dropPartialLine(text: string): string {
   const cut = text.lastIndexOf("\n");
@@ -91,46 +96,33 @@ function trailer(dropped: number): string {
   return `[Context budget reached: ${dropped} block${dropped === 1 ? "" : "s"} left out. Ask a narrower question or call recall_memory for a saved note.]`;
 }
 
-export function buildSystemPrompt(input: ContextInput): string | null {
-  const sent = new Set([
-    ...renderedIds(input.globalMemories),
-    ...(input.project ? renderedIds(input.projectMemories) : []),
-  ]);
-  const relevantText = renderMemories(
-    (input.relevantMemories ?? []).filter((memory) => !sent.has(memory.id)),
-  );
+function heading(text: string | null | undefined, title: string): string | null {
+  const trimmed = text?.trim();
+  return trimmed ? `## ${title}\n${trimmed}` : null;
+}
 
-  const blocks: { text: string; kind: BlockKind }[] = [];
-  for (const line of identityBlocks(input.userName)) blocks.push({ text: line, kind: "instruction" });
+function block(text: string | null, kind: BlockKind): Block | null {
+  return text ? { text, kind } : null;
+}
 
-  const standing = input.standingPrompt?.trim();
-  if (standing) blocks.push({ text: `## Standing instructions\n${standing}`, kind: "instruction" });
+function collectBlocks(input: ContextInput, relevantText: string): Block[] {
+  const project = input.project;
+  const blocks: (Block | null)[] = [
+    ...identityBlocks(input.userName).map((text): Block => ({ text, kind: "instruction" })),
+    block(heading(input.standingPrompt, "Standing instructions"), "instruction"),
+    block(heading(renderMemories(input.globalMemories), "Durable memory"), "data"),
+    block(project ? projectInstructionBlock(project) : null, "instruction"),
+    block(project ? projectMemoryBlock(input.projectMemories) : null, "data"),
+    block(heading(input.chatPrompt, "This chat"), "instruction"),
+    block(heading(relevantText, "Relevant memory for this turn"), "data"),
+    block(input.episodicBlock?.trim() ?? null, "data"),
+    block(input.knowledgeBlock?.trim() ?? null, "data"),
+    block(input.skillIndexBlock?.trim() ?? null, "data"),
+  ];
+  return blocks.filter((entry): entry is Block => entry !== null);
+}
 
-  const global = renderMemories(input.globalMemories);
-  if (global) blocks.push({ text: `## Durable memory\n${global}`, kind: "data" });
-
-  if (input.project) {
-    const project = projectInstructionBlock(input.project);
-    if (project) blocks.push({ text: project, kind: "instruction" });
-    const projectMemory = projectMemoryBlock(input.projectMemories);
-    if (projectMemory) blocks.push({ text: projectMemory, kind: "data" });
-  }
-
-  const chat = input.chatPrompt?.trim();
-  if (chat) blocks.push({ text: `## This chat\n${chat}`, kind: "instruction" });
-
-  if (relevantText) {
-    blocks.push({ text: `## Relevant memory for this turn\n${relevantText}`, kind: "data" });
-  }
-  const episodes = input.episodicBlock?.trim();
-  if (episodes) blocks.push({ text: episodes, kind: "data" });
-
-  const knowledge = input.knowledgeBlock?.trim();
-  if (knowledge) blocks.push({ text: knowledge, kind: "data" });
-
-  const skills = input.skillIndexBlock?.trim();
-  if (skills) blocks.push({ text: skills, kind: "data" });
-
+function fitBlocks(blocks: Block[]): string | null {
   const instructionChars = blocks
     .filter((block) => block.kind === "instruction")
     .reduce((sum, block) => sum + block.text.length + 2, 0);
@@ -156,6 +148,17 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   if (dropped > 0) out = `${out}\n\n${trailer(dropped)}`;
   if (out.length > MAX_CHARS) out = dropPartialLine(out.slice(0, MAX_CHARS));
   return out.length > 0 ? out : null;
+}
+
+export function buildSystemPrompt(input: ContextInput): string | null {
+  const sent = new Set([
+    ...renderedIds(input.globalMemories),
+    ...(input.project ? renderedIds(input.projectMemories) : []),
+  ]);
+  const relevantText = renderMemories(
+    (input.relevantMemories ?? []).filter((memory) => !sent.has(memory.id)),
+  );
+  return fitBlocks(collectBlocks(input, relevantText));
 }
 
 export function buildChildSystemPrompt(
