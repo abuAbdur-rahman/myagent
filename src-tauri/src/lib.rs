@@ -1,3 +1,4 @@
+mod artifacts;
 mod commands;
 mod computer_use;
 #[cfg(windows)]
@@ -479,7 +480,9 @@ pub fn run() {
                 .expect("failed to build HTTP client"),
         )
         .manage(mcp::McpState::default())
+        .manage(artifacts::ArtifactStore::default())
         .manage(state::StreamState::default())
+        .register_uri_scheme_protocol("artifact", artifacts::serve)
         .invoke_handler(tauri::generate_handler![
             vault::set_api_key,
             vault::add_provider_key,
@@ -590,6 +593,8 @@ pub fn run() {
             sandbox::sandbox_set_allow_installs,
             sandbox::sandbox_preview,
             sandbox::artifact_export,
+            artifacts::artifact_preview_url,
+            artifacts::artifact_preview_drop,
             voice::voice_status,
             voice::voice_enable,
             voice::voice_disable,

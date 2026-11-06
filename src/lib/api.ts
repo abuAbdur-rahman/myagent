@@ -436,6 +436,14 @@ export function artifactExport(path: string, destination: string) {
   return invoke<string>("artifact_export", { path, destination });
 }
 
+export function artifactPreviewUrl(html: string) {
+  return invoke<string>("artifact_preview_url", { html });
+}
+
+export function artifactPreviewDrop(id: string) {
+  return invoke<void>("artifact_preview_drop", { id });
+}
+
 export function todoFinish(conversationId: string, complete: boolean) {
   return invoke<void>("todo_finish", { conversationId, complete });
 }

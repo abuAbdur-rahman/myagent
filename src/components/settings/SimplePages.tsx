@@ -1707,6 +1707,8 @@ export function GeneralPage() {
     setCollapseThinking,
     collapseToolCalls,
     setCollapseToolCalls,
+    generativeUi,
+    setGenerativeUi,
     standingPrompt,
     setStandingPrompt,
     showContextBar,
@@ -1774,6 +1776,12 @@ export function GeneralPage() {
           onChange={setCollapseToolCalls}
           label="Collapse tool calls"
         />
+      </SettingRow>
+      <SettingRow
+        label="Generative UI"
+        description="Let the assistant answer with cards, tables and charts from OpenUI"
+      >
+        <Toggle checked={generativeUi} onChange={setGenerativeUi} label="Generative UI" />
       </SettingRow>
 
       <div
