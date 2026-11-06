@@ -34,6 +34,16 @@ describe("splitOpenUISegments", () => {
     expect(segments[1]).toEqual({ kind: "openui", code: program, closed: true });
   });
 
+  it("does not extract an openui fence inside a tilde code block", () => {
+    const content = "~~~\n```openui-lang\n" + program + "\n```\n~~~";
+    expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);
+  });
+
+  it("ignores a backtick fence with a backtick in the info string", () => {
+    const content = "```openui-lang `bad`\n" + program + "\n```";
+    expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);
+  });
+
   it("does not extract an openui fence nested inside a longer markdown fence", () => {
     const content = "````markdown\n```openui-lang\n" + program + "\n```\n````";
     expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);
