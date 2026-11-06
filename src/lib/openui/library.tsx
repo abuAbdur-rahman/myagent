@@ -28,13 +28,13 @@ const Stat = defineComponent({
   description: "A KPI card with a label, value and optional detail.",
   props: z.object({
     label: z.string(),
-    value: z.string(),
+    value: z.union([z.string(), z.number()]),
     detail: z.string().optional(),
   }),
   component: ({ props }) => (
     <div className="min-w-0 rounded-card border border-border bg-surface-2 px-3 py-2.5">
       <div className="text-xs font-medium uppercase tracking-wide text-muted">{props.label}</div>
-      <div className="mt-1 text-xl font-semibold tabular-nums">{props.value}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums">{String(props.value)}</div>
       {props.detail && <div className="mt-0.5 text-xs text-muted">{props.detail}</div>}
     </div>
   ),
@@ -45,7 +45,7 @@ const Table = defineComponent({
   description: "A compact data table for comparisons and records.",
   props: z.object({
     columns: z.array(z.string()),
-    rows: z.array(z.array(z.string())),
+    rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean()]))),
     caption: z.string().optional(),
   }),
   component: ({ props }) => (
@@ -74,7 +74,7 @@ const Table = defineComponent({
             <tr key={rowIndex} className="border-t border-border align-top">
               {row.map((cell, cellIndex) => (
                 <td key={cellIndex} className="px-3 py-1.5">
-                  {cell}
+                  {String(cell)}
                 </td>
               ))}
             </tr>
@@ -92,15 +92,16 @@ const List = defineComponent({
     items: z.array(z.string()),
     ordered: z.boolean().optional(),
   }),
-  component: ({ props }) => (
-    <ul
-      className={`m-0 space-y-1 pl-5 text-sm ${props.ordered ? "list-decimal" : "list-disc"}`}
-    >
-      {props.items.map((item, index) => (
-        <li key={index}>{item}</li>
-      ))}
-    </ul>
-  ),
+  component: ({ props }) => {
+    const Tag = props.ordered ? "ol" : "ul";
+    return (
+      <Tag className={`m-0 space-y-1 pl-5 text-sm ${props.ordered ? "list-decimal" : "list-disc"}`}>
+        {props.items.map((item, index) => (
+          <li key={index}>{item}</li>
+        ))}
+      </Tag>
+    );
+  },
 });
 
 const Callout = defineComponent({
@@ -152,7 +153,7 @@ const Progress = defineComponent({
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={max}
-          aria-valuenow={props.value}
+          aria-valuenow={Math.max(0, Math.min(max, props.value))}
           aria-label={props.label}
         >
           <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
@@ -175,7 +176,7 @@ const BarChart = defineComponent({
     return (
       <div className="rounded-card border border-border bg-surface-2 px-3 py-3">
         {props.title && <div className="mb-2 text-sm font-medium">{props.title}</div>}
-        <div className="space-y-2" role="img" aria-label={props.title ?? "Bar chart"}>
+        <div className="space-y-2">
           {props.data.map((item, index) => (
             <div key={index} className="flex items-center gap-2 text-xs">
               <span className="w-20 shrink-0 truncate text-muted" title={item.label}>
@@ -255,14 +256,14 @@ const KeyValue = defineComponent({
   name: "KeyValue",
   description: "A compact list of labels and values.",
   props: z.object({
-    pairs: z.array(z.object({ key: z.string(), value: z.string() })),
+    pairs: z.array(z.object({ key: z.string(), value: z.union([z.string(), z.number()]) })),
   }),
   component: ({ props }) => (
     <dl className="m-0 grid gap-1.5 rounded-card border border-border bg-surface-2 px-3 py-2.5 text-sm">
       {props.pairs.map((pair, index) => (
         <div key={index} className="flex gap-3">
           <dt className="w-24 shrink-0 text-muted">{pair.key}</dt>
-          <dd className="m-0 min-w-0 flex-1 break-words">{pair.value}</dd>
+          <dd className="m-0 min-w-0 flex-1 break-words">{String(pair.value)}</dd>
         </div>
       ))}
     </dl>

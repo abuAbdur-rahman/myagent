@@ -1519,11 +1519,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
+      openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
       contextLimit: modelContextLimit ?? DEFAULT_MODEL_CONTEXT,
     });
-    const system = generativeUi
-      ? [base, OPENUI_SYSTEM_PROMPT].filter((part): part is string => Boolean(part)).join("\n\n")
-      : base;
+    const system = base;
     const limitKnown = modelContextLimit != null;
     const limit = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
     const lastUsage = [...messages]
@@ -1976,10 +1975,10 @@ setKnowledgeSummary([]);
       chatPrompt: chatPromptRef.current ?? undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
+      openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
       contextLimit: contextLimitRef.current,
     });
-    if (!generativeUi) return base;
-    return [base, OPENUI_SYSTEM_PROMPT].filter((part): part is string => Boolean(part)).join("\n\n");
+    return base;
   }, [generativeUi]);
 
   const withSystem = useCallback(

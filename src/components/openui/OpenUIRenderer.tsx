@@ -46,9 +46,11 @@ export function OpenUIRenderer({ code, isStreaming }: { code: string; isStreamin
               void openUrl(url).catch((error) => toast(errorText(error)));
             }
           }}
-          onError={(errors) => {
+          onParseResult={(result) => {
             if (isStreaming) return;
-            setFailed(errors.some((error) => error.severity !== "warning"));
+            const fatal =
+              result?.meta.errors?.some((error) => error.code === "no-root") ?? true;
+            setFailed(!result || result.meta.statementCount === 0 || fatal);
           }}
         />
       )}

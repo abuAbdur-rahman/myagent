@@ -37,6 +37,14 @@ describe("artifact names", () => {
     expect(segment.artifact.title).toBe("HTML preview");
   });
 
+  it("does not add a second html extension", () => {
+    const [segment] = splitArtifactSegments(
+      "```html\n" + page("Report.html", "Q3") + "\n```",
+    );
+    if (segment.kind !== "artifact") throw new Error("expected artifact");
+    expect(segment.artifact.title).toBe("Report");
+  });
+
   it("dedupes repeated names", () => {
     const fence = "```html\n" + page("Same name", "Q3") + "\n```";
     const segments = splitArtifactSegments(`${fence}\n\n${fence}`);

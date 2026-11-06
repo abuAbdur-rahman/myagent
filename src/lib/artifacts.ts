@@ -42,7 +42,9 @@ function extractArtifacts(content: string): Artifact[] {
   while ((match = HTML_FENCE.exec(content)) !== null) {
     const code = match[3].trimEnd();
     if (code.length < 40) continue;
-    const base = fenceTitle(match[2]) || documentTitle(code) || "HTML preview";
+    const base =
+      (fenceTitle(match[2]) || documentTitle(code)).replace(/\.html?$/i, "").trim() ||
+      "HTML preview";
     let title = base;
     let suffix = 2;
     while (used.has(title.toLowerCase())) {

@@ -24,21 +24,26 @@ export function ArtifactPreview({
     setState({ status: "loading" });
     api
       .artifactPreviewUrl(code)
-      .then((url) => {
-        const id = url.split("/").filter(Boolean).pop() ?? "";
+      .then((handle) => {
         if (!live) {
-          if (id) void api.artifactPreviewDrop(id);
+          void api
+            .artifactPreviewDrop(handle.id)
+            .catch((error: unknown) => console.warn("Artifact preview cleanup failed", error));
           return;
         }
-        created = id;
-        setState({ status: "ready", url });
+        created = handle.id;
+        setState({ status: "ready", url: handle.url });
       })
       .catch((reason) => {
         if (live) setState({ status: "error", message: errorText(reason) });
       });
     return () => {
       live = false;
-      if (created) void api.artifactPreviewDrop(created);
+      if (created) {
+        void api
+          .artifactPreviewDrop(created)
+          .catch((error: unknown) => console.warn("Artifact preview cleanup failed", error));
+      }
     };
   }, [code]);
 

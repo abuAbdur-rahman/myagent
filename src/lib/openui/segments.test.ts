@@ -29,6 +29,11 @@ describe("splitOpenUISegments", () => {
     expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);
   });
 
+  it("accepts an indented fence", () => {
+    const segments = splitOpenUISegments(`- item\n  \`\`\`openui-lang\n${program}\n  \`\`\``, false);
+    expect(segments[1]).toEqual({ kind: "openui", code: program, closed: true });
+  });
+
   it("keeps ordinary code fences in the text", () => {
     const content = `\`\`\`ts\nconst answer = 42;\n\`\`\``;
     expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);

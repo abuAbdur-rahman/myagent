@@ -5,7 +5,7 @@ export type OpenUISegment =
 const UI_LANGS = new Set(["openui-lang", "openui"]);
 
 const FENCE =
-  /^```[ \t]*([^\n]*)\r?\n([\s\S]*?)(?:\r?\n(```)[ \t]*(?=\r?\n|$)|(?![\s\S]))/gm;
+  /^[ \t]*```[ \t]*([^\n]*)\r?\n([\s\S]*?)(?:\r?\n[ \t]*(```)[ \t]*(?=\r?\n|$)|(?![\s\S]))/gm;
 
 export function splitOpenUISegments(content: string, streaming: boolean): OpenUISegment[] {
   const segments: OpenUISegment[] = [];

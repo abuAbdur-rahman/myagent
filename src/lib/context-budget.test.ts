@@ -144,6 +144,22 @@ describe("buildSystemPrompt budget", () => {
     expect((system ?? "").length).toBeLessThanOrEqual(6000);
   });
 
+  it("counts the generative UI prompt inside the prompt budget", () => {
+    const system = buildSystemPrompt({
+      ...base,
+      openuiPrompt: "OPENUI-PROMPT " + "u".repeat(6000),
+      contextLimit: 1_000_000,
+    });
+    expect(system).toContain("When Generative UI is available");
+    expect(system).toContain("OPENUI-PROMPT");
+    expect((system ?? "").length).toBeLessThanOrEqual(promptBudget(1_000_000).total);
+  });
+
+  it("omits the generative UI precedence line when the prompt is off", () => {
+    const system = buildSystemPrompt({ ...base, contextLimit: 128_000 });
+    expect(system).not.toContain("When Generative UI is available");
+  });
+
   it("never keeps a durable heading without a note", () => {
     const notes = Array.from({ length: 60 }, (_, index) =>
       memory(String(index).padStart(32, "0"), `note ${index} ${"x".repeat(80)}`),

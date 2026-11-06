@@ -45,6 +45,7 @@ export interface ContextInput {
   skillIndexBlock?: string;
   standingPrompt?: string;
   chatPrompt?: string;
+  openuiPrompt?: string;
   /** Model context window in tokens; scales the memory budget. */
   contextLimit?: number;
 }
@@ -139,6 +140,13 @@ function collectBlocks(input: ContextInput, relevantText: string): Block[] {
   const project = input.project;
   const blocks: (Block | null)[] = [
     ...identityBlocks(input.userName).map((text): Block => ({ text, kind: "instruction" })),
+    block(
+      input.openuiPrompt
+        ? "When Generative UI is available, prefer a fenced openui-lang block for visual answers. Use a fenced html page only when the user asks for a standalone page."
+        : null,
+      "instruction",
+    ),
+    block(input.openuiPrompt?.trim() ?? null, "instruction"),
     block(heading(input.standingPrompt, "Standing instructions"), "instruction"),
     block(heading(renderMemories(input.globalMemories), "Durable memory"), "data", 3),
     block(project ? projectInstructionBlock(project) : null, "instruction"),

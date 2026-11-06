@@ -6,7 +6,7 @@ use tauri::{Manager, Runtime, UriSchemeContext};
 
 const MAX_ARTIFACT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 8;
-const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'self' data: blob:";
+const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'";
 
 const SHELL: &str = r#"<!doctype html>
 <html lang="en">
@@ -132,12 +132,16 @@ fn not_found() -> Response<Vec<u8>> {
     build_response(StatusCode::NOT_FOUND, b"artifact not found".to_vec())
 }
 
+fn requested_id(path: &str) -> Option<&str> {
+    path.strip_prefix("/s/")
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
 pub fn serve<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
-    let path = request.uri().path();
-    let Some(id) = path.strip_prefix("/s/") else {
+    let Some(id) = requested_id(request.uri().path()) else {
         return not_found();
     };
     match ctx.app_handle().state::<ArtifactStore>().get(id) {
@@ -147,10 +151,22 @@ pub fn serve<R: Runtime>(
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct ArtifactPreviewHandle {
+    pub id: String,
+    pub url: String,
+}
+
 #[tauri::command]
-pub fn artifact_preview_url(app: tauri::AppHandle, html: String) -> Result<String, String> {
+pub fn artifact_preview_url(
+    app: tauri::AppHandle,
+    html: String,
+) -> Result<ArtifactPreviewHandle, String> {
     let id = app.state::<ArtifactStore>().put(&html)?;
-    Ok(format!("https://artifact.localhost/s/{id}"))
+    Ok(ArtifactPreviewHandle {
+        url: format!("https://artifact.localhost/s/{id}"),
+        id,
+    })
 }
 
 #[tauri::command]
@@ -211,5 +227,15 @@ mod tests {
     #[test]
     fn unknown_artifacts_are_not_found() {
         assert_eq!(not_found().status(), StatusCode::NOT_FOUND);
+        assert_eq!(requested_id("/s/"), None);
+        assert_eq!(requested_id("/s/a/b"), None);
+        assert_eq!(requested_id("/x/abc"), None);
+        assert_eq!(requested_id("/s/abc"), Some("abc"));
+    }
+
+    #[test]
+    fn csp_blocks_every_external_frame() {
+        let csp = header_value(&shell_response("<h1>ok</h1>"), "content-security-policy");
+        assert!(csp.contains("frame-src 'none'"));
     }
 }

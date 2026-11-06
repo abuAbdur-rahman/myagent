@@ -8,6 +8,22 @@ describe("OPENUI_SYSTEM_PROMPT", () => {
     expect(OPENUI_SYSTEM_PROMPT).toContain("openui-lang");
     expect(OPENUI_SYSTEM_PROMPT).toContain("BarChart");
     expect(OPENUI_SYSTEM_PROMPT).toContain("FollowUps");
+    for (const component of [
+      "Stack",
+      "Row",
+      "Card",
+      "Text",
+      "Stat",
+      "Table",
+      "List",
+      "Callout",
+      "Progress",
+      "KeyValue",
+      "Code",
+      "Button",
+    ]) {
+      expect(OPENUI_SYSTEM_PROMPT).toContain(component);
+    }
   });
 
   it("stays compact enough for every turn", () => {

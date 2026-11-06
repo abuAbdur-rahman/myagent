@@ -45,9 +45,9 @@ function fileStem(title: string, ext: string): string {
     .replace(new RegExp(`\\.${ext}$`, "i"), "")
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
     .replace(/\s+/g, " ")
-    .replace(/[. ]+$/g, "")
     .trim()
-    .slice(0, 80);
+    .slice(0, 80)
+    .replace(/[. ]+$/g, "");
   return cleaned || "artifact";
 }
 

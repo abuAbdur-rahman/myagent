@@ -67,21 +67,20 @@ function unescapeMarked(text: string): string {
 function renderHtml(content: string, highlighter: HighlighterCore | null): string {
   const raw = marked.parse(content, { async: false, breaks: true }) as string;
   let html = DOMPurify.sanitize(raw);
-  if (!highlighter) return html;
 
   html = html.replace(
     /<pre><code(?: class="language-([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g,
     (_match, rawFence: string | undefined, escaped: string) => {
-      const fence = (rawFence ?? "").trim().toLowerCase();
-      const lang = normalizeFenceLang(fence);
+      const fence = (rawFence ?? "").trim();
+      const lang = normalizeFenceLang(fence.toLowerCase());
       const label = fence || "text";
       const highlighted =
-        lang && highlighter.getLoadedLanguages().includes(lang)
+        highlighter && lang && highlighter.getLoadedLanguages().includes(lang)
           ? highlighter.codeToHtml(unescapeMarked(escaped).replace(/\n$/, ""), {
               lang,
               theme: "github-dark",
             })
-          : `<pre class="codeblock-body"><code>${escaped}</code></pre>`;
+          : `<pre class="codeblock-body"><code>${escaped.replace(/\n$/, "")}</code></pre>`;
       const header =
         `<div class="codeblock-head"><span>${label}</span>` +
         `<button type="button" data-copy-code="1">Copy</button></div>`;
@@ -101,8 +100,8 @@ export function Markdown({ content }: { content: string }) {
       .then((loaded) => {
         if (live) setHighlighter(loaded);
       })
-      .catch(() => {
-        /* highlighting is optional; plain code stays visible */
+      .catch((error: unknown) => {
+        console.warn("Markdown highlighting unavailable", error);
       });
     return () => {
       live = false;

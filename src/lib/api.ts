@@ -436,8 +436,13 @@ export function artifactExport(path: string, destination: string) {
   return invoke<string>("artifact_export", { path, destination });
 }
 
-export function artifactPreviewUrl(html: string) {
-  return invoke<string>("artifact_preview_url", { html });
+export interface ArtifactPreviewHandle {
+  id: string;
+  url: string;
+}
+
+export function artifactPreviewUrl(html: string): Promise<ArtifactPreviewHandle> {
+  return invoke<ArtifactPreviewHandle>("artifact_preview_url", { html });
 }
 
 export function artifactPreviewDrop(id: string) {
