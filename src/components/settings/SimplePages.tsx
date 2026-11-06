@@ -105,6 +105,7 @@ function entryToMemory(
     project_id: projectId,
     kind,
     content: entry.text,
+    untrusted: entry.untrusted,
     created_at: entry.created_at,
     updated_at: entry.created_at,
   };
