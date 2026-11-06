@@ -77,12 +77,13 @@ function windowLevel(pcm: Int16Array, start: number, end: number): number {
   return Math.sqrt(sum / (end - start));
 }
 
-/** Loudest 50 ms window, so leading and trailing silence cannot dilute speech. */
+/** Loudest 50 ms window, sliding in 12.5 ms steps, so quiet speech split across blocks still counts. */
 export function pcmLevel(pcm: Int16Array, sampleRate: number): number {
   if (pcm.length === 0) return 0;
   const size = Math.max(1, Math.round(sampleRate * LEVEL_WINDOW_SECONDS));
+  const hop = Math.max(1, Math.round(size / 4));
   let level = 0;
-  for (let start = 0; start < pcm.length; start += size) {
+  for (let start = 0; start < pcm.length; start += hop) {
     const end = Math.min(pcm.length, start + size);
     const window = windowLevel(pcm, start, end);
     if (window > level) level = window;
@@ -128,6 +129,10 @@ export function mergeChunks(chunks: Float32Array[], limit: number): Float32Array
   return merged;
 }
 
+function stopTracks(stream: MediaStream | null): void {
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
 export class VoiceRecorder {
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
@@ -146,21 +151,28 @@ export class VoiceRecorder {
     this.chunks = [];
     this.frames = 0;
     let stream: MediaStream | null = null;
+    let acquired: MediaStream | null = null;
+    let aborted = false;
+    const media = navigator.mediaDevices
+      .getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
+      .then((found) => {
+        acquired = found;
+        if (aborted) found.getTracks().forEach((track) => track.stop());
+        return found;
+      });
+    void media.catch(() => undefined);
     try {
       const context = sharedContext();
       this.rate = context.sampleRate;
-      const [, media] = await Promise.all([
-        primeWorklet(),
-        navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        }),
-      ]);
-      stream = media;
+      await primeWorklet();
+      stream = await media;
       await context.resume();
       if (context.state !== "running") throw new Error("the microphone did not start");
       const source = context.createMediaStreamSource(stream);
@@ -190,7 +202,9 @@ export class VoiceRecorder {
       this.node = node;
       this.sink = sink;
     } catch (error) {
-      stream?.getTracks().forEach((track) => track.stop());
+      aborted = true;
+      stopTracks(stream);
+      stopTracks(acquired);
       this.node?.port.close();
       this.node?.disconnect();
       this.source?.disconnect();
@@ -242,8 +256,7 @@ export class VoiceRecorder {
     this.sink?.disconnect();
     this.source?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
-    this.flushed = null;
-    this.context = null;
+    this.flushed = null;    this.context = null;
     this.stream = null;
     this.source = null;
     this.node = null;
