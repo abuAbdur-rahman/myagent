@@ -5,6 +5,7 @@ const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const IMAGE_PART_CHARS = 1500;
 const TRAILER_RESERVE = 200;
+const DURABLE_PRIORITY = 3;
 export const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
 const MAX_TURNS_WINDOW = 60;
@@ -84,6 +85,7 @@ type BlockKind = "instruction" | "data";
 interface Block {
   text: string;
   kind: BlockKind;
+  priority?: number;
 }
 
 /** Drop a trailing partial line so an instruction or a note is never cut in half. */
@@ -101,8 +103,8 @@ function heading(text: string | null | undefined, title: string): string | null 
   return trimmed ? `## ${title}\n${trimmed}` : null;
 }
 
-function block(text: string | null, kind: BlockKind): Block | null {
-  return text ? { text, kind } : null;
+function block(text: string | null, kind: BlockKind, priority?: number): Block | null {
+  return text ? { text, kind, priority } : null;
 }
 
 function collectBlocks(input: ContextInput, relevantText: string): Block[] {
@@ -110,41 +112,65 @@ function collectBlocks(input: ContextInput, relevantText: string): Block[] {
   const blocks: (Block | null)[] = [
     ...identityBlocks(input.userName).map((text): Block => ({ text, kind: "instruction" })),
     block(heading(input.standingPrompt, "Standing instructions"), "instruction"),
-    block(heading(renderMemories(input.globalMemories), "Durable memory"), "data"),
+    block(heading(renderMemories(input.globalMemories), "Durable memory"), "data", 3),
     block(project ? projectInstructionBlock(project) : null, "instruction"),
-    block(project ? projectMemoryBlock(input.projectMemories) : null, "data"),
+    block(project ? projectMemoryBlock(input.projectMemories) : null, "data", 4),
     block(heading(input.chatPrompt, "This chat"), "instruction"),
-    block(heading(relevantText, "Relevant memory for this turn"), "data"),
-    block(input.episodicBlock?.trim() ?? null, "data"),
-    block(input.knowledgeBlock?.trim() ?? null, "data"),
-    block(input.skillIndexBlock?.trim() ?? null, "data"),
+    block(heading(relevantText, "Relevant memory for this turn"), "data", 1),
+    block(input.episodicBlock?.trim() ?? null, "data", 2),
+    block(input.knowledgeBlock?.trim() ?? null, "data", 5),
+    block(input.skillIndexBlock?.trim() ?? null, "data", 6),
   ];
   return blocks.filter((entry): entry is Block => entry !== null);
 }
 
+function instructionOverflow(instructions: string, hadData: boolean): string {
+  const room = MAX_CHARS - TRAILER_RESERVE;
+  const cut = dropPartialLine(instructions.slice(0, room));
+  const head = cut || instructions.slice(0, room);
+  const skipped = hadData ? " Memory and knowledge were not sent." : "";
+  return `${head}\n\n[Instructions over budget: shorten them.${skipped}]`;
+}
+
+function trimToRoom(text: string, room: number): string | null {
+  if (room <= 0) return null;
+  const head = dropPartialLine(text.slice(0, room));
+  return head.length > 0 ? head : null;
+}
+
 function fitBlocks(blocks: Block[]): string | null {
-  const instructionChars = blocks
-    .filter((block) => block.kind === "instruction")
-    .reduce((sum, block) => sum + block.text.length + 2, 0);
-  const dataBudget = Math.max(0, MAX_CHARS - instructionChars - TRAILER_RESERVE);
-  let usedData = 0;
-  let dropped = 0;
-  const kept: string[] = [];
-  for (const block of blocks) {
-    if (block.kind === "instruction") {
-      kept.push(block.text);
-      continue;
-    }
-    const cost = block.text.length + 2;
-    if (usedData + cost <= dataBudget) {
-      kept.push(block.text);
-      usedData += cost;
-    } else {
-      dropped += 1;
-    }
+  const instructions = blocks.filter((block) => block.kind === "instruction");
+  const data = blocks.filter((block) => block.kind === "data");
+  const instructionText = instructions.map((block) => block.text).join("\n\n");
+  if (instructionText.length > MAX_CHARS - TRAILER_RESERVE) {
+    return instructionOverflow(instructionText, data.length > 0);
   }
 
-  let out = kept.join("\n\n");
+  const dataBudget = Math.max(0, MAX_CHARS - instructionText.length - 2 - TRAILER_RESERVE);
+  const byPriority = [...data].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+  const keep = new Map<Block, string>();
+  let used = 0;
+  let dropped = 0;
+  for (const block of byPriority) {
+    const cost = block.text.length + 2;
+    if (used + cost <= dataBudget) {
+      keep.set(block, block.text);
+      used += cost;
+      continue;
+    }
+    const head =
+      block.priority === DURABLE_PRIORITY ? trimToRoom(block.text, dataBudget - used) : null;
+    if (head) {
+      keep.set(block, head);
+      used += head.length + 2;
+    }
+    dropped += 1;
+  }
+
+  const parts = blocks
+    .filter((block) => block.kind === "instruction" || keep.has(block))
+    .map((block) => keep.get(block) ?? block.text);
+  let out = parts.join("\n\n");
   if (dropped > 0) out = `${out}\n\n${trailer(dropped)}`;
   if (out.length > MAX_CHARS) out = dropPartialLine(out.slice(0, MAX_CHARS));
   return out.length > 0 ? out : null;
@@ -170,7 +196,9 @@ export function buildChildSystemPrompt(
     if (project) blocks.push(project);
   }
   const base = blocks.join("\n\n");
-  return base ? dropPartialLine(base.slice(0, MAX_CHARS)) || base.slice(0, MAX_CHARS) : null;
+  if (!base) return null;
+  if (base.length <= MAX_CHARS) return base;
+  return dropPartialLine(base.slice(0, MAX_CHARS)) || base.slice(0, MAX_CHARS);
 }
 
 export function applyCompactWindow<T extends { content: string | { type: string }[] }>(turns: T[], compacted: boolean): T[] {
