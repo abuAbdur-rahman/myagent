@@ -119,6 +119,38 @@ describe("buildSystemPrompt budget", () => {
     expect(system).not.toContain("Available skills");
   });
 
+  it("keeps the skill index ahead of an attached document", () => {
+    const system = buildSystemPrompt({
+      ...base,
+      skillIndexBlock: "## Available skills\n- git-helper: Helps with git work",
+      knowledgeBlock: "## Attached knowledge\n" + "k".repeat(6000),
+    });
+    expect(system).toContain("- git-helper: Helps with git work");
+    expect(system).not.toContain("Attached knowledge");
+  });
+
+  it("truncates an oversized single-line instruction at a word, not away", () => {
+    const system = buildSystemPrompt({ ...base, standingPrompt: "alpha beta ".repeat(600) });
+    expect(system).toContain("alpha beta");
+    expect(system).toContain("Instructions over budget");
+    expect(system).toContain("…");
+    expect((system ?? "").length).toBeLessThanOrEqual(6000);
+  });
+
+  it("never keeps a durable heading without a note", () => {
+    const notes = Array.from({ length: 60 }, (_, index) =>
+      memory(String(index).padStart(32, "0"), `note ${index} ${"x".repeat(80)}`),
+    );
+    const system = buildSystemPrompt({
+      ...base,
+      globalMemories: notes,
+      relevantMemories: [memory("r".repeat(32), "the turn needs this")],
+    });
+    const durable = system?.split("## Durable memory")[1]?.split("\n\n##")[0] ?? "";
+    if (durable.length > 0) expect(durable).toContain("- (");
+    expect(system).toContain("the turn needs this");
+  });
+
   it("reports instruction overflow instead of returning an empty prompt", () => {
     const system = buildSystemPrompt({ ...base, standingPrompt: "x".repeat(7000) });
     expect(system).toContain("Instructions over budget");

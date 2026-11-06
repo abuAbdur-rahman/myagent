@@ -256,7 +256,8 @@ export class VoiceRecorder {
     this.sink?.disconnect();
     this.source?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
-    this.flushed = null;    this.context = null;
+    this.flushed = null;
+    this.context = null;
     this.stream = null;
     this.source = null;
     this.node = null;

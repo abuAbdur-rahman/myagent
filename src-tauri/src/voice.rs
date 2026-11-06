@@ -582,10 +582,7 @@ async fn remote_transcribe(
     }
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| AppError::Upstream(format!("transcription response: {e}")))?;
-    let text = value["text"].as_str().unwrap_or("").trim().to_string();
-    if text.is_empty() {
-        return Err(AppError::Upstream("empty transcription".to_string()));
-    }
+    let text = finish_transcript(value["text"].as_str().unwrap_or("").to_string())?;
     Ok(text)
 }
 

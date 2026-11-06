@@ -1711,7 +1711,7 @@ setKnowledgeSummary([]);
           kind: row.kind,
           id: row.id,
           date: undefined,
-          trust: row.trust,
+          trust: "trusted",
         });
         approvedMemoryRef.current.set(id, { ...row, content: text });
         await db.dismissPendingMemory(id);

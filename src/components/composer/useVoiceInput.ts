@@ -44,12 +44,12 @@ async function beginCapture(held: RefObject<boolean>): Promise<VoiceRecorder | n
 
 async function transcribeCapture(recorder: VoiceRecorder): Promise<string | null> {
   const capture = await recorder.finish();
-  const pcm = trimSilence(capture.pcm, capture.sampleRate);
-  const problem = captureProblem(pcm, capture.sampleRate);
+  const problem = captureProblem(capture.pcm, capture.sampleRate);
   if (problem) {
     toast(PROBLEM_MESSAGES[problem]);
     return null;
   }
+  const pcm = trimSilence(capture.pcm, capture.sampleRate);
   const { text } = await audioTranscribe(Array.from(pcm), capture.sampleRate);
   const trimmed = text.trim();
   if (!trimmed) {

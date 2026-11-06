@@ -4573,7 +4573,7 @@ export function DataPage() {
                 kind: memory.kind,
                 id: memory.id,
                 date: new Date(memory.created_at).toISOString().slice(0, 10),
-                trust: "trusted",
+                trust: memory.untrusted ? "untrusted" : "trusted",
               });
             },
       );

@@ -339,8 +339,9 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
           <div className="rounded-card border border-border bg-surface p-3">
             <b className="text-sm">Memory</b>
             <p className="mb-2 mt-1 text-xs text-muted">
-              {projectMemories.length} note{projectMemories.length === 1 ? "" : "s"} · sent with
-              every chat here
+              {projectMemories.filter((memory) => !memory.untrusted).length} note
+              {projectMemories.filter((memory) => !memory.untrusted).length === 1 ? "" : "s"} ·
+              sent with every chat here
             </p>
             <PendingMemoryBar projectId={project.id} />
             <MemoryEditor
