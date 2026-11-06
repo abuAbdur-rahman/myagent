@@ -76,7 +76,11 @@ export function useVoiceInput(append: (text: string) => void, busy: boolean) {
   const startingRef = useRef(false);
 
   useEffect(() => {
-    void primeWorklet().catch(() => undefined);
+    try {
+      void primeWorklet().catch(() => undefined);
+    } catch {
+      return;
+    }
   }, []);
 
   useEffect(() => {

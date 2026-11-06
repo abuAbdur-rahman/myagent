@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSystemPrompt } from "./context";
+import { buildChildSystemPrompt, buildSystemPrompt } from "./context";
 import type { Memory, Project } from "./types";
 
 const base = {
@@ -107,5 +107,28 @@ describe("buildSystemPrompt budget", () => {
     });
     expect(system).not.toContain("the deploy target is Linux");
     expect(system).toContain("the deploy target is Windows");
+  });
+
+  it("keeps durable memory before a skill index that does not fit", () => {
+    const system = buildSystemPrompt({
+      ...base,
+      globalMemories: [memory("d".repeat(32), "prefers pnpm")],
+      skillIndexBlock: "## Available skills\n" + "s".repeat(6000),
+    });
+    expect(system).toContain("prefers pnpm");
+    expect(system).not.toContain("Available skills");
+  });
+
+  it("reports instruction overflow instead of returning an empty prompt", () => {
+    const system = buildSystemPrompt({ ...base, standingPrompt: "x".repeat(7000) });
+    expect(system).toContain("Instructions over budget");
+    expect((system ?? "").length).toBeLessThanOrEqual(6000);
+  });
+});
+
+describe("buildChildSystemPrompt", () => {
+  it("keeps a fitting child prompt whole", () => {
+    const system = buildChildSystemPrompt({ project: project("Always answer in English.") });
+    expect(system).toContain("Always answer in English.");
   });
 });
