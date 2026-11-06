@@ -67,17 +67,27 @@ function unescapeMarked(text: string): string {
 function renderHtml(content: string, highlighter: HighlighterCore | null): string {
   const raw = marked.parse(content, { async: false, breaks: true }) as string;
   let html = DOMPurify.sanitize(raw);
-  if (!highlighter) return html;
 
   html = html.replace(
-    /<pre><code class="language-([\w+-]+)">([\s\S]*?)<\/code><\/pre>/g,
-    (match, fence: string, escaped: string) => {
-      const lang = normalizeFenceLang(String(fence));
-      if (!lang || !highlighter.getLoadedLanguages().includes(lang)) return match;
-      const code = unescapeMarked(escaped).replace(/\n$/, "");
-      const highlighted = highlighter.codeToHtml(code, { lang, theme: "github-dark" });
+    /<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/g,
+    (_match, attrs: string, escaped: string) => {
+      const classValue = /class="([^"]*)"/.exec(attrs)?.[1] ?? "";
+      const languageClass = classValue
+        .split(/\s+/)
+        .find((item) => item.startsWith("language-"))
+        ?.slice("language-".length);
+      const fence = (languageClass ?? "").trim();
+      const lang = normalizeFenceLang(fence.toLowerCase());
+      const label = fence || "text";
+      const highlighted =
+        highlighter && lang && highlighter.getLoadedLanguages().includes(lang)
+          ? highlighter.codeToHtml(unescapeMarked(escaped).replace(/\n$/, ""), {
+              lang,
+              theme: "github-dark",
+            })
+          : `<pre class="codeblock-body"><code>${escaped.replace(/\n$/, "")}</code></pre>`;
       const header =
-        `<div class="codeblock-head"><span>${String(fence).trim().toLowerCase()}</span>` +
+        `<div class="codeblock-head"><span>${label}</span>` +
         `<button type="button" data-copy-code="1">Copy</button></div>`;
       return `<div class="codeblock">${header}${highlighted}</div>`;
     },
@@ -95,8 +105,8 @@ export function Markdown({ content }: { content: string }) {
       .then((loaded) => {
         if (live) setHighlighter(loaded);
       })
-      .catch(() => {
-        /* highlighting is optional; plain code stays visible */
+      .catch((error: unknown) => {
+        console.warn("Markdown highlighting unavailable", error);
       });
     return () => {
       live = false;
@@ -126,7 +136,7 @@ export function Markdown({ content }: { content: string }) {
   return (
     <div
       ref={ref}
-      className="markdown text-sm leading-relaxed text-neutral-200 [&_a]:text-accent-link [&_code]:rounded-control [&_code]:bg-vault-raised [&_code]:px-1 [&_h1]:mt-4 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_ul>li]:list-disc [&_ol>li]:list-decimal [&_p]:mb-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-panel [&_pre]:p-3 [&_table]:w-full [&_td]:border [&_td]:border-vault-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-vault-line [&_th]:px-2 [&_th]:py-1 [&_ul]:mb-2 [&_.codeblock]:my-3 [&_.codeblock]:overflow-hidden [&_.codeblock]:rounded-panel [&_.codeblock]:border [&_.codeblock]:border-vault-line [&_.codeblock-head]:flex [&_.codeblock-head]:items-center [&_.codeblock-head]:justify-between [&_.codeblock-head]:bg-vault-raised [&_.codeblock-head]:px-3 [&_.codeblock-head]:py-1 [&_.codeblock-head]:text-xs [&_.codeblock-head]:text-muted [&_.codeblock-head_button]:rounded-control [&_.codeblock-head_button]:px-2 [&_.codeblock-head_button]:py-0.5 [&_.codeblock-head_button:hover]:bg-hover [&_.codeblock-head_button:hover]:text-text"
+      className="markdown text-sm leading-relaxed text-neutral-200 [&_a]:text-accent-link [&_code]:rounded-control [&_code]:bg-vault-raised [&_code]:px-1 [&_pre_code]:rounded-none [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_h1]:mt-4 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_ul>li]:list-disc [&_ol>li]:list-decimal [&_p]:mb-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-panel [&_pre]:p-3 [&_table]:w-full [&_td]:border [&_td]:border-vault-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-vault-line [&_th]:px-2 [&_th]:py-1 [&_ul]:mb-2 [&_.codeblock]:my-3 [&_.codeblock]:overflow-hidden [&_.codeblock]:rounded-panel [&_.codeblock]:border [&_.codeblock]:border-vault-line [&_.codeblock]:bg-surface [&_.codeblock-head]:flex [&_.codeblock-head]:items-center [&_.codeblock-head]:justify-between [&_.codeblock-head]:border-b [&_.codeblock-head]:border-vault-line [&_.codeblock-head]:bg-vault-raised [&_.codeblock-head]:px-3 [&_.codeblock-head]:py-1 [&_.codeblock-head]:text-xs [&_.codeblock-head]:text-muted [&_.codeblock-head>button]:rounded-control [&_.codeblock-head>button]:px-2 [&_.codeblock-head>button]:py-0.5 [&_.codeblock-head>button:hover]:bg-hover [&_.codeblock-head>button:hover]:text-text [&_.codeblock>pre]:my-0 [&_.codeblock>pre]:rounded-none [&_.codeblock>pre]:font-mono [&_.codeblock>pre]:text-sm [&_.codeblock>pre]:leading-relaxed [&_.codeblock-body]:bg-surface [&_.codeblock-body]:font-mono [&_.codeblock-body]:text-sm [&_.codeblock-body]:leading-relaxed"
       onClick={handleClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />

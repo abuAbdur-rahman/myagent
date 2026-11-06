@@ -11,6 +11,7 @@ import {
 import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, promptBudget, summarySystemTurn } from "./context";
+import { OPENUI_SYSTEM_PROMPT } from "./openui/prompt";
 import { buildUserContent, resolveImageSend, searchKnowledgeWithHits, withFinalTurnImages } from "./knowledge";
 import { buildEpisodeBlock, selectEpisodeHits } from "./episodes";
 import {
@@ -486,6 +487,8 @@ interface AppContextValue {
   setCollapseThinking: (value: boolean) => void;
   collapseToolCalls: boolean;
   setCollapseToolCalls: (value: boolean) => void;
+  generativeUi: boolean;
+  setGenerativeUi: (value: boolean) => void;
   searchBackend: "tavily" | "searxng";
   setSearchBackend: (value: "tavily" | "searxng") => void;
   searchEndpoint: string;
@@ -684,6 +687,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const [collapseToolCalls, setCollapseToolCallsState] = useState(
     () => localStorage.getItem("collapseToolCalls") !== "0",
+  );
+  const [generativeUi, setGenerativeUiState] = useState(
+    () => localStorage.getItem("generativeUi") !== "0",
   );
   const autoCompactRef = useRef(true);
   const autoLatchRef = useRef<{ through: number | null; count: number } | null>(null);
@@ -1162,6 +1168,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("collapseToolCalls", value ? "1" : "0");
   }, []);
 
+  const setGenerativeUi = useCallback((value: boolean) => {
+    setGenerativeUiState(value);
+    localStorage.setItem("generativeUi", value ? "1" : "0");
+  }, []);
+
   const [searchBackend, setSearchBackendState] = useState<"tavily" | "searxng">(
     () => (localStorage.getItem("searchBackend") === "searxng" ? "searxng" : "tavily"),
   );
@@ -1497,7 +1508,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingVisionFallbackRef = useRef<VisionFallback | null>(null);
 
   const contextInfo = useMemo(() => {
-    const system = buildSystemPrompt({
+    const base = buildSystemPrompt({
       globalMemories: globalSentMemories,
       project: activeProject,
       projectMemories: projectSentMemories,
@@ -1508,8 +1519,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
+      openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
       contextLimit: modelContextLimit ?? DEFAULT_MODEL_CONTEXT,
     });
+    const system = base;
     const limitKnown = modelContextLimit != null;
     const limit = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
     const lastUsage = [...messages]
@@ -1555,6 +1568,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     conversations,
     activeConversationId,
     modelContextLimit,
+    generativeUi,
   ]);
 
   const resolveEffort = useCallback((): string | null => {
@@ -1943,28 +1957,38 @@ setKnowledgeSummary([]);
       .catch(reportError);
   }, []);
 
-  const systemPromptFromRefs = useCallback(
-    () =>
-      buildSystemPrompt({
-        globalMemories: memoryPausedRef.current
-          ? []
-          : sentMemories(globalMemoriesRef.current, globalSentRef.current),
-        project: projectRef.current,
-        projectMemories: memoryPausedRef.current
-          ? []
-          : sentMemories(projectMemoriesRef.current, projectSentRef.current),
-        relevantMemories: memoryPausedRef.current ? [] : relevantMemoriesRef.current,
-        episodicBlock: episodicRecallRef.current
-          ? episodicBlockRef.current || undefined
-          : undefined,
-        userName: displayNameRef.current || undefined,
-        standingPrompt: standingPromptRef.current || undefined,
-        chatPrompt: chatPromptRef.current ?? undefined,
-        knowledgeBlock: knowledgeBlockRef.current || undefined,
-        skillIndexBlock: skillIndexRef.current || undefined,
-        contextLimit: contextLimitRef.current,
-      }),
-    [],
+  const systemPromptFromRefs = useCallback(() => {
+    const base = buildSystemPrompt({
+      globalMemories: memoryPausedRef.current
+        ? []
+        : sentMemories(globalMemoriesRef.current, globalSentRef.current),
+      project: projectRef.current,
+      projectMemories: memoryPausedRef.current
+        ? []
+        : sentMemories(projectMemoriesRef.current, projectSentRef.current),
+      relevantMemories: memoryPausedRef.current ? [] : relevantMemoriesRef.current,
+      episodicBlock: episodicRecallRef.current
+        ? episodicBlockRef.current || undefined
+        : undefined,
+      userName: displayNameRef.current || undefined,
+      standingPrompt: standingPromptRef.current || undefined,
+      chatPrompt: chatPromptRef.current ?? undefined,
+      knowledgeBlock: knowledgeBlockRef.current || undefined,
+      skillIndexBlock: skillIndexRef.current || undefined,
+      openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
+      contextLimit: contextLimitRef.current,
+    });
+    return base;
+  }, [generativeUi]);
+
+  const refreshSystemPrompt = useCallback(
+    (payload: PayloadTurn[]): PayloadTurn[] => {
+      const system = systemPromptFromRefs();
+      if (!system) return payload;
+      const rest = payload[0]?.role === "system" ? payload.slice(1) : payload;
+      return [{ role: "system", content: system }, ...rest];
+    },
+    [systemPromptFromRefs],
   );
 
   const withSystem = useCallback(
@@ -2785,9 +2809,9 @@ setKnowledgeSummary([]);
       return;
     }
     if (partial.finish_reason !== "length" && partial.finish_reason !== "interrupted") return;
-    const payload =
-      lastPayloadRef.current ??
-      buildPayload(conversationId, await withDocumentBlock(turns, projectRef.current?.id ?? null));
+    const payload = lastPayloadRef.current
+      ? refreshSystemPrompt(lastPayloadRef.current)
+      : buildPayload(conversationId, await withDocumentBlock(turns, projectRef.current?.id ?? null));
     await streamTurn(
       conversationId,
       connection,
@@ -2796,11 +2820,12 @@ setKnowledgeSummary([]);
       partial,
       true,
     );
-  }, [streaming, streamTurn, buildPayload, sendMessage]);
+  }, [streaming, streamTurn, buildPayload, sendMessage, refreshSystemPrompt]);
 
-  const retryTurn = useCallback(async () => {    const conversationId = convIdRef.current;
+  const retryTurn = useCallback(async () => {
+    const conversationId = convIdRef.current;
     const connection = connRef.current;
-    const payload = lastPayloadRef.current;
+    const payload = lastPayloadRef.current ? refreshSystemPrompt(lastPayloadRef.current) : null;
     if (!conversationId || !connection || !modelRef.current || streaming || !payload) return;
     setError(null);
     let assistantMsg: Message;
@@ -2812,7 +2837,7 @@ setKnowledgeSummary([]);
     }
     setMessages((prev) => [...prev, assistantMsg]);
     await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
-  }, [streaming, streamTurn]);
+  }, [streaming, streamTurn, refreshSystemPrompt]);
 
   const replyApproval = useCallback(
     async (reply: "once" | "always" | "deny") => {
@@ -3180,6 +3205,8 @@ setKnowledgeSummary([]);
     setCollapseThinking,
     collapseToolCalls,
     setCollapseToolCalls,
+    generativeUi,
+    setGenerativeUi,
     searchBackend,
     setSearchBackend,
     searchEndpoint,

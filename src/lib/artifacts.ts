@@ -1,23 +1,60 @@
 export interface Artifact {
   index: number;
+  title: string;
   lang: string;
   code: string;
   start: number;
   end: number;
 }
 
-const HTML_FENCE = /```\s*(html|htm)\b[^\n]*\n([\s\S]*?)```/gi;
+const HTML_FENCE =
+  /^[ \t]*(`{3,})(html|htm)((?:[ \t][^\n]*)?)\r?\n([\s\S]*?)\r?\n[ \t]*\1`*[ \t]*(?=\r?\n|$)/gim;
+
+function textOf(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fenceTitle(meta: string): string {
+  const match = /(?:^|\s)title\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))/i.exec(meta);
+  return textOf(match?.[1] ?? match?.[2] ?? match?.[3] ?? "").slice(0, 80);
+}
+
+function documentTitle(code: string): string {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(code)?.[1];
+  if (title) return textOf(title).slice(0, 80);
+  const heading = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(code)?.[1];
+  return heading ? textOf(heading).slice(0, 80) : "";
+}
 
 function extractArtifacts(content: string): Artifact[] {
   const artifacts: Artifact[] = [];
+  const used = new Set<string>();
   let match: RegExpExecArray | null;
   let index = 0;
   HTML_FENCE.lastIndex = 0;
   while ((match = HTML_FENCE.exec(content)) !== null) {
-    const code = match[2].trimEnd();
+    const code = match[4].trimEnd();
     if (code.length < 40) continue;
+    const base =
+      (fenceTitle(match[3]) || documentTitle(code)).replace(/\.html?$/i, "").trim() ||
+      "HTML preview";
+    let title = base;
+    let suffix = 2;
+    while (used.has(title.toLowerCase())) {
+      title = `${base} ${suffix}`;
+      suffix += 1;
+    }
+    used.add(title.toLowerCase());
     const end = match.index + match[0].length;
-    artifacts.push({ index: index++, lang: "html", code, start: match.index, end });
+    artifacts.push({ index: index++, title, lang: "html", code, start: match.index, end });
   }
   return artifacts;
 }

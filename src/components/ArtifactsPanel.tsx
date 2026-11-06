@@ -18,6 +18,7 @@ import { FilePreview } from "./FilePreview";
 import { ContextInspector } from "./ContextInspector";
 import { cn, copyText, downloadText } from "../lib/utils";
 import { toast } from "../lib/toast";
+import { ArtifactPreview } from "./ArtifactPreview";
 
 const EXTENSIONS: Record<string, string> = {
   html: "html",
@@ -38,6 +39,18 @@ const EXTENSIONS: Record<string, string> = {
   sh: "sh",
   bash: "sh",
 };
+
+function fileStem(title: string, ext: string): string {
+  const cleaned = title
+    .replace(new RegExp(`\\.${ext}$`, "i"), "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80)
+    .replace(/[. ]+$/g, "");
+  const name = cleaned || "artifact";
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name) ? `${name}-artifact` : name;
+}
 
 function tabsFor(lang: string): { id: PanelTab; label: string }[] {
   const normalized = lang.toLowerCase();
@@ -125,7 +138,7 @@ export function ArtifactsPanel() {
 
   const download = () => {
     downloadText(
-      `artifact.${ext}`,
+      `${fileStem(panelArtifact.title, ext)}.${ext}`,
       panelArtifact.code,
       ext === "html" ? "text/html" : "text/plain",
     );
@@ -193,7 +206,7 @@ export function ArtifactsPanel() {
               type="button"
               onClick={() => setPanelTab(tab.id)}
               className={cn(
-                "rounded-control px-2.5 py-1 text-[13px]",
+                "rounded-control px-2.5 py-1 text-sm",
                 activeTab === tab.id ? "bg-active text-text" : "text-muted hover:text-text",
               )}
             >
@@ -258,11 +271,9 @@ export function ArtifactsPanel() {
           <FilePreview path={panelArtifact.path} />
         )}
         {activeTab === "preview" && !panelArtifact.path && (
-          <iframe
-            sandbox="allow-scripts"
-            srcDoc={panelArtifact.code}
-            title="Artifact preview"
-            className="h-full w-full flex-1 border-0 bg-white"
+          <ArtifactPreview
+            code={panelArtifact.code}
+            onShowSource={() => setPanelTab("code")}
           />
         )}
         {activeTab === "doc" && (
@@ -271,7 +282,7 @@ export function ArtifactsPanel() {
           </div>
         )}
         {activeTab !== "preview" && activeTab !== "doc" && (
-          <pre className="m-0 flex-1 overflow-auto p-3.5 font-mono text-[13px] leading-relaxed">
+          <pre className="m-0 flex-1 overflow-auto p-3.5 font-mono text-sm leading-relaxed">
             <code>{panelArtifact.code}</code>
           </pre>
         )}

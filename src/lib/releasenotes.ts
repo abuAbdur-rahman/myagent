@@ -22,6 +22,32 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+
+    version: "0.10.0",
+    date: "2026-11-06",
+    summary:
+      "The assistant can answer with native cards, tables and charts, artifacts run inline JavaScript in a locked-down sandbox, and every code block is easy to see and copy.",
+    changes: [
+      {
+        kind: "new",
+        text: "Generative UI: a fenced `openui-lang` block renders as native app components through OpenUI — cards, rows, stats, tables, lists, callouts, progress bars, a bar chart, key/value lists and follow-up buttons — instead of plain markdown. Settings → General has a Generative UI switch, on by default; the prompt is removed when it is off. A follow-up button sends a new turn, an HTTPS link opens externally, and there is no tool, query or mutation bridge.",
+      },
+      {
+        kind: "fixed",
+        text: "Every fenced code block now has the same header, language label, Copy button, border and background. A `text` fence, an unknown language or no language at all is no longer a barely visible block with no copy control.",
+      },
+      {
+        kind: "fixed",
+        text: "Artifact previews run inline JavaScript again. The preview is served from a dedicated per-artifact shell with its own CSP and the artifact runs in a nested `sandbox=\"allow-scripts\"` iframe, so scripts, canvas and data images work while fetch/XHR, WebSockets, storage, popups, top navigation and Tauri IPC stay blocked. Thumbnails remain script-free.",
+      },
+      {
+        kind: "improved",
+        text: "Artifacts have names. A fenced HTML page takes its name from `title=\"…\"`, its `<title>`, its first `<h1>` or `HTML preview`, duplicate names get a number, and Download uses that name instead of `artifact.html`. `save_artifact` asks for a specific 2–5 word title.",
+      },
+    ],
+  },
+  {
+
     version: "0.9.3",
     date: "2026-11-06",
     summary:

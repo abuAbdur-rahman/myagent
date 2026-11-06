@@ -706,7 +706,7 @@ pub fn tool_specs(
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "title": { "type": "string" },
+                        "title": { "type": "string", "description": "A specific 2-5 word name for the content. Never 'artifact', 'untitled' or a file extension." },
                         "language": { "type": "string", "description": "Short identifier such as html, python, rust, markdown. Text/code only." },
                         "content": { "type": "string" },
                     },

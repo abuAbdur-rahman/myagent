@@ -26,7 +26,9 @@ import { useApp } from "../lib/store";
 import { classifyStreamError } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
-import { splitArtifactSegments } from "../lib/artifacts";
+import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
+import { splitOpenUISegments, type OpenUISegment } from "../lib/openui/segments";
+import { OpenUIRenderer } from "./openui/OpenUIRenderer";
 import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
 import { DocAttachmentCard } from "./AttachmentCard";
 import { isKnownTool } from "../lib/tools";
@@ -444,8 +446,15 @@ function AssistantMessage({
   onRemember: (content: string) => Promise<void>;
 }) {
   const live = streaming && streamingId === message.id;
-  const segments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
-  const fenceCount = segments.filter((s) => s.kind === "artifact").length;
+  const baseSegments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
+  const segments = useMemo(() => {
+    const out: (ContentSegment | OpenUISegment)[] = [];
+    for (const segment of baseSegments) {
+      if (segment.kind === "text") out.push(...splitOpenUISegments(segment.text, live));
+      else out.push(segment);
+    }
+    return out;
+  }, [baseSegments, live]);
   const declared = useMemo(() => parseDeclaredArtifacts(message.artifacts), [message.artifacts]);
   const toolEntries = useMemo(() => parseToolLog(message.tool_log), [message.tool_log]);
   const [rememberLabel, setRememberLabel] = useState("Remember");
@@ -479,11 +488,17 @@ function AssistantMessage({
             {segments.map((segment, i) =>
               segment.kind === "text" ? (
                 <Markdown key={i} content={segment.text} />
+              ) : segment.kind === "openui" ? (
+                <OpenUIRenderer
+                  key={`openui-${i}`}
+                  code={segment.code}
+                  isStreaming={live && !segment.closed}
+                />
               ) : (
                 <ArtifactCard
                   key={`fence-${segment.artifact.index}`}
                   id={`${message.id}:fence:${segment.artifact.index}`}
-                  title={fenceCount > 1 ? `artifact-${segment.artifact.index + 1}.html` : "artifact.html"}
+                  title={`${segment.artifact.title}.html`}
                   lang={segment.artifact.lang}
                   code={segment.artifact.code}
                 />
