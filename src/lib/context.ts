@@ -94,8 +94,11 @@ function dropPartialLine(text: string): string {
   return cut > 0 ? text.slice(0, cut) : "";
 }
 
-function trailer(dropped: number): string {
-  return `[Context budget reached: ${dropped} block${dropped === 1 ? "" : "s"} left out. Ask a narrower question or call recall_memory for a saved note.]`;
+function trailer(dropped: number, partial: boolean): string {
+  const parts: string[] = [];
+  if (dropped > 0) parts.push(`${dropped} block${dropped === 1 ? "" : "s"} left out`);
+  if (partial) parts.push("durable memory was shortened");
+  return `[Context budget reached: ${parts.join("; ")}. Ask a narrower question to see the rest.]`;
 }
 
 function heading(text: string | null | undefined, title: string): string | null {
@@ -118,24 +121,44 @@ function collectBlocks(input: ContextInput, relevantText: string): Block[] {
     block(heading(input.chatPrompt, "This chat"), "instruction"),
     block(heading(relevantText, "Relevant memory for this turn"), "data", 1),
     block(input.episodicBlock?.trim() ?? null, "data", 2),
-    block(input.knowledgeBlock?.trim() ?? null, "data", 5),
-    block(input.skillIndexBlock?.trim() ?? null, "data", 6),
+    block(input.knowledgeBlock?.trim() ?? null, "data", 6),
+    block(input.skillIndexBlock?.trim() ?? null, "data", 5),
   ];
   return blocks.filter((entry): entry is Block => entry !== null);
 }
 
-function instructionOverflow(instructions: string, hadData: boolean): string {
-  const room = MAX_CHARS - TRAILER_RESERVE;
-  const cut = dropPartialLine(instructions.slice(0, room));
-  const head = cut || instructions.slice(0, room);
-  const skipped = hadData ? " Memory and knowledge were not sent." : "";
-  return `${head}\n\n[Instructions over budget: shorten them.${skipped}]`;
+export function clipAtWord(text: string, room: number): string {
+  if (room <= 0) return "";
+  const slice = text.slice(0, room);
+  const midWord = room < text.length && !/\s/.test(text[room]);
+  const head = midWord ? slice.slice(0, Math.max(0, slice.search(/\s+\S*$/))).trimEnd() : slice.trimEnd();
+  return head.length > 0 ? `${head}…` : "";
+}
+
+function instructionOverflow(blocks: Block[], hadData: boolean): string {
+  const notice = hadData
+    ? "[Instructions over budget: shorten them. Memory and knowledge were not sent.]"
+    : "[Instructions over budget: shorten them.]";
+  const room = MAX_CHARS - notice.length - 4;
+  let out = "";
+  for (const block of blocks) {
+    const joined = out ? `${out}\n\n${block.text}` : block.text;
+    if (joined.length <= room) {
+      out = joined;
+      continue;
+    }
+    const left = room - (out ? out.length + 2 : 0);
+    const head = clipAtWord(block.text, left);
+    if (head) out = out ? `${out}\n\n${head}` : head;
+    break;
+  }
+  return out ? `${out}\n\n${notice}` : notice;
 }
 
 function trimToRoom(text: string, room: number): string | null {
   if (room <= 0) return null;
   const head = dropPartialLine(text.slice(0, room));
-  return head.length > 0 ? head : null;
+  return head.includes("\n- ") ? head : null;
 }
 
 function fitBlocks(blocks: Block[]): string | null {
@@ -143,7 +166,7 @@ function fitBlocks(blocks: Block[]): string | null {
   const data = blocks.filter((block) => block.kind === "data");
   const instructionText = instructions.map((block) => block.text).join("\n\n");
   if (instructionText.length > MAX_CHARS - TRAILER_RESERVE) {
-    return instructionOverflow(instructionText, data.length > 0);
+    return instructionOverflow(instructions, data.length > 0);
   }
 
   const dataBudget = Math.max(0, MAX_CHARS - instructionText.length - 2 - TRAILER_RESERVE);
@@ -151,6 +174,7 @@ function fitBlocks(blocks: Block[]): string | null {
   const keep = new Map<Block, string>();
   let used = 0;
   let dropped = 0;
+  let partial = false;
   for (const block of byPriority) {
     const cost = block.text.length + 2;
     if (used + cost <= dataBudget) {
@@ -163,15 +187,17 @@ function fitBlocks(blocks: Block[]): string | null {
     if (head) {
       keep.set(block, head);
       used += head.length + 2;
+      partial = head.length < block.text.length;
+    } else {
+      dropped += 1;
     }
-    dropped += 1;
   }
 
   const parts = blocks
     .filter((block) => block.kind === "instruction" || keep.has(block))
     .map((block) => keep.get(block) ?? block.text);
   let out = parts.join("\n\n");
-  if (dropped > 0) out = `${out}\n\n${trailer(dropped)}`;
+  if (dropped > 0 || partial) out = `${out}\n\n${trailer(dropped, partial)}`;
   if (out.length > MAX_CHARS) out = dropPartialLine(out.slice(0, MAX_CHARS));
   return out.length > 0 ? out : null;
 }

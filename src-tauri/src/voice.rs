@@ -582,11 +582,10 @@ async fn remote_transcribe(
     }
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| AppError::Upstream(format!("transcription response: {e}")))?;
-    let text = value["text"].as_str().unwrap_or("").trim().to_string();
-    if text.is_empty() {
-        return Err(AppError::Upstream("empty transcription".to_string()));
-    }
-    Ok(text)
+    let text = value["text"]
+        .as_str()
+        .ok_or_else(|| AppError::Upstream("transcription response has no text".to_string()))?;
+    finish_transcript(text.to_string())
 }
 
 fn pcm_to_16k(pcm: &[i16], sample_rate: u32) -> Vec<f32> {

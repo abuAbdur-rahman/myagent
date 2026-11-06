@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.9.2",
+    date: "2026-11-06",
+    summary:
+      "An approved memory is eligible for the model again, import keeps provenance, and a short one-word hold is less likely to be rejected as too short. The prompt keeps the skill index ahead of documents and never cuts an instruction down to its heading.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "Approving a memory makes it eligible for the model again. The approval kept the pending row's untrusted flag, and 0.9.1 stopped sending untrusted notes, so an approved note could never appear; approval now promotes it to trusted. The budget and per-turn recall can still leave it out of a turn, and notes approved under 0.9.1 stay excluded.",
+      },
+      {
+        kind: "fixed",
+        text: "Import keeps provenance: a note exported as untrusted is imported as untrusted instead of being rewritten as trusted.",
+      },
+      {
+        kind: "fixed",
+        text: "A short one-word hold is less likely to be rejected as too short. The capture checks run on the raw recording and the trimmed clip is sent only when it still meets the 0.3 s minimum; otherwise the untrimmed capture is sent, which the backend still rejects below 0.3 s.",
+      },
+      {
+        kind: "fixed",
+        text: "A provider transcription with no text field is an upstream error, and a blank text field says \"No speech detected\" instead of showing an `upstream error:` prefix.",
+      },
+      {
+        kind: "fixed",
+        text: "The prompt keeps the skill index ahead of attached documents when both cannot fit, and a single instruction longer than the budget is cut at a word and labelled instead of losing its body behind its heading.",
+      },
+    ],
+  },
+  {
     version: "0.9.1",
     date: "2026-11-06",
     summary:
@@ -37,7 +65,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "improved",
-        text: "The four voice outcomes are distinct — no audio captured, recording too short, the microphone recorded silence, no speech detected — and those backend strings map to plain messages, so `internal:` prefixes no longer reach the user for them. The activity pill shows \"Starting microphone\" while the device opens.",
+        text: "The four voice outcomes are distinct — no audio captured, recording too short, the microphone recorded silence, no speech detected — and those backend strings map to plain messages, so `internal error:` prefixes no longer reach the user for them. The activity pill shows \"Starting microphone\" while the device opens.",
       },
       {
         kind: "fixed",

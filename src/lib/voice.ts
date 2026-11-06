@@ -3,7 +3,7 @@ const TARGET_RATE = 16_000;
 const MAX_SECONDS = 60;
 const LEVEL_WINDOW_SECONDS = 0.05;
 const LEVEL_PAD_SECONDS = 0.1;
-const MIN_CAPTURE_SECONDS = 0.3;
+export const MIN_CAPTURE_SECONDS = 0.3;
 const SILENT_LEVEL = 0.003;
 
 export type Capture = {
@@ -256,7 +256,8 @@ export class VoiceRecorder {
     this.sink?.disconnect();
     this.source?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
-    this.flushed = null;    this.context = null;
+    this.flushed = null;
+    this.context = null;
     this.stream = null;
     this.source = null;
     this.node = null;

@@ -105,6 +105,7 @@ function entryToMemory(
     project_id: projectId,
     kind,
     content: entry.text,
+    untrusted: entry.untrusted,
     created_at: entry.created_at,
     updated_at: entry.created_at,
   };
@@ -4573,7 +4574,7 @@ export function DataPage() {
                 kind: memory.kind,
                 id: memory.id,
                 date: new Date(memory.created_at).toISOString().slice(0, 10),
-                trust: "trusted",
+                trust: memory.untrusted ? "untrusted" : "trusted",
               });
             },
       );

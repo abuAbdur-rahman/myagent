@@ -13,7 +13,7 @@ const LABELS: Record<PillState, string> = {
 };
 
 const HINTS: Partial<Record<PillState, string>> = {
-  starting: "hold to speak",
+  starting: "keep holding",
   recording: "release to send",
 };
 
