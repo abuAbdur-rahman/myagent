@@ -22,6 +22,26 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.9.3",
+    date: "2026-11-06",
+    summary:
+      "Memory capacity now grows with the model's window: a 1M-token model carries four times the knowledge and past-chat room, and the model is told how to fetch the rest.",
+    changes: [
+      {
+        kind: "new",
+        text: "The memory budget scales with the context window: 1× at 128k, 2× at 200k, 3× at 500k and 4× at 1M, capped at 24,000 characters. Attached knowledge and past-chat snippets grow with it.",
+      },
+      {
+        kind: "improved",
+        text: "The system prompt tells the model to reach for more: `read_document` for the rest of a project file, `recall_memory` with a fresh query for notes it has not seen. No new tool.",
+      },
+      {
+        kind: "improved",
+        text: "The context inspector shows the memory budget and its multiplier, so it is clear why a turn carries more than the old 6,000 characters.",
+      },
+    ],
+  },
+  {
     version: "0.9.2",
     date: "2026-11-06",
     summary:
