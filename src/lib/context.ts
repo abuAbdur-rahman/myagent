@@ -4,6 +4,7 @@ import { toolListSentence } from "./tools";
 const MAX_MEMORIES = 24;
 const MAX_CHARS = 6000;
 const IMAGE_PART_CHARS = 1500;
+const TRAILER_RESERVE = 200;
 export const DEFAULT_MODEL_CONTEXT = 128_000;
 const COMPACT_WINDOW = 4;
 const MAX_TURNS_WINDOW = 60;
@@ -37,6 +38,7 @@ const IDENTITY_LINES = [
 
 function renderMemories(memories: Memory[]): string {
   return memories
+    .filter((memory) => !memory.untrusted)
     .slice(0, MAX_MEMORIES)
     .map((memory) => ({ kind: memory.kind, content: memory.content.trim() }))
     .filter(({ content }) => content.length > 0)
@@ -50,6 +52,7 @@ function renderMemories(memories: Memory[]): string {
  */
 function renderedIds(memories: Memory[]): string[] {
   return memories
+    .filter((memory) => !memory.untrusted)
     .slice(0, MAX_MEMORIES)
     .filter((memory) => memory.content.trim().length > 0)
     .map((memory) => memory.id);
@@ -62,37 +65,30 @@ function identityBlocks(userName?: string): string[] {
   return [first, ...IDENTITY_LINES.slice(1)];
 }
 
-function projectBlock(project: Project, projectMemories: Memory[]): string | null {
+function projectInstructionBlock(project: Project): string | null {
   const parts: string[] = [`## Project: ${project.name}`];
   const description = project.description.trim();
   const instructions = project.instructions.trim();
-  const projectMemory = renderMemories(projectMemories);
-
   if (description) parts.push(description);
   if (instructions) parts.push(`### Project instructions\n${instructions}`);
-  if (projectMemory) parts.push(`### Project memory\n${projectMemory}`);
-
   return parts.length > 1 ? parts.join("\n\n") : null;
 }
 
-function appendWithinBudget(base: string, knowledge?: string, skills?: string): string {
-  const used = base.length + (base ? 2 : 0);
-  const skillsRoom = skills ? skills.length + 2 : 0;
-  const knowledgeRoom = Math.max(0, MAX_CHARS - used - skillsRoom);
-  const clippedKnowledge = knowledge?.slice(0, knowledgeRoom).trim();
-  const tail = [clippedKnowledge, skills].filter(
-    (part): part is string => Boolean(part && part.length > 0),
-  );
-  return [base, ...tail]
-    .filter((part) => part.length > 0)
-    .join("\n\n")
-    .slice(0, MAX_CHARS);
+function projectMemoryBlock(projectMemories: Memory[]): string | null {
+  const text = renderMemories(projectMemories);
+  return text ? `### Project memory\n${text}` : null;
 }
 
-/** Drop a trailing partial line so a memory note is never cut in half. */
+type BlockKind = "instruction" | "data";
+
+/** Drop a trailing partial line so an instruction or a note is never cut in half. */
 function dropPartialLine(text: string): string {
   const cut = text.lastIndexOf("\n");
   return cut > 0 ? text.slice(0, cut) : "";
+}
+
+function trailer(dropped: number): string {
+  return `[Context budget reached: ${dropped} block${dropped === 1 ? "" : "s"} left out. Ask a narrower question or call recall_memory for a saved note.]`;
 }
 
 export function buildSystemPrompt(input: ContextInput): string | null {
@@ -103,43 +99,63 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   const relevantText = renderMemories(
     (input.relevantMemories ?? []).filter((memory) => !sent.has(memory.id)),
   );
-  const relevant = relevantText
-    ? `## Relevant memory for this turn\n${relevantText}`
-    : "";
-  const episodes = input.episodicBlock?.trim() ?? "";
-  const reserve =
-    (relevant ? relevant.length + 2 : 0) + (episodes ? episodes.length + 2 : 0);
 
-  const blocks = identityBlocks(input.userName);
+  const blocks: { text: string; kind: BlockKind }[] = [];
+  for (const line of identityBlocks(input.userName)) blocks.push({ text: line, kind: "instruction" });
 
   const standing = input.standingPrompt?.trim();
-  if (standing) blocks.push(`## Standing instructions\n${standing}`);
+  if (standing) blocks.push({ text: `## Standing instructions\n${standing}`, kind: "instruction" });
 
   const global = renderMemories(input.globalMemories);
-  if (global) blocks.push(`## Durable memory\n${global}`);
+  if (global) blocks.push({ text: `## Durable memory\n${global}`, kind: "data" });
 
   if (input.project) {
-    const project = projectBlock(input.project, input.projectMemories);
-    if (project) blocks.push(project);
+    const project = projectInstructionBlock(input.project);
+    if (project) blocks.push({ text: project, kind: "instruction" });
+    const projectMemory = projectMemoryBlock(input.projectMemories);
+    if (projectMemory) blocks.push({ text: projectMemory, kind: "data" });
   }
 
   const chat = input.chatPrompt?.trim();
-  if (chat) blocks.push(`## This chat\n${chat}`);
+  if (chat) blocks.push({ text: `## This chat\n${chat}`, kind: "instruction" });
 
-  const base = blocks.join("\n\n");
-  const room = Math.max(0, MAX_CHARS - reserve);
-  const head =
-    reserve > 0 && base.length > room ? dropPartialLine(base.slice(0, room)) : base;
-  const combined = [head, relevant, episodes]
-    .filter((part) => part.length > 0)
-    .join("\n\n");
+  if (relevantText) {
+    blocks.push({ text: `## Relevant memory for this turn\n${relevantText}`, kind: "data" });
+  }
+  const episodes = input.episodicBlock?.trim();
+  if (episodes) blocks.push({ text: episodes, kind: "data" });
+
+  const knowledge = input.knowledgeBlock?.trim();
+  if (knowledge) blocks.push({ text: knowledge, kind: "data" });
 
   const skills = input.skillIndexBlock?.trim();
-  const knowledge = input.knowledgeBlock?.trim();
+  if (skills) blocks.push({ text: skills, kind: "data" });
 
-  if (knowledge || skills) return appendWithinBudget(combined, knowledge, skills);
-  if (!combined) return null;
-  return combined.slice(0, MAX_CHARS);
+  const instructionChars = blocks
+    .filter((block) => block.kind === "instruction")
+    .reduce((sum, block) => sum + block.text.length + 2, 0);
+  const dataBudget = Math.max(0, MAX_CHARS - instructionChars - TRAILER_RESERVE);
+  let usedData = 0;
+  let dropped = 0;
+  const kept: string[] = [];
+  for (const block of blocks) {
+    if (block.kind === "instruction") {
+      kept.push(block.text);
+      continue;
+    }
+    const cost = block.text.length + 2;
+    if (usedData + cost <= dataBudget) {
+      kept.push(block.text);
+      usedData += cost;
+    } else {
+      dropped += 1;
+    }
+  }
+
+  let out = kept.join("\n\n");
+  if (dropped > 0) out = `${out}\n\n${trailer(dropped)}`;
+  if (out.length > MAX_CHARS) out = dropPartialLine(out.slice(0, MAX_CHARS));
+  return out.length > 0 ? out : null;
 }
 
 export function buildChildSystemPrompt(
@@ -147,11 +163,11 @@ export function buildChildSystemPrompt(
 ): string | null {
   const blocks = identityBlocks(input.userName);
   if (input.project) {
-    const project = projectBlock(input.project, []);
+    const project = projectInstructionBlock(input.project);
     if (project) blocks.push(project);
   }
   const base = blocks.join("\n\n");
-  return base ? base.slice(0, MAX_CHARS) : null;
+  return base ? dropPartialLine(base.slice(0, MAX_CHARS)) || base.slice(0, MAX_CHARS) : null;
 }
 
 export function applyCompactWindow<T extends { content: string | { type: string }[] }>(turns: T[], compacted: boolean): T[] {

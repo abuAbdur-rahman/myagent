@@ -22,6 +22,34 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.9.1",
+    date: "2026-11-06",
+    summary:
+      "Hold-to-talk keeps the beginning of what you say and reports the real reason when it hears nothing. The prompt budget keeps instructions whole and never sends an untrusted note as trusted prose.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "Hold-to-talk no longer loses the start of an utterance: the audio context and PCM worklet are prepared once at mount, the worklet flushes its partial buffer before teardown, and a context that never reached `running` is refused instead of yielding silence.",
+      },
+      {
+        kind: "fixed",
+        text: "The capture gate measures the loudest 50 ms window instead of the whole hold, so leading and trailing silence cannot dilute a short word. Silence is trimmed with 100 ms of padding, the minimum clip is 0.3 s, and a blank local transcript is an error.",
+      },
+      {
+        kind: "improved",
+        text: "The four voice outcomes are distinct — no audio captured, recording too short, the microphone recorded silence, no speech detected — and `internal:` prefixes no longer reach the user. The activity pill shows \"Starting microphone\" while the device opens.",
+      },
+      {
+        kind: "fixed",
+        text: "The prompt budget reserves instructions first and fits data blocks into the remainder, ending an over-budget turn with a line saying how many blocks were left out. A truncation can no longer cut a memory note or a project instruction in half.",
+      },
+      {
+        kind: "fixed",
+        text: "Untrusted memory notes never enter the prompt as trusted prose. The renderer filters them and the client carries the file's trust flag, which was being dropped when notes were read.",
+      },
+    ],
+  },
+  {
     version: "0.9.0",
     date: "2026-11-05",
     summary:
