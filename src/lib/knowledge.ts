@@ -54,9 +54,9 @@ function attr(value: string): string {
 }
 
 /** Hits that actually fit the block budget, in ranking order. */
-function selectChunkHits(hits: KnowledgeHit[]): KnowledgeHit[] {
+function selectChunkHits(hits: KnowledgeHit[], budgetChars = MAX_CHUNK_CHARS): KnowledgeHit[] {
   const kept: KnowledgeHit[] = [];
-  let budget = MAX_CHUNK_CHARS;
+  let budget = budgetChars;
   for (const hit of hits.slice(0, MAX_FILES_PER_QUERY)) {
     if (budget <= 0) break;
     const body = hit.text.replace(/<\/?source[^>]*>/gi, "").trim();
@@ -68,11 +68,11 @@ function selectChunkHits(hits: KnowledgeHit[]): KnowledgeHit[] {
 }
 
 /** Render retrieved chunks so the model can cite the document and the section. */
-export function buildChunkBlock(hits: KnowledgeHit[]): string {
+export function buildChunkBlock(hits: KnowledgeHit[], budgetChars = MAX_CHUNK_CHARS): string {
   if (hits.length === 0) return "";
   const parts: string[] = [];
-  let budget = MAX_CHUNK_CHARS;
-  for (const hit of selectChunkHits(hits)) {
+  let budget = budgetChars;
+  for (const hit of selectChunkHits(hits, budgetChars)) {
     if (budget <= 0) break;
     const body = hit.text.replace(/<\/?source[^>]*>/gi, "").trim();
     if (body.length === 0) continue;
@@ -153,13 +153,14 @@ export async function searchKnowledge(projectId: string, query: string): Promise
 export async function searchKnowledgeWithHits(
   projectId: string,
   query: string,
+  budgetChars = MAX_CHUNK_CHARS,
 ): Promise<{ block: string; hits: KnowledgeHit[] }> {
   const trimmed = query.trim();
   if (trimmed.length === 0) return { block: "", hits: [] };
   try {
     const hits = await knowledgeSearch(projectId, trimmed, MAX_FILES_PER_QUERY);
     if (hits.length > 0) {
-      return { block: buildChunkBlock(hits), hits: selectChunkHits(hits) };
+      return { block: buildChunkBlock(hits, budgetChars), hits: selectChunkHits(hits, budgetChars) };
     }
   } catch (error) {
     console.warn("knowledge: chunk search failed, using excerpts", error);
