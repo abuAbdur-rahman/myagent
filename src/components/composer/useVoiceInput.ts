@@ -3,6 +3,7 @@ import { audioTranscribe, formatInvokeError } from "../../lib/api";
 import { toast } from "../../lib/toast";
 import {
   captureProblem,
+  MIN_CAPTURE_SECONDS,
   primeWorklet,
   trimSilence,
   VoiceRecorder,
@@ -49,14 +50,16 @@ async function transcribeCapture(recorder: VoiceRecorder): Promise<string | null
     toast(PROBLEM_MESSAGES[problem]);
     return null;
   }
-  const pcm = trimSilence(capture.pcm, capture.sampleRate);
+  const trimmed = trimSilence(capture.pcm, capture.sampleRate);
+  const floor = Math.round(capture.sampleRate * MIN_CAPTURE_SECONDS);
+  const pcm = trimmed.length >= floor ? trimmed : capture.pcm;
   const { text } = await audioTranscribe(Array.from(pcm), capture.sampleRate);
-  const trimmed = text.trim();
-  if (!trimmed) {
+  const said = text.trim();
+  if (!said) {
     toast("No speech detected");
     return null;
   }
-  return trimmed;
+  return said;
 }
 
 function canStart(busy: boolean, transcribing: boolean, held: boolean): boolean {
