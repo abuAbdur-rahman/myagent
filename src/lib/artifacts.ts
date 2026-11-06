@@ -8,7 +8,7 @@ export interface Artifact {
 }
 
 const HTML_FENCE =
-  /```[ \t]*(html|htm)((?:[ \t][^\n]*)?)\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/gi;
+  /^[ \t]*(`{3,})(html|htm)((?:[ \t][^\n]*)?)\r?\n([\s\S]*?)\r?\n[ \t]*\1`*[ \t]*(?=\r?\n|$)/gim;
 
 function textOf(value: string): string {
   return value
@@ -23,7 +23,7 @@ function textOf(value: string): string {
 }
 
 function fenceTitle(meta: string): string {
-  const match = /title\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))/i.exec(meta);
+  const match = /(?:^|\s)title\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))/i.exec(meta);
   return textOf(match?.[1] ?? match?.[2] ?? match?.[3] ?? "").slice(0, 80);
 }
 
@@ -41,10 +41,10 @@ function extractArtifacts(content: string): Artifact[] {
   let index = 0;
   HTML_FENCE.lastIndex = 0;
   while ((match = HTML_FENCE.exec(content)) !== null) {
-    const code = match[3].trimEnd();
+    const code = match[4].trimEnd();
     if (code.length < 40) continue;
     const base =
-      (fenceTitle(match[2]) || documentTitle(code)).replace(/\.html?$/i, "").trim() ||
+      (fenceTitle(match[3]) || documentTitle(code)).replace(/\.html?$/i, "").trim() ||
       "HTML preview";
     let title = base;
     let suffix = 2;

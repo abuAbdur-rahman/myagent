@@ -11,24 +11,28 @@ function lineStart(content: string, index: number): boolean {
 function fenceAt(
   content: string,
   index: number,
-): { ticks: number; infoEnd: number } | null {
+): { marker: "`" | "~"; ticks: number; infoEnd: number } | null {
   let cursor = index;
   while (cursor < content.length && (content[cursor] === " " || content[cursor] === "\t")) {
     cursor += 1;
   }
-  if (content[cursor] !== "`") return null;
+  const marker = content[cursor];
+  if (marker !== "`" && marker !== "~") return null;
   let ticks = 0;
-  while (content[cursor + ticks] === "`") ticks += 1;
+  while (content[cursor + ticks] === marker) ticks += 1;
   if (ticks < 3) return null;
   const infoEnd = content.indexOf("\n", cursor + ticks);
   if (infoEnd < 0) return null;
-  return { ticks, infoEnd };
+  if (marker === "`" && content.slice(cursor + ticks, infoEnd).includes("`")) return null;
+  return { marker, ticks, infoEnd };
 }
 
-function closingFence(content: string, from: number, ticks: number): {
-  start: number;
-  end: number;
-} | null {
+function closingFence(
+  content: string,
+  from: number,
+  marker: "`" | "~",
+  ticks: number,
+): { start: number; end: number } | null {
   let line = from;
   while (line < content.length) {
     let lineEnd = content.indexOf("\n", line);
@@ -38,7 +42,7 @@ function closingFence(content: string, from: number, ticks: number): {
       cursor += 1;
     }
     let count = 0;
-    while (cursor + count < lineEnd && content[cursor + count] === "`") count += 1;
+    while (cursor + count < lineEnd && content[cursor + count] === marker) count += 1;
     if (count >= ticks && content.slice(cursor + count, lineEnd).trim() === "") {
       return { start: line, end: lineEnd };
     }
@@ -64,8 +68,8 @@ export function splitOpenUISegments(content: string, streaming: boolean): OpenUI
       continue;
     }
     const info = content.slice(index, fence.infoEnd).trim();
-    const lang = info.replace(/^`+/, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-    const close = closingFence(content, fence.infoEnd + 1, fence.ticks);
+    const lang = info.replace(/^[`~]+/, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    const close = closingFence(content, fence.infoEnd + 1, fence.marker, fence.ticks);
     if (UI_LANGS.has(lang) && (close || streaming)) {
       if (index > cursor) {
         segments.push({ kind: "text", text: content.slice(cursor, index) });

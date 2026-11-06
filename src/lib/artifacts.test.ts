@@ -21,6 +21,14 @@ describe("artifact names", () => {
     expect(segment.artifact.title).toBe("Board report");
   });
 
+  it("ignores a data-title attribute", () => {
+    const [segment] = splitArtifactSegments(
+      '```html data-title="Draft" title="Final"\n' + page("Ignored", "Q3") + "\n```",
+    );
+    if (segment.kind !== "artifact") throw new Error("expected artifact");
+    expect(segment.artifact.title).toBe("Final");
+  });
+
   it("falls back to the first h1", () => {
     const [segment] = splitArtifactSegments(
       "```html\n" + page("", "Pipeline overview") + "\n```",
@@ -35,6 +43,14 @@ describe("artifact names", () => {
     );
     if (segment.kind !== "artifact") throw new Error("expected artifact");
     expect(segment.artifact.title).toBe("HTML preview");
+  });
+
+  it("respects a longer opening fence and inner triple backticks", () => {
+    const segments = splitArtifactSegments(
+      "````html\n<html><body>\n```\n" + "x".repeat(60) + "\n</body></html>\n````",
+    );
+    if (segments[0].kind !== "artifact") throw new Error("expected artifact");
+    expect(segments[0].artifact.code).toContain("```");
   });
 
   it("does not treat html-template as an HTML artifact", () => {
