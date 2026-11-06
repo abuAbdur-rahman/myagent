@@ -172,7 +172,7 @@ const BarChart = defineComponent({
     unit: z.string().optional(),
   }),
   component: ({ props }) => {
-    const max = Math.max(1, ...props.data.map((item) => item.value));
+    const max = Math.max(1, ...props.data.map((item) => Math.abs(item.value)));
     return (
       <div className="rounded-card border border-border bg-surface-2 px-3 py-3">
         {props.title && <div className="mb-2 text-sm font-medium">{props.title}</div>}
@@ -185,7 +185,7 @@ const BarChart = defineComponent({
               <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-active">
                 <span
                   className="block h-full rounded-full bg-accent"
-                  style={{ width: `${Math.max(2, (item.value / max) * 100)}%` }}
+                  style={{ width: `${Math.max(2, (Math.abs(item.value) / max) * 100)}%` }}
                 />
               </span>
               <span className="w-14 shrink-0 text-right tabular-nums">

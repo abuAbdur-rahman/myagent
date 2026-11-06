@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Renderer } from "@openuidev/react-lang";
+import { useEffect, useRef, useState } from "react";
+import { Renderer, type ParseResult } from "@openuidev/react-lang";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { openuiLibrary } from "../../lib/openui/library";
@@ -10,10 +10,22 @@ import { errorText } from "../../lib/utils";
 export function OpenUIRenderer({ code, isStreaming }: { code: string; isStreaming: boolean }) {
   const { sendMessage, streaming } = useApp();
   const [failed, setFailed] = useState(false);
+  const lastResult = useRef<ParseResult | null | undefined>(undefined);
+
+  const applyResult = (result: ParseResult | null) => {
+    const fatal =
+      result?.meta.errors?.some((error) => error.code === "no-root") ?? true;
+    setFailed(!result || result.meta.statementCount === 0 || fatal);
+  };
 
   useEffect(() => {
     setFailed(false);
+    lastResult.current = undefined;
   }, [code]);
+
+  useEffect(() => {
+    if (!isStreaming && lastResult.current !== undefined) applyResult(lastResult.current);
+  }, [isStreaming]);
 
   return (
     <div className="my-3" role="group" aria-label="Generated interface">
@@ -37,7 +49,12 @@ export function OpenUIRenderer({ code, isStreaming }: { code: string; isStreamin
                 toast("Wait for the current reply to finish");
                 return;
               }
-              void sendMessage(event.humanFriendlyMessage);
+              const text = event.humanFriendlyMessage.trim();
+              if (!text) {
+                toast("Nothing to send");
+                return;
+              }
+              void sendMessage(text);
               return;
             }
             if (event.type === "open_url") {
@@ -47,10 +64,8 @@ export function OpenUIRenderer({ code, isStreaming }: { code: string; isStreamin
             }
           }}
           onParseResult={(result) => {
-            if (isStreaming) return;
-            const fatal =
-              result?.meta.errors?.some((error) => error.code === "no-root") ?? true;
-            setFailed(!result || result.meta.statementCount === 0 || fatal);
+            lastResult.current = result;
+            if (!isStreaming) applyResult(result);
           }}
         />
       )}

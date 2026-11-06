@@ -7,7 +7,8 @@ export interface Artifact {
   end: number;
 }
 
-const HTML_FENCE = /```[ \t]*(html|htm)\b([^\n]*)\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/gi;
+const HTML_FENCE =
+  /```[ \t]*(html|htm)((?:[ \t][^\n]*)?)\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/gi;
 
 function textOf(value: string): string {
   return value

@@ -48,7 +48,8 @@ function fileStem(title: string, ext: string): string {
     .trim()
     .slice(0, 80)
     .replace(/[. ]+$/g, "");
-  return cleaned || "artifact";
+  const name = cleaned || "artifact";
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name) ? `${name}-artifact` : name;
 }
 
 function tabsFor(lang: string): { id: PanelTab; label: string }[] {

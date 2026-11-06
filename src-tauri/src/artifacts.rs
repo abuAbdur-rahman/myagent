@@ -5,8 +5,8 @@ use tauri::http::{Request, Response, StatusCode, header};
 use tauri::{Manager, Runtime, UriSchemeContext};
 
 const MAX_ARTIFACT_BYTES: usize = 2 * 1024 * 1024;
-const MAX_ARTIFACTS: usize = 8;
-const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'";
+const MAX_ARTIFACTS: usize = 16;
+const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'self'";
 
 const SHELL: &str = r#"<!doctype html>
 <html lang="en">
@@ -164,7 +164,7 @@ pub fn artifact_preview_url(
 ) -> Result<ArtifactPreviewHandle, String> {
     let id = app.state::<ArtifactStore>().put(&html)?;
     Ok(ArtifactPreviewHandle {
-        url: format!("https://artifact.localhost/s/{id}"),
+        url: format!("http://artifact.localhost/s/{id}"),
         id,
     })
 }
@@ -195,7 +195,10 @@ mod tests {
         }
         let entries = store.entries.lock().unwrap();
         assert_eq!(entries.len(), MAX_ARTIFACTS);
-        assert_eq!(entries.back().unwrap().1, "<h1>9</h1>");
+        assert_eq!(
+            entries.back().unwrap().1,
+            format!("<h1>{}</h1>", MAX_ARTIFACTS + 1)
+        );
     }
 
     #[test]
@@ -234,8 +237,9 @@ mod tests {
     }
 
     #[test]
-    fn csp_blocks_every_external_frame() {
+    fn csp_blocks_external_frames_but_keeps_the_srcdoc_frame() {
         let csp = header_value(&shell_response("<h1>ok</h1>"), "content-security-policy");
-        assert!(csp.contains("frame-src 'none'"));
+        assert!(csp.contains("frame-src 'self'"));
+        assert!(!csp.contains("frame-src 'none'"));
     }
 }

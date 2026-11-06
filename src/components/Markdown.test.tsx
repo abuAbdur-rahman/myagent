@@ -27,4 +27,17 @@ describe("Markdown code blocks", () => {
     expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
     expect(document.querySelector(".codeblock")).not.toBeNull();
   });
+
+  it("extracts the language token before a fence attribute", async () => {
+    render(<Markdown content={"```ts title=x\nconst answer = 42;\n```"} />);
+    expect(await screen.findByText("ts")).toBeTruthy();
+    expect(document.querySelector(".codeblock")).not.toBeNull();
+  });
+
+  it("wraps a pre element with a non-language class", async () => {
+    render(<Markdown content={'<pre><code class="example">plain</code></pre>'} />);
+    expect(await screen.findByText("text")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+    expect(document.querySelector(".codeblock")).not.toBeNull();
+  });
 });

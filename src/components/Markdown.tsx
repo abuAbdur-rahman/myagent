@@ -69,9 +69,14 @@ function renderHtml(content: string, highlighter: HighlighterCore | null): strin
   let html = DOMPurify.sanitize(raw);
 
   html = html.replace(
-    /<pre><code(?: class="language-([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g,
-    (_match, rawFence: string | undefined, escaped: string) => {
-      const fence = (rawFence ?? "").trim();
+    /<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/g,
+    (_match, attrs: string, escaped: string) => {
+      const classValue = /class="([^"]*)"/.exec(attrs)?.[1] ?? "";
+      const languageClass = classValue
+        .split(/\s+/)
+        .find((item) => item.startsWith("language-"))
+        ?.slice("language-".length);
+      const fence = (languageClass ?? "").trim();
       const lang = normalizeFenceLang(fence.toLowerCase());
       const label = fence || "text";
       const highlighted =

@@ -1981,6 +1981,16 @@ setKnowledgeSummary([]);
     return base;
   }, [generativeUi]);
 
+  const refreshSystemPrompt = useCallback(
+    (payload: PayloadTurn[]): PayloadTurn[] => {
+      const system = systemPromptFromRefs();
+      if (!system) return payload;
+      const rest = payload[0]?.role === "system" ? payload.slice(1) : payload;
+      return [{ role: "system", content: system }, ...rest];
+    },
+    [systemPromptFromRefs],
+  );
+
   const withSystem = useCallback(
     (turns: PayloadTurn[], summary: string | null = null) => {
       const system = systemPromptFromRefs();
@@ -2799,9 +2809,9 @@ setKnowledgeSummary([]);
       return;
     }
     if (partial.finish_reason !== "length" && partial.finish_reason !== "interrupted") return;
-    const payload =
-      lastPayloadRef.current ??
-      buildPayload(conversationId, await withDocumentBlock(turns, projectRef.current?.id ?? null));
+    const payload = lastPayloadRef.current
+      ? refreshSystemPrompt(lastPayloadRef.current)
+      : buildPayload(conversationId, await withDocumentBlock(turns, projectRef.current?.id ?? null));
     await streamTurn(
       conversationId,
       connection,
@@ -2810,11 +2820,12 @@ setKnowledgeSummary([]);
       partial,
       true,
     );
-  }, [streaming, streamTurn, buildPayload, sendMessage]);
+  }, [streaming, streamTurn, buildPayload, sendMessage, refreshSystemPrompt]);
 
-  const retryTurn = useCallback(async () => {    const conversationId = convIdRef.current;
+  const retryTurn = useCallback(async () => {
+    const conversationId = convIdRef.current;
     const connection = connRef.current;
-    const payload = lastPayloadRef.current;
+    const payload = lastPayloadRef.current ? refreshSystemPrompt(lastPayloadRef.current) : null;
     if (!conversationId || !connection || !modelRef.current || streaming || !payload) return;
     setError(null);
     let assistantMsg: Message;
@@ -2826,7 +2837,7 @@ setKnowledgeSummary([]);
     }
     setMessages((prev) => [...prev, assistantMsg]);
     await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
-  }, [streaming, streamTurn]);
+  }, [streaming, streamTurn, refreshSystemPrompt]);
 
   const replyApproval = useCallback(
     async (reply: "once" | "always" | "deny") => {

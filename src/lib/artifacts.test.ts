@@ -37,6 +37,14 @@ describe("artifact names", () => {
     expect(segment.artifact.title).toBe("HTML preview");
   });
 
+  it("does not treat html-template as an HTML artifact", () => {
+    const segments = splitArtifactSegments(
+      "```html-template\n" + page("Not an artifact", "Q3") + "\n```",
+    );
+    expect(segments).toHaveLength(1);
+    expect(segments[0].kind).toBe("text");
+  });
+
   it("does not add a second html extension", () => {
     const [segment] = splitArtifactSegments(
       "```html\n" + page("Report.html", "Q3") + "\n```",

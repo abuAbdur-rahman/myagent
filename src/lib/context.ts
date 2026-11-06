@@ -136,17 +136,14 @@ function block(text: string | null, kind: BlockKind, priority?: number): Block |
   return text ? { text, kind, priority } : null;
 }
 
-function collectBlocks(input: ContextInput, relevantText: string): Block[] {
+function collectBlocks(
+  input: ContextInput,
+  relevantText: string,
+  openuiBlock: string | null,
+): Block[] {
   const project = input.project;
   const blocks: (Block | null)[] = [
     ...identityBlocks(input.userName).map((text): Block => ({ text, kind: "instruction" })),
-    block(
-      input.openuiPrompt
-        ? "When Generative UI is available, prefer a fenced openui-lang block for visual answers. Use a fenced html page only when the user asks for a standalone page."
-        : null,
-      "instruction",
-    ),
-    block(input.openuiPrompt?.trim() ?? null, "instruction"),
     block(heading(input.standingPrompt, "Standing instructions"), "instruction"),
     block(heading(renderMemories(input.globalMemories), "Durable memory"), "data", 3),
     block(project ? projectInstructionBlock(project) : null, "instruction"),
@@ -156,6 +153,7 @@ function collectBlocks(input: ContextInput, relevantText: string): Block[] {
     block(input.episodicBlock?.trim() ?? null, "data", 2),
     block(input.knowledgeBlock?.trim() ?? null, "data", 6),
     block(input.skillIndexBlock?.trim() ?? null, "data", 5),
+    block(openuiBlock, "instruction"),
   ];
   return blocks.filter((entry): entry is Block => entry !== null);
 }
@@ -243,7 +241,13 @@ export function buildSystemPrompt(input: ContextInput): string | null {
   const relevantText = renderMemories(
     (input.relevantMemories ?? []).filter((memory) => !sent.has(memory.id)),
   );
-  return fitBlocks(collectBlocks(input, relevantText), promptBudget(input.contextLimit).total);
+  const openuiBlock = input.openuiPrompt?.trim()
+    ? "When Generative UI is available, prefer a fenced openui-lang block for visual answers. Use a fenced html page only when the user asks for a standalone page.\n\n" +
+      input.openuiPrompt.trim()
+    : null;
+  const base = promptBudget(input.contextLimit).total;
+  const budget = base + (openuiBlock ? openuiBlock.length + 2 : 0);
+  return fitBlocks(collectBlocks(input, relevantText, openuiBlock), budget);
 }
 
 export function buildChildSystemPrompt(

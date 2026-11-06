@@ -34,6 +34,25 @@ describe("splitOpenUISegments", () => {
     expect(segments[1]).toEqual({ kind: "openui", code: program, closed: true });
   });
 
+  it("does not extract an openui fence nested inside a longer markdown fence", () => {
+    const content = "````markdown\n```openui-lang\n" + program + "\n```\n````";
+    expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);
+  });
+
+  it("requires a closing fence at least as long as the opener", () => {
+    const segments = splitOpenUISegments(
+      "````openui-lang\n" + program + "\n```\n" + program + "\n````",
+      false,
+    );
+    expect(segments).toEqual([
+      {
+        kind: "openui",
+        code: `${program}\n\`\`\`\n${program}`,
+        closed: true,
+      },
+    ]);
+  });
+
   it("keeps ordinary code fences in the text", () => {
     const content = `\`\`\`ts\nconst answer = 42;\n\`\`\``;
     expect(splitOpenUISegments(content, false)).toEqual([{ kind: "text", text: content }]);
