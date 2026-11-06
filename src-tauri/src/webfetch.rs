@@ -354,7 +354,8 @@ async fn fetch_once(
             .starts_with('<');
         let as_html = textual_kind(content_type.as_deref(), starts_html)?;
         let text = if as_html {
-            htmd::convert(&body).map_err(|e| fail("CONVERT_FAILED", e))?
+            crate::extract::html_to_markdown(&body)
+                .map_err(|error| fail("CONVERT_FAILED", error))?
         } else {
             body.into_owned()
         };

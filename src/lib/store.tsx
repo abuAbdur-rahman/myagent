@@ -495,6 +495,8 @@ interface AppContextValue {
   setSearchEndpoint: (value: string) => void;
   todos: Todo[];
   activeTool: string | null;
+  activeStep: { step: number; max: number } | null;
+  turnStartedAt: number | null;
   refreshTodos: (conversationId: string | null) => Promise<void>;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
@@ -635,6 +637,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const fileCommandsRef = useRef<FileCommand[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [activeStep, setActiveStep] = useState<{ step: number; max: number } | null>(null);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
@@ -1521,6 +1525,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       skillIndexBlock: skillIndexRef.current || undefined,
       openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
       contextLimit: modelContextLimit ?? DEFAULT_MODEL_CONTEXT,
+      now: new Date(),
     });
     const system = base;
     const limitKnown = modelContextLimit != null;
@@ -1923,6 +1928,8 @@ setKnowledgeSummary([]);
   }, []);
 
   const finalize = useCallback((assistantId: string, conversationId: string) => {
+    setActiveStep(null);
+    setTurnStartedAt(null);
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
     const settledLog = settleToolLog(toolLogRef.current);
@@ -1977,6 +1984,7 @@ setKnowledgeSummary([]);
       skillIndexBlock: skillIndexRef.current || undefined,
       openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
       contextLimit: contextLimitRef.current,
+      now: new Date(),
     });
     return base;
   }, [generativeUi]);
@@ -2016,6 +2024,8 @@ setKnowledgeSummary([]);
       requestIdRef.current = requestId;
       lastPayloadRef.current = payload;
       setCanRetry(false);
+      setActiveStep(null);
+      setTurnStartedAt(Date.now());
       const memoryIdsBefore = new Set(
         [...globalMemoriesRef.current, ...projectMemoriesRef.current].map(
           (memory) => memory.id,
@@ -2105,6 +2115,7 @@ setKnowledgeSummary([]);
             childSystem: buildChildSystemPrompt({
               userName: displayNameRef.current || undefined,
               project: projectRef.current,
+              now: new Date(),
             }),
             ...fallbackFields(pendingVisionFallbackRef.current),
           },
@@ -2144,6 +2155,8 @@ setKnowledgeSummary([]);
                     : m,
                 ),
               );
+            } else if (event.type === "step") {
+              setActiveStep({ step: event.step, max: event.max });
             } else if (event.type === "finish") {
               finishRef.current = event.reason;
               setActiveTool(null);
@@ -2802,9 +2815,28 @@ setKnowledgeSummary([]);
     const turns = messagesRef.current.filter((m) => m.content.length > 0);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
-    if (partial.finish_reason === "step_limit") {
+    if (partial.finish_reason === "step_limit" || partial.finish_reason === "time_limit") {
+      const seen = new Set<string>();
+      const lines = db
+        .parseToolLog(partial.tool_log)
+        .slice(-10)
+        .filter((entry) => {
+          const key = `${entry.name}\n${entry.summary}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(-6)
+        .map((entry) => {
+          const preview = entry.preview?.trim();
+          return `- ${entry.name}: ${entry.summary}${preview ? `\n  ${preview.slice(0, 300)}` : ""}`;
+        });
+      const digest =
+        lines.length > 0
+          ? `\n\nAlready done this turn (do not repeat):\n${lines.join("\n")}`
+          : "";
       await sendMessage(
-        "Continue from where you left off. Do not repeat work that is already done; reuse the files and checklist you already created.",
+        `Continue from where you left off. Do not repeat work that is already done.${digest}`,
       );
       return;
     }
@@ -3213,6 +3245,8 @@ setKnowledgeSummary([]);
     setSearchEndpoint,
     todos,
     activeTool,
+    activeStep,
+    turnStartedAt,
     refreshTodos,
     panelOpen,
     panelArtifact,

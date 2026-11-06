@@ -312,8 +312,19 @@ fn html_body(bytes: &[u8]) -> ExtractResult<String> {
             "this page nests tags too deeply to read".to_string(),
         ));
     }
-    htmd::convert(&source)
-        .map_err(|error| ExtractError::Failed(format!("html could not be converted: {error}")))
+    html_to_markdown(&source).map_err(ExtractError::Failed)
+}
+
+const HTML_SKIP_TAGS: &[&str] = &[
+    "script", "style", "noscript", "head", "title", "meta", "link",
+];
+
+pub(crate) fn html_to_markdown(source: &str) -> Result<String, String> {
+    htmd::HtmlToMarkdown::builder()
+        .skip_tags(HTML_SKIP_TAGS.to_vec())
+        .build()
+        .convert(source)
+        .map_err(|error| format!("html could not be converted: {error}"))
 }
 
 fn tag_depth(source: &str) -> usize {
@@ -709,6 +720,20 @@ mod tests {
         .unwrap();
         assert!(text.contains("Title"), "{text}");
         assert!(text.contains("Body text"), "{text}");
+    }
+
+    #[test]
+    fn html_conversion_drops_scripts_styles_and_head_noise() {
+        let text = extract(
+            "page.html",
+            "text/html",
+            b"<html><head><title>Wrong page</title><style>.x{color:red}</style><script>function insertBanner(){}</script></head><body><h1>Pricing</h1><p>$1 per token</p></body></html>",
+        )
+        .unwrap();
+        assert!(text.contains("Pricing"), "{text}");
+        assert!(text.contains("$1 per token"), "{text}");
+        assert!(!text.contains("insertBanner"), "{text}");
+        assert!(!text.contains("color:red"), "{text}");
     }
 
     #[test]

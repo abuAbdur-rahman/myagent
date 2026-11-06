@@ -51,6 +51,13 @@ export function toolActivityLabel(name: string | null): string | null {
   return readable ? `Working: ${readable}` : "Working";
 }
 
+export function elapsedLabel(startedAt: number | null, now: number): string | null {
+  if (startedAt === null) return null;
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 export function activityState(messages: Message[], streaming: boolean): ActivityState | null {
   if (!streaming) return null;
   const last = messages[messages.length - 1];

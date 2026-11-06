@@ -530,9 +530,15 @@ function AssistantMessage({
       </div>
       {!busy && (
         <>
-          {isLast && message.finish_reason === "step_limit" && (
+          {isLast && (message.finish_reason === "step_limit" || message.finish_reason === "time_limit") && (
             <div className="mb-1 flex flex-wrap items-center gap-2 rounded-control border border-warn/50 bg-warn/10 px-3 py-2 text-xs text-warn">
-              <span>Paused: step limit reached. The task may be unfinished.</span>
+              <span>
+                {message.finish_reason === "time_limit"
+                  ? "Paused: the turn budget was reached"
+                  : "Paused: the 25-step cap was reached"}{" "}
+                after {toolEntries.length} tool call
+                {toolEntries.length === 1 ? "" : "s"}. The task may be unfinished.
+              </span>
               <ContinueButton />
             </div>
           )}

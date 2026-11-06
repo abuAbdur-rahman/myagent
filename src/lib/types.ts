@@ -306,6 +306,7 @@ const streamEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("finish"), reason: z.string().nullable() }),
   z.object({ type: z.literal("retrying"), attempt: z.number(), max: z.number() }),
+  z.object({ type: z.literal("step"), step: z.number(), max: z.number() }),
   z.object({
     type: z.literal("approval_asked"),
     id: z.string(),

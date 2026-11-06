@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import { Loader2, Mic } from "lucide-react";
 import { useApp } from "../lib/store";
-import { pillState, toolActivityLabel, type PillState } from "../lib/activity";
+import { elapsedLabel, pillState, toolActivityLabel, type PillState } from "../lib/activity";
 import { cn } from "../lib/utils";
 
 const LABELS: Record<PillState, string> = {
@@ -18,9 +19,21 @@ const HINTS: Partial<Record<PillState, string>> = {
 };
 
 export function ActivityPill({ placement }: { placement: "center" | "inline" }) {
-  const { messages, streaming, compacting, voicePhase, activeTool } = useApp();
+  const { messages, streaming, compacting, voicePhase, activeTool, activeStep, turnStartedAt } =
+    useApp();
   const state = pillState({ messages, streaming, compacting, voice: voicePhase });
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (state === null) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [state, turnStartedAt]);
+
   if (state === null) return null;
+
+  const elapsed = elapsedLabel(turnStartedAt, now);
 
   const voice = state === "starting" || state === "recording" || state === "transcribing";
   const toolLabel =
@@ -42,6 +55,12 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
         <Mic size={13} className={state === "recording" ? "text-danger" : undefined} aria-hidden="true" />
       ) : null}
       <span className="font-medium text-text">{label}</span>
+      {activeStep !== null && state !== "writing" ? (
+        <span>
+          step {activeStep.step}/{activeStep.max}
+        </span>
+      ) : null}
+      {elapsed ? <span>{elapsed}</span> : null}
       {HINTS[state] && <span>{HINTS[state]}</span>}
       {state === "recording" ? (
         <span className="size-1.5 animate-pulse rounded-full bg-danger" aria-hidden="true" />

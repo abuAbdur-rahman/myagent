@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityState, pillPlacement, pillState } from "./activity";
+import { activityState, elapsedLabel, pillPlacement, pillState } from "./activity";
 import type { Message } from "./types";
 
 function message(role: Message["role"], content: string): Message {
@@ -34,6 +34,17 @@ describe("pillPlacement", () => {
 
   it("moves inline as soon as a message exists", () => {
     expect(pillPlacement(true)).toBe("inline");
+  });
+});
+
+describe("elapsedLabel", () => {
+  it("is null until a turn starts", () => {
+    expect(elapsedLabel(null, 1_000)).toBeNull();
+  });
+
+  it("shows seconds and then minutes", () => {
+    expect(elapsedLabel(1_000, 1_000)).toBe("0s");
+    expect(elapsedLabel(1_000, 66_000)).toBe("1m 5s");
   });
 });
 
