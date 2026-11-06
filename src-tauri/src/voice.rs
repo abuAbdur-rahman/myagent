@@ -39,7 +39,7 @@ const MODEL_FILES: [(&str, &str, u64, &str); 3] = [
 ];
 const SAMPLE_RATE: u32 = 16_000;
 const MAX_SECONDS: usize = 60;
-const MIN_SECONDS: f32 = 0.2;
+const MIN_SECONDS: f32 = 0.3;
 const IDLE_UNLOAD: Duration = Duration::from_secs(300);
 const PROGRESS_STEP: u64 = 256 * 1024;
 const MAX_REMOTE_BYTES: usize = 1024 * 1024;
@@ -396,6 +396,30 @@ async fn sha256_file(path: &Path) -> AppResult<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn check_clip(pcm: &[i16], sample_rate: u32) -> AppResult<()> {
+    if pcm.is_empty() {
+        return Err(AppError::Internal("no audio captured".to_string()));
+    }
+    if !(8_000..=192_000).contains(&sample_rate) {
+        return Err(AppError::Internal("unsupported sample rate".to_string()));
+    }
+    if pcm.len() > sample_rate as usize * MAX_SECONDS {
+        return Err(AppError::Internal("recording is too long".to_string()));
+    }
+    if pcm.len() as f32 / (sample_rate as f32) < MIN_SECONDS {
+        return Err(AppError::Internal("recording too short".to_string()));
+    }
+    Ok(())
+}
+
+fn finish_transcript(text: String) -> AppResult<String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(AppError::Internal("no speech detected".to_string()));
+    }
+    Ok(text)
+}
+
 #[tauri::command]
 pub async fn audio_transcribe(
     app: AppHandle,
@@ -403,26 +427,13 @@ pub async fn audio_transcribe(
     pcm: Vec<i16>,
     sample_rate: u32,
 ) -> AppResult<Transcript> {
-    if pcm.is_empty() {
-        return Err(AppError::Internal("no audio captured".to_string()));
-    }
-    if !(8_000..=192_000).contains(&sample_rate) {
-        return Err(AppError::Internal("unsupported sample rate".to_string()));
-    }
-    let max_samples = sample_rate as usize * MAX_SECONDS;
-    if pcm.len() > max_samples {
-        return Err(AppError::Internal("recording is too long".to_string()));
-    }
-    let seconds = pcm.len() as f32 / sample_rate as f32;
-    if seconds < MIN_SECONDS {
-        return Err(AppError::Internal("recording too short".to_string()));
-    }
     let cfg = config(&app);
     if !cfg.enabled {
         return Err(AppError::Internal(
             "voice is off; enable it in Settings > Voice".to_string(),
         ));
     }
+    check_clip(&pcm, sample_rate)?;
     let started = Instant::now();
     if let Some(provider) = cfg.provider.clone() {
         let model = cfg.model.clone().unwrap_or_else(|| "whisper-1".to_string());
@@ -441,12 +452,12 @@ pub async fn audio_transcribe(
             "voice model is missing; download it in Settings > Voice".to_string(),
         ));
     }
-    let text = tauri::async_runtime::spawn_blocking(move || local_transcribe(&dir, &samples))
+    let outcome = tauri::async_runtime::spawn_blocking(move || local_transcribe(&dir, &samples))
         .await
-        .map_err(|e| AppError::Internal(format!("voice worker: {e}")))??;
+        .map_err(|e| AppError::Internal(format!("voice worker: {e}")))?;
     schedule_idle_unload();
     Ok(Transcript {
-        text,
+        text: outcome?,
         ms: started.elapsed().as_millis() as u64,
     })
 }
@@ -511,7 +522,7 @@ fn local_transcribe(dir: &Path, samples: &[f32]) -> AppResult<String> {
         .model
         .transcribe_with(samples, &MoonshineParams::default())
         .map_err(|e| AppError::Internal(format!("voice transcription: {e}")))?;
-    Ok(result.text.trim().to_string())
+    finish_transcript(result.text)
 }
 
 fn endpoint_url(base_url: &str) -> AppResult<String> {
@@ -673,6 +684,47 @@ mod tests {
     fn model_is_not_ready_without_files() {
         let dir = std::env::temp_dir().join("myagent-voice-missing");
         assert!(!model_ready(&dir));
+    }
+
+    #[test]
+    fn empty_pcm_is_no_audio_captured() {
+        let error = check_clip(&[], 16_000).expect_err("empty");
+        assert!(error.to_string().contains("no audio captured"));
+    }
+
+    #[test]
+    fn clip_shorter_than_the_minimum_is_refused() {
+        let samples = vec![0i16; 4_799];
+        let error = check_clip(&samples, 16_000).expect_err("short");
+        assert!(error.to_string().contains("recording too short"));
+    }
+
+    #[test]
+    fn clip_at_the_minimum_is_accepted() {
+        assert!(check_clip(&vec![0i16; 4_800], 16_000).is_ok());
+    }
+
+    #[test]
+    fn unsupported_sample_rate_is_refused() {
+        let error = check_clip(&vec![0i16; 4_800], 4_000).expect_err("rate");
+        assert!(error.to_string().contains("unsupported sample rate"));
+    }
+
+    #[test]
+    fn overlong_clip_is_refused() {
+        let error = check_clip(&vec![0i16; 16_000 * (MAX_SECONDS + 1)], 16_000).expect_err("long");
+        assert!(error.to_string().contains("recording is too long"));
+    }
+
+    #[test]
+    fn blank_transcript_is_no_speech_detected() {
+        let error = finish_transcript("  \n\t ".to_string()).expect_err("blank");
+        assert!(error.to_string().contains("no speech detected"));
+    }
+
+    #[test]
+    fn transcript_is_trimmed() {
+        assert_eq!(finish_transcript(" hello ".to_string()).unwrap(), "hello");
     }
 
     #[tokio::test]

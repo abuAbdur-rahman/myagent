@@ -359,10 +359,16 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   const voice = useVoiceInput((text) => editorRef.current?.appendMarkdown(text), streaming);
 
   useEffect(() => {
-    const phase = voice.recording ? "recording" : voice.transcribing ? "transcribing" : "idle";
+    const phase = voice.recording
+      ? "recording"
+      : voice.starting
+        ? "starting"
+        : voice.transcribing
+          ? "transcribing"
+          : "idle";
     setVoicePhase(phase);
     return () => setVoicePhase("idle");
-  }, [voice.recording, voice.transcribing, setVoicePhase]);
+  }, [voice.recording, voice.starting, voice.transcribing, setVoicePhase]);
 
   const historyEntries = useMemo(() => {
     const users = messages
@@ -675,13 +681,27 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
               }
             }}
             disabled={streaming || voice.transcribing}
-            aria-label={voice.recording ? "Stop recording" : "Hold to talk"}
-            title={voice.recording ? "Release to transcribe" : "Hold to talk"}
+            aria-label={
+              voice.recording
+                ? "Stop recording"
+                : voice.starting
+                  ? "Starting microphone"
+                  : "Hold to talk"
+            }
+            title={
+              voice.recording
+                ? "Release to transcribe"
+                : voice.starting
+                  ? "Starting microphone…"
+                  : "Hold to talk"
+            }
             className={cn(
               "grid h-7 w-7 flex-none place-items-center rounded-control border border-border disabled:text-faint",
               voice.recording
                 ? "bg-danger text-accent-contrast"
-                : "bg-surface text-muted hover:bg-hover",
+                : voice.starting
+                  ? "bg-active text-muted"
+                  : "bg-surface text-muted hover:bg-hover",
             )}
           >
             <Mic size={14} />

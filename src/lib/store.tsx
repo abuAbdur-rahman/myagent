@@ -97,6 +97,7 @@ function memoryFromEntry(
     project_id: projectId,
     kind: MEMORY_KIND_NAMES.includes(entry.kind) ? (entry.kind as MemoryKind) : "note",
     content: entry.text,
+    untrusted: entry.untrusted,
     created_at: entry.created_at,
     updated_at: entry.created_at,
   };

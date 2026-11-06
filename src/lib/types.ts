@@ -155,6 +155,7 @@ const memorySchema = z.object({
   kind: memoryKindSchema,
   content: z.string().min(1).max(2000),
   source_conversation_id: z.string().nullable().optional(),
+  untrusted: z.boolean().optional(),
   created_at: z.number(),
   updated_at: z.number(),
 });

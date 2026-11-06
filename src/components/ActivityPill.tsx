@@ -7,11 +7,13 @@ const LABELS: Record<PillState, string> = {
   thinking: "Thinking",
   writing: "Writing",
   compacting: "Compacting",
+  starting: "Starting microphone",
   recording: "Listening",
   transcribing: "Transcribing",
 };
 
 const HINTS: Partial<Record<PillState, string>> = {
+  starting: "hold to speak",
   recording: "release to send",
 };
 
@@ -20,7 +22,7 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
   const state = pillState({ messages, streaming, compacting, voice: voicePhase });
   if (state === null) return null;
 
-  const voice = state === "recording" || state === "transcribing";
+  const voice = state === "starting" || state === "recording" || state === "transcribing";
   const toolLabel =
     state === "thinking" || state === "writing" ? toolActivityLabel(activeTool) : null;
   const label = toolLabel ?? LABELS[state];
@@ -43,7 +45,7 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
       {HINTS[state] && <span>{HINTS[state]}</span>}
       {state === "recording" ? (
         <span className="size-1.5 animate-pulse rounded-full bg-danger" aria-hidden="true" />
-      ) : state === "transcribing" ? (
+      ) : state === "starting" || state === "transcribing" ? (
         <Loader2 size={12} className="animate-spin" aria-hidden="true" />
       ) : (
         <>

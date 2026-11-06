@@ -1,8 +1,13 @@
 import type { Message } from "./types";
 
 export type ActivityState = "thinking" | "writing";
-export type PillState = ActivityState | "compacting" | "recording" | "transcribing";
-export type VoicePhase = "idle" | "recording" | "transcribing";
+export type PillState =
+  | ActivityState
+  | "compacting"
+  | "starting"
+  | "recording"
+  | "transcribing";
+export type VoicePhase = "idle" | "starting" | "recording" | "transcribing";
 
 export type PillPlacement = "center" | "inline";
 
@@ -59,6 +64,7 @@ export function pillState(input: {
   compacting: boolean;
   voice: VoicePhase;
 }): PillState | null {
+  if (input.voice === "starting") return "starting";
   if (input.voice === "recording") return "recording";
   if (input.voice === "transcribing") return "transcribing";
   if (input.compacting) return "compacting";
