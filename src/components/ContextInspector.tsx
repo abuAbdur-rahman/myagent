@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Brain, Copy, FileText, X } from "lucide-react";
 import { useApp } from "../lib/store";
+import { DEFAULT_MODEL_CONTEXT, promptBudget } from "../lib/context";
 import { parseDocAttachments } from "../lib/attachments";
 import * as api from "../lib/api";
 import { copyWithToast } from "./ChatHeader";
@@ -50,6 +51,7 @@ export function ContextInspector() {
     pendingMemories,
     memoryPaused,
     memoryOmitted,
+    modelContextLimit,
     episodicRecall,
     standingPrompt,
     chatPrompt,
@@ -317,6 +319,22 @@ export function ContextInspector() {
             </p>
           </Section>
         )}
+
+        <Section title="Budget">
+          <p className="m-0 flex flex-wrap items-baseline gap-x-1.5 text-xs text-muted">
+            <span className="tabular-nums text-text">
+              {promptBudget(modelContextLimit ?? DEFAULT_MODEL_CONTEXT).total.toLocaleString()}
+            </span>
+            <span>characters for memory and knowledge</span>
+            <span className="text-text-faint">·</span>
+            <span className="tabular-nums">
+              ×{promptBudget(modelContextLimit ?? DEFAULT_MODEL_CONTEXT).factor}
+            </span>
+            <span>
+              at {Math.round((modelContextLimit ?? DEFAULT_MODEL_CONTEXT) / 1000)}k tokens
+            </span>
+          </p>
+        </Section>
 
         <Section title="Project">
           <p className="m-0 text-xs text-muted">

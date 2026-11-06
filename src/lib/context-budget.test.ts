@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildChildSystemPrompt, buildSystemPrompt, clipAtWord } from "./context";
+import { buildChildSystemPrompt, buildSystemPrompt, clipAtWord, promptBudget } from "./context";
+import { buildChunkBlock } from "./knowledge";
 import type { Memory, Project } from "./types";
 
 const base = {
@@ -170,6 +171,38 @@ describe("buildChildSystemPrompt", () => {
   it("keeps a fitting child prompt whole", () => {
     const system = buildChildSystemPrompt({ project: project("Always answer in English.") });
     expect(system).toContain("Always answer in English.");
+  });
+});
+
+describe("promptBudget", () => {
+  it("keeps the small-window budget unchanged", () => {
+    const budget = promptBudget(128_000);
+    expect(budget.factor).toBe(1);
+    expect(budget.total).toBe(6000);
+    expect(budget.knowledge).toBe(2400);
+    expect(budget.episodes).toBe(1600);
+  });
+
+  it("grows fourfold on a million-token window and stops there", () => {
+    const budget = promptBudget(2_000_000);
+    expect(budget.factor).toBe(4);
+    expect(budget.total).toBe(24000);
+    expect(budget.knowledge).toBe(9600);
+    expect(budget.episodes).toBe(6400);
+  });
+
+  it("sends more knowledge on a large window than on a small one", () => {
+    const hits = Array.from({ length: 3 }, (_, index) => ({
+      doc_id: `d${index}`,
+      name: `doc-${index}.md`,
+      ord: index,
+      heading: null,
+      text: "k".repeat(2200),
+      score: 1,
+    }));
+    const small = buildChunkBlock(hits);
+    const big = buildChunkBlock(hits, promptBudget(1_000_000).knowledge);
+    expect(big.length).toBeGreaterThan(small.length);
   });
 });
 
