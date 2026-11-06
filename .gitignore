@@ -14,10 +14,9 @@ dist-ssr
 .env
 .env.*
 !.env.example
+temp_auto_push.bat
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
 .idea
 .DS_Store
 *.suo
@@ -32,3 +31,5 @@ src-tauri/resources/screen-model/tokenizer.json
 
 __pycache__/
 *.pyc
+.gitignore
+branch_structure.json

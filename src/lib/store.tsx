@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as db from "./db";
 import * as api from "./api";
-import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, summarySystemTurn } from "./context";
+import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, promptBudget, summarySystemTurn } from "./context";
 import { buildUserContent, resolveImageSend, searchKnowledgeWithHits, withFinalTurnImages } from "./knowledge";
 import { buildEpisodeBlock, selectEpisodeHits } from "./episodes";
 import {
@@ -922,8 +922,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!episodicRecallRef.current) return [];
         if ((projectRef.current?.id ?? null) !== projectId) return [];
         if (conversationId !== null && convIdRef.current !== conversationId) return [];
-        const rendered = selectEpisodeHits(hits);
-        episodicBlockRef.current = buildEpisodeBlock(rendered);
+        const budget = promptBudget(contextLimitRef.current);
+        const rendered = selectEpisodeHits(hits, budget.episodes);
+        episodicBlockRef.current = buildEpisodeBlock(rendered, budget.episodes);
         setEpisodeSummary(rendered);
         return rendered;
       } catch (error) {
@@ -1507,6 +1508,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       chatPrompt: conversations.find((item) => item.id === activeConversationId)?.system_prompt ?? undefined,
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
+      contextLimit: modelContextLimit ?? DEFAULT_MODEL_CONTEXT,
     });
     const limitKnown = modelContextLimit != null;
     const limit = modelContextLimit ?? DEFAULT_MODEL_CONTEXT;
@@ -1960,6 +1962,7 @@ setKnowledgeSummary([]);
         chatPrompt: chatPromptRef.current ?? undefined,
         knowledgeBlock: knowledgeBlockRef.current || undefined,
         skillIndexBlock: skillIndexRef.current || undefined,
+        contextLimit: contextLimitRef.current,
       }),
     [],
   );
@@ -2607,7 +2610,11 @@ setKnowledgeSummary([]);
       try {
         if (projectRef.current) {
           const request = knowledgeRequestRef.current;
-          const found = await searchKnowledgeWithHits(projectRef.current.id, text);
+          const found = await searchKnowledgeWithHits(
+            projectRef.current.id,
+            text,
+            promptBudget(contextLimitRef.current).knowledge,
+          );
           if (request === knowledgeRequestRef.current) {
             knowledge = found.block;
             knowledgeHits = found.hits;
@@ -2952,7 +2959,11 @@ setKnowledgeSummary([]);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
         const recalled = await recallFor(trimmed, projectId);
         const episodes = await recallEpisodes(trimmed, projectId, created.id);
-        const found = await searchKnowledgeWithHits(projectId, trimmed).catch((error) => {
+        const found = await searchKnowledgeWithHits(
+          projectId,
+          trimmed,
+          promptBudget(contextLimitRef.current).knowledge,
+        ).catch((error) => {
           console.warn("knowledge: first-turn search failed", error);
           return { block: "", hits: [] as api.KnowledgeHit[] };
         });
