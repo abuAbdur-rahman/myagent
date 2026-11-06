@@ -452,12 +452,12 @@ pub async fn audio_transcribe(
             "voice model is missing; download it in Settings > Voice".to_string(),
         ));
     }
-    let text = tauri::async_runtime::spawn_blocking(move || local_transcribe(&dir, &samples))
+    let outcome = tauri::async_runtime::spawn_blocking(move || local_transcribe(&dir, &samples))
         .await
-        .map_err(|e| AppError::Internal(format!("voice worker: {e}")))??;
+        .map_err(|e| AppError::Internal(format!("voice worker: {e}")))?;
     schedule_idle_unload();
     Ok(Transcript {
-        text,
+        text: outcome?,
         ms: started.elapsed().as_millis() as u64,
     })
 }

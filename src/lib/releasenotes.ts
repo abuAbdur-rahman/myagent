@@ -29,7 +29,7 @@ export const RELEASES: readonly Release[] = [
     changes: [
       {
         kind: "fixed",
-        text: "Hold-to-talk no longer loses the start of an utterance: the audio context and PCM worklet are prepared once at mount, the worklet flushes its partial buffer before teardown, and a context that never reached `running` is refused instead of yielding silence.",
+        text: "Hold-to-talk keeps more of the start of an utterance: the audio context and PCM worklet are prepared once at mount, the worklet flushes its partial buffer before teardown, and a context that never reached `running` is refused instead of yielding silence. Audio spoken before \"Listening\" appears can still be missed.",
       },
       {
         kind: "fixed",
@@ -37,7 +37,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "improved",
-        text: "The four voice outcomes are distinct — no audio captured, recording too short, the microphone recorded silence, no speech detected — and `internal:` prefixes no longer reach the user. The activity pill shows \"Starting microphone\" while the device opens.",
+        text: "The four voice outcomes are distinct — no audio captured, recording too short, the microphone recorded silence, no speech detected — and those backend strings map to plain messages, so `internal:` prefixes no longer reach the user for them. The activity pill shows \"Starting microphone\" while the device opens.",
       },
       {
         kind: "fixed",
@@ -45,7 +45,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "fixed",
-        text: "Untrusted memory notes never enter the prompt as trusted prose. The renderer filters them and the client carries the file's trust flag, which was being dropped when notes were read.",
+        text: "Untrusted memory notes never enter the prompt as trusted prose. The renderer filters them and the client carries the trust flag when notes are read from `MEMORY.md`; the legacy database path that only runs when that file is missing still writes an approval without it.",
       },
     ],
   },
