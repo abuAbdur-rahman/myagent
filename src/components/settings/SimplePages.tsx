@@ -1762,13 +1762,13 @@ export function GeneralPage() {
         />
       </SettingRow>
       <SettingRow
-        label="Context bar"
-        description="Show the used-tokens bar above the composer"
+        label="Context meter"
+        description="Show the live token ring in the composer"
       >
         <Toggle
           checked={showContextBar}
           onChange={setShowContextBar}
-          label="Show the context bar"
+          label="Show the context meter"
         />
       </SettingRow>
       <SettingRow label="Collapse thinking" description="Fold reasoning blocks once the reply is done">

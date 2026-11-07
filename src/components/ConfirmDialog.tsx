@@ -70,7 +70,7 @@ export function ConfirmHost() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/40"
+      className="fixed inset-0 z-[100] grid place-items-center bg-[var(--scrim)] backdrop-blur-[3px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) settle(false);
       }}
@@ -80,7 +80,7 @@ export function ConfirmHost() {
         role="alertdialog"
         aria-modal="true"
         aria-label={opts.title}
-        className="w-full max-w-[480px] rounded-composer border border-border bg-surface p-5 shadow-[var(--shadow)]"
+        className="w-full max-w-[480px] rounded-composer bg-overlay p-5 shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
       >
         <h3 className="m-0 text-base font-semibold">{opts.title}</h3>
         {opts.body && <p className="m-0 mt-1 text-sm text-muted">{opts.body}</p>}

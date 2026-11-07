@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
+  ChevronRight,
   ChevronsRight,
   Folder,
   FolderInput,
@@ -267,10 +268,35 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
-    () => new Set(["Older"]),
-  );
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem("sidebar.projects");
+    if (saved !== null) {
+      try {
+        const parsed = JSON.parse(saved);
+        return new Set<string>(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        return new Set<string>();
+      }
+    }
+    return new Set(projects.map((project) => project.id));
+  });
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("sidebar.groups") ?? "null");
+      if (Array.isArray(saved)) return new Set<string>(saved);
+    } catch {
+      // fall through to the default
+    }
+    return new Set(["Older"]);
+  });
+
+  useEffect(() => {
+    localStorage.setItem("sidebar.projects", JSON.stringify([...expandedProjects]));
+  }, [expandedProjects]);
+
+  useEffect(() => {
+    localStorage.setItem("sidebar.groups", JSON.stringify([...collapsedGroups]));
+  }, [collapsedGroups]);
 
   const toggleGroupCollapsed = (name: string) => {
     setCollapsedGroups((prev) => {
@@ -284,13 +310,14 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   const shown = tagFilter
     ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
     : conversations;
+  const pinnedChats = shown.filter((chat) => chat.pinned === 1);
   const groups = arrangeChats(
-    shown.filter((chat) => !chat.project_id),
+    shown.filter((chat) => !chat.project_id && chat.pinned !== 1),
     groupByDate,
-  );
+  ).filter((group) => group.items.length > 0);
   const threadsByProject = new Map<string, Conversation[]>();
   for (const chat of shown) {
-    if (!chat.project_id) continue;
+    if (!chat.project_id || chat.pinned === 1) continue;
     const list = threadsByProject.get(chat.project_id) ?? [];
     list.push(chat);
     threadsByProject.set(chat.project_id, list);
@@ -301,10 +328,9 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         .slice()
         .sort((a, b) => b.updated_at - a.updated_at);
       const activity = threads[0]?.updated_at ?? project.updated_at;
-      return { project, threads: threads.slice(0, 5), activity };
+      return { project, threads, activity };
     })
-    .sort((a, b) => b.activity - a.activity)
-    .slice(0, 2);
+    .sort((a, b) => b.activity - a.activity);
 
   const toggleProjectExpanded = (id: string) => {
     setExpandedProjects((prev) => {
@@ -491,7 +517,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
             title="All projects"
             className={cn(
               "flex h-[34px] items-center gap-2.5 rounded-field px-2.5 text-sm text-fg-2 hover:bg-fill-2 hover:text-fg",
-              (view === "projects" || view === "project") && "bg-fill-3 text-fg",
+              (view === "projects") && "bg-fill-3 text-fg",
             )}
           >
             <Folder size={16} className="text-fg-3" />
@@ -543,13 +569,32 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
           </div>
         )}
 
-        <button
-          type="button"
-          aria-label="Projects"
-          className="mt-3 flex h-7 items-center gap-1 rounded-chip px-2 text-xs font-medium text-fg-3 hover:text-fg-2"
-        >
+        {pinnedChats.length > 0 && (
+          <>
+            <div className="mt-3 flex h-7 items-center gap-1 px-2 text-xs font-medium text-fg-3">
+              <Pin size={12} />
+              <span>Pinned</span>
+            </div>
+            {pinnedChats.map((chat) => (
+              <ChatRow
+                key={chat.id}
+                chat={chat}
+                working={chat.id === workingConversationId}
+                renaming={renamingId === chat.id}
+                onOpen={() => openChat(chat.id)}
+                menu={chatMenu(chat)}
+                onRenameCommit={() => void commitRename()}
+                onRenameCancel={() => setRenamingId(null)}
+                onRenameChange={setRenameDraft}
+              />
+            ))}
+          </>
+        )}
+
+        <div className="mt-3 flex h-7 items-center gap-1 px-2 text-xs font-medium text-fg-3">
           <span>Projects</span>
-        </button>
+          {projects.length > 0 && <span className="text-text-off">{projects.length}</span>}
+        </div>
         {topProjects.map((entry) => (
           <div key={entry.project.id}>
             <div
@@ -653,10 +698,11 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.name}`}
                 className="group mt-3 flex h-7 w-full items-center gap-1 rounded-chip px-2 text-left text-xs font-medium text-fg-3 hover:text-fg-2"
               >
-                <ChevronDown
-                  size={12}
-                  className={cn("transition-transform", collapsed && "-rotate-90")}
-                />
+                {collapsed ? (
+                  <ChevronRight size={12} />
+                ) : (
+                  <ChevronDown size={12} />
+                )}
                 <span className="flex-1">{group.name}</span>
               </button>
               {!collapsed &&

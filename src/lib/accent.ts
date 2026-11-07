@@ -13,7 +13,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   { id: "graphite", label: "Graphite", hue: 80 },
 ];
 
-export const DEFAULT_ACCENT = "clay";
+const DEFAULT_ACCENT = "clay";
 
 const LEGACY_HEX: Record<string, string> = {
   "#c96442": "clay",

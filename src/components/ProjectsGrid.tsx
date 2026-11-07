@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectColor, timeAgo } from "../lib/grouping";
-import { Input, Button } from "./ui";
+import { EmptyState, Input, Button } from "./ui";
 
 export function ProjectsGrid({ onNew }: { onNew: () => void }) {
   const { projects, conversations, selectProject } = useApp();
@@ -57,10 +57,15 @@ export function ProjectsGrid({ onNew }: { onNew: () => void }) {
           })}
         </div>
         {visible.length === 0 && (
-          <div className="py-16 text-center">
-            <p className="m-0 text-sm font-medium">No projects found.</p>
-            <p className="m-0 mt-1 text-[13px] text-fg-3">Create one to group chats and shared context.</p>
-          </div>
+          <EmptyState
+            title="No projects found."
+            body="Create one to group chats and shared context."
+            action={
+              <Button variant="primary" onClick={onNew}>
+                <Plus size={16} /> New project
+              </Button>
+            }
+          />
         )}
       </div>
     </div>

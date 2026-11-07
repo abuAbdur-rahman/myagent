@@ -62,8 +62,8 @@ function WelcomeStep({
   return (
     <>
       <Logo size={56} />
-      <h1 className="m-0 font-serif text-[28px] font-semibold">Welcome to MyAgent</h1>
-      <label className="flex w-full max-w-[300px] flex-col gap-1 text-left text-xs text-muted">
+      <h1 className="m-0 font-serif text-[1.75rem] font-normal">Welcome to MyAgent</h1>
+      <label className="flex w-full max-w-[300px] flex-col gap-1 text-left text-[13px] text-fg-3">
         What should I call you?
         <Input
           value={displayName}
@@ -74,13 +74,13 @@ function WelcomeStep({
       </label>
       <ul className="m-0 flex list-none flex-col gap-2.5 p-0 text-left text-sm">
         <li className="flex items-center gap-2.5">
-          <KeyRound size={16} className="text-accent" /> Bring your own keys
+          <KeyRound size={16} className="text-accent-text" /> Bring your own keys
         </li>
         <li className="flex items-center gap-2.5">
-          <ShieldCheck size={16} className="text-accent" /> Private by default
+          <ShieldCheck size={16} className="text-accent-text" /> Private by default
         </li>
         <li className="flex items-center gap-2.5">
-          <Plug size={16} className="text-accent" /> Works with any OpenAI-compatible provider
+          <Plug size={16} className="text-accent-text" /> Works with any OpenAI-compatible provider
         </li>
       </ul>
     </>
@@ -103,11 +103,11 @@ function ProviderTiles({
           onClick={() => onPick(tile.id)}
           aria-pressed={kind === tile.id}
           className={cn(
-            "flex w-[110px] flex-col items-center gap-1.5 rounded-card border-2 bg-surface p-2 hover:bg-hover",
-            kind === tile.id ? "border-accent" : "border-border",
+            "flex w-[110px] flex-col items-center gap-1.5 rounded-card p-2 text-[13px] ring-1 ring-line hover:bg-fill-2",
+            kind === tile.id ? "bg-accent-soft ring-2 ring-accent" : "bg-fill-1",
           )}
         >
-          <span className="grid h-8 w-8 place-items-center rounded-full bg-accent text-xs font-semibold text-accent-contrast">
+          <span className="grid h-8 w-8 place-items-center rounded-full bg-fill-3 text-xs font-semibold text-fg-2">
             {tile.initials}
           </span>
           {tile.label}
@@ -128,10 +128,10 @@ function ProviderKeyInput({
 }) {
   const keyless = KEYLESS_KINDS.has(kind);
   return (
-    <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-xs text-muted">
+    <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-[13px] text-fg-3">
       {keyless ? "No key needed" : "API key"}
       {keyless ? (
-        <span className="text-xs text-muted">
+        <span className="text-[13px] text-fg-3">
           A local Ollama server accepts requests without a key.
         </span>
       ) : (
@@ -175,7 +175,7 @@ function ProviderStep({
       <h2 className="m-0 text-xl font-semibold">Connect a provider</h2>
       <ProviderTiles kind={kind} onPick={onPick} />
       <ProviderKeyInput kind={kind} value={keyValue} onChange={onKey} />
-      <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-xs text-muted">
+      <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-[13px] text-fg-3">
         Base URL
         <Input value={baseUrl} onChange={(e) => onBaseUrl(e.target.value)} />
       </label>
@@ -188,7 +188,7 @@ function ProviderStep({
         </span>
       )}
       {status && (
-        <p className="m-0 text-xs text-muted" role="status">
+        <p className="m-0 text-[13px] text-fg-3" role="status">
           {status}
         </p>
       )}
@@ -209,7 +209,7 @@ function ModelStep({
     <>
       <h2 className="m-0 text-xl font-semibold">Pick a default model</h2>
       {models.length === 0 ? (
-        <p className="text-sm text-muted">
+        <p className="text-sm text-fg-3">
           No provider connected. You can add one later in Settings.
         </p>
       ) : (
@@ -221,7 +221,7 @@ function ModelStep({
               onClick={() => onModel(id)}
               aria-pressed={model === id}
               className={cn(
-                "rounded-card border border-border px-3 py-2.5 text-left text-sm hover:bg-hover",
+                "rounded-card border border-line px-3 py-2.5 text-left text-sm hover:bg-fill-2",
                 model === id && "border-accent",
               )}
             >
@@ -256,13 +256,13 @@ function SuggestionsStep({
             key={suggestion}
             type="button"
             onClick={() => onSuggestion(suggestion)}
-            className="rounded-card border border-border bg-surface p-3 text-left text-sm hover:bg-hover"
+            className="rounded-card border border-line bg-raised p-3 text-left text-sm hover:bg-fill-2"
           >
             {suggestion}
           </button>
         ))}
       </div>
-      <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-xs text-muted">
+      <label className="flex w-full max-w-[360px] flex-col gap-1 text-left text-[13px] text-fg-3">
         Web search key (optional, Tavily)
         <span className="flex gap-1.5">
           <Input
@@ -279,7 +279,7 @@ function SuggestionsStep({
         </span>
       </label>
       {searchStatus && (
-        <p className="m-0 text-xs text-muted" role="status">
+        <p className="m-0 text-[13px] text-fg-3" role="status">
           {searchStatus}
         </p>
       )}
@@ -293,7 +293,7 @@ function StepDots({ step }: { step: number }) {
       {[0, 1, 2, 3].map((i) => (
         <span
           key={i}
-          className={cn("h-2 w-2 rounded-full", i === step ? "bg-accent" : "bg-active")}
+          className={cn("h-2 w-2 rounded-full", i === step ? "bg-accent" : "bg-fill-3")}
         />
       ))}
     </span>
@@ -472,12 +472,12 @@ export function OnboardingDialog() {
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-0 top-8 z-[100] grid place-items-center bg-surface p-4">
+    <div className="fixed inset-x-0 bottom-0 top-8 z-[100] grid place-items-center bg-raised p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Welcome"
-        className="flex min-h-[440px] w-full max-w-[720px] flex-col gap-3.5 rounded-composer border border-border bg-surface p-8"
+        className="flex min-h-[440px] w-full max-w-[720px] flex-col gap-3.5 rounded-composer bg-overlay p-8 shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
       >
         <div className="flex flex-1 flex-col items-center gap-3 text-center">
           {step === 0 && (

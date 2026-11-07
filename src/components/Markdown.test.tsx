@@ -40,4 +40,23 @@ describe("Markdown code blocks", () => {
     expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
     expect(document.querySelector(".codeblock")).not.toBeNull();
   });
+
+  it("renders a markdown fence as prose instead of code", async () => {
+    render(<Markdown content={"```md\n## Milestone 1\n\n**Outcome**\n```"} />);
+    expect(await screen.findByRole("heading", { level: 2, name: "Milestone 1" })).toBeTruthy();
+    expect(document.querySelector(".md-fence")).not.toBeNull();
+    expect(document.querySelector(".codeblock")).toBeNull();
+  });
+
+  it("renders a txt fence that contains markdown as prose", async () => {
+    render(<Markdown content={"```txt\n## Milestone 2\n\n- one\n- two\n```"} />);
+    expect(await screen.findByRole("heading", { level: 2, name: "Milestone 2" })).toBeTruthy();
+    expect(document.querySelector(".md-fence")).not.toBeNull();
+  });
+
+  it("keeps plain text fences as code", async () => {
+    render(<Markdown content={"```txt\nplain words only\n```"} />);
+    expect(await screen.findByText("txt")).toBeTruthy();
+    expect(document.querySelector(".codeblock")).not.toBeNull();
+  });
 });

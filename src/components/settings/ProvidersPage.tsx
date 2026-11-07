@@ -664,8 +664,7 @@ export function ProvidersPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm text-fg-3">Bring your own API keys.</span>
+      <div className="mb-3 flex items-center justify-end">
         <Button variant="primary" onClick={() => setDialog({ open: true, connection: null })}>
           <Plus size={16} /> Add provider
         </Button>

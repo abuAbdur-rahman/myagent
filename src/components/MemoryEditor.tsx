@@ -5,7 +5,7 @@ import {
   type Memory,
   type MemoryDraft,
 } from "../lib/types";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button, IconButton, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
 import { Select } from "./ui/select";
@@ -67,6 +67,7 @@ export function MemoryEditor({
   const [content, setContent] = useState("");
   const [kind, setKind] = useState<MemoryDraft["kind"]>("fact");
   const [addError, setAddError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
@@ -118,6 +119,7 @@ export function MemoryEditor({
       setDeleteError(null);
       setContent("");
       setKind("fact");
+      setAdding(false);
       return true;
     });
 
@@ -172,29 +174,53 @@ export function MemoryEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="rounded-field bg-fill-1 p-2.5">
-        <div className="mb-1.5 flex items-center gap-2">
-          <KindSelect value={kind} onChange={setKind} label="New memory kind" />
-          <span className="text-xs text-fg-3">
-            A durable note the assistant should keep in mind.
-          </span>
+      {!adding && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          onClick={() => setAdding(true)}
+        >
+          <Plus size={14} /> Add note
+        </Button>
+      )}
+      {adding && (
+        <div className="rounded-field bg-fill-1 p-2.5">
+          <div className="mb-1.5 flex items-center gap-2">
+            <KindSelect value={kind} onChange={setKind} label="New memory kind" />
+            <span className="text-xs text-fg-3">
+              A durable note the assistant should keep in mind.
+            </span>
+          </div>
+          <Textarea
+            rows={2}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="e.g. Always answer with TypeScript examples."
+            aria-label="New memory"
+          />
+          <div className="mt-1.5 flex items-center justify-between gap-2">
+            <span className="text-xs text-danger" role="alert">
+              {addError}
+            </span>
+            <div className="flex gap-1.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setAdding(false);
+                  setAddError(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void add()} disabled={busy}>
+                Add memory
+              </Button>
+            </div>
+          </div>
         </div>
-        <Textarea
-          rows={2}
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder="e.g. Always answer with TypeScript examples."
-          aria-label="New memory"
-        />
-        <div className="mt-1.5 flex items-center justify-between">
-          <span className="text-xs text-danger" role="alert">
-            {addError}
-          </span>
-          <Button size="sm" onClick={() => void add()} disabled={busy}>
-            Add memory
-          </Button>
-        </div>
-      </div>
+      )}
 
       {deleteError && (
         <p className="text-xs text-danger" role="alert">

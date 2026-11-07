@@ -309,28 +309,6 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
   );
 }
 
-export function SectionLabel({
-  children,
-  action,
-  className,
-}: {
-  children: ReactNode;
-  action?: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex items-center justify-between gap-2 px-1 pb-1 pt-4 text-xs font-medium text-fg-3",
-        className,
-      )}
-    >
-      <span>{children}</span>
-      {action}
-    </div>
-  );
-}
-
 export function EmptyState({
   icon,
   title,
@@ -348,54 +326,6 @@ export function EmptyState({
       <h3 className="m-0 text-sm font-semibold">{title}</h3>
       {body && <p className="m-0 max-w-sm text-[13px] text-fg-3">{body}</p>}
       {action && <div className="mt-2">{action}</div>}
-    </div>
-  );
-}
-
-export type NoticeTone = "info" | "warn" | "danger" | "success";
-
-const noticeTone: Record<NoticeTone, string> = {
-  info: "bg-[var(--info-soft)] text-info shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--info)_28%,transparent)]",
-  warn: "bg-[var(--warning-soft)] text-warning shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warning)_28%,transparent)]",
-  danger:
-    "bg-danger-soft text-danger shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--danger)_28%,transparent)]",
-  success:
-    "bg-success-soft text-success shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--success)_28%,transparent)]",
-};
-
-export function Notice({
-  tone = "info",
-  icon,
-  title,
-  children,
-  actions,
-  details,
-}: {
-  tone?: NoticeTone;
-  icon?: ReactNode;
-  title: string;
-  children?: ReactNode;
-  actions?: ReactNode;
-  details?: string;
-}) {
-  return (
-    <div role={tone === "danger" ? "alert" : "status"} className={cn("rounded-card p-3", noticeTone[tone])}>
-      <div className="flex items-start gap-2.5">
-        {icon && <span className="mt-0.5 flex-none">{icon}</span>}
-        <div className="min-w-0 flex-1">
-          <p className="m-0 text-[13px] font-semibold">{title}</p>
-          {children && <div className="mt-0.5 text-[13px] leading-relaxed text-fg-2">{children}</div>}
-          {details && (
-            <details className="mt-1.5 text-xs text-fg-3">
-              <summary className="cursor-pointer">Technical details</summary>
-              <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-field bg-code p-2 font-mono">
-                {details}
-              </pre>
-            </details>
-          )}
-        </div>
-        {actions && <div className="flex flex-none items-center gap-1.5">{actions}</div>}
-      </div>
     </div>
   );
 }

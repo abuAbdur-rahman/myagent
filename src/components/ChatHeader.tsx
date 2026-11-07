@@ -267,8 +267,12 @@ export function ChatHeader() {
         label="Context inspector"
         title={`Context · ${contextPct ?? 0}% used`}
         onClick={openContextPanel}
+        className="w-auto gap-1 px-1.5"
       >
         <ContextRing pct={contextPct} warn={contextPct !== null && contextPct >= 80} />
+        {contextPct !== null && contextPct >= 50 && (
+          <span className="text-[11px] font-medium tabular-nums text-fg-3">{contextPct}%</span>
+        )}
       </IconButton>
       <IconButton
         label="Toggle side panel"
