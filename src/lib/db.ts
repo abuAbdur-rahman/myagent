@@ -338,7 +338,7 @@ export async function importBundle(
     report.conversations += 1;
     for (const message of conversation.messages) {
       const result = await db.execute(
-        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
         [
           message.id,
           conversation.id,
@@ -354,6 +354,7 @@ export async function importBundle(
           sqlNull(message.artifacts),
           sqlNull(message.attachments),
           sqlNull(message.model),
+          sqlNull(message.error),
           sqlNull(message.rating),
           message.created_at,
         ],
