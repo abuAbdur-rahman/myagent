@@ -1906,6 +1906,10 @@ setKnowledgeSummary([]);
 
   const removeConversation = useCallback(
     async (id: string) => {
+      if (streamConversationId === id) {
+        toast("Stop the working turn before deleting this chat.");
+        return;
+      }
       await db.deleteConversation(id);
       await api.deleteSpill(id).catch(() => {
         toast("Spill files may remain on disk");
@@ -1925,7 +1929,7 @@ setKnowledgeSummary([]);
         setEpisodeSummary([]);
       }
     },
-    [activeConversationId],
+    [activeConversationId, streamConversationId],
   );
 
   const renameConversation = useCallback(async (id: string, title: string) => {
@@ -2305,6 +2309,9 @@ setKnowledgeSummary([]);
               });
               toast(`Artifact saved: ${event.title}`);
             } else if (event.type === "approval_asked") {
+              if (conversationId !== convIdRef.current) {
+                void selectConversation(conversationId);
+              }
               setApproval({
                 id: event.id,
                 tool: event.tool,
@@ -2314,6 +2321,9 @@ setKnowledgeSummary([]);
                 screenFailed: event.screen_failed,
               });
             } else if (event.type === "question_asked") {
+              if (conversationId !== convIdRef.current) {
+                void selectConversation(conversationId);
+              }
               setQuestion({
                 id: event.id,
                 question: event.question,
@@ -2404,6 +2414,7 @@ setKnowledgeSummary([]);
       refreshMemories,
       refreshPendingMemories,
       deleteMemory,
+      selectConversation,
       searchBackend,
       searchEndpoint,
     ],
