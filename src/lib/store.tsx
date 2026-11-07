@@ -1855,25 +1855,20 @@ setKnowledgeSummary([]);
       setTodos([]);
       return;
     }
-    const rows = await db.listMessages(id);
+    let rows = await db.listMessages(id);
     if (convIdRef.current !== id) return;
     const assistantId = assistantMsgIdRef.current;
     if (streamConversationIdRef.current === id && assistantId) {
-      const index = rows.findIndex((row) => row.id === assistantId);
-      if (index >= 0) {
-        rows[index] = {
-          ...rows[index],
-          content: bufferRef.current,
-          reasoning: reasoningRef.current,
-          thinking_ms: thinkingMsRef.current,
-          finish_reason: finishRef.current,
-          tool_log:
-            toolLogRef.current.length > 0 ? JSON.stringify(toolLogRef.current) : null,
-          artifacts:
-            artifactsRef.current.length > 0 ? JSON.stringify(artifactsRef.current) : null,
-          error: streamErrorRef.current,
-        };
-      }
+      rows = db.withLiveTurn(rows, {
+        assistantId,
+        content: bufferRef.current,
+        reasoning: reasoningRef.current,
+        thinkingMs: thinkingMsRef.current,
+        finishReason: finishRef.current,
+        toolLog: toolLogRef.current,
+        artifacts: artifactsRef.current,
+        error: streamErrorRef.current,
+      });
     }
     setMessages(rows);
     setTodos(await db.listTodos(id));

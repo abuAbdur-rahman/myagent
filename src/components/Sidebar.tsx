@@ -35,6 +35,16 @@ function initialsOf(name: string): string {
   return trimmed.slice(0, 2).toUpperCase();
 }
 
+function WorkingSpinner() {
+  return (
+    <span
+      role="status"
+      aria-label="Working"
+      className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
+    />
+  );
+}
+
 function ChatRow({
   chat,
   projectName,
@@ -103,13 +113,7 @@ function ChatRow({
           title={projectName ?? undefined}
         />
       )}
-      {working && (
-        <span
-          role="status"
-          aria-label="Working"
-          className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
-        />
-      )}
+      {working && <WorkingSpinner />}
       <span className="min-w-0 flex-1 truncate text-sm">{chat.title}</span>
       <DropdownMenu
         align="end"
@@ -622,13 +626,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                       activeConversationId === thread.id && "bg-active text-text",
                     )}
                   >
-                    {thread.id === workingConversationId && (
-                      <span
-                        role="status"
-                        aria-label="Working"
-                        className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
-                      />
-                    )}
+                    {thread.id === workingConversationId && <WorkingSpinner />}
                     <span className="truncate">{thread.title}</span>
                   </button>
                 ))}

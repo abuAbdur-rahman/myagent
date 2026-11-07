@@ -535,6 +535,7 @@ export interface FullMessageInput {
   finishReason?: string | null;
   toolLogJson?: string | null;
   artifactsJson?: string | null;
+  error?: string | null;
   model?: string | null;
   createdAt?: number | null;
 }
@@ -572,7 +573,7 @@ export async function insertMessageFull(
     finishReason: sqlNull(input.finishReason),
     toolLogJson: sqlNull(input.toolLogJson),
     artifactsJson: sqlNull(input.artifactsJson),
-    error: null,
+    error: sqlNull(input.error),
   });
   return message;
 }
@@ -618,7 +619,7 @@ export async function setMessageRating(id: string, rating: number | null): Promi
   await db.execute("UPDATE messages SET rating = $1 WHERE id = $2", [rating, id]);
 }
 
-export { continueDigest, parseDeclaredArtifacts, parseToolLog } from "./message-parse";
+export { continueDigest, parseDeclaredArtifacts, parseToolLog, withLiveTurn } from "./message-parse";
 
 export async function truncateConversation(
   conversationId: string,
@@ -688,7 +689,7 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
       [
         newId(),
         branched.id,
@@ -704,6 +705,7 @@ export async function branchConversation(
         sqlNull(m.artifacts),
         sqlNull(m.attachments),
         sqlNull(m.model),
+        sqlNull(m.error),
         m.created_at,
       ],
     );

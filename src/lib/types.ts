@@ -259,6 +259,7 @@ const exportMessageSchema = z.object({
   finishReason: z.string().nullable(),
   toolLog: z.array(toolLogEntrySchema),
   artifacts: z.array(declaredArtifactSchema),
+  error: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
   rating: z.number().nullable().optional(),
   createdAt: z.number(),
