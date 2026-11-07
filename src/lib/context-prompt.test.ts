@@ -44,6 +44,15 @@ describe("buildSystemPrompt instruction order", () => {
     expect(chat).toBeGreaterThan(project);
   });
 
+  it("tells the model the local date and time", () => {
+    const system = buildSystemPrompt({
+      ...base,
+      now: new Date("2026-11-06T12:34:00Z"),
+    }) ?? "";
+    expect(system).toContain("Today is");
+    expect(system).toContain("Call get_time only if the user asks for the exact time.");
+  });
+
   it("keeps the chat block last even with memory in the prompt", () => {
     const system = buildSystemPrompt({
       ...base,

@@ -615,7 +615,7 @@ export async function setMessageRating(id: string, rating: number | null): Promi
   await db.execute("UPDATE messages SET rating = $1 WHERE id = $2", [rating, id]);
 }
 
-export { parseDeclaredArtifacts, parseToolLog } from "./message-parse";
+export { continueDigest, parseDeclaredArtifacts, parseToolLog } from "./message-parse";
 
 export async function truncateConversation(
   conversationId: string,

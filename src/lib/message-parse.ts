@@ -44,3 +44,39 @@ export function parseToolLog(raw: unknown): ToolLogEntry[] {
   }
   return entries;
 }
+
+function newestUnique(entries: ToolLogEntry[], limit: number): ToolLogEntry[] {
+  const seen = new Set<string>();
+  return entries
+    .slice()
+    .reverse()
+    .filter((entry) => {
+      const key = `${entry.name}\n${entry.summary}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit)
+    .reverse();
+}
+
+export function continueDigest(entries: ToolLogEntry[]): string {
+  const recent = entries.slice(-10);
+  const done = newestUnique(
+    recent.filter((entry) => entry.status === "ok"),
+    6,
+  ).map((entry) => {
+    const preview = entry.preview?.trim();
+    return `- ${entry.name}: ${entry.summary}${preview ? `\n  ${preview.slice(0, 300)}` : ""}`;
+  });
+  const failed = newestUnique(
+    recent.filter((entry) => entry.status === "err"),
+    3,
+  ).map((entry) => `- ${entry.name}: ${entry.summary}`);
+  const doneBlock = done.length > 0 ? `\n\nAlready done this turn (do not repeat):\n${done.join("\n")}` : "";
+  const failedBlock =
+    failed.length > 0
+      ? `\n\nRecent failures (retry differently if needed):\n${failed.join("\n")}`
+      : "";
+  return `${doneBlock}${failedBlock}`;
+}

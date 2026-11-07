@@ -46,11 +46,11 @@ const COMMAND_CAP: usize = 8_000;
 const MEMORY_CAP: usize = 2_000;
 const MEMORY_KINDS: [&str; 4] = ["fact", "preference", "summary", "note"];
 const TODO_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "cancelled"];
-const WEB_FETCH_CAP: usize = 8_000;
+pub(crate) const WEB_FETCH_CAP: usize = 16_000;
 const DOCUMENT_CAP: usize = 20_000;
 const SHELL_CAP: usize = 6_000;
 const MIN_CHARS_CAP: usize = 200;
-const WEB_SEARCH_CAP: usize = 5;
+pub(crate) const WEB_SEARCH_CAP: usize = 5;
 const WEB_SEARCH_PROBE: usize = 3;
 const SEARCH_RESULTS_MAX: usize = 20;
 const GREP_CAP: usize = 512;
@@ -468,7 +468,7 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "get_time",
-                "description": "Get the current date and time (UTC and local Unix timestamp).",
+                "description": "Get the current date and time (local time and UTC, plus a Unix timestamp).",
                 "parameters": { "type": "object", "properties": {}, "additionalProperties": false },
             },
         },
@@ -726,7 +726,7 @@ pub fn tool_specs(
                         "url": { "type": "string", "description": "The public https url to fetch." },
                         "grep": { "type": "string", "maxLength": 512, "description": "Case-insensitive regular expression; keeps only matching lines." },
                         "start": { "type": "integer", "minimum": 0, "description": "Character offset to continue from; a truncated result reports the value to pass next." },
-                        "max_chars": { "type": "integer", "minimum": 200, "maximum": 32768, "description": "Cap the returned characters (default 8000)." },
+                        "max_chars": { "type": "integer", "minimum": 200, "maximum": 32768, "description": "Cap the returned characters (default 16000)." },
                         "format": { "type": "string", "enum": ["markdown", "text"], "description": "markdown (default) keeps links and emphasis; text returns plain text." },
                     },
                     "required": ["url"],
@@ -1660,9 +1660,11 @@ pub async fn execute(
     match name {
         "get_time" => {
             let now = chrono::Utc::now();
+            let local = chrono::Local::now();
             Ok(ExecOutput {
                 output: format!(
-                    "{} (unix {})",
+                    "{} (local) / {} (UTC) (unix {})",
+                    local.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     now.timestamp()
                 ),
@@ -1864,7 +1866,7 @@ pub async fn execute(
             let rendered = websearch::render_results(&query, &hits[..shown], &fields);
             let mut output = format!("{rendered}\n{}", tooltext::count_report(shown, hits.len()));
             if shown < hits.len() {
-                output.push_str(" Call web_search again with a larger max_results to see more.");
+                output.push_str(" More results are available if you need them.");
             }
             Ok(ExecOutput {
                 output,
@@ -2589,7 +2591,7 @@ pub async fn execute(
                 None
             };
             let mut shaped = tooltext::report_body(&body, start, max_chars, |next| {
-                format!("Call web_fetch again with start: {next} to read more.")
+                format!("Call web_fetch again with start: {next} only if you still need more.")
             });
             if let Some(path) = spill {
                 shaped.push_str(&format!("\nFull page saved at {path}."));

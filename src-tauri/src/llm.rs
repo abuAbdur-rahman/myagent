@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -55,6 +55,10 @@ pub enum StreamEvent {
     },
     Retrying {
         attempt: u32,
+        max: u32,
+    },
+    Step {
+        step: u32,
         max: u32,
     },
     Done,
@@ -1556,7 +1560,9 @@ pub async fn chat_stream(
             .collect();
         let history =
             harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
-        stream_completion(&client, &req, key, history, &on_event, &cancel).await
+        stream_completion(&client, &req, key, history, &on_event, &cancel)
+            .await
+            .map(|_| ())
     };
     state.finish(&req.request_id);
     result
@@ -1927,30 +1933,161 @@ fn tool_text_message(id: &str, text: &str) -> serde_json::Value {
     })
 }
 
-const PRUNE_KEEP_TOOL_MESSAGES: usize = 1;
+const TOOL_OUTPUT_BUDGET: usize = 64 * 1024;
+const TOOL_DIGEST_CHARS: usize = 300;
+
+fn tool_output_digest(content: &str) -> String {
+    let head: String = content.chars().take(TOOL_DIGEST_CHARS).collect();
+    let head = head.trim();
+    if head.is_empty() {
+        format!("[tool output omitted: {} bytes]", content.len())
+    } else {
+        format!(
+            "[tool output omitted: {} bytes; first {TOOL_DIGEST_CHARS} chars kept]\n{head}",
+            content.len()
+        )
+    }
+}
 
 fn prune_tool_history(history: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let tool_total = history
-        .iter()
-        .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
-        .count();
-    let mut seen = 0;
-    history
-        .iter()
-        .map(|m| {
-            let is_tool = m.get("role").and_then(|r| r.as_str()) == Some("tool");
-            if !is_tool {
-                return m.clone();
-            }
-            seen += 1;
-            if tool_total - seen < PRUNE_KEEP_TOOL_MESSAGES {
-                return m.clone();
-            }
-            let mut pruned = m.clone();
-            pruned["content"] = serde_json::json!("[older tool output omitted]");
-            pruned
-        })
-        .collect()
+    let mut out: Vec<serde_json::Value> = history.to_vec();
+    let mut used = 0usize;
+    for message in out.iter_mut().rev() {
+        if message.get("role").and_then(|r| r.as_str()) != Some("tool") {
+            continue;
+        }
+        let size = message
+            .get("content")
+            .and_then(|value| value.as_str())
+            .map(str::len)
+            .unwrap_or(0);
+        if used == 0 || used.saturating_add(size) <= TOOL_OUTPUT_BUDGET {
+            used = used.saturating_add(size);
+            continue;
+        }
+        let digest = message
+            .get("content")
+            .and_then(|value| value.as_str())
+            .map(tool_output_digest)
+            .unwrap_or_else(|| "[tool output omitted]".to_string());
+        message["content"] = serde_json::json!(digest);
+    }
+    out
+}
+
+fn normalize_query(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn is_cache_buster(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    matches!(
+        key.as_str(),
+        "cb" | "cache" | "cachebust" | "_" | "t" | "ts" | "timestamp" | "refresh" | "nocache" | "v"
+    ) || key.starts_with("utm_")
+        || matches!(key.as_str(), "fbclid" | "gclid" | "mc_cid" | "mc_eid")
+}
+
+fn normalize_fetch_url(raw: &str) -> String {
+    let Ok(mut url) = url::Url::parse(raw.trim()) else {
+        return raw.trim().to_string();
+    };
+    url.set_fragment(None);
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| !is_cache_buster(key))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.set_query(None);
+    if !kept.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in kept {
+            query.append_pair(&key, &value);
+        }
+    }
+    url.to_string()
+}
+
+fn repeat_key(name: &str, args: &serde_json::Value) -> String {
+    match name {
+        "web_fetch" => {
+            let url = args
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let start = args
+                .get("start")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let grep = args
+                .get("grep")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            format!(
+                "web_fetch\n{}\nstart={start}\ngrep={}",
+                normalize_fetch_url(url),
+                normalize_query(grep)
+            )
+        }
+        "web_search" => {
+            let query = args
+                .get("query")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            format!("web_search\n{}", normalize_query(query))
+        }
+        "get_time" => "get_time".to_string(),
+        _ => format!(
+            "{name}\n{}",
+            serde_json::to_string(args).unwrap_or_default()
+        ),
+    }
+}
+
+fn tool_cache_key(name: &str, args: &serde_json::Value) -> Option<String> {
+    match name {
+        "web_fetch" => {
+            let url = args.get("url").and_then(|value| value.as_str())?;
+            let start = args
+                .get("start")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let max_chars = args
+                .get("max_chars")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(tools::WEB_FETCH_CAP as u64);
+            let grep = args
+                .get("grep")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            Some(format!(
+                "web_fetch\n{}\nstart={start}\nmax={max_chars}\ngrep={}",
+                normalize_fetch_url(url),
+                normalize_query(grep)
+            ))
+        }
+        "web_search" => {
+            let query = args.get("query").and_then(|value| value.as_str())?;
+            let max_results = args
+                .get("max_results")
+                .or_else(|| args.get("count"))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(tools::WEB_SEARCH_CAP as u64);
+            let fields = args
+                .get("fields")
+                .map(|value| serde_json::to_string(value).unwrap_or_default())
+                .unwrap_or_default();
+            Some(format!(
+                "web_search\n{}\nmax={max_results}\nfields={fields}",
+                normalize_query(query)
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn prune_chat_history(history: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -1965,32 +2102,25 @@ fn prune_chat_history(history: &[serde_json::Value]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+#[derive(Default)]
 struct RepeatGuard {
-    last_key: Option<String>,
-    streak: u32,
+    counts: HashMap<String, u32>,
+    asked: HashSet<String>,
 }
 
 impl RepeatGuard {
     fn new() -> Self {
-        Self {
-            last_key: None,
-            streak: 0,
-        }
+        Self::default()
     }
 
     fn note(&mut self, key: String) -> u32 {
-        if self.last_key.as_deref() == Some(key.as_str()) {
-            self.streak += 1;
-        } else {
-            self.streak = 1;
-            self.last_key = Some(key);
-        }
-        self.streak
+        let count = self.counts.entry(key).or_insert(0);
+        *count += 1;
+        *count
     }
 
-    fn reset(&mut self) {
-        self.streak = 0;
-        self.last_key = None;
+    fn first_ask(&mut self, key: &str) -> bool {
+        self.asked.insert(key.to_string())
     }
 }
 
@@ -2198,6 +2328,10 @@ trait ToolRunner {
         call: &serde_json::Value,
         history: &mut Vec<serde_json::Value>,
     ) -> AppResult<StepControl>;
+
+    fn long_running(&self) -> bool {
+        false
+    }
 }
 
 fn history_has_tool_message(history: &[serde_json::Value]) -> bool {
@@ -2206,14 +2340,31 @@ fn history_has_tool_message(history: &[serde_json::Value]) -> bool {
         .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
 }
 
+const TURN_BUDGET: Duration = Duration::from_secs(300);
+const LONG_TURN_BUDGET: Duration = Duration::from_secs(1200);
+
 async fn agent_loop<M: ModelClient, T: ToolRunner>(
     model: &M,
     tools: &mut T,
     history: &mut Vec<serde_json::Value>,
     max_iterations: usize,
     replay_reasoning: bool,
+    started: Instant,
+    on_event: &dyn EventSink,
 ) -> AppResult<(String, bool)> {
-    for _ in 0..max_iterations {
+    for round in 0..max_iterations {
+        let budget = if tools.long_running() {
+            LONG_TURN_BUDGET
+        } else {
+            TURN_BUDGET
+        };
+        if started.elapsed() >= budget {
+            break;
+        }
+        on_event.send(StreamEvent::Step {
+            step: (round + 1) as u32,
+            max: max_iterations as u32,
+        });
         let step = match model.stream_step(history.as_slice(), true).await {
             Ok(Some(step)) => step,
             Ok(None) => return Ok((String::new(), false)),
@@ -2222,8 +2373,8 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
                     && !is_content_blocked_error(&error)
                     && !history_has_tool_message(history) =>
             {
-                model.stream_step(history.as_slice(), false).await?;
-                return Ok((String::new(), false));
+                let final_step = model.stream_step(history.as_slice(), false).await?;
+                return Ok((final_step.map(|step| step.text).unwrap_or_default(), false));
             }
             Err(error) => return Err(error),
         };
@@ -2244,8 +2395,12 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
             }
         }
     }
-    model.stream_step(history.as_slice(), false).await?;
-    Ok((String::new(), true))
+    history.push(serde_json::json!({
+        "role": "system",
+        "content": "Step budget exhausted. Answer now with the results above. Do not call more tools. State what is unverified."
+    }));
+    let final_step = model.stream_step(history.as_slice(), false).await?;
+    Ok((final_step.map(|step| step.text).unwrap_or_default(), true))
 }
 
 struct RealModel<'a> {
@@ -2278,7 +2433,14 @@ impl ModelClient for RealModel<'_> {
                 self.cancel,
             )
             .await
-            .map(|()| None);
+            .map(|text| {
+                Some(Iteration {
+                    text,
+                    calls: Vec::new(),
+                    reasoning: String::new(),
+                    responses_items: Vec::new(),
+                })
+            });
         }
         if responses::only(&self.req.base_url, &self.req.model) {
             let effort = responses_effort(self.client, self.req, &self.key).await;
@@ -2436,8 +2598,11 @@ struct RealTools<'a> {
     key: &'a str,
     repeat: RepeatGuard,
     last_pure: Option<(String, String)>,
+    get_time_cache: Option<String>,
+    tool_cache: HashMap<String, String>,
     children: u32,
     untrusted: bool,
+    long_running: bool,
 }
 
 impl RealTools<'_> {
@@ -2565,6 +2730,13 @@ impl ToolRunner for RealTools<'_> {
         {
             self.untrusted = true;
         }
+        if matches!(
+            name.as_str(),
+            "sandbox_run" | "run_powershell" | "research_run"
+        ) || name.starts_with("mcp__")
+        {
+            self.long_running = true;
+        }
 
         self.on_event.send(StreamEvent::ToolStart {
             id: id.clone(),
@@ -2572,38 +2744,60 @@ impl ToolRunner for RealTools<'_> {
             summary: tools::summarize_call(&name, &args),
         });
 
-        let repeat_key = format!(
-            "{name}\n{}",
-            serde_json::to_string(&args).unwrap_or_default()
-        );
-        let streak = self.repeat.note(repeat_key.clone());
-        if collapsible_call(&name) {
-            if self
-                .last_pure
-                .as_ref()
-                .is_some_and(|(k, _)| k == &repeat_key)
-            {
-                let output = self
-                    .last_pure
-                    .as_ref()
-                    .map(|(_, o)| o.clone())
-                    .unwrap_or_default();
+        if name == "get_time"
+            && let Some(output) = self.get_time_cache.clone()
+        {
+            let allowed =
+                permissions::check(self.app, &name, &[], self.req.project_id.as_deref()).await;
+            if matches!(allowed, Ok(permissions::Effect::Allow)) {
+                self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: true,
+                    preview: truncate_preview(&output),
+                });
                 history.push(tool_text_message(&id, &output));
-                if streak < 3 {
-                    return Ok(StepControl::Continue);
-                }
+                return Ok(StepControl::Continue);
+            }
+        }
+
+        let key = repeat_key(&name, &args);
+        let count = self.repeat.note(key.clone());
+        if collapsible_call(&name) {
+            if let Some((known, output)) = &self.last_pure
+                && known == &key
+            {
+                let output = output.clone();
+                self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: true,
+                    preview: truncate_preview(&output),
+                });
+                history.push(tool_text_message(&id, &output));
+                return Ok(StepControl::Continue);
             }
         } else {
             self.last_pure = None;
         }
-        if streak >= 3 {
+        if count >= 3 {
+            if !self.repeat.first_ask(&key) {
+                self.on_event.send(StreamEvent::ToolResult {
+                    id: id.clone(),
+                    ok: false,
+                    preview: "Stopped: repeated tool call after a warning".to_string(),
+                });
+                history.push(tool_text_message(
+                    &id,
+                    "Stopped: the same tool call repeated after a warning",
+                ));
+                return Ok(StepControl::StopTurn);
+            }
             let question_id = format!("{}:{id}:repeat", self.req.request_id);
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.state.insert_question(&question_id, tx)?;
             self.on_event.send(StreamEvent::QuestionAsked {
                 id: question_id.clone(),
                 question: format!(
-                    "`{name}` was called 3 times in a row with identical arguments. The turn is paused."
+                    "`{name}` was called {count} times this turn with the same arguments. The turn is paused."
                 ),
                 options: vec!["Keep going".to_string(), "Stop here".to_string()],
                 allow_custom: true,
@@ -2620,19 +2814,10 @@ impl ToolRunner for RealTools<'_> {
                 });
                 history.push(tool_text_message(
                     &id,
-                    "Stopped by user: same tool call repeated 3 times",
+                    "Stopped by user: the same tool call repeated after a warning",
                 ));
                 return Ok(StepControl::StopTurn);
             }
-            if answer != "Keep going" {
-                self.on_event.send(StreamEvent::ToolResult {
-                    id: id.clone(),
-                    ok: true,
-                    preview: answer.chars().take(120).collect(),
-                });
-                history.push(tool_text_message(&id, &format!("User guidance: {answer}")));
-            }
-            self.repeat.reset();
         }
 
         let mut resources = approval_resources(&name, &args);
@@ -3007,6 +3192,33 @@ impl ToolRunner for RealTools<'_> {
             return Ok(StepControl::Continue);
         }
 
+        let cache_key = tool_cache_key(&name, &args);
+        if let Some(output) = cache_key
+            .as_ref()
+            .and_then(|key| self.tool_cache.get(key))
+            .cloned()
+        {
+            let output =
+                format!("{output}\n[cached: the same request already ran earlier this turn]");
+            if name == "web_search" {
+                let domains = domains_in(&output);
+                if !domains.is_empty() {
+                    self.on_event.send(StreamEvent::ToolSources {
+                        id: id.clone(),
+                        domains,
+                        files: Vec::new(),
+                    });
+                }
+            }
+            self.on_event.send(StreamEvent::ToolResult {
+                id: id.clone(),
+                ok: true,
+                preview: truncate_preview(&output),
+            });
+            history.push(tool_text_message(&id, &output));
+            return Ok(StepControl::Continue);
+        }
+
         let touched_path = if matches!(name.as_str(), "sandbox_write" | "sandbox_edit") {
             args.get("path")
                 .and_then(|v| v.as_str())
@@ -3050,8 +3262,14 @@ impl ToolRunner for RealTools<'_> {
             }
         } {
             Ok(done) => {
+                if name == "get_time" {
+                    self.get_time_cache = Some(done.output.clone());
+                }
+                if let Some(cache) = cache_key.as_ref() {
+                    self.tool_cache.insert(cache.clone(), done.output.clone());
+                }
                 if collapsible_call(&name) {
-                    self.last_pure = Some((repeat_key.clone(), done.output.clone()));
+                    self.last_pure = Some((key.clone(), done.output.clone()));
                 }
                 if let Some(artifact) = done.artifact {
                     self.on_event.send(StreamEvent::Artifact {
@@ -3102,6 +3320,10 @@ impl ToolRunner for RealTools<'_> {
             }
         }
         Ok(StepControl::Continue)
+    }
+
+    fn long_running(&self) -> bool {
+        self.long_running
     }
 }
 
@@ -3183,14 +3405,36 @@ async fn run_agentic(
         key: &key,
         repeat: RepeatGuard::new(),
         last_pure: None,
+        get_time_cache: None,
+        tool_cache: HashMap::new(),
         children: 0,
         untrusted: req.subagent,
+        long_running: false,
     };
-    let (text, exhausted) =
-        agent_loop(&model, &mut runner, &mut history, max, replay_reasoning).await?;
+    let started = Instant::now();
+    let (text, exhausted) = agent_loop(
+        &model,
+        &mut runner,
+        &mut history,
+        max,
+        replay_reasoning,
+        started,
+        on_event,
+    )
+    .await?;
     if exhausted {
+        let budget = if runner.long_running() {
+            LONG_TURN_BUDGET
+        } else {
+            TURN_BUDGET
+        };
+        let reason = if started.elapsed() >= budget {
+            "time_limit"
+        } else {
+            "step_limit"
+        };
         on_event.send(StreamEvent::Finish {
-            reason: Some("step_limit".to_string()),
+            reason: Some(reason.to_string()),
         });
     }
     Ok(text)
@@ -3203,7 +3447,7 @@ async fn stream_completion(
     history: Vec<serde_json::Value>,
     on_event: &dyn EventSink,
     cancel: &Notify,
-) -> AppResult<()> {
+) -> AppResult<String> {
     if responses::only(&req.base_url, &req.model) {
         return stream_responses_completion(client, req, &key, &history, on_event, cancel).await;
     }
@@ -3235,19 +3479,20 @@ async fn stream_completion(
             return stream_responses_completion(client, req, &key, &history, on_event, cancel)
                 .await;
         }
-        Err(error) if is_cancel_shutdown(&error) => return Ok(()),
+        Err(error) if is_cancel_shutdown(&error) => return Ok(String::new()),
         Err(error) => return Err(error),
     };
 
     let mut stream = resp.bytes_stream();
     let mut parser = sse::SseParser::new();
     let mut received: u32 = 0;
+    let mut text = String::new();
     let notified = cancel.notified();
     tokio::pin!(notified);
 
     loop {
         let next = tokio::select! {
-            _ = &mut notified => return Ok(()),
+            _ = &mut notified => return Ok(String::new()),
             next = stream.next() => next,
         };
 
@@ -3261,7 +3506,7 @@ async fn stream_completion(
                             "empty response from provider".to_string(),
                         ))
                     } else {
-                        Ok(())
+                        Ok(text)
                     };
                 }
                 sse::SseItem::Payload(payload) => {
@@ -3274,6 +3519,7 @@ async fn stream_completion(
                     }
                     if !mapped.text.is_empty() {
                         received += 1;
+                        text.push_str(&mapped.text);
                         on_event.send(StreamEvent::Delta { text: mapped.text });
                     }
                     if !mapped.reasoning.is_empty() {
@@ -3305,7 +3551,7 @@ async fn stream_completion(
             "empty response from provider".to_string(),
         ));
     }
-    Ok(())
+    Ok(text)
 }
 
 async fn stream_responses_completion(
@@ -3315,7 +3561,7 @@ async fn stream_responses_completion(
     history: &[serde_json::Value],
     on_event: &dyn EventSink,
     cancel: &Notify,
-) -> AppResult<()> {
+) -> AppResult<String> {
     let effort = responses_effort(client, req, key).await;
     let history = prune_tool_history(history);
     let replay_reasoning_items = !is_agentrouter(req.connection_kind.as_deref(), &req.base_url);
@@ -3363,9 +3609,9 @@ async fn stream_responses_completion(
             ProviderRoute::new(req.connection_kind.as_deref(), Some(&req.connection_id)),
         )
         .await
-        .map(|_| ());
+        .map(|iteration| iteration.map(|step| step.text).unwrap_or_default());
     }
-    result.map(|_| ())
+    result.map(|iteration| iteration.map(|step| step.text).unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -4516,9 +4762,18 @@ mod tests {
         let model = FakeModel::new(vec![FakeStep::Tool, FakeStep::Text("done")]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
-        agent_loop(&model, &mut tools, &mut history, 25, false)
-            .await
-            .expect("loop");
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        agent_loop(
+            &model,
+            &mut tools,
+            &mut history,
+            25,
+            false,
+            Instant::now(),
+            &sink,
+        )
+        .await
+        .expect("loop");
         assert_eq!(model.call_count(), 2);
         assert_eq!(tools.runs.get(), 1);
         assert_eq!(model.tools_flags(), vec![true, true]);
@@ -4530,9 +4785,18 @@ mod tests {
         let model = FakeModel::new(vec![FakeStep::Text("hi")]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
-        agent_loop(&model, &mut tools, &mut history, 25, false)
-            .await
-            .expect("loop");
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        agent_loop(
+            &model,
+            &mut tools,
+            &mut history,
+            25,
+            false,
+            Instant::now(),
+            &sink,
+        )
+        .await
+        .expect("loop");
         assert_eq!(model.call_count(), 1);
         assert_eq!(tools.runs.get(), 0);
         assert_eq!(model.tools_flags(), vec![true]);
@@ -4543,23 +4807,55 @@ mod tests {
         let model = FakeModel::new(Vec::new());
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
-        agent_loop(&model, &mut tools, &mut history, 3, false)
-            .await
-            .expect("loop");
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        agent_loop(
+            &model,
+            &mut tools,
+            &mut history,
+            3,
+            false,
+            Instant::now(),
+            &sink,
+        )
+        .await
+        .expect("loop");
         assert_eq!(model.call_count(), 4);
         assert_eq!(tools.runs.get(), 3);
         assert_eq!(model.tools_flags(), vec![true, true, true, false]);
     }
 
+    #[tokio::test]
+    async fn agent_loop_returns_the_final_answer_when_the_time_budget_is_gone() {
+        let model = FakeModel::new(vec![FakeStep::Text("final answer")]);
+        let mut tools = FakeTools::new();
+        let mut history = Vec::new();
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        let (text, exhausted) = agent_loop(
+            &model,
+            &mut tools,
+            &mut history,
+            25,
+            false,
+            Instant::now() - TURN_BUDGET - Duration::from_secs(1),
+            &sink,
+        )
+        .await
+        .expect("loop");
+        assert!(exhausted);
+        assert_eq!(text, "final answer");
+        assert_eq!(model.tools_flags(), vec![false]);
+    }
+
     #[test]
-    fn repeat_guard_counts_consecutive_identical_calls() {
+    fn repeat_guard_counts_across_interleaved_calls() {
         let mut guard = RepeatGuard::new();
-        assert_eq!(guard.note("read::{}".to_string()), 1);
-        assert_eq!(guard.note("read::{}".to_string()), 2);
-        assert_eq!(guard.note("read::{}".to_string()), 3);
-        assert_eq!(guard.note("other::{}".to_string()), 1);
-        guard.reset();
-        assert_eq!(guard.note("read::{}".to_string()), 1);
+        assert_eq!(guard.note("fetch".to_string()), 1);
+        assert_eq!(guard.note("other".to_string()), 1);
+        assert_eq!(guard.note("fetch".to_string()), 2);
+        assert_eq!(guard.note("other".to_string()), 2);
+        assert_eq!(guard.note("fetch".to_string()), 3);
+        assert!(guard.first_ask("fetch"));
+        assert!(!guard.first_ask("fetch"));
     }
 
     #[test]
@@ -4894,7 +5190,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_keeps_newest_tool_output_only() {
+    fn prune_keeps_all_tool_output_under_budget() {
         let history = vec![
             serde_json::json!({"role": "user", "content": "hi"}),
             tool_text_message("call-1", "old output one"),
@@ -4904,19 +5200,38 @@ mod tests {
         ];
         let pruned = prune_tool_history(&history);
         assert_eq!(pruned.len(), 5);
-        assert_eq!(pruned[0]["content"], serde_json::json!("hi"));
-        assert_eq!(
-            pruned[1]["content"],
-            serde_json::json!("[older tool output omitted]")
-        );
-        assert_eq!(pruned[1]["tool_call_id"], serde_json::json!("call-1"));
-        assert_eq!(
-            pruned[2]["content"],
-            serde_json::json!("[older tool output omitted]")
-        );
-        assert_eq!(pruned[3]["content"], serde_json::json!("working"));
+        assert_eq!(pruned[1]["content"], serde_json::json!("old output one"));
+        assert_eq!(pruned[2]["content"], serde_json::json!("old output two"));
         assert_eq!(pruned[4]["content"], serde_json::json!("fresh output"));
-        assert_eq!(pruned[4]["tool_call_id"], serde_json::json!("call-3"));
+    }
+
+    #[test]
+    fn prune_digests_only_when_the_tool_budget_is_exceeded() {
+        let big = "x".repeat(TOOL_OUTPUT_BUDGET / 2 + 1);
+        let history = vec![
+            tool_text_message("call-1", &big),
+            tool_text_message("call-2", &big),
+            tool_text_message("call-3", "fresh output"),
+        ];
+        let pruned = prune_tool_history(&history);
+        assert!(
+            pruned[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("tool output omitted")
+        );
+        assert_eq!(pruned[1]["content"], serde_json::json!(big));
+        assert_eq!(pruned[2]["content"], serde_json::json!("fresh output"));
+    }
+
+    #[test]
+    fn repeat_key_ignores_cache_busting_params() {
+        let first = serde_json::json!({"url": "https://example.com/pricing?cb=1#top"});
+        let second = serde_json::json!({"url": "https://example.com/pricing?v=2"});
+        assert_eq!(
+            repeat_key("web_fetch", &first),
+            repeat_key("web_fetch", &second)
+        );
     }
 
     #[test]

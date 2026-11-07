@@ -235,9 +235,9 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Meter matches stored usage.
 
 ## C7. Prune old tool outputs
-- **Status:** Have (0.1.7: older role:tool outputs replaced in send payload only, newest kept)
+- **Status:** Have (0.1.7: older role:tool outputs replaced in send payload only, newest kept. next: prunes by bytes, keeping the newest 64 KiB of tool output; older results keep a byte count and the first 300 chars)
 - **Ref:** † OpenCode first clears old tool outputs and keeps only the most recent chunk (about 40K tokens in its docs), skipping some important tools.
-- **Build:** When building context, replace tool results older than N turns with "[output omitted, N bytes]". Stored messages stay intact. Pure function over the message list.
+- **Build:** When building the send payload, keep the newest tool outputs up to a 64 KiB budget and replace older ones with a byte count plus a short head. Stored messages stay intact. Pure function over the message list.
 - **Done:** Pruned context is smaller, stored history unchanged.
 
 ## C8. Compaction summary
@@ -277,9 +277,9 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Split argument fixtures assemble into valid JSON.
 
 ## D3. Step cap and doom-loop guard
-- **Status:** Have (0.3.3 verified: max_iterations 25 clamped 1..32 with a no-tools fallback at the cap; the same tool with the same arguments three times in a row asks Keep going / Stop here)
+- **Status:** Have (0.3.3 verified: max_iterations 25 clamped 1..32 with a no-tools fallback at the cap. next: repeats are counted across the whole turn with normalized web URLs and search queries; the third repeat asks Keep going / Stop here once, and a further repeat stops the turn)
 - **Ref:** † OpenCode has a `doom_loop` permission that asks before repeating identical calls.
-- **Build:** Max steps per turn (for example 25). If the same tool with the same arguments repeats 3 times, stop and ask the user.
+- **Build:** Max steps per turn (for example 25). If the same tool with the same arguments repeats 3 times in a turn, ask the user once; stop on the next repeat.
 - **Done:** A looping mock model is halted.
 
 ## D4. Permission engine
