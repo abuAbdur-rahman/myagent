@@ -572,6 +572,7 @@ export async function insertMessageFull(
     finishReason: sqlNull(input.finishReason),
     toolLogJson: sqlNull(input.toolLogJson),
     artifactsJson: sqlNull(input.artifactsJson),
+    error: null,
   });
   return message;
 }
@@ -585,12 +586,13 @@ export interface MessageMeta {
   finishReason: string | null;
   toolLogJson: string | null;
   artifactsJson: string | null;
+  error: string | null;
 }
 
 export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8 WHERE id = $9",
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8, error = $9 WHERE id = $10",
     [
       meta.reasoning,
       meta.thinkingMs,
@@ -600,6 +602,7 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
       meta.finishReason,
       meta.toolLogJson,
       meta.artifactsJson,
+      meta.error,
       id,
     ],
   );

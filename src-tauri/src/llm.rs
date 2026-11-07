@@ -2361,10 +2361,12 @@ async fn agent_loop<M: ModelClient, T: ToolRunner>(
         if started.elapsed() >= budget {
             break;
         }
-        on_event.send(StreamEvent::Step {
-            step: (round + 1) as u32,
-            max: max_iterations as u32,
-        });
+        if round > 0 {
+            on_event.send(StreamEvent::Step {
+                step: round as u32,
+                max: max_iterations as u32,
+            });
+        }
         let step = match model.stream_step(history.as_slice(), true).await {
             Ok(Some(step)) => step,
             Ok(None) => return Ok((String::new(), false)),
@@ -3842,6 +3844,21 @@ mod tests {
         }
     }
 
+    fn step_events(sink: &RecordingSink) -> Vec<u32> {
+        sink.0
+            .lock()
+            .map(|events| {
+                events
+                    .iter()
+                    .filter_map(|event| match event {
+                        StreamEvent::Step { step, .. } => Some(*step),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn spec_names(specs: &serde_json::Value) -> Vec<String> {
         specs
             .as_array()
@@ -4777,6 +4794,7 @@ mod tests {
         assert_eq!(model.call_count(), 2);
         assert_eq!(tools.runs.get(), 1);
         assert_eq!(model.tools_flags(), vec![true, true]);
+        assert_eq!(step_events(&sink), vec![1]);
         assert!(history_has_tool_message(&history));
     }
 
@@ -4800,6 +4818,7 @@ mod tests {
         assert_eq!(model.call_count(), 1);
         assert_eq!(tools.runs.get(), 0);
         assert_eq!(model.tools_flags(), vec![true]);
+        assert!(step_events(&sink).is_empty());
     }
 
     #[tokio::test]

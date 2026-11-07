@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { Brain } from "lucide-react";
 import { useApp } from "../lib/store";
+import { toast } from "../lib/toast";
+import { Button } from "./ui";
 import { PendingMemoryList } from "./PendingMemoryList";
 
 export function pendingForConversation<T extends { conversation_id: string | null }>(
@@ -15,7 +18,10 @@ export function PendingMemoryBar({
   projectId,
   onChanged,
 }: { projectId?: string; onChanged?: () => void } = {}) {
-  const { pendingMemories, activeConversationId, setSettingsPage } = useApp();
+  const { pendingMemories, activeConversationId, setSettingsPage, approveAllPendingMemories } =
+    useApp();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const rows = projectId
     ? pendingMemories.filter(
         (memory) => memory.scope === "project" && memory.project_id === projectId,
@@ -26,6 +32,19 @@ export function PendingMemoryBar({
 
   const shown = rows.slice(0, VISIBLE);
   const hidden = rows.length - shown.length;
+  const acceptAll = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await approveAllPendingMemories(rows);
+      toast(`${rows.length} ${rows.length === 1 ? "memory" : "memories"} saved`);
+      onChanged?.();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div
@@ -49,10 +68,25 @@ export function PendingMemoryBar({
             {hidden} more in Settings
           </button>
         )}
+        {rows.length > 1 && (
+          <Button
+            size="sm"
+            className={hidden > 0 ? "" : "ml-auto"}
+            disabled={busy}
+            onClick={() => void acceptAll()}
+          >
+            {busy ? "Saving…" : "Accept all"}
+          </Button>
+        )}
       </div>
       <div className="mt-2">
         <PendingMemoryList rows={shown} compact onChanged={onChanged} />
       </div>
+      {error && (
+        <p className="mt-1 text-xs text-danger" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

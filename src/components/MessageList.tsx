@@ -10,6 +10,7 @@ import {
   FileText,
   GitBranch,
   Globe,
+  AlertTriangle,
   ListChecks,
   Pencil,
   RefreshCw,
@@ -23,7 +24,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useApp } from "../lib/store";
-import { classifyStreamError } from "../lib/api";
+import { classifyStreamError, STREAM_ERROR_TITLES } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
@@ -38,6 +39,7 @@ import { Logo } from "./Logo";
 import { Button, IconButton } from "./ui";
 import { cn } from "../lib/utils";
 import { parseToolLog, parseDeclaredArtifacts } from "../lib/db";
+import { groupToolEntries } from "../lib/tool-groups";
 import type { Message, ToolLogEntry } from "../lib/types";
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
@@ -67,6 +69,36 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
           {message}
         </pre>
       </details>
+    </div>
+  );
+}
+
+function AgentErrorCard({ message, retryable }: { message: string; retryable: boolean }) {
+  const { retryTurn } = useApp();
+  const { cls, hint } = classifyStreamError(message);
+  return (
+    <div
+      role="alert"
+      className="my-2 rounded-card border border-danger/50 bg-danger/5 px-3 py-2 text-sm"
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={16} className="mt-0.5 flex-none text-danger" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-danger">{STREAM_ERROR_TITLES[cls]}</p>
+          <p className="mt-0.5 text-muted">{hint}</p>
+          <details className="mt-1 text-xs text-muted">
+            <summary className="cursor-pointer">Technical details</summary>
+            <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono">
+              {message}
+            </pre>
+          </details>
+        </div>
+        {retryable && (
+          <Button size="sm" onClick={() => void retryTurn()}>
+            Retry
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -118,6 +150,7 @@ export function ToolLogView({
   useEffect(() => {
     setCollapsed(collapseToolCalls);
   }, [resetKey, collapseToolCalls]);
+  const rows = useMemo(() => groupToolEntries(entries), [entries]);
   if (entries.length === 0) return null;
   const running = entries.filter((e) => e.status === "running").length;
   const failed = entries.filter((e) => e.status === "err").length;
@@ -145,47 +178,73 @@ export function ToolLogView({
       </button>
       {!collapsed && (
         <div className="flex flex-col gap-1">
-          {entries.map((entry) => (
-            <details key={entry.id} className="text-[13px]">
-              <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
-                {entry.status === "running" && (
-                  <span
-                    role="status"
-                    aria-label="Running"
-                    className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent"
+          {rows.map((row) =>
+            row.kind === "single" ? (
+              <ToolEntryRow key={row.entry.id} entry={row.entry} />
+            ) : (
+              <details key={`group-${row.name}`} className="group text-[13px]">
+                <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
+                  <ToolIcon name={row.name} />
+                  <span className="truncate">{row.label}</span>
+                  <span className="text-muted">· {row.entries.length}</span>
+                  <ChevronDown
+                    size={14}
+                    className="ml-auto transition-transform group-open:rotate-180"
+                    aria-hidden="true"
                   />
-                )}
-                {entry.status === "ok" && (
-                  <span role="img" aria-label="Succeeded">
-                    <Check size={14} className="text-success" />
-                  </span>
-                )}
-                {entry.status === "err" && (
-                  <span role="img" aria-label="Failed">
-                    <X size={14} className="text-danger" />
-                  </span>
-                )}
-                <ToolIcon name={entry.name} />
-                {entry.name === "skill" ? (
-                  <span className="truncate rounded bg-active px-1.5 py-px text-xs text-accent">
-                    Using skill: {entry.summary.replace(/^Skill:\s*/, "").trim() || "unknown"}
-                  </span>
-                ) : (
-                  <span className="truncate" title={entry.summary}>
-                    {entry.summary}
-                  </span>
-                )}
-              </summary>
-              {entry.preview && (
-                <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
-                  {entry.preview}
-                </pre>
-              )}
-            </details>
-          ))}
+                </summary>
+                <div className="ml-5 flex flex-col gap-1">
+                  {row.entries.map((entry) => (
+                    <ToolEntryRow key={entry.id} entry={entry} />
+                  ))}
+                </div>
+              </details>
+            ),
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function ToolEntryRow({ entry }: { entry: ToolLogEntry }) {
+  return (
+    <details className="text-[13px]">
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
+        {entry.status === "running" && (
+          <span
+            role="status"
+            aria-label="Running"
+            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent"
+          />
+        )}
+        {entry.status === "ok" && (
+          <span role="img" aria-label="Succeeded">
+            <Check size={14} className="text-success" />
+          </span>
+        )}
+        {entry.status === "err" && (
+          <span role="img" aria-label="Failed">
+            <X size={14} className="text-danger" />
+          </span>
+        )}
+        <ToolIcon name={entry.name} />
+        {entry.name === "skill" ? (
+          <span className="truncate rounded bg-active px-1.5 py-px text-xs text-accent">
+            Using skill: {entry.summary.replace(/^Skill:\s*/, "").trim() || "unknown"}
+          </span>
+        ) : (
+          <span className="truncate" title={entry.summary}>
+            {entry.summary}
+          </span>
+        )}
+      </summary>
+      {entry.preview && (
+        <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
+          {entry.preview}
+        </pre>
+      )}
+    </details>
   );
 }
 
@@ -446,6 +505,7 @@ function AssistantMessage({
   onRemember: (content: string) => Promise<void>;
 }) {
   const live = streaming && streamingId === message.id;
+  const { canRetry } = useApp();
   const baseSegments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
   const segments = useMemo(() => {
     const out: (ContentSegment | OpenUISegment)[] = [];
@@ -528,6 +588,9 @@ function AssistantMessage({
           </>
         )}
       </div>
+      {message.error && (
+        <AgentErrorCard message={message.error} retryable={isLast && !streaming && canRetry} />
+      )}
       {!busy && (
         <>
           {isLast && (message.finish_reason === "step_limit" || message.finish_reason === "time_limit") && (

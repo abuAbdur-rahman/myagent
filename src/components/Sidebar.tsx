@@ -39,6 +39,7 @@ function ChatRow({
   chat,
   projectName,
   dotColor,
+  working,
   renaming,
   onOpen,
   menu,
@@ -49,6 +50,7 @@ function ChatRow({
   chat: Conversation;
   projectName: string | null;
   dotColor: string | null;
+  working?: boolean;
   renaming: boolean;
   onOpen: () => void;
   menu: MenuEntry[];
@@ -99,6 +101,13 @@ function ChatRow({
           className="h-2 w-2 flex-none rounded-full"
           style={{ background: dotColor }}
           title={projectName ?? undefined}
+        />
+      )}
+      {working && (
+        <span
+          role="status"
+          aria-label="Working"
+          className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent"
         />
       )}
       <span className="min-w-0 flex-1 truncate text-sm">{chat.title}</span>
@@ -220,6 +229,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     conversations,
     projects,
     activeConversationId,
+    workingConversationId,
     selectConversation,
     newConversation,
     removeConversation,
@@ -608,11 +618,18 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                     onClick={() => openChat(thread.id)}
                     title={thread.title}
                     className={cn(
-                      "h-7 truncate rounded-control px-2 text-left text-[13px] text-muted hover:bg-hover hover:text-text",
+                      "flex h-7 items-center gap-1.5 truncate rounded-control px-2 text-left text-[13px] text-muted hover:bg-hover hover:text-text",
                       activeConversationId === thread.id && "bg-active text-text",
                     )}
                   >
-                    {thread.title}
+                    {thread.id === workingConversationId && (
+                      <span
+                        role="status"
+                        aria-label="Working"
+                        className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent"
+                      />
+                    )}
+                    <span className="truncate">{thread.title}</span>
                   </button>
                 ))}
                 {entry.threads.length === 0 && (
@@ -662,6 +679,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                         chat={chat}
                         projectName={project?.name ?? null}
                         dotColor={project ? projectColor(project.id) : null}
+                        working={chat.id === workingConversationId}
                         renaming={renamingId === chat.id}
                         onOpen={() => openChat(chat.id)}
                         menu={chatMenu(chat)}

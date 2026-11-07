@@ -103,6 +103,7 @@ const messageSchema = z.object({
   tool_log: z.string().nullish(),
   artifacts: z.string().nullish(),
   attachments: z.string().nullish(),
+  error: z.string().nullish(),
   model: z.string().nullish(),
   rating: z.number().nullish(),
   created_at: z.number(),

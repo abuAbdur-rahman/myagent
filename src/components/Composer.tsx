@@ -290,6 +290,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     messages,
     conversations,
     activeConversationId,
+    workingConversationId,
     clearActiveConversation,
     setSettingsPage,
     newConversation,
@@ -730,7 +731,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         </div>
       </div>
       <div className="mt-1.5 text-center text-xs text-muted">
-        MyAgent can make mistakes. Check important info.
+        {workingConversationId && workingConversationId !== activeConversationId
+          ? "Another chat is working — open it to stop it before sending here."
+          : "MyAgent can make mistakes. Check important info."}
       </div>
       <ModelPickerHost />
     </div>

@@ -22,6 +22,38 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.10.2",
+    date: "2026-11-07",
+    summary:
+      "The activity pill belongs to the working chat, repeated tool calls fold into groups, failures appear inline with a plain-language reason, and multiple memory proposals can be accepted at once.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "The step counter no longer appears on a turn that never used a tool. It starts after the first tool round, so a simple answer shows Thinking and elapsed time without a misleading step 1/25.",
+      },
+      {
+        kind: "improved",
+        text: "Repeated tool calls fold into one expandable row by tool, such as Searched the web · 4 or Read pages · 6, instead of a long flat list. Single calls still show on their own.",
+      },
+      {
+        kind: "improved",
+        text: "A failed turn shows an inline error card with a plain-language heading and hint - internet connection, API key, model, rate limit, context length, blocked request or provider server - plus collapsible technical details. Retry stays on the card when the turn can be retried.",
+      },
+      {
+        kind: "new",
+        text: "When more than one memory is waiting for review, the memory bar has Accept all. It saves every pending note for that chat or project and reports the count.",
+      },
+      {
+        kind: "improved",
+        text: "Only the chat that is working shows the activity pill. Other chats can be opened while a turn runs, the working chat is marked with a spinner in the sidebar, and its live output comes back when you return. Sending in another chat waits for the active turn to finish.",
+      },
+      {
+        kind: "fixed",
+        text: "Migration 32 adds a nullable error column to messages, so an inline error survives a reload. Existing messages keep an empty error.",
+      },
+    ],
+  },
+  {
     version: "0.10.1",
     date: "2026-11-07",
     summary:
