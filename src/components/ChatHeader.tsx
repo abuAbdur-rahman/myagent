@@ -267,7 +267,7 @@ export function ChatHeader() {
         label="Context inspector"
         title={`Context · ${contextPct ?? 0}% used`}
         onClick={openContextPanel}
-        className="w-auto gap-1 px-1.5"
+        className="flex w-auto items-center gap-1 px-1.5"
       >
         <ContextRing pct={contextPct} warn={contextPct !== null && contextPct >= 80} />
         {contextPct !== null && contextPct >= 50 && (
