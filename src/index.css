@@ -150,6 +150,7 @@
   --color-line: var(--line);
   --color-line-subtle: var(--line-subtle);
   --color-line-strong: var(--line-strong);
+  --color-code: var(--code-bg);
   --color-fg: var(--text);
   --color-fg-2: var(--text-2);
   --color-fg-3: var(--text-3);
@@ -320,7 +321,18 @@ kbd {
 }
 
 .shell-grid {
-  transition: grid-template-columns 0.15s ease-out;
+  transition: grid-template-columns 0.2s ease-out;
+}
+
+.dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -28px;
+  height: 28px;
+  background: linear-gradient(transparent, var(--bg-canvas));
+  pointer-events: none;
 }
 
 .settings-hit {
@@ -567,6 +579,11 @@ kbd {
   line-height: 1.65;
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+.markdown-compact {
+  font-size: 0.8125rem;
+  line-height: 1.55;
 }
 
 .markdown p,

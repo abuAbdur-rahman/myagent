@@ -59,26 +59,26 @@ export function PendingMemoryList({
           key={memory.id}
           className={
             compact
-              ? "rounded-control border border-border px-2.5 py-2"
-              : "rounded-control border border-border px-3 py-2"
+              ? "rounded-control border border-line-subtle px-2.5 py-2"
+              : "rounded-control border border-line-subtle px-3 py-2"
           }
         >
-          <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-            <span className="rounded-full bg-hover px-1.5 py-0.5">
+          <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] text-fg-3">
+            <span className="rounded-full bg-fill-2 px-1.5 py-0.5">
               {memory.kind}
             </span>
             <span>
               {memory.scope === "global" ? "Every chat" : "This project"}
             </span>
             {memory.trust === "untrusted" && (
-              <span className="rounded-full bg-warn/15 px-1.5 py-0.5 font-medium text-warn">
+              <span className="rounded-full bg-warn/15 px-1.5 py-0.5 font-medium text-warning">
                 Web or document
               </span>
             )}
           </div>
           {editing === memory.id ? (
             <textarea
-              className="w-full rounded-control border border-border bg-transparent px-2 py-1 text-sm"
+              className="w-full rounded-control border border-line-subtle bg-transparent px-2 py-1 text-sm"
               rows={3}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}

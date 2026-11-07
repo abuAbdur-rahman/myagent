@@ -195,7 +195,7 @@ async function collectModelOptions(
 }
 
 function clampPanelWidth(width: number): number {
-  return Math.min(1000, Math.max(380, Math.round(width)));
+  return Math.min(640, Math.max(360, Math.round(width)));
 }
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -1244,7 +1244,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelView, setPanelViewState] = useState<PanelView>("session");
   const [panelWidth, setPanelWidthState] = useState(() => {
     const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 640);
+    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 400);
   });
 
   const setPanelWidth = useCallback((width: number) => {

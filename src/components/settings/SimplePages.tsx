@@ -122,12 +122,17 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-border px-2 py-3" data-setting-term={label}>
+    <div
+      className="flex min-h-[56px] items-center justify-between gap-6 border-b border-line-subtle py-3.5"
+      data-setting-term={label}
+    >
       <div className="min-w-0">
         <div className="text-sm font-medium">{label}</div>
-        {description && <div className="text-xs text-muted">{description}</div>}
+        {description && <div className="mt-0.5 text-[13px] text-fg-3">{description}</div>}
       </div>
-      <div className="flex w-[260px] flex-none items-center justify-end gap-1.5">{children}</div>
+      <div className="flex max-w-[60%] flex-none flex-wrap items-center justify-end gap-1.5">
+        {children}
+      </div>
     </div>
   );
 }
@@ -556,6 +561,7 @@ function McpToolList({
               options={MCP_DECISIONS}
               onChange={(value) => onDecision(server, tool.name, value)}
               label={"Approval for " + tool.name}
+              tone="policy"
             />
           </li>
         ))}
@@ -757,6 +763,7 @@ function McpServerDefaults({
           options={MCP_MODES}
           onChange={(value) => onApproval(server.id, value)}
           label={"Default approval for " + server.name}
+          tone="policy"
         />
       </div>
       <div className="flex items-center gap-3">

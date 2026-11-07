@@ -2,18 +2,25 @@
 name: myagent
 description: Local-first BYOK Windows chat client
 colors:
-  window-bg: "#202020"
-  sidebar: "#1b1b1b"
-  surface: "#2b2b2b"
-  surface-2: "#323232"
-  border: "#3d3d3d"
-  text: "#f2f2f2"
-  muted: "#a0a0a0"
-  accent: "#c96442"
-  accent-contrast: "#ffffff"
-  danger: "#c42b1c"
-  success: "#0f7b0f"
-  warn: "#e0a040"
+  sunken: "#1a1917"
+  canvas: "#232220"
+  raised: "#2b2a27"
+  overlay: "#32312d"
+  line: "rgba(255,248,235,0.12)"
+  line-subtle: "rgba(255,248,235,0.07)"
+  line-strong: "rgba(255,248,235,0.22)"
+  text: "#ebe8e2"
+  text-2: "#b4afa6"
+  text-3: "#a19c93"
+  text-off: "#6a665f"
+  accent: "oklch(0.55 0.14 38)"
+  accent-text: "oklch(0.78 0.12 38)"
+  accent-soft: "oklch(0.70 0.14 38 / 0.16)"
+  on-accent: "#ffffff"
+  danger: "#f0757c"
+  success: "#6cc48a"
+  warning: "#e6b055"
+  info: "#7db1f0"
 typography:
   body:
     fontFamily: "Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
@@ -24,32 +31,33 @@ typography:
     fontFamily: "Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
     fontSize: "15px"
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 1.65
   greeting:
-    fontFamily: "Georgia, Times New Roman, serif"
+    fontFamily: "Georgia, Iowan Old Style, Times New Roman, serif"
     fontSize: "28px"
-    fontWeight: 600
-    lineHeight: 1.25
+    fontWeight: 400
+    lineHeight: 1.2
   title:
-    fontFamily: "Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
-    fontSize: "22px"
-    fontWeight: 600
+    fontFamily: "Georgia, Iowan Old Style, Times New Roman, serif"
+    fontSize: "28px"
+    fontWeight: 400
   label:
     fontFamily: "Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
-    fontSize: "11px"
+    fontSize: "12px"
     fontWeight: 500
-    letterSpacing: "0.06em"
   small:
     fontFamily: "Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
     fontSize: "13px"
     fontWeight: 400
   mono:
     fontFamily: "Cascadia Code, Consolas, monospace"
-    fontSize: "12px"
+    fontSize: "13px"
 rounded:
-  control: "4px"
-  card: "8px"
-  composer: "12px"
+  chip: "6px"
+  field: "8px"
+  card: "12px"
+  composer: "16px"
+  full: "999px"
 spacing:
   xs: "4px"
   sm: "8px"
@@ -58,29 +66,29 @@ spacing:
 components:
   button-primary:
     backgroundColor: "{colors.accent}"
-    textColor: "{colors.accent-contrast}"
-    rounded: "{rounded.control}"
+    textColor: "{colors.on-accent}"
+    rounded: "{rounded.field}"
     padding: "0 12px"
     height: "32px"
   button-default:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "{colors.raised}"
     textColor: "{colors.text}"
-    rounded: "{rounded.control}"
+    rounded: "{rounded.field}"
     padding: "0 12px"
     height: "32px"
   input:
-    backgroundColor: "{colors.surface-2}"
+    backgroundColor: "rgba(255,248,235,0.035)"
     textColor: "{colors.text}"
-    rounded: "{rounded.card}"
+    rounded: "{rounded.field}"
     padding: "0 10px"
     height: "32px"
   message-bubble:
-    backgroundColor: "{colors.surface-2}"
+    backgroundColor: "{colors.raised}"
     textColor: "{colors.text}"
-    rounded: "12px"
-    padding: "10px 14px"
+    rounded: "{rounded.composer}"
+    padding: "10px 16px"
   composer:
-    backgroundColor: "{colors.surface-2}"
+    backgroundColor: "{colors.raised}"
     textColor: "{colors.text}"
     rounded: "{rounded.composer}"
     padding: "8px 10px"
@@ -92,23 +100,23 @@ components:
 
 **Creative North Star: "The Local Vault"**
 
-The interface is a Windows desktop room the user controls: a 32px title bar with
+The interface is a Windows desktop room the user controls: a 36px title bar with
 real caption buttons, a quiet sidebar, a centered reading column, and an
 artifact pane that opens beside the chat. Nothing glows for attention. Surfaces
-are flat charcoal steps separated by hairline borders; a single terracotta
-accent marks the few things that act — Send, primary buttons, the active row,
-focus rings.
+are warm charcoal steps (`sunken → canvas → raised → overlay`) separated by
+alpha hairlines; a single accent hue marks the few things that act — Send, one
+primary button per view, selection tint, focus rings.
 
 The system ships in two themes (light and dark) that share the same structure;
 dark is the default and the reference. Type is the system UI stack everywhere
-except two places: the welcome greeting, which is set in Georgia serif, and code,
-which is Cascadia Code monospace.
+except two places: page titles and the welcome greeting, set in Georgia serif at
+weight 400, and code, set in Cascadia Code monospace.
 
 **Key Characteristics:**
 - Windows-native shell: custom title bar, 900px minimum width, Ctrl-first shortcuts.
-- Flat tonal ladder, hairline borders, one terracotta accent.
-- 32px controls, 8px cards, 12px composer and bubbles.
-- Serif greeting, system UI body, monospace code.
+- Warm tonal ladder, alpha hairlines, one accent hue with per-preset contrast.
+- 32px controls, 8px fields, 12px cards, 16px composer and dialogs.
+- Serif titles and greeting, sans UI and chat body, monospace code.
 
 ## Colors
 
@@ -116,33 +124,43 @@ A charcoal ladder in dark mode and a paper ladder in light mode, with one accent
 and three functional signals.
 
 ### Primary
-- **Vault Clay** (#c96442): the accent. Send button, primary buttons, active
-  sidebar bar, focus rings, avatar fills, model checkmarks. Six presets exist
-  (Clay, Blue #0067c0, Green #0f7b0f, Purple #7a42d6, Pink #c239b3, Graphite
-  #5c5c5c); the default is Clay.
+- **Accent Hue** (default Clay, `oklch(.55 .14 38)`): solid fills for primary
+  buttons, toggle-on and Send. `--accent-text` is a lighter tint for links and
+  accent icons; `--accent-soft` is a 12–16% tint for selected states. Six presets
+  set one hue: Clay 38, Blue 255, Green 150, Violet 295, Pink 350, Graphite 80
+  (low chroma, near-black text on solid).
 
-### Neutral
-- **Window** (#202020 dark / #f3f3f3 light): the title bar and app background.
-- **Sidebar** (#1b1b1b dark / #eeeeee light): the navigation rail.
-- **Surface** (#2b2b2b dark / #ffffff light): the chat column, cards, buttons.
-- **Surface Raised** (#323232 dark / #f9f9f9 light): inputs, user bubbles, hover
-  grounds.
-- **Line** (#3d3d3d dark / #e0e0e0 light): every 1px border and input stroke.
-- **Text** (#f2f2f2 dark / #1b1b1b light): body and heading text.
-- **Muted** (#a0a0a0 dark / #6b6b6b light): secondary copy, labels, placeholders.
+### Neutral (dark / light)
+- **Sunken** (#1a1917 / #f0eee9): title bar, sidebar, settings nav.
+- **Canvas** (#232220 / #faf9f6): chat column, panels, project page.
+- **Raised** (#2b2a27 / #ffffff): composer, user bubble, cards, modal.
+- **Overlay** (#32312d / #ffffff): menus, popovers, tooltips.
+- **Fill 1/2/3** (3.5% / 6.5% / 12% alpha): inset groups, hover, pressed/active.
+- **Line subtle / line / line strong** (7% / 12% / 22% alpha): dividers, controls,
+  hover edges. Draw them with `box-shadow: inset 0 0 0 1px` so layout never shifts.
+- **Text** (#ebe8e2 / #1f1d1a): primary.
+- **Text 2** (#b4afa6 / #5d5953): secondary copy.
+- **Text 3** (#a19c93 / #6e6962): meta, labels, placeholders; ≥ 4.5:1 on every
+  surface including overlay.
+- **Text off** (#6a665f / #a39e95): disabled and decorative only.
 
 ### Tertiary (functional signals)
-- **Danger Red** (#c42b1c): destructive buttons and text, error banners, the
-  window-close hover.
-- **Stored Green** (#0f7b0f): connected status, success states.
-- **Warning Amber** (#e0a040 dark / #9d5d00 light): high context usage.
+- **Danger** (#f0757c / #be2f3a): errors, destructive actions, window-close hover.
+- **Success** (#6cc48a / #1d7a3e): connected status, success states.
+- **Warning** (#e6b055 / #8a5a00): needs attention, high context usage.
+- **Info** (#7db1f0 / #1f5fae): neutral information only.
+
+Status always pairs an icon and a word with the colour.
 
 ### Named Rules
-**The One Signal Rule.** Color appears only to carry meaning. If a color would
-merely decorate, it is not used.
+**The Surface-First Rule.** Use surface contrast before adding a border. Never a
+surface and a border on the same edge.
 
-**The Accent-Is-Action Rule.** The accent marks things the user can act on —
-never plain text, never selection alone.
+**The One Signal Rule.** Color appears only to carry meaning. Hover is a fill,
+active is a stronger fill, focus is a ring — never all three at once.
+
+**The Accent-Is-Action Rule.** Solid accent fills once per view. Accent never
+carries body text; `--accent-text` exists for that.
 
 ## Typography
 
@@ -152,96 +170,107 @@ never plain text, never selection alone.
 renders identically offline and with the network unplugged.
 
 ### Hierarchy
-- **Greeting** (Georgia serif, 600, 28px, 1.25): the welcome screen and the
-  Projects title. The only serif on any screen.
-- **Title** (600, 20–22px): dialog and view headings (Settings, project detail).
-- **Chat** (400, 15px, 1.6): message and composer text.
+- **Page title** (Georgia serif, 400, 28px, 1.2): welcome greeting, Projects,
+  project detail.
+- **Dialog title** (sans, 600, 18px): settings and form dialogs.
+- **Chat** (400, 15px, 1.65): assistant and user message text.
 - **Body** (400, 14px, 1.45): UI chrome, lists, form copy.
-- **Small** (400, 13px): buttons, table cells, menu items.
-- **Micro** (400–500, 11–12px, 0.06em, uppercase for group headers): sidebar
-  section labels, badges, hints, table metadata.
-- **Mono** (Cascadia Code, Consolas, 12px): code, kbd, token counts, URLs.
+- **Small** (400–500, 13px): buttons, table cells, menu items, descriptions.
+- **Meta** (400–500, 12px): section labels, badges, hints, timestamps. This is
+  the floor; no 10–11px text.
+- **Mono** (Cascadia Code, Consolas, 13px): code, URLs, keys, shortcuts, token
+  counts. Not for model names or ordinary values.
 
 ### Named Rules
 **The System-Font Rule.** No webfont is loaded, ever.
 
-**The Serif-Is-Greeting Rule.** Serif appears only in the welcome greeting and
-top-level view titles — nowhere else.
+**The Serif-Is-Title Rule.** Serif appears only in page titles and the welcome
+greeting, at weight 400 — nowhere else.
 
 ## Layout
 
-A title bar (32px) sits above a three-column grid: sidebar (260px, collapsible
-to 56px) | main column | artifact panel (0 or 420px). The reading column is
-capped at 760px and centered; the welcome column at 720px. The composer is
-anchored to the bottom of the thread with a context bar above it. Minimum window
+A title bar (36px) sits above a three-column grid: sidebar (264px, collapsible
+to 56px) | main column | artifact panel (400px, resizable 360–640, or full).
+The main canvas has a 16px rounded top-left corner and an inset hairline, so the
+sidebar reads as behind it without a divider. The reading column is capped at
+720px and centered; the composer at 760px. The composer sits in a dock with a
+28px fade above it, and the context ring lives in its action row. Minimum window
 size is 900×560. Regions scroll independently; there is no page scroll.
 
 ## Elevation & Depth
 
-**The Flat-By-Default Rule.** No shadows on surfaces. Depth comes from the tonal
-ladder and 1px Line borders. The only shadows in the system belong to floating
-layers: modal dialogs, popover menus, the command palette, and toasts
-(`0 8px 24px rgba(0,0,0,.14)` light / `.5` dark).
+**The Surface-First Rule.** Depth comes from the tonal ladder first. Shadows are
+small and functional: `shadow-sm` on the composer and user bubble, `shadow-md` on
+menus, popovers and the jump pill, `shadow-lg` on the settings modal. The modal
+scrim is 62% dark / 38% light with a 3px backdrop blur. Never a border and a
+shadow doing the same job on one edge.
 
 ## Shapes
 
-Controls are 4px rectangles; cards, inputs and panels are 8px; the composer,
-message bubbles and dialogs are 12px. Icon buttons are square 32/28/24px grids.
-The Send button is a 32px accent circle. Borders are always 1px Line.
+Chips are 6px; buttons, inputs, menu items and rows are 8px; cards, code blocks
+and bubbles are 12px; the composer and dialogs are 16px; toggles, avatars,
+status pills and suggestion chips are fully round. Icon buttons are square
+32/28/24px grids. The Send button is a 32px rounded square (10px).
 
 ## Components
 
 ### Buttons
-- **Shape:** 4px radius, 32px height (28px small), 12px horizontal padding.
-- **Primary:** accent fill with white text — the single main action per view.
-- **Default:** surface fill with a Line border.
-- **Ghost:** transparent, muted text — icon and tertiary actions.
-- **Danger:** red text with red border; **Danger Fill:** red fill, white text.
-- **Hover / Focus:** hover steps the tone; focus draws a 2px accent ring. No
-  transforms, no lift.
+- **Shape:** 8px radius, 32px height (28px small), 12px horizontal padding.
+- **Primary:** accent fill with on-accent text — one per view.
+- **Secondary:** fill-2 with an inset Line hairline.
+- **Ghost:** transparent, text-2 — icon and tertiary actions.
+- **Danger:** danger text, danger-soft hover. No red outline by default.
+- **Hover / Focus:** hover steps the fill; focus draws a 2px accent-line ring
+  with a 3px soft halo. No transforms, no lift.
 
 ### Inputs / Fields
-- **Style:** Line stroke on Surface Raised fill, 8px radius, 32px height.
-- **Focus:** the stroke becomes the accent with a 1px accent ring.
-- **Toggles:** 40×20 pill switches; **Segmented:** bordered groups with an
-  accent-filled active segment (used in settings).
+- **Style:** fill-1, inset 1px Line, 8px radius, 32px height.
+- **Focus:** the same recipe everywhere — inset accent-line plus a 3px
+  accent-ring halo.
+- **Toggles:** 36×20 pill switches, 16px thumb. **Segmented:** fill-2 track,
+  selected raised chip with an inset hairline; policy segments tint Allow green
+  and Block red.
 
 ### Sidebar
-- **Style:** flat 260px rail on Sidebar tone with a right hairline; collapses to
-  a 56px icon rail.
-- **Rows:** 32–34px, 4px radius; active chat rows get a 3px accent bar at the
-  left edge; project rows show a stable color dot.
-- **Groups:** sticky uppercase micro headers (Pinned, Today, Yesterday,
-  Previous 7 days, Older).
-- **Filter:** All chats, Pinned or one project by name; a filtered empty list
-  names the filter and offers Show all chats instead of reading like data loss.
-- **Footer:** a settings icon plus a profile button (avatar, name, plan) opening
-  a small menu.
+- **Style:** 264px rail on Sunken; collapses to a 56px icon rail. The main canvas
+  rounds over its top-right corner instead of a divider.
+- **New chat:** 36px solid accent with the shortcut on the right — the one solid
+  accent in the rail.
+- **Rows:** 34px (30 compact), 8px radius. Every row reserves a 16px lead slot,
+  so titles never jump between dotted and plain rows.
+- **Active:** fill-3 plus brighter text only. No left accent bar. A dot or a
+  spinner in the lead slot means unread/working.
+- **Groups:** 12px sentence-case headers with a rotating chevron; fold state is
+  remembered.
+- **Order:** a chat appears once — under its project if it has one, otherwise in
+  its date group. “All projects” is the page; “Projects” is the rail section.
+- **Footer:** profile row (name, provider status) with the settings gear beside it.
 
 ### Message
-- **User:** right-aligned bubble on Surface Raised with a Line border, 12px
-  radius, max 80% width; hover reveals copy and edit actions.
-- **Assistant:** accent-ring avatar with the model name in muted micro type, then
-  rendered markdown; streaming shows an accent caret, and no in-transcript dots —
-  the activity pill above the composer owns that signal; hover reveals copy,
-  regenerate (last only), branch, thumbs up/down, artifact and remember actions.
-- **Attachments:** a 168px card per document — type chip from the mime type, name
-  wrapping to two lines, and a meta line with size and character count ("Size
-  unknown" when it is).
+- **User:** right-aligned bubble on Raised, 16px radius, no border, `shadow-sm`,
+  max 80% width; hover reveals copy and edit.
+- **Assistant:** logo + model name in 12px meta type once per run, then rendered
+  markdown at 15px/1.65. Thinking and tool calls are collapsed trace rows.
+  Streaming shows an accent caret; the activity pill owns the in-between signal.
+  Hover reveals copy, regenerate (last only), branch, ratings and remember.
+- **Rhythm:** 28px between turns, 8px between a turn’s meta and body, 12px between
+  blocks. Density changes the gap.
+- **Attachments:** a 168px card per document — type chip, name, size and character
+  count.
 
 ### Composer
-- **Shape:** 12px radius container on Surface Raised with a Line border; accent
-  border + ring while focused.
-- **Contents:** auto-growing textarea (to ~8 lines), an attachment row when used,
-  and a tool row: model chip, effort (only where the provider takes it), mic, and
-  a 32px round Send button (accent; gray when disabled) that becomes Stop while
-  streaming. No token estimate — the context bar above the box already answers
-  that question with provider numbers.
-- **Slash menu:** an anchored popover above the box for `/new /clear /memory
-  /settings`, with arrow-key navigation.
+- **Shape:** 16px radius on Raised, inset Line, `shadow-sm`. Focus = inset
+  accent-line + 3px accent-ring.
+- **Contents:** auto-growing textarea (to ~8 lines); an attachment row when used;
+  a tool row of ghost controls — attach, model chip, reasoning chip, then the
+  context ring with a live percent, mic and a 32px Send. Send is neutral until
+  there is text, then accent. It becomes Stop while streaming.
+- **Context:** the ring opens the Context panel. Compact lives inside that panel.
+- **Slash menu:** anchored popover above the box, 8px rows, arrow-key navigation.
 - **Paste:** a block-looking paste arrives as a fenced code block with a guessed
-  language; Undo restores the raw paste at the same position.
-- **Footer:** a centered muted disclaimer line.
+  language; Undo restores the raw paste.
+- **Footer:** 12px meta line — Markdown, `/` commands, keys stay local, plus
+  Compact/Show all when relevant.
 
 ### Activity pill
 - **Shape:** `rounded-full` on Surface Raised at 95% with a Line border, the
@@ -255,42 +284,44 @@ The Send button is a 32px accent circle. Borders are always 1px Line.
   the button; the pill only renders above the composer while recording.
 
 ### Progress panel and artifacts
-- **Progress dock:** 344px right-hand pane with a left hairline and a 48px
-  header: steps in position order, Outputs (the first two artifacts as cards, the
-  rest and written files as rows), and Used in this session (uploads, images,
-  tools, search domains).
-- **Artifact dock:** 480px by default, resizable and persisted; the header starts
-  with a Back arrow to Progress, then title, language badge, tabs, Copy, Download,
-  minimize, fullscreen and Close.
-- **Narrow windows:** below 1100px the open panel overlays the app with a dimmed
-  backdrop and traps focus; closing returns focus to the header trigger.
-- **Outputs gallery:** the sidebar entry opens a grid of the chat's artifacts and
-  written files, each with the same sandboxed thumbnail the panel uses.
+- **Progress dock:** right-hand pane at the shared panel width, 48px header;
+  steps in order, Outputs (first two as cards), and Used in this session.
+- **Artifact dock:** 400px by default, resizable 360–640 and persisted. Row 1:
+  back, title, language badge, close. Row 2: segmented Preview/Code tabs, then
+  Copy, Download, a divider, minimize and fullscreen. Footer: sandbox status.
+- **Narrow windows:** below 1100px the open panel overlays the app with a scrim
+  and traps focus; closing returns focus to the header trigger.
+- **Outputs gallery:** a grid of the chat’s artifacts and written files, each with
+  the same sandboxed thumbnail the panel uses.
 
 
 ### Command Palette
-- **Shape:** a 560px modal pinned near the top over a dimmed app, with a 48px
-  search row, section headers, 36px rows, and a keyboard-hint footer.
+- **Shape:** a 560px modal pinned near the top over a 62% scrim with 3px blur, a
+  48px search row, 12px section headers, 36px rows, and a keyboard-hint footer.
 
 ### Toasts & Confirms
-- **Toasts:** bottom-center dark pills with optional action buttons, auto-dismiss.
-- **Confirms:** small centered dialogs with Cancel plus a primary or
-  danger-filled confirm; Esc and backdrop both cancel.
+- **Toasts:** bottom-center overlay pills with a 1px strong hairline and optional
+  action buttons; auto-dismiss.
+- **Confirms:** small centered dialogs with Cancel plus a primary or danger-filled
+  confirm; Esc and backdrop both cancel.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** separate regions with a 1px Line border or a step on the tonal ladder.
-- **Do** reserve the primary button for the single main action on a screen.
-- **Do** keep the reading column at 760px and the welcome column at 720px.
-- **Do** show keyboard focus with a visible 2px accent ring on every control.
+- **Do** separate regions with surface contrast first; add a hairline only as a
+  secondary cue.
+- **Do** reserve solid accent for one primary action per view.
+- **Do** keep the reading column at 720px and the composer at 760px.
+- **Do** show keyboard focus with a 2px accent ring on every control.
 - **Do** keep destructive actions behind the confirm dialog.
+- **Do** pair status colour with an icon and a word.
 
 ### Don't:
-- **Don't** add shadows to surfaces; floating layers only.
-- **Don't** load a webfont or use serif outside greetings and view titles.
+- **Don't** use a surface and a border on the same edge.
+- **Don't** load a webfont or use serif outside page titles and the greeting.
 - **Don't** ship a control that does nothing — omit it until it works.
 - **Don't** use color as the only cue for state.
+- **Don't** use 10–11px text for anything a user must read.
 
 ## Screen Design Process
 
@@ -375,11 +406,11 @@ Compare it with a neighbouring screen: if it looks like a different app, fix it.
 
 | Thing | Values in this app |
 |---|---|
-| Radii | 4 buttons, rows, chips · 8 inputs, cards, groups · 12 dialogs, composer, bubbles |
-| Control heights | 24 small icon button · 28 small button · 32 default button and input · 34 settings nav row · 48 header |
-| Type (px) | 11 micro and tags · 12 meta, help, mono · 13 dense body and buttons · 14 base · 15 chat · 20–22 title · 28 greeting |
-| Spacing (px) | 4, 6, 8, 10, 12, 16, 20, 24, 28 — no other values |
-| Colour | tokens only: `--bg --sidebar --surface --surface-2 --border --text --muted --hover --active --accent --accent-contrast --danger --success --warn --shadow`. Never hard-code hex; the accent is user-selectable |
+| Radii | 6 chips and tags · 8 buttons, inputs, rows, menu items · 12 cards, code blocks, bubbles · 16 composer, dialogs · 999 toggles, avatars, status pills |
+| Control heights | 24 small icon button · 28 small button and icon button · 32 default button and input · 34 sidebar row (30 compact) · 36 title bar and new chat · 48 header · 52 composer minimum |
+| Type (px) | 12 meta and tags · 13 small and controls · 14 UI · 15 chat (1.65) · 18 dialog title · 28 serif page title |
+| Spacing (px) | 4, 8, 12, 16, 20, 24, 32, 40, 48 — layout values only; control padding may use 10 |
+| Colour | tokens only: `--bg-sunken --bg-canvas --bg-raised --bg-overlay --fill-1/2/3 --line-subtle --line --line-strong --text --text-2 --text-3 --text-off --accent-solid --accent-text --accent-soft --on-accent --danger --success --warning --info`. Never hard-code hex; the accent is a hue preset |
 | Icons | `lucide-react`, 16px inside the control grid. Icon-only buttons need `aria-label` and `title` |
 | Mono | mono for anything a machine wrote: commands, keys, URLs, tool names |
 | Settings dialog | 960×640 max, shrinking to 92vw × 86vh; the page content scrolls, the 220px nav never does |

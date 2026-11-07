@@ -367,7 +367,7 @@ function MenuPanel({
         onPointerEnter={onPointerEnter}
         style={pos ?? { left: 0, top: 0, visibility: "hidden" }}
         className={cn(
-          "fixed z-[1010] box-border min-w-[11rem] max-w-[min(22rem,calc(100vw-16px))] overflow-y-auto overscroll-contain rounded-[12px] border border-ui-line bg-ui-popup p-1 text-ui-fg shadow-ui outline-none animate-ui-in motion-reduce:animate-none [scrollbar-width:thin]",
+          "fixed z-[1010] box-border min-w-[11rem] max-w-[min(22rem,calc(100vw-16px))] overflow-y-auto overscroll-contain rounded-card bg-ui-popup p-1 text-ui-fg shadow-[var(--shadow-md)] ring-1 ring-line outline-none animate-ui-in motion-reduce:animate-none [scrollbar-width:thin]",
           className,
         )}
       >

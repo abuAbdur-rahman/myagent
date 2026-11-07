@@ -4,13 +4,13 @@ import {
   BookOpen,
   Check,
   ChevronDown,
-  ChevronUp,
+  ChevronRight,
   Copy,
   FileCode,
   FileText,
   GitBranch,
   Globe,
-  AlertTriangle,
+  CircleAlert,
   ListChecks,
   Pencil,
   RefreshCw,
@@ -48,27 +48,30 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   return (
     <div
       role="alert"
-      className="rounded-control border border-danger/60 bg-danger/10 px-3 py-2 text-sm"
+      className="rounded-card bg-danger-soft p-3 text-sm shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--danger)_28%,transparent)]"
     >
-      <div className="flex items-start justify-between gap-3">
-        <span className="break-words font-medium text-danger">{hint}</span>
+      <div className="flex items-start gap-2.5">
+        <CircleAlert size={16} className="mt-0.5 flex-none text-danger" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="m-0 font-semibold text-danger">{hint}</p>
+          <details className="mt-1.5 text-xs text-fg-3">
+            <summary className="cursor-pointer">Technical details</summary>
+            <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-field bg-code p-2 font-mono">
+              {message}
+            </pre>
+          </details>
+        </div>
         <div className="flex shrink-0 items-center gap-1">
           {canRetry && !streaming && (
-            <Button size="sm" variant="danger" onClick={() => void retryTurn()}>
+            <Button size="sm" variant="secondary" onClick={() => void retryTurn()}>
               Retry
             </Button>
           )}
-          <IconButton label="Dismiss error" size={24} onClick={onDismiss}>
+          <IconButton label="Dismiss error" size={28} onClick={onDismiss}>
             <X size={14} />
           </IconButton>
         </div>
       </div>
-      <details className="mt-1 text-xs text-danger opacity-80">
-        <summary className="cursor-pointer">Raw error</summary>
-        <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words">
-          {message}
-        </pre>
-      </details>
     </div>
   );
 }
@@ -79,22 +82,22 @@ function AgentErrorCard({ message, retryable }: { message: string; retryable: bo
   return (
     <div
       role="alert"
-      className="my-2 rounded-card border border-danger/50 bg-danger/5 px-3 py-2 text-sm"
+      className="my-2 rounded-card bg-danger-soft p-3 text-sm shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--danger)_28%,transparent)]"
     >
-      <div className="flex items-start gap-2">
-        <AlertTriangle size={16} className="mt-0.5 flex-none text-danger" aria-hidden="true" />
+      <div className="flex items-start gap-2.5">
+        <CircleAlert size={16} className="mt-0.5 flex-none text-danger" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="font-medium text-danger">{STREAM_ERROR_TITLES[cls]}</p>
-          <p className="mt-0.5 text-muted">{hint}</p>
-          <details className="mt-1 text-xs text-muted">
+          <p className="m-0 font-semibold text-danger">{STREAM_ERROR_TITLES[cls]}</p>
+          <p className="m-0 mt-0.5 text-[13px] text-fg-2">{hint}</p>
+          <details className="mt-1.5 text-xs text-fg-3">
             <summary className="cursor-pointer">Technical details</summary>
-            <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono">
+            <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-field bg-code p-2 font-mono">
               {message}
             </pre>
           </details>
         </div>
         {retryable && (
-          <Button size="sm" onClick={() => void retryTurn()}>
+          <Button size="sm" variant="secondary" onClick={() => void retryTurn()}>
             Retry
           </Button>
         )}
@@ -156,7 +159,7 @@ export function ToolLogView({
   const failed = entries.filter((e) => e.status === "err").length;
   return (
     <div
-      className="mb-6 rounded-card border border-border bg-surface px-3 py-2"
+      className="rounded-card bg-fill-1 px-2 py-1.5 shadow-[inset_0_0_0_1px_var(--line-subtle)]"
       aria-live="polite"
     >
       <button
@@ -164,7 +167,7 @@ export function ToolLogView({
         onClick={() => setCollapsed((v) => !v)}
         aria-expanded={!collapsed}
         aria-label={collapsed ? "Show tool calls" : "Hide tool calls"}
-        className="group flex w-full items-center gap-2 py-0.5 text-left text-[13px] text-muted hover:text-text"
+        className="group flex w-full items-center gap-2 py-0.5 text-left text-[13px] text-fg-3 hover:text-fg"
       >
         <Wrench size={14} />
         <span className="flex-1">
@@ -172,21 +175,25 @@ export function ToolLogView({
           {running > 0 && ` · ${running} running`}
           {failed > 0 && ` · ${failed} failed`}
         </span>
-        <span className="visible grid h-5 w-5 place-items-center rounded-control opacity-40 focus-visible:opacity-100 group-hover:opacity-100">
-          {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        <span className="grid h-5 w-5 place-items-center rounded-chip">
+          <ChevronDown
+            size={14}
+            className={cn("transition-transform", collapsed && "-rotate-90")}
+            aria-hidden="true"
+          />
         </span>
       </button>
       {!collapsed && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-0.5 pt-0.5">
           {rows.map((row) =>
             row.kind === "single" ? (
               <ToolEntryRow key={row.entry.id} entry={row.entry} />
             ) : (
               <details key={`group-${row.name}`} className="group text-[13px]">
-                <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
+                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-chip py-0.5 text-fg-3 hover:text-fg">
                   <ToolIcon name={row.name} />
                   <span className="truncate">{row.label}</span>
-                  <span className="text-muted">· {row.entries.length}</span>
+                  <span className="text-fg-3">· {row.entries.length}</span>
                   {row.entries.some((entry) => entry.status === "err") && (
                     <span className="text-danger">
                       · {row.entries.filter((entry) => entry.status === "err").length} failed
@@ -198,7 +205,7 @@ export function ToolLogView({
                     aria-hidden="true"
                   />
                 </summary>
-                <div className="ml-5 flex flex-col gap-1">
+                <div className="ml-5 flex flex-col gap-0.5 border-l border-line-subtle pl-3">
                   {row.entries.map((entry) => (
                     <ToolEntryRow key={entry.id} entry={entry} />
                   ))}
@@ -215,12 +222,12 @@ export function ToolLogView({
 function ToolEntryRow({ entry }: { entry: ToolLogEntry }) {
   return (
     <details className="text-[13px]">
-      <summary className="flex cursor-pointer list-none items-center gap-2 py-0.5 text-muted hover:text-text">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-chip py-0.5 text-fg-3 hover:text-fg">
         {entry.status === "running" && (
           <span
             role="status"
             aria-label="Running"
-            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent"
+            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-line-strong border-t-accent-text"
           />
         )}
         {entry.status === "ok" && (
@@ -235,7 +242,7 @@ function ToolEntryRow({ entry }: { entry: ToolLogEntry }) {
         )}
         <ToolIcon name={entry.name} />
         {entry.name === "skill" ? (
-          <span className="truncate rounded bg-active px-1.5 py-px text-xs text-accent">
+          <span className="truncate rounded-chip bg-accent-soft px-1.5 py-px text-xs text-accent-text">
             Using skill: {entry.summary.replace(/^Skill:\s*/, "").trim() || "unknown"}
           </span>
         ) : (
@@ -245,7 +252,7 @@ function ToolEntryRow({ entry }: { entry: ToolLogEntry }) {
         )}
       </summary>
       {entry.preview && (
-        <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-vault-raised p-2 font-mono text-xs text-text">
+        <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-field bg-code p-2 font-mono text-xs text-fg-2">
           {entry.preview}
         </pre>
       )}
@@ -276,8 +283,8 @@ function ActionButton({
       title={title}
       onClick={onClick}
       className={cn(
-        "grid h-7 w-7 place-items-center rounded-control",
-        active ? "text-accent" : "text-muted hover:text-text",
+        "grid h-7 w-7 place-items-center rounded-field",
+        active ? "bg-fill-2 text-accent-text" : "text-fg-3 hover:bg-fill-2 hover:text-fg",
       )}
     >
       {children}
@@ -330,7 +337,7 @@ function UserMessage({
         <MessageImages message={message} />
         <MessageDocuments message={message} />
         <div className="w-[80%]">
-          <div className="rounded-card border border-accent bg-surface-2 px-2.5 py-2">
+          <div className="rounded-composer bg-raised px-3 py-2 shadow-[inset_0_0_0_1px_var(--accent-line),var(--shadow-sm)]">
             <TipTapEditor
               initialMarkdown={message.content}
               placeholder="Edit message"
@@ -362,10 +369,10 @@ function UserMessage({
     <div className="msg user group flex flex-col items-end" data-mid={message.id}>
       <MessageImages message={message} />
       <MessageDocuments message={message} />
-      <div className="max-w-[80%] break-words rounded-composer border border-border bg-surface-2 px-3.5 py-2.5">
+      <div className="max-w-[80%] break-words rounded-composer bg-raised px-4 py-2.5 shadow-[var(--shadow-sm)]">
         <Markdown content={message.content} />
       </div>
-      <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <div className="mt-0.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
           <Copy size={14} />
         </ActionButton>
@@ -434,22 +441,20 @@ function ArtifactCard({
   const { panelOpen, panelArtifact, panelView, openArtifact, closePanel } = useApp();
   const isOpen = panelOpen && panelView === "artifact" && panelArtifact?.id === id;
   return (
-    <div className="my-3 flex items-center gap-3 rounded-panel border border-border bg-vault px-3 py-2.5">
-      <span className="grid h-9 w-9 flex-none place-items-center rounded-control bg-active">
-        <FileCode size={16} className="text-muted" />
+    <button
+      type="button"
+      onClick={() => (isOpen ? closePanel() : openArtifact({ id, title, lang, code }))}
+      className="my-1 flex w-full items-center gap-3 rounded-card bg-raised px-3 py-2.5 text-left shadow-[inset_0_0_0_1px_var(--line)] hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
+    >
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-field bg-fill-2 text-fg-2">
+        <FileCode size={16} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{title}</span>
-        <span className="block text-xs text-muted">Artifact · {lang}</span>
+        <span className="block text-xs text-fg-3">HTML · sandboxed</span>
       </span>
-      <Button
-        variant={isOpen ? "ghost" : "default"}
-        size="sm"
-        onClick={() => (isOpen ? closePanel() : openArtifact({ id, title, lang, code }))}
-      >
-        {isOpen ? "Hide" : "Open"}
-      </Button>
-    </div>
+      <ChevronRight size={16} className="flex-none text-fg-3" />
+    </button>
   );
 }
 
@@ -462,29 +467,28 @@ function FileCard({ path }: { path: string }) {
   const title = path.split(/[\\/]/).pop() || path;
   const lang = title.includes(".") ? title.split(".").pop()!.toLowerCase() : "file";
   return (
-    <div className="my-3 flex items-center gap-3 rounded-panel border border-border bg-vault px-3 py-2.5">
-      <span className="grid h-9 w-9 flex-none place-items-center rounded-control bg-active">
-        <FileText size={16} className="text-muted" />
+    <button
+      type="button"
+      onClick={() =>
+        openArtifact({
+          id: `file:${path}`,
+          title,
+          lang,
+          code: "",
+          path,
+        })
+      }
+      className="my-1 flex w-full items-center gap-3 rounded-card bg-raised px-3 py-2.5 text-left shadow-[inset_0_0_0_1px_var(--line)] hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
+    >
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-field bg-fill-2 text-fg-2">
+        <FileText size={16} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{title}</span>
-        <span className="block truncate text-xs text-muted">Output · {path}</span>
+        <span className="block truncate text-xs text-fg-3">Output · {path}</span>
       </span>
-      <Button
-        size="sm"
-        onClick={() =>
-          openArtifact({
-            id: `file:${path}`,
-            title,
-            lang,
-            code: "",
-            path,
-          })
-        }
-      >
-        Open
-      </Button>
-    </div>
+      <ChevronRight size={16} className="flex-none text-fg-3" />
+    </button>
   );
 }
 
@@ -537,9 +541,9 @@ function AssistantMessage({
 
   return (
     <div className="msg group" data-mid={message.id}>
-      <div className="mb-1.5 flex items-center gap-2 text-xs">
-        <Logo size={22} alt="" className="rounded-full" />
-        <span className="text-muted">{modelName}</span>
+      <div className="mb-2 flex items-center gap-2 text-xs text-fg-3">
+        <Logo size={16} alt="" className="rounded-full" />
+        <span>{modelName}</span>
       </div>
       <div className="md">
         <ThinkingBlock message={message} live={live} />
@@ -599,7 +603,7 @@ function AssistantMessage({
       {!busy && (
         <>
           {isLast && (message.finish_reason === "step_limit" || message.finish_reason === "time_limit") && (
-            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-control border border-warn/50 bg-warn/10 px-3 py-2 text-xs text-warn">
+            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-card bg-[var(--warning-soft)] px-3 py-2 text-xs text-warning">
               <span>
                 {message.finish_reason === "time_limit"
                   ? "Paused: the turn budget was reached"
@@ -611,17 +615,17 @@ function AssistantMessage({
             </div>
           )}
           {isLast && (message.finish_reason === "length" || message.finish_reason === "interrupted") && (
-            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-warn">
+            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-warning">
               <span>{message.finish_reason === "length" ? "Stopped at the token limit — the reply may be cut off." : "Stream interrupted — partial reply kept."}</span>
               <ContinueButton />
             </div>
           )}
           {isLast && message.finish_reason === "stopped" && (
-            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-fg-3">
               <span>Stopped — partial reply kept.</span>
             </div>
           )}
-          <div className="mt-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <div className="mt-1.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
               <Copy size={14} />
             </ActionButton>
@@ -771,9 +775,9 @@ export function MessageList() {
   return (
     <>
       <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
-        <div className="mx-auto w-full max-w-[760px] px-4 py-6">
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-[var(--msg-gap)] px-6 py-4">
         {error && (
-          <div className="mb-6">
+          <div>
             <ErrorBanner message={error} onDismiss={clearError} />
           </div>
         )}
@@ -785,35 +789,33 @@ export function MessageList() {
         )}
 
         {activeConversation?.summary && (
-          <div className="mb-6 flex items-center gap-3 text-xs text-muted">
-            <span className="h-px flex-1 bg-border" aria-hidden="true" />
+          <div className="flex items-center gap-3 text-xs text-fg-3">
+            <span className="h-px flex-1 bg-line-subtle" aria-hidden="true" />
             <span>Context compacted - earlier messages summarized</span>
-            <span className="h-px flex-1 bg-border" aria-hidden="true" />
+            <span className="h-px flex-1 bg-line-subtle" aria-hidden="true" />
           </div>
         )}
 
         {messages.map((message) =>
           message.role === "user" ? (
-            <div key={message.id} className="mb-[var(--msg-gap)]">
-              <UserMessage
-                message={message}
-                onEdit={(id, text) => editAndResubmit(id, text)}
-              />
-            </div>
+            <UserMessage
+              key={message.id}
+              message={message}
+              onEdit={(id, text) => editAndResubmit(id, text)}
+            />
           ) : (
-            <div key={message.id} className="mb-[var(--msg-gap)]">
-              <AssistantMessage
-                message={message}
-                modelName={message.model ?? activeModel ?? "assistant"}
-                isLast={message.id === lastAssistantId}
-                streaming={streaming}
-                streamingId={streamingId}
-                resetKey={activeConversationId}
-                collapseToolCalls={collapseToolCalls}
-                outputFiles={outputFilesByMessage.get(message.id) ?? []}
-                onRemember={remember}
-              />
-            </div>
+            <AssistantMessage
+              key={message.id}
+              message={message}
+              modelName={message.model ?? activeModel ?? "assistant"}
+              isLast={message.id === lastAssistantId}
+              streaming={streaming}
+              streamingId={streamingId}
+              resetKey={activeConversationId}
+              collapseToolCalls={collapseToolCalls}
+              outputFiles={outputFilesByMessage.get(message.id) ?? []}
+              onRemember={remember}
+            />
           ),
         )}
       </div>
@@ -823,7 +825,7 @@ export function MessageList() {
         <button
           type="button"
           onClick={scrollToBottom}
-          className="absolute bottom-4 left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-control border border-border bg-surface px-3 text-[13px] shadow-[var(--shadow)] hover:bg-hover"
+          className="absolute bottom-3 left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full bg-overlay px-3.5 text-[13px] font-medium text-fg shadow-[var(--shadow-md)] ring-1 ring-line-strong hover:bg-fill-3"
         >
           <ArrowDown size={14} /> Jump to latest
         </button>

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   BookOpen,
+  Box,
   Brain,
   Cpu,
   Database,
+  Globe,
   Info,
   Keyboard,
   History,
@@ -11,10 +13,8 @@ import {
   Monitor,
   Palette,
   Plug,
-  Search,
   Settings as SettingsIcon,
-  Shield,
-  Sparkles,
+  ShieldCheck,
   X,
   Blocks,
 } from "lucide-react";
@@ -53,17 +53,17 @@ const ICONS: Record<SettingsPageId, ReactNode> = {
   appearance: <Palette size={16} />,
   providers: <Plug size={16} />,
   models: <Cpu size={16} />,
-  search: <Search size={16} />,
+  search: <Globe size={16} />,
   mcp: <Blocks size={16} />,
   computer: <Monitor size={16} />,
-  sandbox: <Shield size={16} />,
+  sandbox: <Box size={16} />,
   skills: <BookOpen size={16} />,
   voice: <Mic size={16} />,
-  audit: <History size={16} />,
+  audit: <ShieldCheck size={16} />,
   memory: <Brain size={16} />,
   data: <Database size={16} />,
   shortcuts: <Keyboard size={16} />,
-  changelog: <Sparkles size={16} />,
+  changelog: <History size={16} />,
   about: <Info size={16} />,
 };
 
@@ -168,7 +168,7 @@ export function SettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4"
+      className="fixed inset-0 z-[100] grid place-items-center bg-[var(--scrim)] p-4 backdrop-blur-[3px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setSettingsPage(null);
       }}
@@ -179,11 +179,11 @@ export function SettingsDialog() {
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="flex h-[min(640px,86vh)] w-[min(960px,92vw)] overflow-hidden rounded-composer border border-border bg-surface shadow-[var(--shadow)]"
+        className="flex h-[min(620px,86vh)] w-[min(900px,92vw)] overflow-hidden rounded-composer bg-raised shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <nav
-          className="flex w-[220px] flex-none flex-col gap-2 overflow-y-auto border-r border-border bg-surface-2 p-3"
+          className="flex w-[208px] flex-none flex-col gap-1 overflow-y-auto border-r border-line-subtle bg-sunken p-3"
           aria-label="Settings sections"
         >
           <input
@@ -192,7 +192,7 @@ export function SettingsDialog() {
             placeholder="Search settings"
             aria-label="Search settings"
             autoComplete="off"
-            className="h-8 w-full rounded-card border border-border bg-surface px-2.5 text-sm outline-none placeholder:text-muted focus:border-accent"
+            className="h-8 w-full rounded-field bg-fill-1 px-2.5 text-sm text-fg shadow-[inset_0_0_0_1px_var(--line)] outline-none placeholder:text-fg-3 focus:shadow-[inset_0_0_0_1px_var(--accent-line),0_0_0_3px_var(--accent-ring)]"
           />
           <div className="flex flex-col gap-0.5">
             {navPages.map(({ id, label, icon }) => (
@@ -201,21 +201,21 @@ export function SettingsDialog() {
                 type="button"
                 onClick={() => openPage(id, null)}
                 className={cn(
-                  "flex h-[34px] items-center gap-2.5 rounded-control px-2.5 text-left text-sm",
-                  id === page ? "bg-active font-semibold" : "hover:bg-hover",
+                  "flex h-8 items-center gap-2.5 rounded-field px-2.5 text-left text-sm text-fg-2 hover:bg-fill-2 hover:text-fg",
+                  id === page && "bg-fill-3 font-medium text-fg",
                 )}
               >
-                <span className="text-muted">{icon}</span>
+                <span className="text-fg-3">{icon}</span>
                 {label}
               </button>
             ))}
             {q && navPages.length === 0 && hits.length === 0 && (
-              <p className="px-2 py-2 text-xs text-muted">No matches</p>
+              <p className="px-2 py-2 text-xs text-fg-3">No matches</p>
             )}
           </div>
           {q && rowHits.length > 0 && (
-            <div className="flex flex-col gap-0.5 border-t border-border pt-2">
-              <p className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <div className="flex flex-col gap-0.5 border-t border-line-subtle pt-2">
+              <p className="px-2.5 pb-1 text-xs font-medium text-fg-3">
                 Settings
               </p>
               {rowHits.map((hit) => (
@@ -224,27 +224,27 @@ export function SettingsDialog() {
                   type="button"
                   onClick={() => openPage(hit.page, hit.term)}
                   aria-label={`${hit.term} in ${hit.pageLabel}`}
-                  className="flex h-[30px] items-center gap-2 rounded-control px-2.5 text-left text-sm hover:bg-hover"
+                  className="flex h-8 items-center gap-2 rounded-field px-2.5 text-left text-sm text-fg-2 hover:bg-fill-2 hover:text-fg"
                 >
                   <span className="min-w-0 truncate">{hit.term}</span>
-                  <span className="ml-auto flex-none text-[11px] text-muted">{hit.pageLabel}</span>
+                  <span className="ml-auto flex-none text-[11px] text-fg-3">{hit.pageLabel}</span>
                 </button>
               ))}
             </div>
           )}
         </nav>
-        <section className="relative min-w-0 flex-1 overflow-y-auto p-6">
+        <section className="relative min-w-0 flex-1 overflow-y-auto px-6 pb-6 pt-5">
           <button
             type="button"
             aria-label="Close settings"
             onClick={() => setSettingsPage(null)}
-            className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+            className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
           >
             <X size={16} />
           </button>
           <header className="mb-4 mt-0 pr-10">
-            <h2 className="text-xl">{TITLES[page]}</h2>
-            <p className="mt-1 text-sm text-muted">{SUBTITLES[page]}</p>
+            <h2 className="text-[18px] font-semibold leading-snug">{TITLES[page]}</h2>
+            <p className="mt-0.5 text-[13px] text-fg-3">{SUBTITLES[page]}</p>
           </header>
           {page === "general" && <GeneralPage />}
           {page === "appearance" && <AppearancePage />}

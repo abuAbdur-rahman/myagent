@@ -1,13 +1,12 @@
 import { useRef, useState } from "react";
-import { Cpu, Download, FolderInput, Gauge, ListChecks, MessageSquare, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
+import { Download, FolderInput, ListChecks, MessageSquare, MoreHorizontal, PanelLeft, PanelRight, Pencil, Pin, PinOff, Trash2, Upload } from "lucide-react";
 import { useApp } from "../lib/store";
-import { projectColor } from "../lib/grouping";
 import { stepLabel } from "../lib/session";
 import { buildChatExport, conversationToMarkdown, importChatExport, safeFilename } from "../lib/export";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
-import { openModelPicker } from "./ModelPicker";
 import { Button, Dialog, IconButton, Textarea } from "./ui";
+import { ContextRing } from "./ContextRing";
 import { copyText, downloadText, errorText } from "../lib/utils";
 import { toast } from "../lib/toast";
 
@@ -21,18 +20,20 @@ export function ChatHeader() {
     togglePin,
     moveConversation,
     removeConversation,
-    activeConnection,
-    model,
     messages,
+    toggleSidebar,
     togglePanel,
     panelOpen,
     openSessionPanel,
     openContextPanel,
+    contextInfo,
     todos,
     refreshConversations,
     selectConversation,
+    selectProject,
   } = useApp();
   const step = stepLabel(todos);
+  const contextPct = contextInfo.pct;
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   const [promptOpen, setPromptOpen] = useState(false);
@@ -141,13 +142,25 @@ export function ChatHeader() {
             },
           ],
         },
-        { id: "export-md", icon: <Download size={16} />, label: "Export", onSelect: exportChat },
         {
-          id: "export-json",
+          id: "export",
+          type: "submenu",
           icon: <Download size={16} />,
-          label: "Export JSON",
-          onSelect: exportJson,
+          label: "Export",
+          items: [
+            {
+              id: "export-md",
+              label: "As Markdown",
+              onSelect: exportChat,
+            },
+            {
+              id: "export-json",
+              label: "As JSON",
+              onSelect: exportJson,
+            },
+          ],
         },
+        { id: "export-sep", type: "separator" },
         {
           id: "import",
           icon: <Upload size={16} />,
@@ -167,7 +180,10 @@ export function ChatHeader() {
 
   return (
     <>
-    <div className="flex h-12 flex-none items-center gap-2 border-b border-border py-0 pl-4 pr-3">
+    <div className="flex h-12 flex-none items-center gap-1 border-b border-line-subtle pl-2 pr-2">
+      <IconButton label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)" onClick={toggleSidebar}>
+        <PanelLeft size={18} />
+      </IconButton>
       {renaming && chat ? (
         <input
           autoFocus
@@ -183,42 +199,42 @@ export function ChatHeader() {
           }}
           onBlur={() => void commitRename()}
           aria-label="Rename chat"
-          className="h-7 max-w-[300px] rounded-control border border-accent bg-surface px-1.5 text-sm font-semibold outline-none"
+          className="h-7 max-w-[300px] rounded-field bg-fill-1 px-2 text-sm font-medium shadow-[inset_0_0_0_1px_var(--accent-line)] outline-none"
         />
-      ) : chat ? (
-        <button
-          type="button"
-          onClick={() => {
-            setDraft(chat.title);
-            setRenaming(true);
-          }}
-          title="Rename"
-          className="max-w-[40%] truncate rounded-control px-2 py-1 text-left text-sm font-semibold hover:bg-hover"
-        >
-          {chat.title}
-        </button>
       ) : (
-        <span className="px-2 py-1 text-sm font-semibold">New chat</span>
+        <div className="flex min-w-0 items-center gap-1.5 pl-1 text-sm">
+          {project && (
+            <>
+              <button
+                type="button"
+                onClick={() => selectProject(project.id)}
+                title={`Open ${project.name}`}
+                className="max-w-[160px] truncate rounded-chip px-1 text-fg-3 hover:bg-fill-2 hover:text-fg-2"
+              >
+                {project.name}
+              </button>
+              <span className="text-text-off" aria-hidden="true">
+                /
+              </span>
+            </>
+          )}
+          {chat ? (
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(chat.title);
+                setRenaming(true);
+              }}
+              title="Rename chat"
+              className="max-w-[42vw] truncate rounded-chip px-1 py-0.5 text-left font-medium hover:bg-fill-2"
+            >
+              {chat.title}
+            </button>
+          ) : (
+            <span className="px-1 py-0.5 font-medium">New chat</span>
+          )}
+        </div>
       )}
-
-      {project && (
-        <span className="flex max-w-[220px] items-center gap-1.5 rounded bg-hover px-2 py-1 text-xs text-muted">
-          <span className="h-2 w-2 flex-none rounded-full" style={{ background: projectColor(project.id) }} />
-          <span className="truncate">{project.name}</span>
-        </span>
-      )}
-
-      <button
-        type="button"
-        onClick={(e) => openModelPicker(e.currentTarget)}
-        title="Model"
-        className="flex max-w-[220px] items-center gap-1.5 rounded bg-hover px-2 py-1 text-xs text-muted hover:text-text"
-      >
-        <Cpu size={14} />
-        <span className="truncate">
-          {activeConnection && model ? `${activeConnection.name} · ${model}` : "Select model"}
-        </span>
-      </button>
 
       <span className="flex-1" />
 
@@ -228,7 +244,7 @@ export function ChatHeader() {
           onClick={openSessionPanel}
           aria-label={`Open progress: ${step}`}
           title={`${step} · open progress`}
-          className="flex items-center gap-1.5 rounded-control px-2 py-1 text-xs text-muted hover:bg-hover hover:text-text"
+          className="flex h-7 items-center gap-1.5 rounded-field px-2 text-xs text-fg-3 hover:bg-fill-2 hover:text-fg"
         >
           <ListChecks size={14} />
           {step}
@@ -249,10 +265,10 @@ export function ChatHeader() {
       )}
       <IconButton
         label="Context inspector"
-        title="System prompt, memory, checklist and token usage"
+        title={`Context · ${contextPct ?? 0}% used`}
         onClick={openContextPanel}
       >
-        <Gauge size={16} />
+        <ContextRing pct={contextPct} warn={contextPct !== null && contextPct >= 80} />
       </IconButton>
       <IconButton
         label="Toggle side panel"
@@ -260,7 +276,7 @@ export function ChatHeader() {
         aria-expanded={panelOpen}
         onClick={togglePanel}
       >
-        <PanelRight size={16} />
+        <PanelRight size={18} />
       </IconButton>
       <input
         ref={fileRef}

@@ -140,7 +140,7 @@ export function CommandPalette({
   let section = "";
   return (
     <div
-      className="fixed inset-0 z-[100] bg-black/40 px-4 pt-[12vh]"
+      className="fixed inset-0 z-[100] bg-[var(--scrim)] px-4 pt-[12vh] backdrop-blur-[3px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -150,11 +150,11 @@ export function CommandPalette({
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="mx-auto w-[560px] max-w-full overflow-hidden rounded-composer border border-border bg-surface shadow-[var(--shadow)]"
+        className="mx-auto w-[560px] max-w-full overflow-hidden rounded-composer bg-overlay shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex h-12 items-center gap-2.5 border-b border-border px-3.5">
-          <Search size={16} className="text-muted" aria-hidden="true" />
+        <div className="flex h-12 items-center gap-2.5 border-b border-line-subtle px-3.5">
+          <Search size={16} className="text-fg-3" aria-hidden="true" />
           <input
             ref={inputRef}
             value={query}
@@ -162,7 +162,7 @@ export function CommandPalette({
             placeholder="Search chats, projects, actions…"
             aria-label="Command palette"
             autoComplete="off"
-            className="flex-1 border-0 bg-transparent text-[15px] outline-none placeholder:text-muted"
+            className="flex-1 border-0 bg-transparent text-[15px] outline-none placeholder:text-fg-3"
           />
         </div>
         <div id="palette-list" className="max-h-[50vh] overflow-auto p-1.5">
@@ -172,7 +172,7 @@ export function CommandPalette({
             return (
               <div key={`${entry.section}-${entry.label}-${i}`}>
                 {header && (
-                  <div className="px-2.5 pb-0.5 pt-1.5 text-[11px] uppercase text-muted">
+                  <div className="px-2.5 pb-0.5 pt-1.5 text-xs font-medium text-fg-3">
                     {header}
                   </div>
                 )}
@@ -184,21 +184,21 @@ export function CommandPalette({
                     setTimeout(entry.run, 0);
                   }}
                   className={cn(
-                    "flex h-9 w-full items-center gap-2.5 rounded-control px-2.5 text-left text-sm",
-                    i === index && "selected bg-active",
+                    "flex h-9 w-full items-center gap-2.5 rounded-field px-2.5 text-left text-sm",
+                    i === index && "bg-fill-2",
                   )}
                 >
-                  <span className="text-muted">{entry.icon}</span>
+                  <span className="text-fg-3">{entry.icon}</span>
                   <span className="truncate">{entry.label}</span>
                 </button>
               </div>
             );
           })}
           {filtered.length === 0 && (
-            <div className="px-3 py-6 text-center text-sm text-muted">No results</div>
+            <div className="px-3 py-6 text-center text-sm text-fg-3">No results</div>
           )}
         </div>
-        <div className="border-t border-border px-3.5 py-2 text-xs text-muted">
+        <div className="border-t border-line-subtle px-3.5 py-2 text-xs text-fg-3">
           ↑↓ navigate · Enter select · Esc close
         </div>
       </div>

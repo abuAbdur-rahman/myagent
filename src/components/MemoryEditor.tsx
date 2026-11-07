@@ -5,10 +5,12 @@ import {
   type Memory,
   type MemoryDraft,
 } from "../lib/types";
-import { Button, Textarea } from "./ui";
+import { Pencil, Trash2 } from "lucide-react";
+import { Button, IconButton, Textarea } from "./ui";
+import { Markdown } from "./Markdown";
 import { Select } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
-import { cn, errorText } from "../lib/utils";
+import { errorText } from "../lib/utils";
 
 const SNIPPET_MAX = 80;
 
@@ -20,7 +22,7 @@ function snippet(content: string): string {
 
 function KindChip({ kind }: { kind: string }) {
   return (
-    <span className="rounded-control bg-vault-raised px-1.5 py-0.5 text-xs uppercase tracking-wide text-text-muted">
+    <span className="rounded-chip bg-fill-2 px-1.5 py-0.5 text-[11px] uppercase tracking-[0.04em] text-fg-3">
       {kind}
     </span>
   );
@@ -169,11 +171,11 @@ export function MemoryEditor({
   };
 
   return (
-    <div className="space-y-3">
-      <div className="rounded-control border border-vault-line p-3">
-        <div className="mb-2 flex items-center gap-2">
+    <div className="flex flex-col gap-2">
+      <div className="rounded-field bg-fill-1 p-2.5">
+        <div className="mb-1.5 flex items-center gap-2">
           <KindSelect value={kind} onChange={setKind} label="New memory kind" />
-          <span className="text-xs text-text-muted">
+          <span className="text-xs text-fg-3">
             A durable note the assistant should keep in mind.
           </span>
         </div>
@@ -184,8 +186,8 @@ export function MemoryEditor({
           placeholder="e.g. Always answer with TypeScript examples."
           aria-label="New memory"
         />
-        <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-alarm" role="alert">
+        <div className="mt-1.5 flex items-center justify-between">
+          <span className="text-xs text-danger" role="alert">
             {addError}
           </span>
           <Button size="sm" onClick={() => void add()} disabled={busy}>
@@ -195,20 +197,17 @@ export function MemoryEditor({
       </div>
 
       {deleteError && (
-        <p className="text-xs text-alarm" role="alert">
+        <p className="text-xs text-danger" role="alert">
           {deleteError}
         </p>
       )}
 
-      <div className="space-y-1">
-        {memories.length === 0 && <p className="px-1 py-3 text-xs text-text-faint">{emptyHint}</p>}
+      <div className="flex flex-col">
+        {memories.length === 0 && <p className="py-3 text-xs text-fg-3">{emptyHint}</p>}
         {memories.map((memory) => (
           <div
             key={memory.id}
-            className={cn(
-              "rounded-control border border-vault-line px-3 py-2",
-              editingId === memory.id && "bg-vault-surface/60",
-            )}
+            className="group border-t border-line-subtle py-2.5 first:border-t-0"
           >
             {editingId === memory.id ? (
               <div className="space-y-2">
@@ -230,42 +229,40 @@ export function MemoryEditor({
                   </div>
                 </div>
                 {editError && (
-                  <span className="block text-xs text-alarm" role="alert">
+                  <span className="block text-xs text-danger" role="alert">
                     {editError}
                   </span>
                 )}
               </div>
             ) : (
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <KindChip kind={memory.kind} />
-                    {meta && <span className="text-xs text-text-faint">{meta(memory)}</span>}
+              <>
+                <div className="flex items-center gap-1.5">
+                  <KindChip kind={memory.kind} />
+                  {meta && <span className="text-xs text-text-off">{meta(memory)}</span>}
+                  <span className="flex-1" />
+                  <div className="flex opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                    <IconButton
+                      label="Edit memory"
+                      size={24}
+                      onClick={() => startEdit(memory)}
+                      disabled={rowLocked}
+                    >
+                      <Pencil size={14} />
+                    </IconButton>
+                    <IconButton
+                      label="Delete memory"
+                      size={24}
+                      onClick={() => void remove(memory)}
+                      disabled={rowLocked}
+                    >
+                      <Trash2 size={14} />
+                    </IconButton>
                   </div>
-                  <p className="mt-1 whitespace-pre-wrap text-sm text-text-primary">
-                    {memory.content}
-                  </p>
                 </div>
-                <div className="flex shrink-0 gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => startEdit(memory)}
-                    disabled={rowLocked}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void remove(memory)}
-                    disabled={rowLocked}
-                    aria-label="Delete memory"
-                  >
-                    Delete
-                  </Button>
+                <div className="mt-1 text-fg-2">
+                  <Markdown content={memory.content} compact />
                 </div>
-              </div>
+              </>
             )}
           </div>
         ))}
