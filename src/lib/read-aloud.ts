@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 let speakingId: string | null = null;
+let speakToken = 0;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -16,11 +17,18 @@ function snapshot(): string | null {
   return speakingId;
 }
 
+function finish(token: number, id: string): void {
+  if (token !== speakToken || speakingId !== id) return;
+  speakingId = null;
+  emit();
+}
+
 export function canReadAloud(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
 export function stopSpeaking(): void {
+  speakToken += 1;
   if (typeof window !== "undefined" && "speechSynthesis" in window) {
     window.speechSynthesis.cancel();
   }
@@ -47,6 +55,7 @@ export function speakMessage(id: string, markdown: string): void {
   const text = speechText(markdown);
   if (!text) return;
   window.speechSynthesis.cancel();
+  const token = ++speakToken;
   const utterance = new SpeechSynthesisUtterance(text);
   const voiceUri = localStorage.getItem("readAloudVoice");
   if (voiceUri) {
@@ -55,18 +64,8 @@ export function speakMessage(id: string, markdown: string): void {
   }
   const rate = Number(localStorage.getItem("readAloudRate"));
   if (Number.isFinite(rate) && rate >= 0.5 && rate <= 2) utterance.rate = rate;
-  utterance.onend = () => {
-    if (speakingId === id) {
-      speakingId = null;
-      emit();
-    }
-  };
-  utterance.onerror = () => {
-    if (speakingId === id) {
-      speakingId = null;
-      emit();
-    }
-  };
+  utterance.onend = () => finish(token, id);
+  utterance.onerror = () => finish(token, id);
   speakingId = id;
   emit();
   window.speechSynthesis.speak(utterance);

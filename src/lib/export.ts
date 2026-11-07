@@ -49,6 +49,8 @@ export function buildChatExport(chat: Conversation, messages: Message[]): ChatEx
       error: db.sqlNull(message.error),
       model: db.sqlNull(message.model),
       rating: message.rating ?? null,
+      durationMs: message.duration_ms ?? null,
+      completedAt: message.completed_at ?? null,
       createdAt: message.created_at,
     })),
   };
@@ -109,6 +111,8 @@ export async function importChatExport(raw: unknown): Promise<string> {
         message.artifacts.length > 0 ? JSON.stringify(message.artifacts) : null,
       error: message.error ?? null,
       model: db.sqlNull(message.model),
+      durationMs: message.durationMs ?? null,
+      completedAt: message.completedAt ?? null,
       createdAt: message.createdAt,
     });
     if (message.rating !== undefined && message.rating !== null) {

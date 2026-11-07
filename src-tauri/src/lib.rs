@@ -419,6 +419,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN duration_ms INTEGER;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 34,
+            description: "add_message_completed_at",
+            sql: "ALTER TABLE messages ADD COLUMN completed_at INTEGER;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

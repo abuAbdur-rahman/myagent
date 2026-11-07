@@ -338,7 +338,7 @@ export async function importBundle(
     report.conversations += 1;
     for (const message of conversation.messages) {
       const result = await db.execute(
-        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, rating, duration_ms, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, rating, duration_ms, completed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
         [
           message.id,
           conversation.id,
@@ -357,6 +357,7 @@ export async function importBundle(
           sqlNull(message.error),
           sqlNull(message.rating),
           sqlNull(message.duration_ms),
+          sqlNull(message.completed_at),
           message.created_at,
         ],
       );
@@ -539,6 +540,8 @@ export interface FullMessageInput {
   artifactsJson?: string | null;
   error?: string | null;
   model?: string | null;
+  durationMs?: number | null;
+  completedAt?: number | null;
   createdAt?: number | null;
 }
 
@@ -576,7 +579,8 @@ export async function insertMessageFull(
     toolLogJson: sqlNull(input.toolLogJson),
     artifactsJson: sqlNull(input.artifactsJson),
     error: sqlNull(input.error),
-    durationMs: null,
+    durationMs: sqlNull(input.durationMs),
+    completedAt: sqlNull(input.completedAt),
   });
   return message;
 }
@@ -592,12 +596,13 @@ export interface MessageMeta {
   artifactsJson: string | null;
   error: string | null;
   durationMs: number | null;
+  completedAt: number | null;
 }
 
 export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8, error = $9, duration_ms = $10 WHERE id = $11",
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8, error = $9, duration_ms = $10, completed_at = $11 WHERE id = $12",
     [
       meta.reasoning,
       meta.thinkingMs,
@@ -609,6 +614,7 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
       meta.artifactsJson,
       meta.error,
       meta.durationMs,
+      meta.completedAt,
       id,
     ],
   );

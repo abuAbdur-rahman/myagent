@@ -404,6 +404,8 @@ export function VoicePage() {
         </div>
       )}
 
+      <ReadAloudCard />
+
       {status === null ? (
         error ? null : <Spinner label="Loading voice settings" />
       ) : (
@@ -430,7 +432,6 @@ export function VoicePage() {
               )
             }
           />
-          <ReadAloudCard />
         </>
       )}
     </div>

@@ -774,7 +774,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             <span className="font-mono">/</span>
             <span>for commands</span>
             <span aria-hidden="true">·</span>
-            <span>keys never leave this device</span>
+            <span>keys stay in Windows Credential Manager</span>
             {conversation?.compacted === 1 && (
               <button
                 type="button"

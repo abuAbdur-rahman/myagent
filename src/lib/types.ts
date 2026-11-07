@@ -107,6 +107,7 @@ const messageSchema = z.object({
   model: z.string().nullish(),
   rating: z.number().nullish(),
   duration_ms: z.number().nullish(),
+  completed_at: z.number().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;
@@ -263,6 +264,8 @@ const exportMessageSchema = z.object({
   error: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
   rating: z.number().nullable().optional(),
+  durationMs: z.number().nullable().optional(),
+  completedAt: z.number().nullable().optional(),
   createdAt: z.number(),
 });
 

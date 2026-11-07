@@ -38,6 +38,7 @@ function initialsOf(name: string): string {
 function ChatRow({
   chat,
   working,
+  active,
   renaming,
   onOpen,
   menu,
@@ -47,6 +48,7 @@ function ChatRow({
 }: {
   chat: Conversation;
   working?: boolean;
+  active?: boolean;
   renaming: boolean;
   onOpen: () => void;
   menu: MenuEntry[];
@@ -90,7 +92,11 @@ function ChatRow({
       onKeyDown={(e) => {
         if (e.key === "Enter") onOpen();
       }}
-      className="group flex h-[var(--chat-row-h)] cursor-pointer items-center gap-2 rounded-field px-2.5 text-fg-2 hover:bg-fill-2 hover:text-fg"
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "group flex h-[var(--chat-row-h)] cursor-pointer items-center gap-2 rounded-field px-2.5 hover:text-fg",
+        active ? "bg-fill-3 text-fg" : "text-fg-2 hover:bg-fill-2",
+      )}
     >
       <span className="grid w-4 flex-none place-items-center">
         {working ? (
@@ -581,6 +587,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 key={chat.id}
                 chat={chat}
                 working={chat.id === workingConversationId}
+                active={chat.id === activeConversationId}
                 renaming={renamingId === chat.id}
                 onOpen={() => openChat(chat.id)}
                 menu={chatMenu(chat)}
@@ -712,6 +719,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                     key={chat.id}
                     chat={chat}
                     working={chat.id === workingConversationId}
+                    active={chat.id === activeConversationId}
                     renaming={renamingId === chat.id}
                     onOpen={() => openChat(chat.id)}
                     menu={chatMenu(chat)}
@@ -742,14 +750,8 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
               <span className="flex min-w-0 flex-col leading-tight">
                 <b className="truncate text-[13px] font-medium">{displayName || "Local user"}</b>
                 <small className="flex items-center gap-1.5 text-xs text-fg-3">
-                  <i
-                    className={cn(
-                      "h-1.5 w-1.5 rounded-full",
-                      activeConnection ? "bg-success" : "bg-fg-3",
-                    )}
-                  />
                   {activeConnection && <ProviderIcon kind={activeConnection.kind} size={14} />}
-                  {activeConnection ? `${activeConnection.name} · key OK` : "No provider"}
+                  {activeConnection ? activeConnection.name : "No provider"}
                 </small>
               </span>
             </button>

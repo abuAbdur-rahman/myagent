@@ -518,7 +518,7 @@ function AssistantMessage({
   resetKey: string | null;
   collapseToolCalls: boolean;
   outputFiles: string[];
-  onRemember: (message: Message) => Promise<void>;
+  onRemember: (message: Message) => Promise<boolean>;
 }) {
   const live = streaming && streamingId === message.id;
   const { canRetry } = useApp();
@@ -537,14 +537,15 @@ function AssistantMessage({
   const speakingId = useSpeakingId();
   const speaking = speakingId === message.id;
   const duration = message.duration_ms ?? null;
-  const completedAt = message.created_at + (duration ?? 0);
+  const completedAt =
+    message.completed_at ?? message.created_at + (duration ?? 0);
   const busy = live && message.content.length === 0;
 
   const remember = async () => {
     setRememberLabel("Extracting…");
     try {
-      await onRemember(message);
-      setRememberLabel("Queued");
+      const queued = await onRemember(message);
+      setRememberLabel(queued ? "Queued" : "Nothing new");
     } catch {
       setRememberLabel("Remember failed");
     }
@@ -758,6 +759,7 @@ export function MessageList() {
     clearError,
     ready,
     activeConnection,
+    model,
     queueMemories,
     editAndResubmit,
     conversations,
@@ -779,6 +781,10 @@ export function MessageList() {
     if (stuck) scrollToBottom();
   }, [messages, streaming, stuck, scrollToBottom]);
 
+  useEffect(() => {
+    return () => stopSpeaking();
+  }, [activeConversationId]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -787,12 +793,10 @@ export function MessageList() {
   };
 
   const remember = useCallback(
-    async (message: Message) => {
-      const model =
-        message.model ?? conversations.find((c) => c.id === activeConversationId)?.model ?? null;
+    async (message: Message): Promise<boolean> => {
       if (!activeConnection || !model) {
         toast("Choose a provider and model first.");
-        return;
+        return false;
       }
       const raw = await api.extractMemory(
         activeConnection.id,
@@ -803,12 +807,13 @@ export function MessageList() {
       const notes = parseExtractedNotes(raw);
       if (notes.length === 0) {
         toast("No durable notes found in this reply.");
-        return;
+        return false;
       }
       const rows = await queueMemories(notes);
       toast(`${rows.length} ${rows.length === 1 ? "note" : "notes"} queued for review.`);
+      return rows.length > 0;
     },
-    [activeConnection, activeConversationId, conversations, queueMemories],
+    [activeConnection, model, queueMemories],
   );
 
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;

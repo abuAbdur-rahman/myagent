@@ -287,7 +287,7 @@ export function ArtifactsPanel() {
       <div className="flex h-8 flex-none items-center gap-1.5 border-t border-line-subtle px-3 text-xs text-fg-3">
         {activeTab === "preview" && (
           <span className="inline-flex items-center gap-1.5">
-            <Eye size={12} /> {panelArtifact.path ? "Converted in the sandbox" : "Sandboxed preview · no network access"}
+            <Eye size={12} /> {panelArtifact.path ? "Converted in the sandbox" : "Sandboxed preview · scripts and CDN assets allowed"}
           </span>
         )}
         {activeTab === "doc" && (

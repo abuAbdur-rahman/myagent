@@ -68,7 +68,7 @@ export function ArtifactPreview({
 
   return (
     <iframe
-      sandbox="allow-scripts allow-same-origin"
+      sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
       src={state.url}
       title="Artifact preview"
       referrerPolicy="no-referrer"

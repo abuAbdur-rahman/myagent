@@ -725,6 +725,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const requestIdRef = useRef<string | null>(null);
   const streamConversationIdRef = useRef<string | null>(null);
   const turnStartRef = useRef<number | null>(null);
+  const priorDurationRef = useRef(0);
   const bufferRef = useRef("");
   const trimNextDeltaRef = useRef(false);
   const reasoningRef = useRef("");
@@ -2016,8 +2017,14 @@ setKnowledgeSummary([]);
     const reasoning = reasoningRef.current;
     const error = streamErrorRef.current;
     const startedAt = turnStartRef.current;
+    const priorDuration = priorDurationRef.current;
     turnStartRef.current = null;
-    const durationMs = startedAt === null ? null : Math.max(0, Date.now() - startedAt);
+    priorDurationRef.current = 0;
+    const completedAt = startedAt === null ? null : Date.now();
+    const durationMs =
+      startedAt === null || completedAt === null
+        ? null
+        : Math.max(0, completedAt - startedAt) + priorDuration;
     const settledLog = settleToolLog(toolLogRef.current);
     const changed = settledLog.some((entry, index) => entry !== toolLogRef.current[index]);
     toolLogRef.current = settledLog;
@@ -2043,10 +2050,15 @@ setKnowledgeSummary([]);
       artifactsJson,
       error: error ?? null,
       durationMs,
+      completedAt,
     };
     if (durationMs !== null) {
       setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? { ...m, duration_ms: durationMs } : m)),
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, duration_ms: durationMs, completed_at: completedAt }
+            : m,
+        ),
       );
     }
     const persist = content || toolLogJson || artifactsJson || error
@@ -2129,6 +2141,7 @@ setKnowledgeSummary([]);
       const seed = keepSeed
         ? messagesRef.current.find((m) => m.id === assistantMsg.id)
         : undefined;
+      priorDurationRef.current = seed?.duration_ms ?? 0;
       bufferRef.current = seed?.content ?? "";
       trimNextDeltaRef.current = false;
       reasoningRef.current = seed?.reasoning ?? "";
