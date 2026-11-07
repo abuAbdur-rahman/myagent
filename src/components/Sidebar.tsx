@@ -107,7 +107,7 @@ function ChatRow({
         <span
           role="status"
           aria-label="Working"
-          className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent"
+          className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
         />
       )}
       <span className="min-w-0 flex-1 truncate text-sm">{chat.title}</span>
@@ -626,7 +626,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                       <span
                         role="status"
                         aria-label="Working"
-                        className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent"
+                        className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
                       />
                     )}
                     <span className="truncate">{thread.title}</span>

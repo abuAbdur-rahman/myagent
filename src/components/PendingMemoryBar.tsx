@@ -73,6 +73,7 @@ export function PendingMemoryBar({
             size="sm"
             className={hidden > 0 ? "" : "ml-auto"}
             disabled={busy}
+            aria-label={`Accept all ${rows.length} pending ${rows.length === 1 ? "memory" : "memories"}`}
             onClick={() => void acceptAll()}
           >
             {busy ? "Saving…" : "Accept all"}

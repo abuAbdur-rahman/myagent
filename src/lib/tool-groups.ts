@@ -5,7 +5,7 @@ const GROUP_LABELS: Record<string, string> = {
   web_fetch: "Read pages",
   research_run: "Ran research",
   get_time: "Checked the time",
-  remember: "Saved memories",
+  remember: "Memory updates",
   recall_memory: "Recalled memories",
   memory_pending: "Checked pending memories",
   update_memory: "Updated memories",

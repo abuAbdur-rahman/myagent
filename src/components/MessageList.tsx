@@ -187,6 +187,11 @@ export function ToolLogView({
                   <ToolIcon name={row.name} />
                   <span className="truncate">{row.label}</span>
                   <span className="text-muted">· {row.entries.length}</span>
+                  {row.entries.some((entry) => entry.status === "err") && (
+                    <span className="text-danger">
+                      · {row.entries.filter((entry) => entry.status === "err").length} failed
+                    </span>
+                  )}
                   <ChevronDown
                     size={14}
                     className="ml-auto transition-transform group-open:rotate-180"
