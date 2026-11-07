@@ -246,6 +246,20 @@ status pills and suggestion chips are fully round. Icon buttons are square
   its date group. “All projects” is the page; “Projects” is the rail section.
 - **Footer:** profile row (name, provider status) with the settings gear beside it.
 
+### Provider marks
+- **Shape:** a 16–36px circle carrying one lucide mark per provider kind, so a
+  connection reads apart before its name is parsed.
+- **Tint:** fixed brand tint from provider tokens, never the accent preset:
+  OpenRouter `--provider-openrouter` (violet), Agent Router
+  `--provider-agentrouter` (blue), DeepSeek `--provider-deepseek` (cyan),
+  Ollama Cloud `--warning` (amber), Ollama `--text-2` (warm grey) and Custom
+  `--success` (green). Each pair is `color` on a 12–18% `-soft` fill; light and
+  dark define their own readable value.
+- **Use:** provider select options and their cards, the Models provider filter,
+  the Voice transcription provider, the composer model chip, onboarding tiles
+  and the sidebar provider status. The name always sits beside the mark, so the
+  icon stays decorative (`aria-hidden`) and never carries meaning alone.
+
 ### Message
 - **User:** right-aligned bubble on Raised, 16px radius, no border, `shadow-sm`,
   max 80% width; hover reveals copy and edit.

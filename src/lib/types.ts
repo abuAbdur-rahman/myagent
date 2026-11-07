@@ -106,6 +106,7 @@ const messageSchema = z.object({
   error: z.string().nullish(),
   model: z.string().nullish(),
   rating: z.number().nullish(),
+  duration_ms: z.number().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;

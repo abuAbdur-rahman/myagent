@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, Mic, Paperclip, Square, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
+import { ProviderIcon } from "./ProviderIcon";
 import { Select } from "./ui/select";
 import { ContextRing } from "./ContextRing";
 import { toast } from "../lib/toast";
@@ -647,8 +648,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             }}
             aria-label="Choose model"
             title={modelLabel}
-            className="flex h-7 max-w-[260px] items-center gap-1 truncate rounded-field px-2 text-[13px] text-fg-2 hover:bg-fill-2 hover:text-fg"
+            className="flex h-7 max-w-[260px] items-center gap-1.5 truncate rounded-field px-2 text-[13px] text-fg-2 hover:bg-fill-2 hover:text-fg"
           >
+            {activeConnection && (
+              <ProviderIcon kind={activeConnection.kind} size={16} className="flex-none" />
+            )}
             <span className="truncate">{modelLabel}</span>
             <ChevronDown size={14} className="flex-none text-fg-3" />
           </button>

@@ -3,6 +3,7 @@ import { Eye } from "lucide-react";
 import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import * as db from "../lib/db";
+import { ProviderIcon } from "./ProviderIcon";
 import {
   OptionList,
   Popup,
@@ -115,19 +116,26 @@ export function ModelPickerHost() {
 
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => {
+    const kinds = new Map(connections.map((connection) => [connection.id, connection.kind]));
     const list = (options ?? []).map((option) => {
       const connectionId = option.value.split("/")[0];
+      const kind = kinds.get(connectionId);
       const vision = canSeeImages(connectionId, option.label);
       return {
         ...option,
-        icon: vision ? <Eye size={14} aria-label="Vision capable" /> : undefined,
+        icon: (
+          <span className="inline-flex flex-none items-center gap-1.5">
+            {kind && <ProviderIcon kind={kind} size={16} />}
+            {vision && <Eye size={14} aria-label="Vision capable" />}
+          </span>
+        ),
       };
     });
     if (!q) return list;
     return list.filter(
       (o) => o.label.toLowerCase().includes(q) || o.group?.toLowerCase().includes(q),
     );
-  }, [options, q, canSeeImages]);
+  }, [options, q, canSeeImages, connections]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   useEffect(() => {

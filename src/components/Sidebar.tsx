@@ -25,6 +25,7 @@ import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { Avatar, Button, Dialog, Input } from "./ui";
 import { Select } from "./ui/select";
+import { ProviderIcon } from "./ProviderIcon";
 import { cn } from "../lib/utils";
 import type { Conversation } from "../lib/types";
 
@@ -747,6 +748,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                       activeConnection ? "bg-success" : "bg-fg-3",
                     )}
                   />
+                  {activeConnection && <ProviderIcon kind={activeConnection.kind} size={14} />}
                   {activeConnection ? `${activeConnection.name} · key OK` : "No provider"}
                 </small>
               </span>

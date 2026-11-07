@@ -89,6 +89,7 @@ import {
   type StoragePart,
   type StorageUsage,
 } from "../../lib/storage";
+import { ProviderIcon } from "../ProviderIcon";
 
 const MEMORY_KIND_NAMES = ["fact", "preference", "summary", "note"] as const;
 
@@ -3802,7 +3803,11 @@ function ModelCapabilityTable({
           value={connectionId}
           onChange={setConnectionId}
           aria-label="Provider"
-          options={connections.map((item) => ({ value: item.id, label: item.name }))}
+          options={connections.map((item) => ({
+            value: item.id,
+            label: item.name,
+            icon: <ProviderIcon kind={item.kind} size={18} />,
+          }))}
         />
         <Input
           value={query}

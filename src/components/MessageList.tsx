@@ -20,11 +20,18 @@ import {
   ThumbsUp,
   Clock,
   Trash2,
+  Volume2,
+  Square,
   X,
   Wrench,
 } from "lucide-react";
 import { useApp } from "../lib/store";
+import * as api from "../lib/api";
 import { classifyStreamError, STREAM_ERROR_TITLES } from "../lib/api";
+import { parseExtractedNotes } from "../lib/memory-extract";
+import { toast } from "../lib/toast";
+import { formatDuration } from "../lib/utils";
+import { speakMessage, stopSpeaking, useSpeakingId, canReadAloud } from "../lib/read-aloud";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
@@ -511,7 +518,7 @@ function AssistantMessage({
   resetKey: string | null;
   collapseToolCalls: boolean;
   outputFiles: string[];
-  onRemember: (content: string) => Promise<void>;
+  onRemember: (message: Message) => Promise<void>;
 }) {
   const live = streaming && streamingId === message.id;
   const { canRetry } = useApp();
@@ -527,12 +534,17 @@ function AssistantMessage({
   const declared = useMemo(() => parseDeclaredArtifacts(message.artifacts), [message.artifacts]);
   const toolEntries = useMemo(() => parseToolLog(message.tool_log), [message.tool_log]);
   const [rememberLabel, setRememberLabel] = useState("Remember");
+  const speakingId = useSpeakingId();
+  const speaking = speakingId === message.id;
+  const duration = message.duration_ms ?? null;
+  const completedAt = message.created_at + (duration ?? 0);
   const busy = live && message.content.length === 0;
 
   const remember = async () => {
+    setRememberLabel("Extracting…");
     try {
-      await onRemember(message.content);
-      setRememberLabel("Remembered");
+      await onRemember(message);
+      setRememberLabel("Queued");
     } catch {
       setRememberLabel("Remember failed");
     }
@@ -544,6 +556,8 @@ function AssistantMessage({
       <div className="mb-2 flex items-center gap-2 text-xs text-fg-3">
         <Logo size={16} alt="" className="rounded-full" />
         <span>{modelName}</span>
+        {duration !== null && <span aria-hidden="true">·</span>}
+        {duration !== null && <span className="tabular-nums">{formatDuration(duration)}</span>}
       </div>
       <div className="md">
         <ThinkingBlock message={message} live={live} />
@@ -625,16 +639,48 @@ function AssistantMessage({
               <span>Stopped — partial reply kept.</span>
             </div>
           )}
-          <div className="mt-1.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
-              <Copy size={14} />
-            </ActionButton>
-            {isLast && <RegenButton />}
-            <BranchButton messageId={message.id} />
-            <RatingButtons message={message} />
-            <Button variant="ghost" size="sm" onClick={() => void remember()}>
-              {rememberLabel}
-            </Button>
+          <div className="mt-1.5 flex items-center gap-1">
+            <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
+                <Copy size={14} />
+              </ActionButton>
+              {canReadAloud() && message.content.trim().length > 0 && (
+                <ActionButton
+                  label={speaking ? "Stop reading" : "Read aloud"}
+                  title={speaking ? "Stop reading" : "Read aloud"}
+                  active={speaking}
+                  onClick={() =>
+                    speaking ? stopSpeaking() : speakMessage(message.id, message.content)
+                  }
+                >
+                  {speaking ? (
+                    <Square size={13} fill="currentColor" />
+                  ) : (
+                    <Volume2 size={14} />
+                  )}
+                </ActionButton>
+              )}
+              {isLast && <RegenButton />}
+              <BranchButton messageId={message.id} />
+              <RatingButtons message={message} />
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={rememberLabel === "Extracting…"}
+                onClick={() => void remember()}
+              >
+                {rememberLabel}
+              </Button>
+            </div>
+            <span
+              className="ml-auto text-xs tabular-nums text-fg-3"
+              title={new Date(completedAt).toLocaleString()}
+            >
+              {new Date(completedAt).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
           </div>
         </>
       )}
@@ -711,8 +757,8 @@ export function MessageList() {
     error,
     clearError,
     ready,
-    activeProject,
-    addMemory,
+    activeConnection,
+    queueMemories,
     editAndResubmit,
     conversations,
     activeConversationId,
@@ -741,15 +787,28 @@ export function MessageList() {
   };
 
   const remember = useCallback(
-    async (content: string) => {
-      await addMemory({
-        scope: activeProject ? "project" : "global",
-        project_id: activeProject ? activeProject.id : null,
-        kind: "summary",
-        content: content.slice(0, 2000),
-      });
+    async (message: Message) => {
+      const model =
+        message.model ?? conversations.find((c) => c.id === activeConversationId)?.model ?? null;
+      if (!activeConnection || !model) {
+        toast("Choose a provider and model first.");
+        return;
+      }
+      const raw = await api.extractMemory(
+        activeConnection.id,
+        model,
+        message.content,
+        activeConnection.kind,
+      );
+      const notes = parseExtractedNotes(raw);
+      if (notes.length === 0) {
+        toast("No durable notes found in this reply.");
+        return;
+      }
+      const rows = await queueMemories(notes);
+      toast(`${rows.length} ${rows.length === 1 ? "note" : "notes"} queued for review.`);
     },
-    [addMemory, activeProject],
+    [activeConnection, activeConversationId, conversations, queueMemories],
   );
 
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;

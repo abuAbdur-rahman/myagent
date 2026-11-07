@@ -5,6 +5,7 @@ import { useApp } from "../lib/store";
 import * as api from "../lib/api";
 import { DEFAULT_BASE_URLS, KEYLESS_KINDS, PROVIDER_LABELS, connectionInputSchema, type Connection, type ConnectionInput, type ProviderKind } from "../lib/types";
 import { Button, Input, Spinner } from "./ui";
+import { ProviderIcon } from "./ProviderIcon";
 import { cn, errorText, rollbackConnection } from "../lib/utils";
 
 const SUGGESTIONS = [
@@ -39,13 +40,13 @@ async function persistKeyFailure(
   };
 }
 
-const PROVIDER_TILES: { id: ProviderKind; label: string; initials: string }[] = [
-  { id: "openrouter", label: "OpenRouter", initials: "OR" },
-  { id: "agentrouter", label: "Agent Router", initials: "AR" },
-  { id: "deepseek", label: "DeepSeek", initials: "DS" },
-  { id: "ollama-cloud", label: "Ollama Cloud", initials: "OC" },
-  { id: "ollama", label: "Ollama", initials: "OL" },
-  { id: "custom", label: "Custom", initials: "CU" },
+const PROVIDER_TILES: { id: ProviderKind; label: string }[] = [
+  { id: "openrouter", label: "OpenRouter" },
+  { id: "agentrouter", label: "Agent Router" },
+  { id: "deepseek", label: "DeepSeek" },
+  { id: "ollama-cloud", label: "Ollama Cloud" },
+  { id: "ollama", label: "Ollama" },
+  { id: "custom", label: "Custom" },
 ];
 
 function firstIssueMessage(error: { issues: Array<{ message: string }> }): string {
@@ -107,9 +108,7 @@ function ProviderTiles({
             kind === tile.id ? "bg-accent-soft ring-2 ring-accent" : "bg-fill-1",
           )}
         >
-          <span className="grid h-8 w-8 place-items-center rounded-full bg-fill-3 text-xs font-semibold text-fg-2">
-            {tile.initials}
-          </span>
+          <ProviderIcon kind={tile.id} size={32} />
           {tile.label}
         </button>
       ))}

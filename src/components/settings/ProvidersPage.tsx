@@ -15,6 +15,7 @@ import {
 } from "../../lib/types";
 import { Button, Dialog, IconButton, Input, Pill, Spinner, type PillTone } from "../ui";
 import { Select } from "../ui/select";
+import { ProviderIcon } from "../ProviderIcon";
 import { confirmDialog } from "../ConfirmDialog";
 import { toast } from "../../lib/toast";
 import { errorText, rollbackConnection } from "../../lib/utils";
@@ -62,15 +63,6 @@ function KeyPill({
       {KEY_STATUS_TEXT[status]}
     </Pill>
   );
-}
-
-function avatarTint(name: string): { background: string; color: string } {
-  let hue = 0;
-  for (const char of name) hue = (hue * 31 + char.charCodeAt(0)) % 360;
-  return {
-    background: `hsl(${hue} 24% 24%)`,
-    color: `hsl(${hue} 55% 78%)`,
-  };
 }
 
 function ProviderKeyField({
@@ -353,6 +345,7 @@ export function ProviderDialog({
             options={PROVIDER_KINDS.map((value) => ({
               value,
               label: PROVIDER_LABELS[value],
+              icon: <ProviderIcon kind={value} size={18} />,
             }))}
           />
         </label>
@@ -691,13 +684,7 @@ export function ProvidersPage() {
               data-setting-term={connection.name}
             >
               <div className="flex items-center gap-3">
-                <span
-                  className="grid h-9 w-9 flex-none place-items-center rounded-full text-xs font-semibold"
-                  style={avatarTint(connection.name)}
-                  aria-hidden="true"
-                >
-                  {connection.name.slice(0, 2).toUpperCase()}
-                </span>
+                <ProviderIcon kind={connection.kind} size={36} title={connection.name} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <b className="truncate text-sm font-semibold">{connection.name}</b>

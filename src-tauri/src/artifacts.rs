@@ -6,7 +6,7 @@ use tauri::{Manager, Runtime, UriSchemeContext};
 
 const MAX_ARTIFACT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 16;
-const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'self'";
+const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: http:; style-src 'unsafe-inline' https: http:; img-src data: blob: https: http:; font-src data: https: http:; media-src data: blob: https: http:; connect-src https: http:; worker-src blob:; form-action https: http:; base-uri 'none'; frame-src 'self'";
 
 const SHELL: &str = r#"<!doctype html>
 <html lang="en">
@@ -19,7 +19,7 @@ iframe { display: block; width: 100%; height: 100%; border: 0; }
 </style>
 </head>
 <body>
-<iframe id="artifact-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe>
+<iframe id="artifact-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe>
 <script>
 const artifact = __ARTIFACT__;
 document.getElementById("artifact-frame").srcdoc = artifact;
@@ -213,16 +213,17 @@ mod tests {
         let body = shell("</script><script>alert(1)</script>").unwrap();
         assert!(!body.contains("</script><script>alert(1)</script>"));
         assert!(body.contains("\\u003c/script"));
-        assert!(body.contains("sandbox=\"allow-scripts\""));
+        assert!(body.contains("sandbox=\"allow-scripts allow-same-origin"));
     }
 
     #[test]
-    fn shell_response_locks_down_network_and_ipc() {
+    fn shell_response_allows_cdn_assets_but_keeps_default_deny() {
         let response = shell_response("<h1>ok</h1>");
         assert_eq!(response.status(), StatusCode::OK);
         let csp = header_value(&response, "content-security-policy");
-        assert!(csp.contains("connect-src 'none'"));
-        assert!(csp.contains("script-src 'unsafe-inline'"));
+        assert!(csp.contains("connect-src https: http:"));
+        assert!(csp.contains("script-src 'unsafe-inline' 'unsafe-eval' https: http:"));
+        assert!(csp.contains("img-src data: blob: https: http:"));
         assert!(csp.contains("default-src 'none'"));
         assert_eq!(header_value(&response, "cache-control"), "no-store");
     }

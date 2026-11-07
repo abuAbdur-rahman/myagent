@@ -406,6 +406,7 @@ interface AppContextValue {
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
+  queueMemories: (notes: string[], kind?: MemoryKind) => Promise<PendingMemory[]>;
   editMemory: (
     id: string,
     draft: MemoryDraft,
@@ -723,6 +724,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
   const streamConversationIdRef = useRef<string | null>(null);
+  const turnStartRef = useRef<number | null>(null);
   const bufferRef = useRef("");
   const trimNextDeltaRef = useRef(false);
   const reasoningRef = useRef("");
@@ -1676,6 +1678,34 @@ setKnowledgeSummary([]);
     [memoryCompat, refreshMemories],
   );
 
+  const queueMemories = useCallback(
+    async (notes: string[], kind: MemoryKind = "fact"): Promise<PendingMemory[]> => {
+      const scope: MemoryScope = activeProject ? "project" : "global";
+      const projectId = activeProject ? activeProject.id : null;
+      const now = Date.now();
+      const rows: PendingMemory[] = [];
+      for (const raw of notes) {
+        const content = raw.replace(/\s+/g, " ").trim().slice(0, 2000);
+        if (!content) continue;
+        const row: PendingMemory = {
+          id: newId(),
+          scope,
+          project_id: projectId,
+          kind,
+          content,
+          conversation_id: activeConversationId,
+          created_at: now,
+          trust: "trusted",
+        };
+        await db.addPendingMemory(row);
+        rows.push(row);
+      }
+      if (rows.length > 0) await refreshPendingMemories();
+      return rows;
+    },
+    [activeConversationId, activeProject, refreshPendingMemories],
+  );
+
   const editMemory = useCallback(
     async (
       id: string,
@@ -1985,6 +2015,9 @@ setKnowledgeSummary([]);
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
     const error = streamErrorRef.current;
+    const startedAt = turnStartRef.current;
+    turnStartRef.current = null;
+    const durationMs = startedAt === null ? null : Math.max(0, Date.now() - startedAt);
     const settledLog = settleToolLog(toolLogRef.current);
     const changed = settledLog.some((entry, index) => entry !== toolLogRef.current[index]);
     toolLogRef.current = settledLog;
@@ -2009,7 +2042,13 @@ setKnowledgeSummary([]);
       toolLogJson,
       artifactsJson,
       error: error ?? null,
+      durationMs,
     };
+    if (durationMs !== null) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, duration_ms: durationMs } : m)),
+      );
+    }
     const persist = content || toolLogJson || artifactsJson || error
       ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
@@ -2078,8 +2117,10 @@ setKnowledgeSummary([]);
       requestIdRef.current = requestId;
       lastPayloadRef.current = payload;
       setCanRetry(false);
+      const startedAt = Date.now();
       setActiveStep(null);
-      setTurnStartedAt(Date.now());
+      setTurnStartedAt(startedAt);
+      turnStartRef.current = startedAt;
       const memoryIdsBefore = new Set(
         [...globalMemoriesRef.current, ...projectMemoriesRef.current].map(
           (memory) => memory.id,
@@ -3225,6 +3266,7 @@ setKnowledgeSummary([]);
     refreshPendingMemories,
     loadMemories,
     addMemory: saveMemoryToScope,
+    queueMemories,
     editMemory,
     deleteMemory,
     approvePendingMemory,

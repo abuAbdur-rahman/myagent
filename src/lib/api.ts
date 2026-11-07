@@ -798,6 +798,22 @@ export function summarize(
   });
 }
 
+export function extractMemory(
+  connectionId: string,
+  model: string,
+  text: string,
+  connectionKind?: string,
+) {
+  return invoke<string>("extract_memory", {
+    req: {
+      connection_id: connectionId,
+      model,
+      text,
+      connection_kind: connectionKind ?? null,
+    },
+  });
+}
+
 export type SandboxState =
   | "not_installed"
   | "daemon_stopped"
