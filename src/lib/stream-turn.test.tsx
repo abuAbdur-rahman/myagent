@@ -189,7 +189,10 @@ describe("streamTurn", () => {
       await app?.sendMessage("hello");
     });
 
-    expect(app?.error).toContain("network down");
+    const assistant = app?.messages[app.messages.length - 1];
+    expect(assistant?.error).toContain("network down");
+    expect(assistant?.finish_reason).toBe("error");
+    expect(app?.error).toBeNull();
     expect(app?.streaming).toBe(false);
     expect(app?.canRetry).toBe(true);
   });

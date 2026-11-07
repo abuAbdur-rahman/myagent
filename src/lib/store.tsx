@@ -413,6 +413,7 @@ interface AppContextValue {
   ) => Promise<void>;
   deleteMemory: (id: string, scope?: MemoryScope, projectId?: string | null) => Promise<void>;
   approvePendingMemory: (id: string, content?: string) => Promise<void>;
+  approveAllPendingMemories: (rows: PendingMemory[]) => Promise<void>;
   dismissPendingMemory: (id: string) => Promise<void>;
   undoApprovedMemory: (id: string) => Promise<void>;
 
@@ -456,6 +457,7 @@ interface AppContextValue {
   messages: Message[];
   streaming: boolean;
   streamingId: string | null;
+  workingConversationId: string | null;
   sendMessage: (
     text: string,
     images?: { dataUrl: string }[],
@@ -639,8 +641,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<{ step: number; max: number } | null>(null);
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
-  const [streaming, setStreaming] = useState(false);
+  const [streamConversationId, setStreamConversationId] = useState<string | null>(null);
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  const streaming =
+    streamConversationId !== null && streamConversationId === activeConversationId;
+  const workingConversationId = streamConversationId;
   const [compacting, setCompacting] = useState(false);
   const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -716,6 +721,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [recalledMemories, setRecalledMemories] = useState<Memory[]>([]);
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
+  const streamConversationIdRef = useRef<string | null>(null);
   const bufferRef = useRef("");
   const trimNextDeltaRef = useRef(false);
   const reasoningRef = useRef("");
@@ -724,6 +730,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const usageRef = useRef<{ prompt: number; completion: number; total: number } | null>(null);
   const finishRef = useRef<string | null>(null);
   const assistantMsgIdRef = useRef<string | null>(null);
+  const streamErrorRef = useRef<string | null>(null);
 
   useEffect(() => {
     connRef.current = activeConnection;
@@ -751,6 +758,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     convIdRef.current = activeConversationId;
   }, [activeConversationId]);
+  useEffect(() => {
+    streamConversationIdRef.current = streamConversationId;
+  }, [streamConversationId]);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -1750,6 +1760,31 @@ setKnowledgeSummary([]);
     [refreshPendingMemories],
   );
 
+  const approveAllPendingMemories = useCallback(
+    async (rows: PendingMemory[]) => {
+      if (rows.length === 0) return;
+      if (memoryCompat) {
+        for (const row of rows) await db.approvePendingMemory(row.id);
+      } else {
+        for (const row of rows) {
+          await api.memoryAppend({
+            scope: row.scope,
+            projectId: row.project_id,
+            text: row.content,
+            kind: row.kind,
+            id: row.id,
+            date: undefined,
+            trust: "trusted",
+          });
+          approvedMemoryRef.current.set(row.id, row);
+          await db.dismissPendingMemory(row.id);
+        }
+      }
+      await Promise.all([refreshMemories(), refreshPendingMemories()]);
+    },
+    [memoryCompat, refreshMemories, refreshPendingMemories],
+  );
+
   const undoApprovedMemory = useCallback(
     async (id: string) => {
       if (memoryCompat) {
@@ -1798,6 +1833,7 @@ setKnowledgeSummary([]);
   const selectConversation = useCallback(async (id: string | null) => {
     setActiveConversationId(id);
     setError(null);
+    setCanRetry(false);
     setView("chat");
     recallRequestRef.current += 1;
     knowledgeRequestRef.current += 1;
@@ -1819,8 +1855,21 @@ setKnowledgeSummary([]);
       setTodos([]);
       return;
     }
-    const rows = await db.listMessages(id);
+    let rows = await db.listMessages(id);
     if (convIdRef.current !== id) return;
+    const assistantId = assistantMsgIdRef.current;
+    if (streamConversationIdRef.current === id && assistantId) {
+      rows = db.withLiveTurn(rows, {
+        assistantId,
+        content: bufferRef.current,
+        reasoning: reasoningRef.current,
+        thinkingMs: thinkingMsRef.current,
+        finishReason: finishRef.current,
+        toolLog: toolLogRef.current,
+        artifacts: artifactsRef.current,
+        error: streamErrorRef.current,
+      });
+    }
     setMessages(rows);
     setTodos(await db.listTodos(id));
   }, []);
@@ -1857,6 +1906,10 @@ setKnowledgeSummary([]);
 
   const removeConversation = useCallback(
     async (id: string) => {
+      if (streamConversationId === id) {
+        toast("Stop the working turn before deleting this chat.");
+        return;
+      }
       await db.deleteConversation(id);
       await api.deleteSpill(id).catch(() => {
         toast("Spill files may remain on disk");
@@ -1876,7 +1929,7 @@ setKnowledgeSummary([]);
         setEpisodeSummary([]);
       }
     },
-    [activeConversationId],
+    [activeConversationId, streamConversationId],
   );
 
   const renameConversation = useCallback(async (id: string, title: string) => {
@@ -1930,15 +1983,17 @@ setKnowledgeSummary([]);
   const finalize = useCallback((assistantId: string, conversationId: string) => {
     setActiveStep(null);
     setTurnStartedAt(null);
+    setActiveTool(null);
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
+    const error = streamErrorRef.current;
     const settledLog = settleToolLog(toolLogRef.current);
     const changed = settledLog.some((entry, index) => entry !== toolLogRef.current[index]);
     toolLogRef.current = settledLog;
     const toolLogJson = settledLog.length > 0 ? JSON.stringify(settledLog) : null;
     const artifactsJson =
       artifactsRef.current.length > 0 ? JSON.stringify(artifactsRef.current) : null;
-    if (!content && !reasoning && !toolLogJson && !artifactsJson) {
+    if (!content && !reasoning && !toolLogJson && !artifactsJson && !error) {
       setMessages((prev) => prev.filter((m) => m.id !== assistantId));
     } else if (changed) {
       setMessages((prev) =>
@@ -1955,8 +2010,9 @@ setKnowledgeSummary([]);
       finishReason: finishRef.current,
       toolLogJson,
       artifactsJson,
+      error: error ?? null,
     };
-    const persist = content || toolLogJson || artifactsJson
+    const persist = content || toolLogJson || artifactsJson || error
       ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
     persist
@@ -2041,11 +2097,13 @@ setKnowledgeSummary([]);
       thinkingMsRef.current = null;
       usageRef.current = null;
       finishRef.current = null;
+      streamErrorRef.current = null;
       setActiveTool(null);
       artifactsRef.current = db.parseDeclaredArtifacts(seed?.artifacts);
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
-      setStreaming(true);
+      setStreamConversationId(conversationId);
+      streamConversationIdRef.current = conversationId;
       toolLogRef.current = keepSeed
         ? seedToolLog(db.parseToolLog(seed?.tool_log), assistantMsg.id)
         : [];
@@ -2251,6 +2309,9 @@ setKnowledgeSummary([]);
               });
               toast(`Artifact saved: ${event.title}`);
             } else if (event.type === "approval_asked") {
+              if (conversationId !== convIdRef.current) {
+                void selectConversation(conversationId);
+              }
               setApproval({
                 id: event.id,
                 tool: event.tool,
@@ -2260,6 +2321,9 @@ setKnowledgeSummary([]);
                 screenFailed: event.screen_failed,
               });
             } else if (event.type === "question_asked") {
+              if (conversationId !== convIdRef.current) {
+                void selectConversation(conversationId);
+              }
               setQuestion({
                 id: event.id,
                 question: event.question,
@@ -2303,8 +2367,16 @@ setKnowledgeSummary([]);
         }
       } catch (e) {
         if (requestIdRef.current === requestId) {
-          reportError(e);
+          const message = api.formatInvokeError(e);
+          streamErrorRef.current = message;
+          finishRef.current = "error";
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id ? { ...m, error: message, finish_reason: "error" } : m,
+            ),
+          );
           setCanRetry(lastPayloadRef.current !== null);
+          console.warn("stream failed", e);
         }
       } finally {
         if (requestIdRef.current === requestId) {
@@ -2324,7 +2396,8 @@ setKnowledgeSummary([]);
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
           setStreamingId(null);
-          setStreaming(false);
+          setStreamConversationId(null);
+          streamConversationIdRef.current = null;
           pendingVisionFallbackRef.current = null;
           finalize(assistantMsg.id, conversationId);
         }
@@ -2341,6 +2414,7 @@ setKnowledgeSummary([]);
       refreshMemories,
       refreshPendingMemories,
       deleteMemory,
+      selectConversation,
       searchBackend,
       searchEndpoint,
     ],
@@ -2432,7 +2506,7 @@ setKnowledgeSummary([]);
       const id = convIdRef.current;
       const connection = connRef.current;
       const model = modelRef.current;
-      if (!id || !connection || !model || streaming) {
+      if (!id || !connection || !model || streamConversationId !== null) {
         if (!quiet) toast("Nothing to compact yet");
         return;
       }
@@ -2471,12 +2545,13 @@ setKnowledgeSummary([]);
         setCompacting(false);
       }
     },
-    [streaming],
+    [streamConversationId],
   );
 
   const maybeAutoCompact = useCallback(
     async (conversationId: string) => {
       if (!autoCompactRef.current) return;
+      if (convIdRef.current !== conversationId) return;
       const { summary, through } = summaryFor(conversationId);
       const turns = messagesRef.current.filter((m) => m.content.length > 0);
       const fresh = through !== null ? turns.filter((m) => m.created_at > through) : turns;
@@ -2548,7 +2623,10 @@ setKnowledgeSummary([]);
       images?: { dataUrl: string }[],
       docs?: ChatDocument[],
     ): Promise<boolean> => {
-      if (streaming) return false;
+      if (streamConversationId !== null) {
+        toast("Another chat is still working. Wait for it, or open that chat to stop it.");
+        return false;
+      }
       const connection = connRef.current;
       if (!connection) {
         setError("Add a connection in Settings first.");
@@ -2759,7 +2837,7 @@ setKnowledgeSummary([]);
       messages,
       recallFor,
       recallEpisodes,
-      streaming,
+      streamConversationId,
       streamTurn,
       buildPayload,
       resolveTools,
@@ -2771,7 +2849,7 @@ setKnowledgeSummary([]);
   const regenerate = useCallback(async () => {
     const conversationId = convIdRef.current;
     const connection = connRef.current;
-    if (!conversationId || !connection || !modelRef.current || streaming) return;
+    if (!conversationId || !connection || !modelRef.current || streamConversationId !== null) return;
     const turns = messagesRef.current.filter((m) => m.content.length > 0);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const dropped = turns[turns.length - 1];
@@ -2806,12 +2884,12 @@ setKnowledgeSummary([]);
       buildPayload(conversationId, await withDocumentBlock(kept, projectRef.current?.id ?? null)),
       assistantMsg,
     );
-  }, [auditTurn, streaming, streamTurn, buildPayload]);
+  }, [auditTurn, streamConversationId, streamTurn, buildPayload]);
 
   const continueTurn = useCallback(async () => {
     const conversationId = convIdRef.current;
     const connection = connRef.current;
-    if (!conversationId || !connection || !modelRef.current || streaming) return;
+    if (!conversationId || !connection || !modelRef.current || streamConversationId !== null) return;
     const turns = messagesRef.current.filter((m) => m.content.length > 0);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
@@ -2834,13 +2912,13 @@ setKnowledgeSummary([]);
       partial,
       true,
     );
-  }, [streaming, streamTurn, buildPayload, sendMessage, refreshSystemPrompt]);
+  }, [streamConversationId, streamTurn, buildPayload, sendMessage, refreshSystemPrompt]);
 
   const retryTurn = useCallback(async () => {
     const conversationId = convIdRef.current;
     const connection = connRef.current;
     const payload = lastPayloadRef.current ? refreshSystemPrompt(lastPayloadRef.current) : null;
-    if (!conversationId || !connection || !modelRef.current || streaming || !payload) return;
+    if (!conversationId || !connection || !modelRef.current || streamConversationId !== null || !payload) return;
     setError(null);
     let assistantMsg: Message;
     try {
@@ -2851,7 +2929,7 @@ setKnowledgeSummary([]);
     }
     setMessages((prev) => [...prev, assistantMsg]);
     await streamTurn(conversationId, connection, modelRef.current, payload, assistantMsg);
-  }, [streaming, streamTurn, refreshSystemPrompt]);
+  }, [streamConversationId, streamTurn, refreshSystemPrompt]);
 
   const replyApproval = useCallback(
     async (reply: "once" | "always" | "deny") => {
@@ -2885,7 +2963,7 @@ setKnowledgeSummary([]);
     async (userId: string, text: string): Promise<boolean> => {
       const conversationId = convIdRef.current;
       const connection = connRef.current;
-      if (!conversationId || !connection || !modelRef.current || streaming) return false;
+      if (!conversationId || !connection || !modelRef.current || streamConversationId !== null) return false;
       const trimmed = text.trim();
       if (!trimmed) return false;
       try {
@@ -2925,13 +3003,13 @@ setKnowledgeSummary([]);
       );
       return true;
     },
-    [auditTurn, streaming, streamTurn, buildPayload],
+    [auditTurn, streamConversationId, streamTurn, buildPayload],
   );
 
   const branchFrom = useCallback(
     async (messageId: string) => {
       const conversationId = convIdRef.current;
-      if (!conversationId || streaming) return;
+      if (!conversationId || streamConversationId !== null) return;
       const source = conversations.find((c) => c.id === conversationId);
       if (!source) return;
       try {
@@ -2960,7 +3038,7 @@ setKnowledgeSummary([]);
         reportError(e);
       }
     },
-    [conversations, streaming],
+    [conversations, streamConversationId],
   );
 
   const rateMessage = useCallback(
@@ -2980,7 +3058,7 @@ setKnowledgeSummary([]);
   const startProjectChat = useCallback(
     async (projectId: string, text: string): Promise<boolean> => {
       const connection = connRef.current;
-      if (!connection || !modelRef.current || streaming) return false;
+      if (!connection || !modelRef.current || streamConversationId !== null) return false;
       const trimmed = text.trim();
       if (!trimmed) return false;
       setError(null);
@@ -3024,7 +3102,7 @@ setKnowledgeSummary([]);
         return false;
       }
     },
-    [projects, streaming, streamTurn, buildPayload, maybeGenerateTitle, recallFor, recallEpisodes],
+    [projects, streamConversationId, streamTurn, buildPayload, maybeGenerateTitle, recallFor, recallEpisodes],
   );
 
   const clearActiveConversation = useCallback(async () => {
@@ -3057,7 +3135,8 @@ setKnowledgeSummary([]);
     if (!id) return;
     requestIdRef.current = null;
     setStreamingId(null);
-    setStreaming(false);
+    setStreamConversationId(null);
+    streamConversationIdRef.current = null;
     setActiveTool(null);
     api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
@@ -3151,6 +3230,7 @@ setKnowledgeSummary([]);
     editMemory,
     deleteMemory,
     approvePendingMemory,
+    approveAllPendingMemories,
     dismissPendingMemory,
     undoApprovedMemory,
     conversations,
@@ -3192,6 +3272,7 @@ setKnowledgeSummary([]);
     messages,
     streaming,
     streamingId,
+    workingConversationId,
     sendMessage,
     fileCommands,
     loadFileCommands,

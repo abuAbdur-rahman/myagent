@@ -46,6 +46,7 @@ export function buildChatExport(chat: Conversation, messages: Message[]): ChatEx
       finishReason: db.sqlNull(message.finish_reason),
       toolLog: db.parseToolLog(message.tool_log),
       artifacts: db.parseDeclaredArtifacts(message.artifacts),
+      error: db.sqlNull(message.error),
       model: db.sqlNull(message.model),
       rating: message.rating ?? null,
       createdAt: message.created_at,
@@ -106,6 +107,7 @@ export async function importChatExport(raw: unknown): Promise<string> {
         message.toolLog.length > 0 ? JSON.stringify(message.toolLog) : null,
       artifactsJson:
         message.artifacts.length > 0 ? JSON.stringify(message.artifacts) : null,
+      error: message.error ?? null,
       model: db.sqlNull(message.model),
       createdAt: message.createdAt,
     });

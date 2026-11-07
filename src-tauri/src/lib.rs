@@ -407,6 +407,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 32,
+            description: "add_message_error",
+            sql: "ALTER TABLE messages ADD COLUMN error TEXT;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

@@ -85,6 +85,21 @@ describe("ToolLogView", () => {
     expect(html).toContain("Show tool calls");
     expect(html).not.toContain("Search: rust");
   });
+
+  it("groups repeated tools under one expandable row", () => {
+    const repeated: ToolLogEntry[] = [
+      { id: "s1", name: "web_search", summary: "Search: one", status: "ok", preview: null },
+      { id: "s2", name: "web_search", summary: "Search: two", status: "ok", preview: null },
+      { id: "f1", name: "web_fetch", summary: "Fetch: page", status: "ok", preview: null },
+    ];
+    const html = renderToStaticMarkup(
+      <ToolLogView entries={repeated} collapseToolCalls={false} resetKey="g1" />,
+    );
+    expect(html).toContain("Searched the web");
+    expect(html).toContain("· 2");
+    expect(html).toContain("Search: one");
+    expect(html).toContain("Fetch: page");
+  });
 });
 
 describe("MessageDocuments", () => {

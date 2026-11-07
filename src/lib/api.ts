@@ -215,7 +215,15 @@ export function suggestTitle(
   });
 }
 
-export type StreamErrorClass = "key" | "model" | "rate-limit" | "network" | "provider";
+export type StreamErrorClass =
+  | "key"
+  | "model"
+  | "rate-limit"
+  | "network"
+  | "context"
+  | "blocked"
+  | "server"
+  | "provider";
 
 export function classifyStreamError(message: string): { cls: StreamErrorClass; hint: string } {
   const lower = message.toLowerCase();
@@ -228,7 +236,7 @@ export function classifyStreamError(message: string): { cls: StreamErrorClass; h
   ) {
     return {
       cls: "key",
-      hint: "API key rejected. Check the key in Settings → Providers, then retry.",
+      hint: "The API key was rejected. Check it in Settings → Providers, then retry.",
     };
   }
   if (
@@ -239,7 +247,7 @@ export function classifyStreamError(message: string): { cls: StreamErrorClass; h
   ) {
     return {
       cls: "model",
-      hint: "Model not found — it may be renamed or retired. Pick another model, then retry.",
+      hint: "The selected model is unavailable. Pick another model, then retry.",
     };
   }
   if (
@@ -251,7 +259,7 @@ export function classifyStreamError(message: string): { cls: StreamErrorClass; h
   ) {
     return {
       cls: "rate-limit",
-      hint: "Rate limited. Wait a bit, then retry — automatic backoff lands in 0.1.4.",
+      hint: "The provider is rate-limiting requests. Wait a moment, then retry.",
     };
   }
   if (
@@ -261,15 +269,70 @@ export function classifyStreamError(message: string): { cls: StreamErrorClass; h
     lower.includes("timed out") ||
     lower.includes("dns") ||
     lower.includes("connection refused") ||
+    lower.includes("connection reset") ||
     lower.includes("offline")
   ) {
     return {
       cls: "network",
-      hint: "Network error — the request never reached the provider. Check your connection, then retry.",
+      hint: "The request couldn't reach the provider. Check your internet connection, then retry.",
     };
   }
-  return { cls: "provider", hint: "Provider error. Raw message below." };
+  if (
+    lower.includes("context length") ||
+    lower.includes("context window") ||
+    lower.includes("too many tokens") ||
+    lower.includes("maximum context") ||
+    lower.includes("token limit")
+  ) {
+    return {
+      cls: "context",
+      hint: "This chat is too long for the model. Compact it or start a new chat.",
+    };
+  }
+  if (
+    lower.includes("content policy") ||
+    lower.includes("content filter") ||
+    lower.includes("blocked by") ||
+    lower.includes("safety") ||
+    lower.includes("moderation") ||
+    lower.includes("flagged")
+  ) {
+    return {
+      cls: "blocked",
+      hint: "The provider blocked this request. Rephrase it or try another model.",
+    };
+  }
+  if (
+    lower.includes("500") ||
+    lower.includes("502") ||
+    lower.includes("503") ||
+    lower.includes("504") ||
+    lower.includes("internal server") ||
+    lower.includes("bad gateway") ||
+    lower.includes("service unavailable") ||
+    lower.includes("overloaded")
+  ) {
+    return {
+      cls: "server",
+      hint: "The provider had a server problem. Try again in a moment.",
+    };
+  }
+  return {
+    cls: "provider",
+    hint: "The provider returned an error. Retry, or open the technical details below.",
+  };
 }
+
+export const STREAM_ERROR_TITLES: Record<StreamErrorClass, string> = {
+  key: "API key problem",
+  model: "Model unavailable",
+  "rate-limit": "Rate limited",
+  network: "Internet connection problem",
+  context: "Context too large",
+  blocked: "Request blocked",
+  server: "Provider server problem",
+  provider: "Turn failed",
+};
 
 export function formatInvokeError(error: unknown): string {
   if (typeof error === "string") return error;

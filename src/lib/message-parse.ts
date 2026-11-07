@@ -2,6 +2,7 @@ import {
   declaredArtifactSchema,
   toolLogEntrySchema,
   type DeclaredArtifact,
+  type Message,
   type ToolLogEntry,
 } from "./types";
 
@@ -79,4 +80,32 @@ export function continueDigest(entries: ToolLogEntry[]): string {
       ? `\n\nRecent failures (retry differently if needed):\n${failed.join("\n")}`
       : "";
   return `${doneBlock}${failedBlock}`;
+}
+
+export interface LiveTurnDraft {
+  assistantId: string;
+  content: string;
+  reasoning: string;
+  thinkingMs: number | null;
+  finishReason: string | null;
+  toolLog: ToolLogEntry[];
+  artifacts: DeclaredArtifact[];
+  error: string | null;
+}
+
+export function withLiveTurn(messages: Message[], draft: LiveTurnDraft): Message[] {
+  const index = messages.findIndex((message) => message.id === draft.assistantId);
+  if (index < 0) return messages;
+  const next = [...messages];
+  next[index] = {
+    ...next[index],
+    content: draft.content,
+    reasoning: draft.reasoning,
+    thinking_ms: draft.thinkingMs,
+    finish_reason: draft.finishReason,
+    tool_log: draft.toolLog.length > 0 ? JSON.stringify(draft.toolLog) : null,
+    artifacts: draft.artifacts.length > 0 ? JSON.stringify(draft.artifacts) : null,
+    error: draft.error,
+  };
+  return next;
 }

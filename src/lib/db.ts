@@ -338,7 +338,7 @@ export async function importBundle(
     report.conversations += 1;
     for (const message of conversation.messages) {
       const result = await db.execute(
-        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
         [
           message.id,
           conversation.id,
@@ -354,6 +354,7 @@ export async function importBundle(
           sqlNull(message.artifacts),
           sqlNull(message.attachments),
           sqlNull(message.model),
+          sqlNull(message.error),
           sqlNull(message.rating),
           message.created_at,
         ],
@@ -535,6 +536,7 @@ export interface FullMessageInput {
   finishReason?: string | null;
   toolLogJson?: string | null;
   artifactsJson?: string | null;
+  error?: string | null;
   model?: string | null;
   createdAt?: number | null;
 }
@@ -572,6 +574,7 @@ export async function insertMessageFull(
     finishReason: sqlNull(input.finishReason),
     toolLogJson: sqlNull(input.toolLogJson),
     artifactsJson: sqlNull(input.artifactsJson),
+    error: sqlNull(input.error),
   });
   return message;
 }
@@ -585,12 +588,13 @@ export interface MessageMeta {
   finishReason: string | null;
   toolLogJson: string | null;
   artifactsJson: string | null;
+  error: string | null;
 }
 
 export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8 WHERE id = $9",
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8, error = $9 WHERE id = $10",
     [
       meta.reasoning,
       meta.thinkingMs,
@@ -600,6 +604,7 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
       meta.finishReason,
       meta.toolLogJson,
       meta.artifactsJson,
+      meta.error,
       id,
     ],
   );
@@ -615,7 +620,7 @@ export async function setMessageRating(id: string, rating: number | null): Promi
   await db.execute("UPDATE messages SET rating = $1 WHERE id = $2", [rating, id]);
 }
 
-export { continueDigest, parseDeclaredArtifacts, parseToolLog } from "./message-parse";
+export { continueDigest, parseDeclaredArtifacts, parseToolLog, withLiveTurn } from "./message-parse";
 
 export async function truncateConversation(
   conversationId: string,
@@ -685,7 +690,7 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
       [
         newId(),
         branched.id,
@@ -701,6 +706,7 @@ export async function branchConversation(
         sqlNull(m.artifacts),
         sqlNull(m.attachments),
         sqlNull(m.model),
+        sqlNull(m.error),
         m.created_at,
       ],
     );

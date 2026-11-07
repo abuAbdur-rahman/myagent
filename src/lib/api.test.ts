@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
 }));
 
-import { clearModelCache, listModels } from "./api";
+import { classifyStreamError, clearModelCache, listModels } from "./api";
 
 const memory = new Map<string, string>();
 
@@ -123,5 +123,14 @@ describe("model list cache", () => {
     await listModels("conn-1", "openrouter");
     await listModels("conn-2", "openrouter");
     expect(invokeMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("classifyStreamError", () => {
+  it("maps network and context failures to friendly hints", () => {
+    expect(classifyStreamError("failed to fetch").cls).toBe("network");
+    expect(classifyStreamError("maximum context length exceeded").cls).toBe("context");
+    expect(classifyStreamError("503 service unavailable").cls).toBe("server");
+    expect(classifyStreamError("content policy violation").cls).toBe("blocked");
   });
 });

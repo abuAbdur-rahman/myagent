@@ -56,11 +56,11 @@ export function ActivityPill({ placement }: { placement: "center" | "inline" }) 
       ) : null}
       <span className="font-medium text-text">{label}</span>
       {activeStep !== null && state !== "writing" ? (
-        <span>
+        <span aria-hidden="true">
           step {activeStep.step}/{activeStep.max}
         </span>
       ) : null}
-      {elapsed ? <span>{elapsed}</span> : null}
+      {elapsed ? <span aria-hidden="true">{elapsed}</span> : null}
       {HINTS[state] && <span>{HINTS[state]}</span>}
       {state === "recording" ? (
         <span className="size-1.5 animate-pulse rounded-full bg-danger" aria-hidden="true" />
