@@ -2816,25 +2816,7 @@ setKnowledgeSummary([]);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const partial = turns[turns.length - 1];
     if (partial.finish_reason === "step_limit" || partial.finish_reason === "time_limit") {
-      const seen = new Set<string>();
-      const lines = db
-        .parseToolLog(partial.tool_log)
-        .slice(-10)
-        .filter((entry) => {
-          const key = `${entry.name}\n${entry.summary}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        })
-        .slice(-6)
-        .map((entry) => {
-          const preview = entry.preview?.trim();
-          return `- ${entry.name}: ${entry.summary}${preview ? `\n  ${preview.slice(0, 300)}` : ""}`;
-        });
-      const digest =
-        lines.length > 0
-          ? `\n\nAlready done this turn (do not repeat):\n${lines.join("\n")}`
-          : "";
+      const digest = db.continueDigest(db.parseToolLog(partial.tool_log));
       await sendMessage(
         `Continue from where you left off. Do not repeat work that is already done.${digest}`,
       );

@@ -22,6 +22,38 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.10.1",
+    date: "2026-11-07",
+    summary:
+      "Web research keeps the pages it reads, catches repeated calls across the turn, and stops at a budget instead of looping to the step cap.",
+    changes: [
+      {
+        kind: "fixed",
+        text: "A research turn keeps up to 64 KiB of tool output instead of only the newest result. The assistant can read the page it already fetched and stops re-fetching it with cache-busting query parameters.",
+      },
+      {
+        kind: "fixed",
+        text: "Repeated tool calls are counted across the whole turn, with cache-busting URL parameters and search wording normalized. After three repeats the assistant asks Keep going / Stop here once; another repeat ends the turn.",
+      },
+      {
+        kind: "fixed",
+        text: "`web_fetch` returns up to 16,000 characters by default and strips script, style and head noise before converting HTML, so documentation pages reach the price or table they were fetched for instead of a JavaScript banner.",
+      },
+      {
+        kind: "fixed",
+        text: "The assistant is told the local date and time and has a two-search / two-fetch budget for a factual question, so a current price no longer burns the step cap on `get_time` and reworded searches.",
+      },
+      {
+        kind: "improved",
+        text: "A capped turn is visible: the activity pill shows step X/Y and elapsed time, the step-limit banner includes the tool count, and Continue carries a short digest of completed and failed calls.",
+      },
+      {
+        kind: "fixed",
+        text: "Subagent answers are no longer discarded when a subagent hits its step cap, and a turn has a 5-minute budget, or 20 minutes after a sandbox, PowerShell or MCP tool has run, before the final answer is requested.",
+      },
+    ],
+  },
+  {
 
     version: "0.10.0",
     date: "2026-11-06",
