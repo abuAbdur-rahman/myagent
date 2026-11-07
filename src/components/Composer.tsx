@@ -463,7 +463,12 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         handle?.setMarkdown(text);
         setComposerDraft(text);
         setChips(pending);
-        toast("Couldn't send that message.");
+        if (
+          workingConversationId === null ||
+          workingConversationId === activeConversationId
+        ) {
+          toast("Couldn't send that message.");
+        }
       }
     });
   };

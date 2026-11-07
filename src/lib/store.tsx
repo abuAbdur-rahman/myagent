@@ -1833,6 +1833,7 @@ setKnowledgeSummary([]);
   const selectConversation = useCallback(async (id: string | null) => {
     setActiveConversationId(id);
     setError(null);
+    setCanRetry(false);
     setView("chat");
     recallRequestRef.current += 1;
     knowledgeRequestRef.current += 1;
@@ -2103,6 +2104,7 @@ setKnowledgeSummary([]);
       assistantMsgIdRef.current = assistantMsg.id;
       setStreamingId(assistantMsg.id);
       setStreamConversationId(conversationId);
+      streamConversationIdRef.current = conversationId;
       toolLogRef.current = keepSeed
         ? seedToolLog(db.parseToolLog(seed?.tool_log), assistantMsg.id)
         : [];
@@ -2390,6 +2392,7 @@ setKnowledgeSummary([]);
           assistantMsgIdRef.current = null;
           setStreamingId(null);
           setStreamConversationId(null);
+          streamConversationIdRef.current = null;
           pendingVisionFallbackRef.current = null;
           finalize(assistantMsg.id, conversationId);
         }
@@ -3127,6 +3130,7 @@ setKnowledgeSummary([]);
     requestIdRef.current = null;
     setStreamingId(null);
     setStreamConversationId(null);
+    streamConversationIdRef.current = null;
     setActiveTool(null);
     api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
