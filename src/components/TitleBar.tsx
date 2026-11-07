@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Copy, Minus, Square, X } from "lucide-react";
+import { Copy, Minus, Search, Square, X } from "lucide-react";
 import { Logo } from "./Logo";
 import { useApp } from "../lib/store";
 import { toast } from "../lib/toast";
@@ -21,8 +21,8 @@ function CapButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`grid h-8 w-[46px] place-items-center text-text transition-colors ${
-        close ? "hover:bg-danger hover:text-white" : "hover:bg-hover"
+      className={`grid h-9 w-[46px] place-items-center text-fg-2 transition-colors ${
+        close ? "hover:bg-danger hover:text-white" : "hover:bg-fill-2 hover:text-fg"
       }`}
     >
       {children}
@@ -31,7 +31,7 @@ function CapButton({
 }
 
 export function TitleBar() {
-  const { conversations, activeConversationId } = useApp();
+  const { setPaletteOpen } = useApp();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -55,29 +55,41 @@ export function TitleBar() {
       setMaximized(await w.isMaximized());
     });
 
-  const title =
-    conversations.find((c) => c.id === activeConversationId)?.title ?? "New chat";
-
   return (
     <div
       data-tauri-drag-region
-      className="flex h-8 flex-none select-none items-center bg-bg"
+      className="flex h-9 flex-none select-none items-center bg-sunken pl-3"
     >
-      <div data-tauri-drag-region className="flex min-w-0 max-w-[60%] items-center gap-2 pl-2.5">
-        <Logo size={16} alt="" />
-        <b className="text-[13px]">MyAgent</b>
-        <span className="truncate text-[13px] text-muted">· {title}</span>
+      <div
+        data-tauri-drag-region
+        className="flex w-[252px] flex-none items-center gap-2"
+      >
+        <Logo size={20} alt="" />
+        <b className="text-[13px] font-semibold">MyAgent</b>
       </div>
-      <div data-tauri-drag-region className="h-full flex-1" />
-      <CapButton label="Minimize" onClick={() => void run((w) => w.minimize())}>
-        <Minus size={16} />
-      </CapButton>
-      <CapButton label={maximized ? "Restore" : "Maximize"} onClick={() => void toggleMaximize()}>
-        {maximized ? <Copy size={14} /> : <Square size={14} />}
-      </CapButton>
-      <CapButton label="Close" close onClick={() => void run((w) => w.close())}>
-        <X size={16} />
-      </CapButton>
+
+      <button
+        type="button"
+        onClick={() => setPaletteOpen(true)}
+        aria-label="Search chats, projects and commands"
+        className="mx-auto hidden h-[26px] w-[min(420px,40vw)] items-center gap-2 rounded-field bg-fill-1 px-2.5 text-[13px] text-fg-3 shadow-[inset_0_0_0_1px_var(--line-subtle)] hover:bg-fill-2 hover:text-fg-2 md:flex"
+      >
+        <Search size={14} />
+        <span className="truncate">Search chats, projects, commands</span>
+        <kbd className="ml-auto">Ctrl K</kbd>
+      </button>
+
+      <div className="ml-auto flex h-9 items-center">
+        <CapButton label="Minimize" onClick={() => void run((w) => w.minimize())}>
+          <Minus size={15} />
+        </CapButton>
+        <CapButton label={maximized ? "Restore" : "Maximize"} onClick={() => void toggleMaximize()}>
+          {maximized ? <Copy size={13} /> : <Square size={13} />}
+        </CapButton>
+        <CapButton label="Close" close onClick={() => void run((w) => w.close())}>
+          <X size={15} />
+        </CapButton>
+      </div>
     </div>
   );
 }

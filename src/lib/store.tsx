@@ -42,6 +42,7 @@ import {
   parseGroupByDate,
   type Density,
 } from "./appearance";
+import { accentIdOf, parseAccent } from "./accent";
 import {
   readVisionFallback,
   readVisionOverrides,
@@ -1090,11 +1091,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const dark =
         theme === "dark" ||
         (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-      if (dark) {
-        document.documentElement.setAttribute("data-theme", "dark");
-      } else {
-        document.documentElement.removeAttribute("data-theme");
-      }
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     };
     apply();
     const query = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1128,14 +1125,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("data-density", density);
   }, [density]);
 
-  const [accent, setAccentState] = useState(() => localStorage.getItem("accent") ?? "#c96442");
+  const [accent, setAccentState] = useState(() => parseAccent(localStorage.getItem("accent")));
   const setAccent = useCallback((value: string) => {
-    setAccentState(value);
-    localStorage.setItem("accent", value);
+    const id = accentIdOf(value);
+    setAccentState(id);
+    localStorage.setItem("accent", id);
   }, []);
 
   useEffect(() => {
-    document.documentElement.style.setProperty("--accent", accent);
+    document.documentElement.setAttribute("data-accent", accent);
   }, [accent]);
 
   const setComposerDraft = useCallback((value: string) => {

@@ -10,21 +10,26 @@ import {
 import { cn } from "../lib/utils";
 import { useFocusTrap } from "../lib/useFocusTrap";
 
-const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-0";
+const focusRing =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
 
 const buttonVariants = cva(
   cn(
-    "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-control border px-3 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+    "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-field text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-45",
     focusRing,
   ),
   {
     variants: {
       variant: {
-        default: "border-border bg-surface hover:bg-hover",
-        primary: "border-accent bg-accent text-accent-contrast hover:brightness-110",
-        ghost: "border-transparent text-muted hover:bg-hover hover:text-text",
-        danger: "border-danger text-danger hover:bg-hover",
-        dangerFill: "border-danger bg-danger text-white hover:brightness-110",
+        default:
+          "bg-fill-2 text-fg shadow-[inset_0_0_0_1px_var(--line)] hover:bg-fill-3",
+        secondary:
+          "bg-fill-2 text-fg shadow-[inset_0_0_0_1px_var(--line)] hover:bg-fill-3",
+        primary:
+          "bg-accent text-accent-contrast hover:bg-[var(--accent-solid-hover)]",
+        ghost: "text-fg-2 hover:bg-fill-2 hover:text-fg",
+        danger: "text-danger hover:bg-danger-soft",
+        dangerFill: "bg-danger text-white hover:brightness-95",
       },
       size: {
         default: "h-8 px-3",
@@ -64,9 +69,9 @@ export const IconButton = forwardRef<
       aria-label={label}
       title={title ?? label}
       className={cn(
-        "grid flex-none place-items-center rounded-control transition-colors hover:bg-hover",
+        "grid flex-none place-items-center rounded-field transition-colors hover:bg-fill-2 hover:text-fg",
         dims,
-        active ? "text-accent" : "text-muted",
+        active ? "bg-fill-3 text-fg" : "text-fg-2",
         focusRing,
         className,
       )}
@@ -79,7 +84,10 @@ export const IconButton = forwardRef<
 IconButton.displayName = "IconButton";
 
 const fieldBase = cn(
-  "w-full rounded-card border border-border bg-surface-2 px-2.5 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent",
+  "w-full rounded-field bg-fill-1 text-sm text-fg shadow-[inset_0_0_0_1px_var(--line)]",
+  "px-2.5 placeholder:text-fg-3 focus:outline-none",
+  "focus:shadow-[inset_0_0_0_1px_var(--accent-line),0_0_0_3px_var(--accent-ring)]",
+  "disabled:opacity-45",
 );
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
@@ -93,7 +101,7 @@ export const Textarea = forwardRef<
   HTMLTextAreaElement,
   TextareaHTMLAttributes<HTMLTextAreaElement>
 >(({ className, ...props }, ref) => (
-  <textarea ref={ref} className={cn("py-2", fieldBase, className)} {...props} />
+  <textarea ref={ref} className={cn("py-2 leading-relaxed", fieldBase, className)} {...props} />
 ));
 Textarea.displayName = "Textarea";
 
@@ -117,16 +125,18 @@ export function Toggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative inline-flex h-5 w-10 flex-none items-center rounded-full border transition-colors",
-        checked ? "border-accent bg-accent" : "border-border bg-active",
+        "relative inline-flex h-5 w-9 flex-none items-center rounded-full transition-colors",
+        checked
+          ? "bg-accent"
+          : "bg-fill-3 shadow-[inset_0_0_0_1px_var(--line)]",
         focusRing,
-        disabled && "opacity-50",
+        disabled && "opacity-45",
       )}
     >
       <span
         className={cn(
-          "ml-0.5 block h-3.5 w-3.5 rounded-full bg-white transition-transform",
-          checked && "translate-x-[18px]",
+          "ml-0.5 block h-4 w-4 rounded-full transition-transform",
+          checked ? "translate-x-4 bg-white" : "bg-fg-2",
         )}
       />
     </button>
@@ -136,40 +146,47 @@ export function Toggle({
 export function Badge({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
-      className={cn("rounded bg-hover px-1.5 py-px text-[11px] text-muted", className)}
+      className={cn(
+        "inline-flex h-[18px] items-center rounded-chip bg-fill-2 px-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-fg-3",
+        className,
+      )}
     >
       {children}
     </span>
   );
 }
 
-export type PillTone = "neutral" | "accent" | "success" | "warn" | "danger";
+export type PillTone = "neutral" | "accent" | "success" | "warn" | "danger" | "info";
 
 const pillTone: Record<PillTone, string> = {
-  neutral: "border-border text-muted",
-  accent: "border-accent text-accent",
-  success: "border-success text-success",
-  warn: "border-warn text-warn",
-  danger: "border-danger text-danger",
+  neutral: "bg-fill-2 text-fg-2",
+  accent: "bg-accent-soft text-accent-text",
+  success: "bg-success-soft text-success",
+  warn: "bg-[var(--warning-soft)] text-warning",
+  danger: "bg-danger-soft text-danger",
+  info: "bg-[var(--info-soft)] text-info",
 };
 
 export function Pill({
   tone = "neutral",
+  icon,
   children,
   className,
 }: {
   tone?: PillTone;
+  icon?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 flex-none items-center gap-1 rounded-full border px-2 text-[11px] font-medium",
+        "inline-flex h-5 flex-none items-center gap-1 rounded-full px-2 text-xs font-medium",
         pillTone[tone],
         className,
       )}
     >
+      {icon}
       {children}
     </span>
   );
@@ -187,8 +204,13 @@ function segmentedTabIndex(active: boolean, index: number, position: number): nu
   return index < 0 && position === 0 ? 0 : -1;
 }
 
-function segmentedTone(active: boolean): string {
-  return active ? "bg-active font-semibold text-text" : "text-muted hover:bg-hover";
+function segmentedTone(active: boolean, tone: "default" | "policy", value: string): string {
+  if (!active) return "text-fg-3 hover:text-fg";
+  if (tone === "policy" && value === "allow") return "bg-success-soft text-success";
+  if (tone === "policy" && (value === "block" || value === "deny")) {
+    return "bg-danger-soft text-danger";
+  }
+  return "bg-overlay text-fg shadow-sm shadow-[inset_0_0_0_1px_var(--line-subtle)]";
 }
 
 export function Segmented<T extends string>({
@@ -197,6 +219,7 @@ export function Segmented<T extends string>({
   onChange,
   label,
   disabled,
+  tone = "default",
   className,
 }: {
   value: T;
@@ -204,6 +227,7 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   label: string;
   disabled?: boolean;
+  tone?: "default" | "policy";
   className?: string;
 }) {
   const index = options.findIndex((option) => option.value === value);
@@ -217,7 +241,7 @@ export function Segmented<T extends string>({
       role="radiogroup"
       aria-label={label}
       className={cn(
-        "inline-flex flex-none rounded-control border border-border p-0.5",
+        "inline-flex flex-none gap-0.5 rounded-field bg-fill-2 p-0.5",
         className,
       )}
     >
@@ -239,8 +263,8 @@ export function Segmented<T extends string>({
               move(step);
             }}
             className={cn(
-              "h-6 rounded-control px-2 text-xs transition-colors disabled:pointer-events-none disabled:opacity-50",
-              segmentedTone(active),
+              "h-6 rounded-chip px-3 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-45",
+              segmentedTone(active, tone, option.value),
               focusRing,
             )}
           >
@@ -252,10 +276,21 @@ export function Segmented<T extends string>({
   );
 }
 
-export function Avatar({ initials, size = 28 }: { initials: string; size?: number }) {
+export function Avatar({
+  initials,
+  size = 28,
+  muted,
+}: {
+  initials: string;
+  size?: number;
+  muted?: boolean;
+}) {
   return (
     <span
-      className="grid flex-none place-items-center rounded-full bg-accent font-semibold text-accent-contrast"
+      className={cn(
+        "grid flex-none place-items-center rounded-full font-semibold",
+        muted ? "bg-fill-2 text-fg-2" : "bg-accent-soft text-accent-text",
+      )}
       style={{ width: size, height: size, fontSize: size <= 22 ? 10 : 12 }}
       aria-hidden="true"
     >
@@ -269,8 +304,99 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
     <span
       role="status"
       aria-label={label}
-      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-transparent"
+      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-line-strong border-t-accent-text"
     />
+  );
+}
+
+export function SectionLabel({
+  children,
+  action,
+  className,
+}: {
+  children: ReactNode;
+  action?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-2 px-1 pb-1 pt-4 text-xs font-medium text-fg-3",
+        className,
+      )}
+    >
+      <span>{children}</span>
+      {action}
+    </div>
+  );
+}
+
+export function EmptyState({
+  icon,
+  title,
+  body,
+  action,
+}: {
+  icon?: ReactNode;
+  title: string;
+  body?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+      {icon && <div className="text-fg-3">{icon}</div>}
+      <h3 className="m-0 text-sm font-semibold">{title}</h3>
+      {body && <p className="m-0 max-w-sm text-[13px] text-fg-3">{body}</p>}
+      {action && <div className="mt-2">{action}</div>}
+    </div>
+  );
+}
+
+export type NoticeTone = "info" | "warn" | "danger" | "success";
+
+const noticeTone: Record<NoticeTone, string> = {
+  info: "bg-[var(--info-soft)] text-info shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--info)_28%,transparent)]",
+  warn: "bg-[var(--warning-soft)] text-warning shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warning)_28%,transparent)]",
+  danger:
+    "bg-danger-soft text-danger shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--danger)_28%,transparent)]",
+  success:
+    "bg-success-soft text-success shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--success)_28%,transparent)]",
+};
+
+export function Notice({
+  tone = "info",
+  icon,
+  title,
+  children,
+  actions,
+  details,
+}: {
+  tone?: NoticeTone;
+  icon?: ReactNode;
+  title: string;
+  children?: ReactNode;
+  actions?: ReactNode;
+  details?: string;
+}) {
+  return (
+    <div role={tone === "danger" ? "alert" : "status"} className={cn("rounded-card p-3", noticeTone[tone])}>
+      <div className="flex items-start gap-2.5">
+        {icon && <span className="mt-0.5 flex-none">{icon}</span>}
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-[13px] font-semibold">{title}</p>
+          {children && <div className="mt-0.5 text-[13px] leading-relaxed text-fg-2">{children}</div>}
+          {details && (
+            <details className="mt-1.5 text-xs text-fg-3">
+              <summary className="cursor-pointer">Technical details</summary>
+              <pre className="m-0 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-field bg-code p-2 font-mono">
+                {details}
+              </pre>
+            </details>
+          )}
+        </div>
+        {actions && <div className="flex flex-none items-center gap-1.5">{actions}</div>}
+      </div>
+    </div>
   );
 }
 
@@ -296,7 +422,7 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4"
+      className="fixed inset-0 z-[100] grid place-items-center bg-[var(--scrim)] p-4 backdrop-blur-[3px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !noBackdropClose) onClose();
       }}
@@ -308,14 +434,14 @@ export function Dialog({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "flex max-h-[90vh] w-full flex-col overflow-hidden rounded-composer border border-border bg-surface shadow-[var(--shadow)]",
-          wide ? "max-w-[960px]" : "max-w-[480px]",
+          "flex max-h-[86vh] w-full flex-col overflow-hidden rounded-composer bg-overlay shadow-[var(--shadow-lg)] ring-1 ring-line-strong",
+          wide ? "max-w-[900px]" : "max-w-[480px]",
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <IconButton label="Close" size={24} onClick={onClose}>
+        <div className="flex h-12 flex-none items-center justify-between border-b border-line-subtle px-4">
+          <h2 className="text-[15px] font-semibold">{title}</h2>
+          <IconButton label="Close" size={28} onClick={onClose}>
             <CloseGlyph />
           </IconButton>
         </div>
@@ -327,7 +453,15 @@ export function Dialog({
 
 function CloseGlyph() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+    >
       <path d="M18 6 6 18M6 6l12 12" />
     </svg>
   );
