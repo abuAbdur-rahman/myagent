@@ -32,6 +32,12 @@ describe("OPENUI_SYSTEM_PROMPT", () => {
     expect(OPENUI_SYSTEM_PROMPT.length).toBeLessThan(10_000);
   });
 
+  it("teaches an interactive viz block without replacing the prose", () => {
+    expect(OPENUI_SYSTEM_PROMPT).toContain("viz");
+    expect(OPENUI_SYSTEM_PROMPT).toContain("whole answer");
+    expect(OPENUI_SYSTEM_PROMPT).toContain("--myagent-");
+  });
+
   it("fits the default prompt alongside identity instructions", () => {
     const system = buildSystemPrompt({
       globalMemories: [],

@@ -27,6 +27,39 @@ document.getElementById("artifact-frame").srcdoc = artifact;
 </body>
 </html>"#;
 
+const INLINE_REPORTER: &str = r#"<script>
+(function () {
+  var last = 0;
+  function report() {
+    var root = document.documentElement;
+    var body = document.body;
+    var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
+    height = Math.max(80, Math.min(2000, Math.round(height)));
+    if (Math.abs(height - last) < 2) return;
+    last = height;
+    parent.postMessage({ type: "myagent:height", height: height }, "*");
+  }
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || data.type !== "myagent:theme" || !data.tokens) return;
+    var root = document.documentElement;
+    Object.keys(data.tokens).forEach(function (name) {
+      var value = data.tokens[name];
+      if (typeof value === "string" && /^[\w#(),.%\s-]{1,80}$/.test(value)) {
+        root.style.setProperty(name, value);
+      }
+    });
+  });
+  window.addEventListener("load", report);
+  window.addEventListener("resize", report);
+  if (window.ResizeObserver && document.body) {
+    new ResizeObserver(report).observe(document.body);
+  }
+  setTimeout(report, 50);
+  setTimeout(report, 400);
+})();
+</script>"#;
+
 pub struct ArtifactStore {
     entries: Mutex<VecDeque<(String, String)>>,
 }
@@ -121,6 +154,18 @@ fn shell_response(html: &str) -> Response<Vec<u8>> {
     }
 }
 
+fn inline_html(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    match lower.rfind("</body>") {
+        Some(index) => format!("{}{}{}", &html[..index], INLINE_REPORTER, &html[index..]),
+        None => format!("{html}{INLINE_REPORTER}"),
+    }
+}
+
+fn inline_response(html: &str) -> Response<Vec<u8>> {
+    build_response(StatusCode::OK, inline_html(html).into_bytes())
+}
+
 fn internal_error() -> Response<Vec<u8>> {
     build_response(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,7 +186,18 @@ pub fn serve<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
-    let Some(id) = requested_id(request.uri().path()) else {
+    let path = request.uri().path();
+    if let Some(id) = path
+        .strip_prefix("/i/")
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+    {
+        return match ctx.app_handle().state::<ArtifactStore>().get(id) {
+            Ok(Some(html)) => inline_response(&html),
+            Ok(None) => not_found(),
+            Err(_) => internal_error(),
+        };
+    }
+    let Some(id) = requested_id(path) else {
         return not_found();
     };
     match ctx.app_handle().state::<ArtifactStore>().get(id) {
@@ -165,6 +221,18 @@ pub fn artifact_preview_url(
     let id = app.state::<ArtifactStore>().put(&html)?;
     Ok(ArtifactPreviewHandle {
         url: format!("http://artifact.localhost/s/{id}"),
+        id,
+    })
+}
+
+#[tauri::command]
+pub fn artifact_inline_url(
+    app: tauri::AppHandle,
+    html: String,
+) -> Result<ArtifactPreviewHandle, String> {
+    let id = app.state::<ArtifactStore>().put(&html)?;
+    Ok(ArtifactPreviewHandle {
+        url: format!("http://artifact.localhost/i/{id}"),
         id,
     })
 }
@@ -244,5 +312,31 @@ mod tests {
         let csp = header_value(&shell_response("<h1>ok</h1>"), "content-security-policy");
         assert!(csp.contains("frame-src 'self'"));
         assert!(!csp.contains("frame-src 'none'"));
+    }
+
+    #[test]
+    fn inline_html_injects_the_reporter_before_body() {
+        let html = inline_html("<html><body><p>x</p></body></html>");
+        let reporter = html.find(INLINE_REPORTER).expect("reporter present");
+        let body = html.find("</body>").expect("body present");
+        assert!(reporter < body);
+        assert!(html.contains("myagent:height"));
+        assert!(html.contains("myagent:theme"));
+    }
+
+    #[test]
+    fn inline_html_appends_the_reporter_without_a_body() {
+        let html = inline_html("<h1>x</h1>");
+        assert!(html.ends_with(INLINE_REPORTER));
+    }
+
+    #[test]
+    fn inline_response_keeps_the_artifact_csp() {
+        let response = inline_response("<h1>ok</h1>");
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = header_value(&response, "content-security-policy");
+        assert!(csp.contains("connect-src 'none'"));
+        assert!(csp.contains("script-src 'unsafe-inline' 'unsafe-eval' https:"));
+        assert!(csp.contains("default-src 'none'"));
     }
 }

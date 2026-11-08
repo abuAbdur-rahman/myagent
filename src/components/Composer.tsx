@@ -464,6 +464,18 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     compact: () => void compactActive().catch(() => undefined),
     export: runExport,
     model: runModel,
+    visualize: (args: string) => {
+      const prompt = args.trim();
+      if (!prompt) {
+        editorRef.current?.setMarkdown("@visualize ");
+        setComposerDraft("@visualize ");
+        editorRef.current?.focus();
+        return;
+      }
+      void sendMessage(`@visualize ${prompt}`).then((accepted) => {
+        if (!accepted) toast("Couldn't send that request.");
+      });
+    },
     memory: () => setSettingsPage("memory"),
     settings: () => setSettingsPage("general"),
   };

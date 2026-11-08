@@ -111,6 +111,13 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Not:** Forms, live queries, charts beyond horizontal bars, per-message edit mode, or a model-agnostic validity guarantee.
 - **Done:** A valid program renders as native cards and a table; an unclosed fence streams; a broken program shows its source instead of an empty message; the toggle removes the prompt.
 
+## A16. Inline visual
+- **Status:** Have (`/visualize <request>` loads the bundled `visualize` skill and sends `@visualize <request>`; the model may also choose the block on its own. A fence marked `viz` renders inline in an auto-height sandboxed iframe served by the artifact protocol at `/i/<id>` with the artifact CSP: inline JS, no fetch/forms/frames, HTTPS CDN assets allowed. App theme tokens are posted into the frame. Prose before and after the block stays mandatory.)
+- **Ref:** Claude inline artifacts; OpenUI declarative blocks (A15) cover static layouts.
+- **Build:** `src/lib/fences.ts` scanner, `src/lib/viz.ts` splitter, `src/components/InlineVisual.tsx`, `artifacts.rs` inline route plus height/theme reporter, `resources/skills/visualize/SKILL.md`, `/visualize` in the slash registry.
+- **Not:** Persistent per-visual storage, standalone HTML export, drag resize, or theme tokens inside the artifact dock preview.
+- **Done:** A `/visualize` request renders an interactive document inline; controls update results; the block re-renders after reload; an unclosed fence shows a building state and then its source.
+
 ---
 
 # B. Conversation data
@@ -542,7 +549,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # G. App shell
 
 ## G1. Slash commands
-- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest. Current: `/skill` opens a searchable picker of enabled skills and inserts an `@name` mention, or takes `/skill <name>` directly)
+- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest. Current: `/skill` opens a searchable picker of enabled skills and inserts an `@name` mention, or takes `/skill <name>` directly; `/visualize <request>` sends an `@visualize` request and builds an inline visual)
 - **Ref:** † Claude Code and OpenCode have `/compact`, `/export`, `/fork`, `/copy` and more; Claude Code custom commands are markdown files that are now part of skills.
 - **Build:** Typing `/` at the start opens a filtered menu. Start with `/compact`, `/export`, `/fork`, `/clear`, `/model`. Commands are a plain registry in code.
 - **Not:** User-defined commands.

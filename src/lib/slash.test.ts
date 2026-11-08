@@ -26,6 +26,7 @@ function handlers() {
     compact: record("compact"),
     export: record("export"),
     model: record("model"),
+    visualize: record("visualize"),
     memory: record("memory"),
     settings: record("settings"),
   };
@@ -96,6 +97,7 @@ describe("matchSlash", () => {
       "export",
       "model",
       "skill",
+      "visualize",
       "memory",
       "settings",
     ]);

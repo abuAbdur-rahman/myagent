@@ -36,7 +36,9 @@ import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
 import { splitOpenUISegments, type OpenUISegment } from "../lib/openui/segments";
+import { splitVizSegments, type VizSegment } from "../lib/viz";
 import { OpenUIRenderer } from "./openui/OpenUIRenderer";
+import { InlineVisual } from "./InlineVisual";
 import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
 import { DocAttachmentCard } from "./AttachmentCard";
 import { isKnownTool } from "../lib/tools";
@@ -526,10 +528,19 @@ function AssistantMessage({
   const { canRetry } = useApp();
   const baseSegments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
   const segments = useMemo(() => {
-    const out: (ContentSegment | OpenUISegment)[] = [];
+    const out: (ContentSegment | OpenUISegment | VizSegment)[] = [];
     for (const segment of baseSegments) {
-      if (segment.kind === "text") out.push(...splitOpenUISegments(segment.text, live));
-      else out.push(segment);
+      if (segment.kind !== "text") {
+        out.push(segment);
+        continue;
+      }
+      for (const ui of splitOpenUISegments(segment.text, live)) {
+        if (ui.kind !== "text") {
+          out.push(ui);
+          continue;
+        }
+        out.push(...splitVizSegments(ui.text, live));
+      }
     }
     return out;
   }, [baseSegments, live]);
@@ -581,6 +592,12 @@ function AssistantMessage({
               ) : segment.kind === "openui" ? (
                 <OpenUIRenderer
                   key={`openui-${i}`}
+                  code={segment.code}
+                  isStreaming={live && !segment.closed}
+                />
+              ) : segment.kind === "viz" ? (
+                <InlineVisual
+                  key={`viz-${i}`}
                   code={segment.code}
                   isStreaming={live && !segment.closed}
                 />

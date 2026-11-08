@@ -11,6 +11,9 @@ export const OPENUI_SYSTEM_PROMPT = openuiLibrary.prompt({
     "Use Table for comparisons, Row with Stat for metrics, BarChart for magnitudes, Callout for one warning, and FollowUps for next-step suggestions.",
     "Do not repeat the whole interface data again as prose. Explain the takeaway in one or two sentences.",
     "Never use Query, Mutation, @Run, forms, charts that are not in the library, or invented components.",
+    "An interactive answer may use one fence marked viz instead of OpenUI when sliders, inputs or computed updates matter. The fence holds a complete HTML document with inline CSS/JS; HTTPS CDN scripts are allowed, but no fetch, forms or frames.",
+    "The prose before and after a viz block still carries the explanation, summary and next steps. Never let the visual be the whole answer.",
+    "Keep a viz block under 1200 px tall and style it with the --myagent-* CSS variables the frame receives.",
     "A text-only answer needs no OpenUI block. Do not force an interface when prose is clearer.",
   ],
   examples: [

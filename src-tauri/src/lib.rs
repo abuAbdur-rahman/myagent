@@ -636,6 +636,7 @@ pub fn run() {
             sandbox::sandbox_preview,
             sandbox::artifact_export,
             artifacts::artifact_preview_url,
+            artifacts::artifact_inline_url,
             artifacts::artifact_preview_drop,
             voice::voice_status,
             voice::voice_enable,

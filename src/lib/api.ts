@@ -508,6 +508,10 @@ export function artifactPreviewUrl(html: string): Promise<ArtifactPreviewHandle>
   return invoke<ArtifactPreviewHandle>("artifact_preview_url", { html });
 }
 
+export function artifactInlineUrl(html: string): Promise<ArtifactPreviewHandle> {
+  return invoke<ArtifactPreviewHandle>("artifact_inline_url", { html });
+}
+
 export function artifactPreviewDrop(id: string) {
   return invoke<void>("artifact_preview_drop", { id });
 }
