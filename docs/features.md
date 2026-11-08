@@ -319,19 +319,19 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Compound commands are checked per segment; timeout kills the child.
 
 ## D8. Read file tool
-- **Status:** Unknown
+- **Status:** Have (shipped as `sandbox_read`, project-bound with `start` and `max_chars`)
 - **Ref:** † OpenCode `read` returns file contents or a directory listing, with size limits.
 - **Build:** Path must resolve inside the project (canonicalize, reject `..` and symlink escapes). Line-range parameters, size cap, binary files refused. Default allow.
 - **Done:** Path escape attempts are rejected.
 
 ## D9. List, glob and grep tools
-- **Status:** Unknown
+- **Status:** Have (shipped as `sandbox_glob` and `sandbox_grep`; capped, relative paths)
 - **Ref:** † OpenCode uses ripgrep under the hood for grep, glob and list, and tells models to prefer grep over bash grep.
 - **Build:** Shell out to bundled ripgrep, or use the `ignore` and `grep` crates. Respect `.gitignore`, cap results, project-bound paths. Default allow.
 - **Done:** A search returns capped, relative paths.
 
 ## D10. Write and edit tools
-- **Status:** Unknown
+- **Status:** Have (shipped as `sandbox_write`, `sandbox_edit`, `sandbox_delete`; edit is exact-match with `replace_all`)
 - **Ref:** † OpenCode requires reading a file before editing or overwriting it. Edit replaces an exact string.
 - **Build:** Edit = exact match replace; fail if the match is zero or multiple. Refuse if the file was not read in this session or changed since. Write goes through D4 (mode `Accept edits` can auto-allow).
 - **Not:** Patch-file format.
@@ -451,7 +451,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Two threads in one project receive identical instructions and project memory; thread-private history never leaks across.
 
 ## E4. Project instructions file
-- **Status:** Unknown
+- **Status:** Missing (verified: `AGENTS.md`/`CLAUDE.md` are only protected paths in the sandbox, never read into the prompt)
 - **Ref:** † Claude Code reads `CLAUDE.md` (project, user, and path-specific rules); OpenCode reads `AGENTS.md`. Hooks enforce rules, but instructions are only guidance.
 - **Build:** Read `AGENTS.md` from the project root if present, add it to the system prompt, show it in the UI as "Instructions loaded".
 - **Not:** Hierarchies and path-specific rules.
@@ -542,7 +542,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # G. App shell
 
 ## G1. Slash commands
-- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest)
+- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest. Current: `/skill` opens a searchable picker of enabled skills and inserts an `@name` mention, or takes `/skill <name>` directly)
 - **Ref:** † Claude Code and OpenCode have `/compact`, `/export`, `/fork`, `/copy` and more; Claude Code custom commands are markdown files that are now part of skills.
 - **Build:** Typing `/` at the start opens a filtered menu. Start with `/compact`, `/export`, `/fork`, `/clear`, `/model`. Commands are a plain registry in code.
 - **Not:** User-defined commands.
@@ -577,9 +577,9 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Log contains no secrets (test with a fake key).
 
 ## G7. Auto-update
-- **Status:** Missing
-- **Build:** Later; use the platform updater with signed releases. Not before the app is stable.
-- **Done:** n/a for now.
+- **Status:** Have (`tauri-plugin-updater` wired; Settings → Changelog and About expose Check for updates, progress and install. Verify the release channel is public before tagging 1.0.0)
+- **Build:** Platform updater with signed releases; NSIS updater JSON in the release workflow.
+- **Done:** Check, download progress and install work from Settings → About on an installed build.
 
 ## G8. Changelog page
 - **Status:** Have (0.3.2: settings page between Shortcuts and About, releases from `src/lib/releasenotes.ts`)
@@ -602,7 +602,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # H. Quality
 
 ## H1. Test harness
-- **Status:** Partial (vitest and cargo test suites exist and are green; CI runs the Rust suite only, the frontend suite is not wired into CI)
+- **Status:** Partial (CI runs the Rust suite, vitest, `tsc`, the frontend build and `fallow dead-code`; the mock-provider smoke tests and a single `test` command are still missing)
 - **Build:** Rust unit tests for pure logic (A3, A4, A5, D4, E2, B2 path). A mock provider that replays SSE fixtures. Three smoke tests: send, stream, stop. One command runs all; CI blocks merge on failure.
 - **Done:** `test` command is green on a clean checkout.
 
@@ -637,7 +637,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Three parallel streams render independently; one failure does not affect the others.
 
 ## J4. Local models
-- **Status:** Missing
+- **Status:** Have (local Ollama is a first-class provider, no key, `/v1/models` with `/api/tags` fallback)
 - **Ref:** Ollama and LM Studio expose OpenAI-compatible endpoints.
 - **Build:** Provider entry with a custom base URL and optional empty key. Model list from the endpoint's models route. Capabilities default to "unknown" (no tools, no reasoning) until set manually.
 - **Done:** A chat works against a local endpoint with no key.
@@ -671,7 +671,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Adding a file adds a command with no restart.
 
 ## J10. Artifact export
-- **Status:** Missing
+- **Status:** Partial (a single artifact downloads from the panel and preview with its derived name; an all-versions zip is missing)
 - **Build:** Download a single artifact as `.html`, or all versions of a chat as a zip. Builds on F1.
 - **Done:** The downloaded HTML opens standalone.
 

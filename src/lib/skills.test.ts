@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { skillRead } from "./api";
+import { skillRead, type SkillInfo } from "./api";
 import {
   buildSkillIndexBlock,
+  matchSkills,
+  parseSkillCommand,
   parseSkillMentions,
   resolveSkillMentions,
+  skillMention,
 } from "./skills";
 
 vi.mock("./api", () => ({
@@ -159,5 +162,79 @@ describe("resolveSkillMentions", () => {
     const resolved = await resolveSkillMentions("use @notes <filename <files", index);
     expect(resolved.content).toContain("<filename");
     expect(resolved.content).toContain("<files");
+  });
+});
+
+const skills: SkillInfo[] = [
+  {
+    id: "pdf-workbench",
+    name: "pdf-workbench",
+    title: "PDF workbench",
+    version: "1.0.0",
+    summary: "Read and edit PDFs",
+    description: "Read and edit PDF documents with local tools",
+    source: "builtin",
+    enabled: true,
+    directory: "C:\\skills\\pdf-workbench",
+    triggers: ["pdf", "document"],
+    requires_tools: [],
+    requires_python: [],
+    requires_node: [],
+  },
+  {
+    id: "deck-builder",
+    name: "deck-builder",
+    title: "Deck builder",
+    version: "1.0.0",
+    summary: "Build slide decks",
+    description: "Turn an outline into a slide deck",
+    source: "user",
+    enabled: false,
+    directory: "C:\\skills\\deck-builder",
+    triggers: ["slides"],
+    requires_tools: [],
+    requires_python: [],
+    requires_node: [],
+  },
+];
+
+describe("parseSkillCommand", () => {
+  it("reads the query after /skill", () => {
+    expect(parseSkillCommand("/skill")).toBe("");
+    expect(parseSkillCommand("/skill pdf")).toBe("pdf");
+    expect(parseSkillCommand("  /skill   pdf  ")).toBe("pdf");
+  });
+
+  it("ignores other drafts", () => {
+    expect(parseSkillCommand("/skills")).toBeNull();
+    expect(parseSkillCommand("skill")).toBeNull();
+    expect(parseSkillCommand("use /skill")).toBeNull();
+  });
+});
+
+describe("matchSkills", () => {
+  it("lists enabled skills for an empty query", () => {
+    expect(matchSkills(skills, "").map((skill) => skill.id)).toEqual(["pdf-workbench"]);
+  });
+
+  it("matches id, title, description and trigger", () => {
+    expect(matchSkills(skills, "pdf").map((skill) => skill.id)).toEqual(["pdf-workbench"]);
+    expect(matchSkills(skills, "workbench").map((skill) => skill.id)).toEqual(["pdf-workbench"]);
+    expect(matchSkills(skills, "documents").map((skill) => skill.id)).toEqual(["pdf-workbench"]);
+  });
+
+  it("never offers a disabled skill", () => {
+    expect(matchSkills(skills, "deck")).toEqual([]);
+    expect(matchSkills(skills, "slides")).toEqual([]);
+  });
+
+  it("returns nothing for an unknown query", () => {
+    expect(matchSkills(skills, "spreadsheet")).toEqual([]);
+  });
+});
+
+describe("skillMention", () => {
+  it("builds the @mention with a trailing space", () => {
+    expect(skillMention("pdf-workbench")).toBe("@pdf-workbench ");
   });
 });

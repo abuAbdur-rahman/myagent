@@ -16,6 +16,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "compact", label: "Compact context now" },
   { name: "export", label: "Export chat", hint: "[md|json]", takesArgs: true },
   { name: "model", label: "Switch model", hint: "[id]", takesArgs: true },
+  { name: "skill", label: "Use a skill", hint: "[name]", takesArgs: true },
   { name: "memory", label: "Open memory" },
   { name: "settings", label: "Open settings" },
 ];

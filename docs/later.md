@@ -15,9 +15,37 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ## Current
 
-- Shipped: 0.7.0 (MCP setup UX + Windows computer use), 0.7.1 (DeepSeek V4).
-- Next: 0.8.0 - `docs/plan/v0.8.0-hardening.md`.
-- After that: 1.0.0 - `docs/releases/v1.0.0.md`.
+- Shipped: through 0.11.0 (UI overhaul, artifact CDN previews, read-aloud, reply
+  timing); 0.11.0 is a release candidate with no tag yet.
+- Next: 1.0.0. The 0.8.0 plan and the old v1 wishlist are history, not a gate.
+- Status audit 2026-11-08: `features.md` was stale. D8-D10, G7, J4, J10 and H1
+  were corrected in place. Verify a row in code before trusting it.
+- Scope decision 2026-11-08: 1.0.0 is data safety, daily-driver polish and the
+  security gate. Cost control, compare, quick-ask, folders, scheduled runs,
+  branch tree and code mode move past 1.0.0.
+
+### v1.0.0 scope (owner decision 2026-11-08)
+
+Exit: no known data-loss path, daily chat is comfortable, the security review is
+closed and the installer passes on a clean Windows machine.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [ ] | B2 | Message tree + version switcher | Missing | M | H1 |
+| [ ] | D12 | Checkpoints / undo (D11 diff rides with it) | Missing | M | D10, B2 |
+| [ ] | A8 | Queue messages while streaming | Missing | S | A2 |
+| [ ] | B4 | Chat search UI over `message_fts` | Missing | S | B1 |
+| [ ] | B8 | Temporary chat | Missing | S | B2 |
+| [ ] | G5 | Completion notification | Missing | S | none |
+| [ ] | G6 | Debug log and copy diagnostics | Missing | S | none |
+| [ ] | F5 | Mermaid and LaTeX renderers | Missing | M | A9 |
+| [ ] | B11 | Delete-everything filesystem test | Partial | S | D13, F3 |
+| [ ] | — | Hardening: MCP alias collision, untrusted framing, `SKILL.md` cap, document decompression | Missing | M | none |
+| [ ] | — | Clean-machine MCP + computer-use eval, security review, installer check | Planned | M | 0.11.0 |
+
+Deferred past 1.0.0: J2 cost cap, J3 compare, J5 cheap-model routing, J6
+quick-ask, J7 branch tree, J11 scheduled runs, B6 folders, D20/D21 code mode,
+J14 local navigator.
 
 ## Now
 

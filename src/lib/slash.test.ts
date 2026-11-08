@@ -95,6 +95,7 @@ describe("matchSlash", () => {
       "compact",
       "export",
       "model",
+      "skill",
       "memory",
       "settings",
     ]);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, Mic, Paperclip, Square, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
@@ -20,6 +20,9 @@ import {
 } from "../lib/slash";
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
+import { SkillMenu } from "./SkillMenu";
+import { skillsList, type SkillInfo } from "../lib/api";
+import { matchSkills, parseSkillCommand, skillMention } from "../lib/skills";
 import {
   formatBytes,
   ingestChatDoc,
@@ -318,6 +321,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   const modelButtonRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [chips, setChips] = useState<AttachChip[]>([]);
   const [attaching, setAttaching] = useState(false);
   const chipsRef = useRef(chips);
@@ -325,21 +330,41 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const concreteDraft = (editorRef.current?.getMarkdown() ?? composerDraft).trim();
   const mergedCommands = useMemo(() => mergeSlashCommands(fileCommands), [fileCommands]);
-  const slashItems = /^\/[\w-]*$/.test(concreteDraft) ? matchSlash(concreteDraft, mergedCommands) : [];
+  const skillQuery = parseSkillCommand(concreteDraft);
+  const skillItems = skillQuery === null ? [] : matchSkills(skills, skillQuery);
+  const slashItems =
+    skillQuery === null && /^\/[\w-]*$/.test(concreteDraft)
+      ? matchSlash(concreteDraft, mergedCommands)
+      : [];
+
+  const refreshSkills = useCallback(async () => {
+    try {
+      setSkills(await skillsList());
+    } catch (error) {
+      console.warn("skills list failed", error);
+    }
+  }, []);
 
   useEffect(() => {
-    const onFocus = () => void loadFileCommands();
+    const onFocus = () => {
+      void loadFileCommands();
+      void refreshSkills();
+    };
     window.addEventListener("focus", onFocus);
     void loadFileCommands();
+    void refreshSkills();
     return () => window.removeEventListener("focus", onFocus);
-  }, [loadFileCommands]);
+  }, [loadFileCommands, refreshSkills]);
 
   const menuOpenRef = useRef(false);
+  const menuOpen = slashItems.length > 0 || skillQuery !== null;
   useEffect(() => {
-    const open = slashItems.length > 0;
-    if (open && !menuOpenRef.current) void loadFileCommands();
-    menuOpenRef.current = open;
-  }, [slashItems.length, loadFileCommands]);
+    if (menuOpen && !menuOpenRef.current) {
+      void loadFileCommands();
+      void refreshSkills();
+    }
+    menuOpenRef.current = menuOpen;
+  }, [menuOpen, loadFileCommands, refreshSkills]);
 
   const attachFiles = async (files: File[]) => {
     if (files.length === 0) return;
@@ -443,12 +468,40 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     settings: () => setSettingsPage("general"),
   };
 
+  const pickSkill = (skill: SkillInfo) => {
+    const text = skillMention(skill.name);
+    editorRef.current?.setMarkdown(text);
+    setComposerDraft(text);
+    setSkillIndex(0);
+    editorRef.current?.focus();
+  };
+  const pickSkillRef = useRef(pickSkill);
+  pickSkillRef.current = pickSkill;
+
   const submit = () => {
     const handle = editorRef.current;
     const text = (handle?.getMarkdown() ?? composerDraft).trim();
     const pending = chipsRef.current;
     if (!readyToSend(streaming, activeConnection !== null, model)) return;
     if (!hasContent(text, pending.length)) return;
+    const pendingSkill = parseSkillCommand(text);
+    if (pendingSkill !== null) {
+      const matches = matchSkills(skills, pendingSkill);
+      if (matches.length === 1) {
+        pickSkill(matches[0]);
+        return;
+      }
+      if (matches.length === 0) {
+        toast(
+          skills.length === 0
+            ? "No skills installed. Add one in Settings → Skills."
+            : `No skill matches "${pendingSkill}".`,
+        );
+        return;
+      }
+      toast(`Pick a skill from the menu (${matches.length} match).`);
+      return;
+    }
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
@@ -481,8 +534,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const submitRef = useRef(submit);
   submitRef.current = submit;
-  const stateRef = useRef({ streaming, sendWith, slashItems, historyEntries });
-  stateRef.current = { streaming, sendWith, slashItems, historyEntries };
+  const stateRef = useRef({ streaming, sendWith, slashItems, skillItems, skillQuery, historyEntries });
+  stateRef.current = { streaming, sendWith, slashItems, skillItems, skillQuery, historyEntries };
   const actionsRef = useRef({
     stopStream,
     runSlash: (_name: string) => {},
@@ -490,6 +543,14 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   actionsRef.current.stopStream = stopStream;
 
   const runSlash = (name: string) => {
+    if (name === "skill") {
+      editorRef.current?.setMarkdown("/skill");
+      setComposerDraft("/skill");
+      setSlashIndex(0);
+      setSkillIndex(0);
+      editorRef.current?.focus();
+      return;
+    }
     editorRef.current?.clear();
     setComposerDraft("");
     setSlashIndex(0);
@@ -513,7 +574,8 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
         }
         return false;
       },
-      isPopupOpen: () => stateRef.current.slashItems.length > 0,
+      isPopupOpen: () =>
+        stateRef.current.slashItems.length > 0 || stateRef.current.skillQuery !== null,
       sendOnEnter: () => stateRef.current.sendWith === "enter",
       historyEntries: () => stateRef.current.historyEntries,
     }),
@@ -528,8 +590,32 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const slashIndexRef = useRef(slashIndex);
   slashIndexRef.current = slashIndex;
+  const skillIndexRef = useRef(skillIndex);
+  skillIndexRef.current = skillIndex;
   const keyDownRef = useRef((_event: KeyboardEvent): boolean => false);
   keyDownRef.current = (event) => {
+    if (stateRef.current.skillQuery !== null) {
+      const items = stateRef.current.skillItems;
+      if (items.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+        event.preventDefault();
+        setSkillIndex((i) =>
+          event.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length,
+        );
+        return true;
+      }
+      if (items.length > 0 && event.key === "Enter") {
+        event.preventDefault();
+        const clamped = Math.min(skillIndexRef.current, Math.max(0, items.length - 1));
+        pickSkillRef.current(items[clamped]);
+        return true;
+      }
+      if (event.key === "Escape") {
+        setComposerDraft("");
+        editorRef.current?.clear();
+        return true;
+      }
+      return false;
+    }
     const items = stateRef.current.slashItems;
     if (items.length === 0) return false;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -577,11 +663,19 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
       }}
     >
       <div className="composer relative rounded-composer bg-raised px-2 pb-2 pt-2 shadow-[inset_0_0_0_1px_var(--line),var(--shadow-sm)]">
-        <SlashMenu
-          items={slashItems}
-          index={Math.min(slashIndex, Math.max(0, slashItems.length - 1))}
-          onPick={runSlash}
-        />
+        {skillQuery !== null ? (
+          <SkillMenu
+            items={skillItems}
+            index={Math.min(skillIndex, Math.max(0, skillItems.length - 1))}
+            onPick={pickSkill}
+          />
+        ) : (
+          <SlashMenu
+            items={slashItems}
+            index={Math.min(slashIndex, Math.max(0, slashItems.length - 1))}
+            onPick={runSlash}
+          />
+        )}
         {chips.length > 0 && (
           <div className="mb-1.5 flex flex-wrap gap-1.5">
             {chips.map((chip) => (
@@ -614,6 +708,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           onChangeMarkdown={(markdown) => {
             setComposerDraft(markdown);
             setSlashIndex(0);
+            setSkillIndex(0);
           }}
           chat={chat}
           onKeyDown={(event) => keyDownRef.current(event)}
