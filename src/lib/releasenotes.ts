@@ -33,7 +33,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "new",
-        text: "Artifact previews run normal inline JavaScript and load HTTPS CDN scripts, styles, images and fonts, including Tailwind and icon sets. Forms, modals and popups work, while the preview keeps an opaque origin and cannot reach the app, its storage or the network APIs.",
+        text: "Artifact previews run normal inline JavaScript and load HTTPS CDN scripts, styles, images and fonts, including Tailwind and icon sets. Form controls, modals and popups work, and JavaScript handles their interactions, while native form submission, Fetch, XHR and WebSocket stay blocked. The preview keeps an opaque origin and cannot reach the app or its storage. WebRTC is not isolated.",
       },
       {
         kind: "new",
@@ -45,7 +45,7 @@ export const RELEASES: readonly Release[] = [
       },
       {
         kind: "new",
-        text: "Every reply shows when it completed and how long it took, such as 26.7s or 33m 42s. The value persists across restarts, Continue, branching and JSON export/import.",
+        text: "Replies saved with timing metadata show when they completed and how long they took, such as 26.7s or 33m 42s; older replies show creation time without a duration. The value persists across restarts, Continue, branching and JSON export/import.",
       },
       {
         kind: "improved",
