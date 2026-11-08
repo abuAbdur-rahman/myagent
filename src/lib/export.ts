@@ -95,6 +95,7 @@ export async function importChatExport(raw: unknown): Promise<string> {
   if (data.chat.pinned) await db.toggleConversationPin(created.id);
   if (data.chat.summary) await db.setConversationSummary(created.id, data.chat.summary, null);
   const ordered = [...data.messages].sort((a, b) => a.createdAt - b.createdAt);
+  const idMap = new Map<string, string>();
   for (const message of ordered) {
     const inserted = await db.insertMessageFull(created.id, {
       role: message.role,
@@ -115,9 +116,18 @@ export async function importChatExport(raw: unknown): Promise<string> {
       completedAt: message.completedAt ?? null,
       createdAt: message.createdAt,
     });
+    idMap.set(message.id, inserted.id);
     if (message.rating !== undefined && message.rating !== null) {
       await db.setMessageRating(inserted.id, message.rating);
     }
   }
+  for (const message of ordered) {
+    if (!message.parentId) continue;
+    const child = idMap.get(message.id);
+    const parent = idMap.get(message.parentId);
+    if (child && parent) await db.setMessageParent(child, parent);
+  }
+  const last = ordered.length > 0 ? idMap.get(ordered[ordered.length - 1].id) : null;
+  if (last) await db.setCurrentLeaf(created.id, last);
   return created.id;
 }

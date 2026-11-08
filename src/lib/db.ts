@@ -479,11 +479,23 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
   );
 }
 
+export async function setCurrentLeaf(
+  conversationId: string,
+  leafId: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE conversations SET current_leaf_id = $1 WHERE id = $2", [
+    leafId,
+    conversationId,
+  ]);
+}
+
 export async function addMessage(
   conversationId: string,
   role: Role,
   content: string,
   model?: string | null,
+  parentId?: string | null,
 ): Promise<Message> {
   const db = await getDb();
   const message: Message = {
@@ -492,19 +504,22 @@ export async function addMessage(
     role,
     content,
     model: model ?? null,
+    parent_id: parentId ?? null,
     created_at: Date.now(),
   };
   await db.execute(
-    "INSERT INTO messages (id, conversation_id, role, content, model, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    "INSERT INTO messages (id, conversation_id, role, content, model, parent_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     [
       message.id,
       message.conversation_id,
       message.role,
       message.content,
       message.model,
+      message.parent_id,
       message.created_at,
     ],
   );
+  await setCurrentLeaf(conversationId, message.id);
   return message;
 }
 
@@ -527,6 +542,14 @@ export async function updateMessageAttachments(
   ]);
 }
 
+export async function setMessageParent(
+  id: string,
+  parentId: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE messages SET parent_id = $1 WHERE id = $2", [parentId, id]);
+}
+
 export interface FullMessageInput {
   role: Role;
   content: string;
@@ -543,6 +566,7 @@ export interface FullMessageInput {
   durationMs?: number | null;
   completedAt?: number | null;
   createdAt?: number | null;
+  parentId?: string | null;
 }
 
 export async function insertMessageFull(
@@ -556,19 +580,22 @@ export async function insertMessageFull(
     role: input.role,
     content: input.content,
     model: sqlNull(input.model),
+    parent_id: sqlNull(input.parentId),
     created_at: input.createdAt ?? Date.now(),
   };
   await db.execute(
-    "INSERT INTO messages (id, conversation_id, role, content, model, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    "INSERT INTO messages (id, conversation_id, role, content, model, parent_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     [
       message.id,
       message.conversation_id,
       message.role,
       message.content,
       message.model,
+      message.parent_id,
       message.created_at,
     ],
   );
+  await setCurrentLeaf(conversationId, message.id);
   await updateMessageMeta(message.id, {
     reasoning: sqlNull(input.reasoning),
     thinkingMs: sqlNull(input.thinkingMs),
@@ -623,6 +650,10 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDb();
   await db.execute("DELETE FROM messages WHERE id = $1", [id]);
+  await db.execute(
+    "UPDATE conversations SET current_leaf_id = NULL WHERE current_leaf_id = $1",
+    [id],
+  );
 }
 
 export async function setMessageRating(id: string, rating: number | null): Promise<void> {
@@ -646,12 +677,14 @@ export async function truncateConversation(
   for (const row of after) {
     await db.execute("DELETE FROM messages WHERE id = $1", [row.id]);
   }
+  await setCurrentLeaf(conversationId, keepThroughId);
 }
 
 export async function clearConversation(conversationId: string): Promise<void> {
   const db = await getDb();
   const shas = await conversationDocShas(conversationId);
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [conversationId]);
+  await setCurrentLeaf(conversationId, null);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [conversationId]);
   await db.execute("DELETE FROM chat_docs WHERE conversation_id = $1", [conversationId]);
   await wipeUnreferencedDocs(shas);
@@ -698,11 +731,13 @@ export async function branchConversation(
   );
   const index = rows.findIndex((m) => m.id === upToMessageId);
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
+  let previousId: string | null = null;
   for (const m of keep) {
+    const copyId = newId();
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, duration_ms, completed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, duration_ms, completed_at, created_at, parent_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
       [
-        newId(),
+        copyId,
         branched.id,
         m.role,
         m.content,
@@ -720,9 +755,13 @@ export async function branchConversation(
         sqlNull(m.duration_ms),
         sqlNull(m.completed_at),
         m.created_at,
+        previousId,
       ],
     );
+    previousId = copyId;
   }
+  await setCurrentLeaf(branched.id, previousId);
+  branched.current_leaf_id = previousId;
   return branched;
 }
 

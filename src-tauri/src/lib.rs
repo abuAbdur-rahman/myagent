@@ -425,6 +425,29 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN completed_at INTEGER;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 35,
+            description: "add_message_tree",
+            sql: "
+                ALTER TABLE messages ADD COLUMN parent_id TEXT;
+                ALTER TABLE conversations ADD COLUMN current_leaf_id TEXT;
+                UPDATE messages SET parent_id = (
+                    SELECT prev.id FROM messages AS prev
+                    WHERE prev.conversation_id = messages.conversation_id
+                      AND (prev.created_at < messages.created_at
+                        OR (prev.created_at = messages.created_at AND prev.id < messages.id))
+                    ORDER BY prev.created_at DESC, prev.id DESC
+                    LIMIT 1
+                );
+                UPDATE conversations SET current_leaf_id = (
+                    SELECT m.id FROM messages AS m
+                    WHERE m.conversation_id = conversations.id
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                );
+            ",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -871,6 +894,42 @@ mod migration_tests {
         .expect("bm25 ranks")
         .get("r");
         assert!(rank.is_finite(), "bm25 returns a score");
+    }
+
+    #[tokio::test]
+    async fn message_tree_backfills_a_single_chain() {
+        let pool = pool().await;
+        apply_versions(&pool, |version| version <= 34).await;
+        sqlx::query("INSERT INTO conversations (id, title, connection_id, model, created_at, updated_at) VALUES ('c1', 't', NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("seed chat");
+        for (id, at) in [("m1", 2), ("m2", 3), ("m3", 4)] {
+            sqlx::query(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, 'c1', 'user', 'x', ?)",
+            )
+            .bind(id)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .expect("seed message");
+        }
+        apply_versions(&pool, |version| version == 35).await;
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, parent_id FROM messages ORDER BY created_at")
+                .fetch_all(&pool)
+                .await
+                .expect("tree rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].1, None);
+        assert_eq!(rows[1].1.as_deref(), Some("m1"));
+        assert_eq!(rows[2].1.as_deref(), Some("m2"));
+        let leaf: Option<String> =
+            sqlx::query_scalar("SELECT current_leaf_id FROM conversations WHERE id = 'c1'")
+                .fetch_one(&pool)
+                .await
+                .expect("leaf");
+        assert_eq!(leaf.as_deref(), Some("m3"));
     }
 
     #[tokio::test]
