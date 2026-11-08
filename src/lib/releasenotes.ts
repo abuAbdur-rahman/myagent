@@ -22,6 +22,42 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.11.0",
+    date: "2026-11-08",
+    summary:
+      "The interface is rebuilt on warm light and dark themes, artifact previews load CDN assets and run normal JavaScript, Remember extracts durable notes, replies read aloud and show completion time, and every provider has its own mark.",
+    changes: [
+      {
+        kind: "new",
+        text: "The shell, chat, projects, providers and settings surfaces are rebuilt with warm light and dark themes, serif page titles, a single accent per view, visible keyboard focus, and a sidebar that keeps every chat reachable.",
+      },
+      {
+        kind: "new",
+        text: "Artifact previews run normal inline JavaScript and load HTTPS CDN scripts, styles, images and fonts, including Tailwind and icon sets. Form controls, modals and popups work, and JavaScript handles their interactions, while native form submission, Fetch, XHR and WebSocket stay blocked. The preview keeps an opaque origin and cannot reach the app or its storage. WebRTC is not isolated.",
+      },
+      {
+        kind: "new",
+        text: "Remember asks the model for 1-5 durable notes and queues them in the pending-memory bar instead of saving the whole reply. Malformed output and timeouts are reported.",
+      },
+      {
+        kind: "new",
+        text: "Assistant replies have a speaker button with installed Windows voices and online natural voices where offered, a speed control in Settings, and a Stop toggle. Playback stops when the chat changes or its message is removed.",
+      },
+      {
+        kind: "new",
+        text: "Replies saved with timing metadata show when they completed and how long they took, such as 26.7s or 33m 42s; older replies show creation time without a duration. The value persists across restarts, Continue, branching and JSON export/import.",
+      },
+      {
+        kind: "improved",
+        text: "Each provider shows a brand-tinted mark in its card and type select, the model picker, the composer chip, onboarding, the sidebar, the Models filter and the Voice provider select.",
+      },
+      {
+        kind: "fixed",
+        text: "Markdown lists show bullets and numbers again, the command palette scrolls to the selected row, cooldown and danger colours meet contrast, narrow project panes stack, and provider settings no longer claim a key is OK when none is stored.",
+      },
+    ],
+  },
+  {
     version: "0.10.2",
     date: "2026-11-07",
     summary:
