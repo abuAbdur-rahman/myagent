@@ -30,6 +30,7 @@ mod vault;
 mod voice;
 mod webfetch;
 mod websearch;
+mod wipe;
 
 use std::time::Duration;
 
@@ -650,6 +651,7 @@ pub fn run() {
             artifacts::artifact_preview_drop,
             debuglog::debug_log_append,
             debuglog::debug_log_path,
+            wipe::wipe_app_files,
             voice::voice_status,
             voice::voice_enable,
             voice::voice_disable,

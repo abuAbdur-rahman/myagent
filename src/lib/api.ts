@@ -532,6 +532,10 @@ export function debugLogPath() {
   return invoke<string>("debug_log_path");
 }
 
+export function wipeAppFiles() {
+  return invoke<number>("wipe_app_files");
+}
+
 export function todoFinish(conversationId: string, complete: boolean) {
   return invoke<void>("todo_finish", { conversationId, complete });
 }

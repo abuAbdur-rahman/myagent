@@ -26,7 +26,8 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 - 0.12.0 also carries A16 inline visual (`/visualize` plus the `viz` fence),
   A8 queued messages, B2 message versions, B4 message search, B8 temporary
   chats, D11/D12 diff and undo, F5 Mermaid/LaTeX, G5 notifications, G6
-  diagnostics, and the MCP alias, envelope, skill-cap and zip pre-scan fixes.
+  diagnostics, B11 file-wipe coverage, and the MCP alias, envelope, skill-cap
+  and zip pre-scan fixes.
 
 ### v1.0.0 scope (owner decision 2026-11-08)
 
@@ -43,7 +44,7 @@ closed and the installer passes on a clean Windows machine.
 | [x] | G5 | Completion notification | Have (0.12.0) | S | none |
 | [x] | G6 | Debug log and copy diagnostics | Have (0.12.0) | S | none |
 | [x] | F5 | Mermaid and LaTeX renderers | Have (0.12.0) | M | A9 |
-| [ ] | B11 | Delete-everything filesystem test | Partial (table + documents dir tests) | S | D13, F3 |
+| [x] | B11 | Delete-everything filesystem test | Have (0.12.0) | S | D13, F3 |
 | [x] | — | Hardening: MCP alias collision, untrusted framing, `SKILL.md` cap, document decompression | Have (0.12.0; PDF streams still uncapped) | M | none |
 | [ ] | — | Clean-machine MCP + computer-use eval, security review, installer check | Planned | M | 0.11.0 |
 
@@ -223,11 +224,11 @@ Exit: find, organize, back up and wipe chats.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | B8 | Temporary chat | Missing | S | B2 |
-| [ ] | B4 | Search | Missing | M | B1 |
-| [ ] | B9 | Export | Partial | S | B2 |
-| [ ] | B10 | Import | Missing | S | B9 |
-| [ ] | B11 | Delete data (every byte) | Partial | S | D13, F3 |
+| [x] | B8 | Temporary chat | Have (0.12.0) | S | B2 |
+| [x] | B4 | Search | Have (0.12.0) | M | B1 |
+| [x] | B9 | Export | Have | S | B2 |
+| [x] | B10 | Import | Have | S | B9 |
+| [x] | B11 | Delete data (every byte) | Have (0.12.0) | S | D13, F3 |
 | [ ] | B7 | Tags | Missing | S | B1 |
 | [ ] | B6 | Folders | Missing | M | B1 |
 | [ ] | B5 | Pins | Have | S | none |

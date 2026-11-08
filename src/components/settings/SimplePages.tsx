@@ -4642,13 +4642,8 @@ export function DataPage() {
     if (!confirmed) return;
     try {
       stopStream();
-      const spillLeftovers: string[] = [];
-      for (const conversation of conversations) {
-        await api.deleteSpill(conversation.id).catch(() => {
-          spillLeftovers.push(conversation.id);
-        });
-      }
       await db.wipeAll();
+      await api.wipeAppFiles();
       await api.memoryReset();
       await api.memoryMigrate();
       await selectConversation(null);
@@ -4657,11 +4652,7 @@ export function DataPage() {
       await refreshProjects();
       await refreshMemories();
       await refresh();
-      toast(
-        spillLeftovers.length > 0
-          ? "Deleted, but some spill files remain on disk"
-          : "Everything deleted",
-      );
+      toast("Everything deleted");
     } catch (e) {
       toast(errorText(e));
     }

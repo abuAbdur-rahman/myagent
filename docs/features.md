@@ -196,7 +196,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Round trip with B9 passes.
 
 ## B11. Delete data
-- **Status:** Partial (0.12.0: `wipeAll` has a table-level test and the documents directory has a real-filesystem Rust test; spill files are deleted per conversation and any leftover is reported, so a single end-to-end leftover check is still missing. 0.3.5: chat and project documents are released as soon as no chat or project row points at them)
+- **Status:** Have (0.12.0: Delete everything calls `wipeAll` for every table and `wipe_app_files` for `spill`, `documents`, `knowledge` and `memory`. A Rust test creates each store with nested files, proves all four disappear, an unrelated file stays, and a second wipe is a no-op. 0.3.5: chat and project documents are released as soon as no chat or project row points at them.)
 - **Ref:** † OpenWebUI lets you delete one chat or clear all history from settings.
 - **Build:** Delete chat (including spill files and attachments for it). "Delete everything" removes DB, attachments, spill files, caches, then confirms. Memory included, with a warning.
 - **Done:** A test against the real filesystem finds no leftover files.
