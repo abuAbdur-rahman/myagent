@@ -20,6 +20,15 @@ import {
 } from "../lib/slash";
 import { TipTapEditor, type TipTapHandle } from "./composer/TipTapEditor";
 import type { ChatKeyCallbacks } from "./composer/chatKeys";
+import { QueuePanel } from "./composer/QueuePanel";
+import {
+  enqueueMessage,
+  moveQueuedMessage,
+  moveQueuedMessageToFront,
+  queuedFor,
+  removeQueuedMessage,
+  type QueuedMessage,
+} from "./composer/queue";
 import { SkillMenu } from "./SkillMenu";
 import { skillsList, type SkillInfo } from "../lib/api";
 import { matchSkills, parseSkillCommand, skillMention } from "../lib/skills";
@@ -324,6 +333,16 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   const [skillIndex, setSkillIndex] = useState(0);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [chips, setChips] = useState<AttachChip[]>([]);
+  const [queue, setQueue] = useState<QueuedMessage<AttachChip>[]>([]);
+  const [queueBlocked, setQueueBlocked] = useState(false);
+  const [queueCollapsed, setQueueCollapsed] = useState(
+    () => localStorage.getItem("queueCollapsed") === "1",
+  );
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  const wasStreamingRef = useRef(streaming);
+  const lastChatRef = useRef(activeConversationId);
+  const drainingRef = useRef(false);
   const [attaching, setAttaching] = useState(false);
   const chipsRef = useRef(chips);
   chipsRef.current = chips;
@@ -388,6 +407,112 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     if (chip && isDocChip(chip)) void releaseChatDoc(chip.doc, docsOf(rest));
   };
 
+  const visibleQueue = activeConversationId ? queuedFor(queue, activeConversationId) : [];
+
+  const releaseQueuedChips = (chipsToDrop: AttachChip[], remaining: QueuedMessage<AttachChip>[]) => {
+    const keep = [...chipsRef.current, ...remaining.flatMap((item) => item.attachments)]
+      .filter(isDocChip)
+      .map((chip) => chip.doc);
+    for (const chip of chipsToDrop) {
+      if (isDocChip(chip)) void releaseChatDoc(chip.doc, keep);
+    }
+  };
+
+  const queueMessage = (text: string, attachments: AttachChip[]): boolean => {
+    if (!activeConversationId) return false;
+    const item: QueuedMessage<AttachChip> = {
+      id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      conversationId: activeConversationId,
+      text,
+      attachments,
+    };
+    setQueue((prev) => enqueueMessage(prev, item));
+    setQueueBlocked(false);
+    editorRef.current?.clear();
+    setComposerDraft("");
+    setSlashIndex(0);
+    setSkillIndex(0);
+    setChips([]);
+    editorRef.current?.focus();
+    return true;
+  };
+
+  const editQueued = (id: string) => {
+    const item = queueRef.current.find((entry) => entry.id === id);
+    if (!item) return;
+    setQueue((prev) => removeQueuedMessage(prev, id));
+    setQueueBlocked(false);
+    editorRef.current?.setMarkdown(item.text);
+    setComposerDraft(item.text);
+    setChips(item.attachments);
+    editorRef.current?.focus();
+  };
+
+  const removeQueued = (id: string) => {
+    const item = queueRef.current.find((entry) => entry.id === id);
+    if (!item) return;
+    const rest = removeQueuedMessage(queueRef.current, id);
+    setQueue(rest);
+    setQueueBlocked(false);
+    releaseQueuedChips(item.attachments, rest);
+  };
+
+  const moveQueued = (id: string, index: number) => {
+    setQueue((prev) => moveQueuedMessage(prev, id, index));
+  };
+
+  const sendQueued = (id: string) => {
+    const item = queueRef.current.find((entry) => entry.id === id);
+    if (!item) return;
+    setQueueBlocked(false);
+    if (streaming) {
+      setQueue((prev) => moveQueuedMessageToFront(prev, id));
+      toast("Next after this reply.");
+      return;
+    }
+    setQueue(removeQueuedMessage(queueRef.current, id));
+    void sendMessage(item.text, imagesOf(item.attachments), docsOf(item.attachments)).then(
+      (accepted) => {
+        if (!accepted) {
+          setQueue((prev) => [item, ...prev]);
+          setQueueBlocked(true);
+        }
+      },
+    );
+  };
+
+  const toggleQueue = () => {
+    setQueueCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("queueCollapsed", next ? "1" : "0");
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const chatChanged = lastChatRef.current !== activeConversationId;
+    lastChatRef.current = activeConversationId;
+    const finished = wasStreamingRef.current && !streaming;
+    wasStreamingRef.current = streaming;
+    if (!finished && !chatChanged) return;
+    if (streaming || queueBlocked || drainingRef.current) return;
+    if (!activeConversationId || !activeConnection || !model) return;
+    const next = queuedFor(queueRef.current, activeConversationId)[0];
+    if (!next) return;
+    drainingRef.current = true;
+    setQueue((prev) => removeQueuedMessage(prev, next.id));
+    void sendMessage(next.text, imagesOf(next.attachments), docsOf(next.attachments))
+      .then((accepted) => {
+        if (!accepted) {
+          setQueue((prev) => [next, ...prev]);
+          setQueueBlocked(true);
+        }
+      })
+      .finally(() => {
+        drainingRef.current = false;
+      });
+  }, [streaming, activeConversationId, activeConnection, model, queueBlocked, sendMessage]);
+
   const voice = useVoiceInput((text) => editorRef.current?.appendMarkdown(text), streaming);
 
   useEffect(() => {
@@ -412,11 +537,11 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
   }, [messages]);
 
   const canSend =
-    !streaming &&
     !attaching &&
     !!activeConnection &&
     !!model &&
-    (composerDraft.trim().length > 0 || chips.length > 0);
+    (composerDraft.trim().length > 0 || chips.length > 0) &&
+    (!streaming || !!activeConversationId);
 
   const runExport = (args: string) => {
     const chat = conversations.find((item) => item.id === activeConversationId) ?? null;
@@ -494,7 +619,6 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     const handle = editorRef.current;
     const text = (handle?.getMarkdown() ?? composerDraft).trim();
     const pending = chipsRef.current;
-    if (!readyToSend(streaming, activeConnection !== null, model)) return;
     if (!hasContent(text, pending.length)) return;
     const pendingSkill = parseSkillCommand(text);
     if (pendingSkill !== null) {
@@ -514,6 +638,18 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
       toast(`Pick a skill from the menu (${matches.length} match).`);
       return;
     }
+    if (streaming) {
+      if (!activeConnection || !model || !activeConversationId) return;
+      if (parseSlash(text)) {
+        toast("Commands wait until the current reply finishes.");
+        return;
+      }
+      const images = imagesOf(pending);
+      const docs = docsOf(pending);
+      queueMessage(outgoingText(text, images.length, docs.length), pending);
+      return;
+    }
+    if (!readyToSend(streaming, activeConnection !== null, model)) return;
     handle?.clear();
     setComposerDraft("");
     setSlashIndex(0);
@@ -675,6 +811,15 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
       }}
     >
       <div className="composer relative rounded-composer bg-raised px-2 pb-2 pt-2 shadow-[inset_0_0_0_1px_var(--line),var(--shadow-sm)]">
+        <QueuePanel
+          items={visibleQueue.map((item) => ({ id: item.id, text: item.text }))}
+          collapsed={queueCollapsed}
+          onToggle={toggleQueue}
+          onEdit={editQueued}
+          onSend={sendQueued}
+          onRemove={removeQueued}
+          onMove={moveQueued}
+        />
         {skillQuery !== null ? (
           <SkillMenu
             items={skillItems}

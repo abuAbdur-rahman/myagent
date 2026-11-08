@@ -23,7 +23,8 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 - Scope decision 2026-11-08: 1.0.0 is data safety, daily-driver polish and the
   security gate. Cost control, compare, quick-ask, folders, scheduled runs,
   branch tree and code mode move past 1.0.0.
-- 0.12.0 also carries A16 inline visual (`/visualize` plus the `viz` fence).
+- 0.12.0 also carries A16 inline visual (`/visualize` plus the `viz` fence) and
+  A8 queued messages in the composer.
 
 ### v1.0.0 scope (owner decision 2026-11-08)
 

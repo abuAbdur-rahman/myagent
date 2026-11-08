@@ -59,7 +59,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Each error class has one fixture and one visible message.
 
 ## A8. Queue messages while streaming
-- **Status:** Missing
+- **Status:** Have (0.12.0: Enter or Send while a reply streams queues the turn with its chips. The panel above the composer shows `Queued messages N`, collapses, drag-reorders, and offers edit, send next and remove. Items are per conversation, drain one at a time when that chat is idle, and stop draining after a failed send until the user acts.)
 - **Ref:** † OpenCode v2 queues or steers prompts while a session is busy and runs them at the next safe boundary.
 - **Build:** While streaming, Enter queues the message (shown as pending). It sends when the current turn ends. Cancel removes it.
 - **Not:** Steering the running turn mid-flight.
