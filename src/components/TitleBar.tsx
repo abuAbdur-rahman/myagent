@@ -22,7 +22,7 @@ function CapButton({
       aria-label={label}
       onClick={onClick}
       className={`grid h-9 w-[46px] place-items-center text-fg-2 transition-colors ${
-        close ? "hover:bg-danger hover:text-white" : "hover:bg-fill-2 hover:text-fg"
+        close ? "hover:bg-danger hover:text-on-danger" : "hover:bg-fill-2 hover:text-fg"
       }`}
     >
       {children}

@@ -36,6 +36,10 @@ export function stopSpeaking(): void {
   emit();
 }
 
+export function stopSpeakingFor(id: string): void {
+  if (speakingId === id) stopSpeaking();
+}
+
 export function speechText(markdown: string): string {
   return markdown
     .replace(/```[\s\S]*?```/g, " ")

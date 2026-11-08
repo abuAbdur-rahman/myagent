@@ -288,8 +288,8 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
         <b className="min-w-0 truncate text-sm font-medium">{project.name}</b>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto grid w-full max-w-[1040px] grid-cols-[minmax(0,1fr)_340px] gap-10 px-8 pb-12 pt-4">
+      <div className="@container min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto grid w-full max-w-[1040px] grid-cols-1 gap-10 px-8 pb-12 pt-4 @[860px]:grid-cols-[minmax(0,1fr)_340px]">
           <div className="flex min-w-0 flex-col">
             <input
               value={name}

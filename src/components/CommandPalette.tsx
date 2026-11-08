@@ -133,7 +133,7 @@ export function CommandPalette({
     document
       .querySelector("#palette-list .selected")
       ?.scrollIntoView({ block: "nearest" });
-  }, [index ]);
+  }, [index]);
 
   if (!open) return null;
 
@@ -185,7 +185,7 @@ export function CommandPalette({
                   }}
                   className={cn(
                     "flex h-9 w-full items-center gap-2.5 rounded-field px-2.5 text-left text-sm",
-                    i === index && "bg-fill-2",
+                    i === index && "selected bg-fill-2",
                   )}
                 >
                   <span className="text-fg-3">{entry.icon}</span>

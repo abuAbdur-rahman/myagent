@@ -7,6 +7,11 @@ describe("formatDuration", () => {
     expect(formatDuration(4_200)).toBe("4.2s");
   });
 
+  it("normalises rounded seconds into the next unit", () => {
+    expect(formatDuration(59_960)).toBe("1m");
+    expect(formatDuration(59_949)).toBe("59.9s");
+  });
+
   it("shows minutes and seconds", () => {
     expect(formatDuration(33 * 60_000 + 42_000)).toBe("33m 42s");
     expect(formatDuration(1_800_000)).toBe("30m");

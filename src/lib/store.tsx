@@ -1688,7 +1688,7 @@ setKnowledgeSummary([]);
       for (const raw of notes) {
         const content = raw.replace(/\s+/g, " ").trim().slice(0, 2000);
         if (!content) continue;
-        const row: PendingMemory = {
+        rows.push({
           id: newId(),
           scope,
           project_id: projectId,
@@ -1697,11 +1697,12 @@ setKnowledgeSummary([]);
           conversation_id: activeConversationId,
           created_at: now,
           trust: "trusted",
-        };
-        await db.addPendingMemory(row);
-        rows.push(row);
+        });
       }
-      if (rows.length > 0) await refreshPendingMemories();
+      if (rows.length > 0) {
+        await db.addPendingMemories(rows);
+        await refreshPendingMemories();
+      }
       return rows;
     },
     [activeConversationId, activeProject, refreshPendingMemories],
@@ -2009,7 +2010,7 @@ setKnowledgeSummary([]);
     }
   }, []);
 
-  const finalize = useCallback((assistantId: string, conversationId: string) => {
+  const finalize = useCallback((assistantId: string, conversationId: string, endedAt?: number) => {
     setActiveStep(null);
     setTurnStartedAt(null);
     setActiveTool(null);
@@ -2020,7 +2021,7 @@ setKnowledgeSummary([]);
     const priorDuration = priorDurationRef.current;
     turnStartRef.current = null;
     priorDurationRef.current = 0;
-    const completedAt = startedAt === null ? null : Date.now();
+    const completedAt = startedAt === null ? null : (endedAt ?? Date.now());
     const durationMs =
       startedAt === null || completedAt === null
         ? null
@@ -2432,6 +2433,7 @@ setKnowledgeSummary([]);
         }
       } finally {
         if (requestIdRef.current === requestId) {
+          const endedAt = Date.now();
           if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
             thinkingMsRef.current = Date.now() - thinkingStartRef.current;
           }
@@ -2451,7 +2453,7 @@ setKnowledgeSummary([]);
           setStreamConversationId(null);
           streamConversationIdRef.current = null;
           pendingVisionFallbackRef.current = null;
-          finalize(assistantMsg.id, conversationId);
+          finalize(assistantMsg.id, conversationId, endedAt);
         }
       }
     },

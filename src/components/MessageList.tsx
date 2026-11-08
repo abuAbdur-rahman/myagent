@@ -30,8 +30,8 @@ import * as api from "../lib/api";
 import { classifyStreamError, STREAM_ERROR_TITLES } from "../lib/api";
 import { parseExtractedNotes } from "../lib/memory-extract";
 import { toast } from "../lib/toast";
-import { formatDuration } from "../lib/utils";
-import { speakMessage, stopSpeaking, useSpeakingId, canReadAloud } from "../lib/read-aloud";
+import { errorText, formatDuration } from "../lib/utils";
+import { speakMessage, stopSpeaking, stopSpeakingFor, useSpeakingId, canReadAloud } from "../lib/read-aloud";
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
@@ -458,7 +458,9 @@ function ArtifactCard({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{title}</span>
-        <span className="block text-xs text-fg-3">HTML · sandboxed</span>
+        <span className="block text-xs text-fg-3">
+          {lang ? `${lang.toUpperCase()} · sandboxed` : "Sandboxed"}
+        </span>
       </span>
       <ChevronRight size={16} className="flex-none text-fg-3" />
     </button>
@@ -540,6 +542,10 @@ function AssistantMessage({
   const completedAt =
     message.completed_at ?? message.created_at + (duration ?? 0);
   const busy = live && message.content.length === 0;
+
+  useEffect(() => {
+    return () => stopSpeakingFor(message.id);
+  }, [message.id]);
 
   const remember = async () => {
     setRememberLabel("Extracting…");
@@ -804,7 +810,14 @@ export function MessageList() {
         message.content,
         activeConnection.kind,
       );
-      const notes = parseExtractedNotes(raw);
+      const notes = (() => {
+        try {
+          return parseExtractedNotes(raw);
+        } catch (error) {
+          toast(errorText(error));
+          throw error;
+        }
+      })();
       if (notes.length === 0) {
         toast("No durable notes found in this reply.");
         return false;
