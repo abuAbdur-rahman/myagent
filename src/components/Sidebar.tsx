@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -285,8 +285,9 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         return new Set<string>();
       }
     }
-    return new Set(projects.map((project) => project.id));
+    return new Set<string>();
   });
+  const projectsInitRef = useRef(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("sidebar.groups") ?? "null");
@@ -298,8 +299,16 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   });
 
   useEffect(() => {
+    if (projects.length === 0) return;
+    if (!projectsInitRef.current) {
+      projectsInitRef.current = true;
+      if (localStorage.getItem("sidebar.projects") === null) {
+        setExpandedProjects(new Set(projects.map((project) => project.id)));
+        return;
+      }
+    }
     localStorage.setItem("sidebar.projects", JSON.stringify([...expandedProjects]));
-  }, [expandedProjects]);
+  }, [projects, expandedProjects]);
 
   useEffect(() => {
     localStorage.setItem("sidebar.groups", JSON.stringify([...collapsedGroups]));

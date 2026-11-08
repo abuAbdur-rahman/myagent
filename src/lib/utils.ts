@@ -12,12 +12,10 @@ export function newId() {
 
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "";
-  const seconds = ms / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60);
+  const tenths = Math.round(ms / 100) / 10;
+  if (tenths < 60) return `${tenths.toFixed(1)}s`;
+  const minutes = Math.floor(tenths / 60);
+  const rest = Math.round(tenths % 60);
   if (minutes < 60) return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const remaining = minutes % 60;

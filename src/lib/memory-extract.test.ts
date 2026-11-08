@@ -31,9 +31,14 @@ describe("parseExtractedNotes", () => {
     expect(parseExtractedNotes(JSON.stringify(["1", "2", "3", "4", "5", "6"]))).toHaveLength(5);
   });
 
+  it("finds the array after prose or another bracket", () => {
+    expect(parseExtractedNotes('Notes [see below]: ["Keeps vim"]')).toEqual(["Keeps vim"]);
+    expect(parseExtractedNotes('See [1] then ["Uses pnpm"]')).toEqual(["Uses pnpm"]);
+  });
+
   it("returns nothing for unusable output", () => {
     expect(parseExtractedNotes("No durable notes here.")).toEqual([]);
-    expect(parseExtractedNotes("[not json]")).toEqual([]);
     expect(parseExtractedNotes("[]")).toEqual([]);
+    expect(() => parseExtractedNotes("[not json]")).toThrow("Could not read the extracted notes");
   });
 });
