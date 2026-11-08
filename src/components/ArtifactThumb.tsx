@@ -22,7 +22,7 @@ export function ArtifactThumb({ artifact }: { artifact: ThumbArtifact }) {
   if (isHtml(artifact.lang)) {
     return (
       <div
-        className="relative h-[104px] w-full overflow-hidden rounded-control border border-border bg-white"
+        className="relative h-[104px] w-full overflow-hidden rounded-field bg-white"
         aria-hidden="true"
       >
         <iframe
@@ -40,21 +40,21 @@ export function ArtifactThumb({ artifact }: { artifact: ThumbArtifact }) {
   if (isDoc(artifact.lang)) {
     return (
       <div
-        className="flex h-[104px] w-full flex-col gap-1.5 overflow-hidden rounded-control border border-border bg-surface p-2"
+        className="flex h-[104px] w-full flex-col gap-1.5 overflow-hidden rounded-field bg-fill-1 p-2"
         aria-hidden="true"
       >
-        <span className="h-2 w-2/3 rounded bg-border" />
-        <span className="h-1.5 w-full rounded bg-border/70" />
-        <span className="h-1.5 w-11/12 rounded bg-border/70" />
-        <span className="h-1.5 w-4/5 rounded bg-border/70" />
-        <span className="h-2 w-1/2 rounded bg-border" />
+        <span className="h-2 w-2/3 rounded bg-fill-3" />
+        <span className="h-1.5 w-full rounded bg-fill-3" />
+        <span className="h-1.5 w-11/12 rounded bg-fill-3" />
+        <span className="h-1.5 w-4/5 rounded bg-fill-3" />
+        <span className="h-2 w-1/2 rounded bg-fill-3" />
       </div>
     );
   }
 
   return (
     <div
-      className="flex h-[104px] w-full items-center justify-center gap-1.5 rounded-control border border-border bg-surface text-xs text-muted"
+      className="flex h-[104px] w-full items-center justify-center gap-1.5 rounded-field bg-fill-1 text-xs text-fg-3"
       aria-hidden="true"
     >
       <FileText size={16} />

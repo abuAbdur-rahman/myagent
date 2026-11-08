@@ -56,7 +56,7 @@ export function SearchKeyDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4"
+      className="fixed inset-0 z-[100] grid place-items-center bg-[var(--scrim)] backdrop-blur-[3px] p-4"
       role="presentation"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) dismiss();
@@ -66,7 +66,7 @@ export function SearchKeyDialog() {
         role="dialog"
         aria-modal="true"
         aria-label="Add a web search key"
-        className="flex w-full max-w-[420px] flex-col gap-3 rounded-composer border border-border bg-surface p-6 shadow-[var(--shadow)]"
+        className="flex w-full max-w-[420px] flex-col gap-3 rounded-composer bg-overlay p-6 shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <h2 className="m-0 flex items-center gap-2 text-lg font-semibold">

@@ -338,7 +338,7 @@ export async function importBundle(
     report.conversations += 1;
     for (const message of conversation.messages) {
       const result = await db.execute(
-        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, rating, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+        "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, rating, duration_ms, completed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
         [
           message.id,
           conversation.id,
@@ -356,6 +356,8 @@ export async function importBundle(
           sqlNull(message.model),
           sqlNull(message.error),
           sqlNull(message.rating),
+          sqlNull(message.duration_ms),
+          sqlNull(message.completed_at),
           message.created_at,
         ],
       );
@@ -538,6 +540,8 @@ export interface FullMessageInput {
   artifactsJson?: string | null;
   error?: string | null;
   model?: string | null;
+  durationMs?: number | null;
+  completedAt?: number | null;
   createdAt?: number | null;
 }
 
@@ -575,6 +579,8 @@ export async function insertMessageFull(
     toolLogJson: sqlNull(input.toolLogJson),
     artifactsJson: sqlNull(input.artifactsJson),
     error: sqlNull(input.error),
+    durationMs: sqlNull(input.durationMs),
+    completedAt: sqlNull(input.completedAt),
   });
   return message;
 }
@@ -589,12 +595,14 @@ export interface MessageMeta {
   toolLogJson: string | null;
   artifactsJson: string | null;
   error: string | null;
+  durationMs: number | null;
+  completedAt: number | null;
 }
 
 export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8, error = $9 WHERE id = $10",
+    "UPDATE messages SET reasoning = $1, thinking_ms = $2, prompt_tokens = $3, completion_tokens = $4, total_tokens = $5, finish_reason = $6, tool_log = $7, artifacts = $8, error = $9, duration_ms = $10, completed_at = $11 WHERE id = $12",
     [
       meta.reasoning,
       meta.thinkingMs,
@@ -605,6 +613,8 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
       meta.toolLogJson,
       meta.artifactsJson,
       meta.error,
+      meta.durationMs,
+      meta.completedAt,
       id,
     ],
   );
@@ -690,7 +700,7 @@ export async function branchConversation(
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
   for (const m of keep) {
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, duration_ms, completed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
       [
         newId(),
         branched.id,
@@ -707,6 +717,8 @@ export async function branchConversation(
         sqlNull(m.attachments),
         sqlNull(m.model),
         sqlNull(m.error),
+        sqlNull(m.duration_ms),
+        sqlNull(m.completed_at),
         m.created_at,
       ],
     );
@@ -893,10 +905,20 @@ export async function updatePendingMemory(id: string, content: string): Promise<
 }
 
 export async function addPendingMemory(memory: PendingMemory): Promise<void> {
+  await addPendingMemories([memory]);
+}
+
+export async function addPendingMemories(memories: PendingMemory[]): Promise<void> {
+  if (memories.length === 0) return;
   const db = await getDb();
-  await db.execute(
-    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    [
+  const rows: string[] = [];
+  const params: (string | number | null)[] = [];
+  memories.forEach((memory, index) => {
+    const base = index * 8;
+    rows.push(
+      `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`,
+    );
+    params.push(
       memory.id,
       memory.scope,
       memory.project_id,
@@ -905,7 +927,11 @@ export async function addPendingMemory(memory: PendingMemory): Promise<void> {
       memory.conversation_id,
       memory.created_at,
       memory.trust,
-    ],
+    );
+  });
+  await db.execute(
+    `INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) VALUES ${rows.join(", ")}`,
+    params,
   );
 }
 

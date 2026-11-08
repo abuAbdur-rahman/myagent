@@ -5,7 +5,7 @@ import { DEFAULT_MODEL_CONTEXT, promptBudget } from "../lib/context";
 import { parseDocAttachments } from "../lib/attachments";
 import * as api from "../lib/api";
 import { copyWithToast } from "./ChatHeader";
-import { Badge, Button } from "./ui";
+import { Badge, Button, Pill } from "./ui";
 
 function estimate(text: string): number {
   return Math.ceil(text.length / 4);
@@ -23,14 +23,14 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="border-b border-border px-3.5 py-3 last:border-b-0">
-      <div className="mb-2 flex items-baseline gap-2">
-        <h3 className="m-0 text-[11px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
+    <section className="border-t border-line-subtle px-4 py-4 first:border-t-0">
+      <div className="mb-2.5 flex items-baseline gap-2">
+        <h3 className="m-0 text-xs font-medium text-fg-3">{title}</h3>
         {typeof tokens === "number" && (
-          <span className="text-[11px] tabular-nums text-muted">≈{tokens} tok</span>
+          <span className="text-xs tabular-nums text-fg-3">≈{tokens} tok</span>
         )}
         {typeof count === "number" && (
-          <span className="text-[11px] tabular-nums text-muted">{count}</span>
+          <span className="text-xs tabular-nums text-fg-3">{count}</span>
         )}
       </div>
       {children}
@@ -60,6 +60,7 @@ export function ContextInspector() {
     closePanel,
   } = useApp();
   const [skills, setSkills] = useState<string[]>([]);
+  const [promptOpen, setPromptOpen] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -83,18 +84,18 @@ export function ContextInspector() {
   return (
     <section
       aria-label="Context inspector"
-      className="flex h-full w-full flex-col overflow-hidden border-l border-border bg-surface outline-none"
+      className="flex h-full w-full flex-col overflow-hidden bg-canvas shadow-[inset_1px_0_0_var(--line)] outline-none"
     >
-      <div className="flex h-12 flex-none items-center gap-2 px-3">
-        <Brain size={16} className="text-muted" />
-        <b className="text-sm">Context</b>
+      <div className="flex h-12 flex-none items-center gap-2 border-b border-line-subtle px-4">
+        <Brain size={16} className="text-fg-3" />
+        <b className="text-sm font-semibold">Context</b>
         <span className="flex-1" />
         <button
           type="button"
           aria-label="Close context inspector"
           title="Close"
           onClick={closePanel}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+          className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
         >
           <X size={16} />
         </button>
@@ -102,47 +103,53 @@ export function ContextInspector() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <Section title="Usage">
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div>
-              <div className="text-muted">Tokens</div>
-              <div className="tabular-nums">{contextInfo.tokens.toLocaleString()}</div>
-            </div>
-            <div>
-              <div className="text-muted">Limit</div>
-              <div className="tabular-nums">{contextInfo.limit.toLocaleString()}</div>
-            </div>
-            <div>
-              <div className="text-muted">Used</div>
-              <div className="tabular-nums">
-                {contextInfo.pct === null ? "unknown" : `${contextInfo.pct}%`}
-              </div>
-            </div>
-            <div>
-              <div className="text-muted">Last turn</div>
-              <div className="tabular-nums">
-                {contextInfo.lastIn === null
-                  ? "—"
-                  : `↑${contextInfo.lastIn.toLocaleString()} ↓${(contextInfo.lastOut ?? 0).toLocaleString()}`}
-              </div>
-            </div>
+          <div className="flex items-baseline gap-2">
+            <b className="text-xl font-semibold tabular-nums">
+              {contextInfo.tokens.toLocaleString()}
+            </b>
+            <span className="text-xs text-fg-3">
+              of {contextInfo.limit.toLocaleString()} tokens
+              {contextInfo.pct === null ? "" : ` · ${contextInfo.pct}%`}
+            </span>
+          </div>
+          <div
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-fill-3"
+            role="progressbar"
+            aria-valuenow={contextInfo.pct ?? 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Context used"
+          >
+            <div
+              className="h-full rounded-full bg-accent"
+              style={{ width: `${contextInfo.pct ?? 0}%` }}
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-between text-xs text-fg-3">
+            <span>Last turn</span>
+            <span className="tabular-nums text-fg-2">
+              {contextInfo.lastIn === null
+                ? "—"
+                : `in ${contextInfo.lastIn.toLocaleString()} · out ${(contextInfo.lastOut ?? 0).toLocaleString()}`}
+            </span>
           </div>
         </Section>
 
         <Section title="Checklist" count={todos.length}>
           {todos.length === 0 ? (
-            <p className="m-0 text-xs text-muted">No checklist for this chat.</p>
+            <p className="m-0 text-xs text-fg-3">No checklist for this chat.</p>
           ) : (
             <ol className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
               {todos.map((todo) => (
                 <li key={todo.id} className="flex items-start gap-1.5">
-                  <span className="font-mono text-muted">
+                  <span className="font-mono text-fg-3">
                     {todo.status === "completed" ? "[x]" : "[ ]"}
                   </span>
                   <span
                     className={
                       todo.status === "completed" || todo.status === "cancelled"
-                        ? "text-muted line-through"
-                        : "text-text"
+                        ? "text-fg-3 line-through"
+                        : "text-fg"
                     }
                   >
                     {todo.text}
@@ -155,15 +162,15 @@ export function ContextInspector() {
 
         <Section title="Important context">
           <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-            <dt className="text-muted">Project</dt>
+            <dt className="text-fg-3">Project</dt>
             <dd className="m-0">{activeProject?.name ?? "None"}</dd>
-            <dt className="text-muted">Project instructions</dt>
+            <dt className="text-fg-3">Project instructions</dt>
             <dd className="m-0">{activeProject?.instructions.trim() ? "Set" : "None"}</dd>
-            <dt className="text-muted">Standing instructions</dt>
+            <dt className="text-fg-3">Standing instructions</dt>
             <dd className="m-0">{standingPrompt.trim() ? "Set" : "None"}</dd>
-            <dt className="text-muted">Chat instructions</dt>
+            <dt className="text-fg-3">Chat instructions</dt>
             <dd className="m-0">{chatPrompt?.trim() ? "Set" : "None"}</dd>
-            <dt className="text-muted">Memory</dt>
+            <dt className="text-fg-3">Memory</dt>
             <dd className="m-0">
               {globalSentMemories.length} global · {projectSentMemories.length} project
               {recalledMemories.length > 0 ? ` · ${recalledMemories.length} recalled` : ""}
@@ -172,14 +179,30 @@ export function ContextInspector() {
         </Section>
 
         <Section title="System prompt" tokens={estimate(contextInfo.prompt)}>
-          <div className="mb-2 flex justify-end">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs text-fg-3">Sent with every message</span>
             <Button size="sm" variant="ghost" onClick={() => void copyWithToast(contextInfo.prompt)}>
               <Copy size={12} /> Copy
             </Button>
           </div>
-          <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface-2 p-2 font-mono text-[11px] text-muted">
+          <pre
+            className={
+              promptOpen
+                ? "m-0 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-field bg-code p-3 font-mono text-xs leading-relaxed text-fg-2"
+                : "m-0 max-h-36 overflow-hidden whitespace-pre-wrap break-words rounded-field bg-code p-3 font-mono text-xs leading-relaxed text-fg-2"
+            }
+          >
             {contextInfo.prompt || "No system prompt."}
           </pre>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="mt-1.5"
+            onClick={() => setPromptOpen((value) => !value)}
+            aria-expanded={promptOpen}
+          >
+            {promptOpen ? "Show less" : "Show full prompt"}
+          </Button>
         </Section>
 
         <Section
@@ -188,19 +211,22 @@ export function ContextInspector() {
           count={globalSentMemories.length + projectSentMemories.length}
         >
           {memoryPaused ? (
-            <p className="m-0 text-xs text-warn">
+            <p className="m-0 text-xs text-warning">
               Memory is paused. No notes are sent with this turn.
             </p>
           ) : globalSentMemories.length + projectSentMemories.length === 0 ? (
-            <p className="m-0 text-xs text-muted">No memory is sent this turn.</p>
+            <p className="m-0 text-xs text-fg-3">No memory is sent this turn.</p>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
               {[...globalSentMemories, ...projectSentMemories].map((memory) => (
-                <li key={memory.id} className="flex min-w-0 gap-1.5">
-                  <span className="flex-none text-muted">
-                    {memory.scope === "global" ? "G" : "P"}
-                  </span>
-                  <span className="min-w-0 truncate text-muted" title={memory.content}>
+                <li key={memory.id} className="flex min-w-0 items-start gap-1.5">
+                  <Pill
+                    tone={memory.scope === "global" ? "accent" : "info"}
+                    className="h-[18px] px-1.5 text-[11px]"
+                  >
+                    {memory.scope === "global" ? "Global" : "Project"}
+                  </Pill>
+                  <span className="min-w-0 truncate text-fg-2" title={memory.content}>
                     {memory.content}
                   </span>
                 </li>
@@ -208,7 +234,7 @@ export function ContextInspector() {
             </ul>
           )}
           {pendingMemories.length > 0 && (
-            <p className="mt-2 text-xs text-warn">
+            <p className="mt-2 text-xs text-warning">
               {pendingMemories.length} waiting for review.
             </p>
           )}
@@ -220,7 +246,7 @@ export function ContextInspector() {
           count={recalledMemories.length}
         >
           {recalledMemories.length === 0 ? (
-            <p className="m-0 text-xs text-muted">
+            <p className="m-0 text-xs text-fg-3">
               {memoryPaused
                 ? "Memory is paused, so nothing was ranked."
                 : "No note cleared the relevance floor, or the ones that matched were already sent in full."}
@@ -230,14 +256,17 @@ export function ContextInspector() {
               {recalledMemories.map((memory) => {
                 const score = recalledDetails.find((detail) => detail.id === memory.id)?.score;
                 return (
-                  <li key={memory.id} className="flex min-w-0 gap-1.5">
-                    <span className="flex-none text-muted">
-                      {memory.scope === "global" ? "G" : "P"}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-muted" title={memory.content}>
+                  <li key={memory.id} className="flex min-w-0 items-start gap-1.5">
+                    <Pill
+                      tone={memory.scope === "global" ? "accent" : "info"}
+                      className="h-[18px] px-1.5 text-[11px]"
+                    >
+                      {memory.scope === "global" ? "Global" : "Project"}
+                    </Pill>
+                    <span className="min-w-0 flex-1 truncate text-fg-2" title={memory.content}>
                       {memory.content}
                     </span>
-                    <span className="flex-none tabular-nums text-text-faint">
+                    <span className="flex-none tabular-nums text-fg-3">
                       {score === undefined ? "" : score.toFixed(3)}
                     </span>
                   </li>
@@ -255,7 +284,7 @@ export function ContextInspector() {
           count={knowledgeSummary.length}
         >
           {knowledgeSummary.length === 0 ? (
-            <p className="m-0 text-xs text-muted">
+            <p className="m-0 text-xs text-fg-3">
               {activeProject
                 ? "No document chunk matched this message."
                 : "Knowledge is project-scoped; this chat has no project."}
@@ -268,11 +297,11 @@ export function ContextInspector() {
                   className="flex min-w-0 gap-1.5"
                   title={hit.text}
                 >
-                  <span className="min-w-0 flex-1 truncate text-muted">
+                  <span className="min-w-0 flex-1 truncate text-fg-3">
                     {hit.name}
                     {hit.heading ? ` · ${hit.heading}` : ""} · #{hit.ord + 1}
                   </span>
-                  <span className="flex-none tabular-nums text-text-faint">
+                  <span className="flex-none tabular-nums text-fg-3">
                     {hit.score.toFixed(3)}
                   </span>
                 </li>
@@ -289,7 +318,7 @@ export function ContextInspector() {
           count={episodeSummary.length}
         >
           {episodeSummary.length === 0 ? (
-            <p className="m-0 text-xs text-muted">
+            <p className="m-0 text-xs text-fg-3">
               {!activeProject
                 ? "Past-chat recall runs in project chats only."
                 : episodicRecall
@@ -300,9 +329,9 @@ export function ContextInspector() {
             <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
               {episodeSummary.map((hit) => (
                 <li key={hit.message_id} className="flex min-w-0 gap-1.5" title={hit.snippet}>
-                  <span className="flex-none text-muted">{hit.date}</span>
-                  <span className="min-w-0 flex-1 truncate text-muted">{hit.title}</span>
-                  <span className="flex-none tabular-nums text-text-faint">
+                  <span className="flex-none text-fg-3">{hit.date}</span>
+                  <span className="min-w-0 flex-1 truncate text-fg-3">{hit.title}</span>
+                  <span className="flex-none tabular-nums text-fg-3">
                     {hit.score.toFixed(3)}
                   </span>
                 </li>
@@ -313,7 +342,7 @@ export function ContextInspector() {
 
         {memoryOmitted > 0 && (
           <Section title="Dropped">
-            <p className="m-0 text-xs text-warn">
+            <p className="m-0 text-xs text-warning">
               {memoryOmitted} global note{memoryOmitted === 1 ? "" : "s"} over the 2,500-character
               send budget. Shorten or merge them in Settings → Memory.
             </p>
@@ -321,12 +350,12 @@ export function ContextInspector() {
         )}
 
         <Section title="Budget">
-          <p className="m-0 flex flex-wrap items-baseline gap-x-1.5 text-xs text-muted">
-            <span className="tabular-nums text-text">
+          <p className="m-0 flex flex-wrap items-baseline gap-x-1.5 text-xs text-fg-3">
+            <span className="tabular-nums text-fg">
               {promptBudget(modelContextLimit ?? DEFAULT_MODEL_CONTEXT).total.toLocaleString()}
             </span>
             <span>characters for memory and knowledge</span>
-            <span className="text-text-faint">·</span>
+            <span className="text-fg-3">·</span>
             <span className="tabular-nums">
               ×{promptBudget(modelContextLimit ?? DEFAULT_MODEL_CONTEXT).factor}
             </span>
@@ -337,13 +366,13 @@ export function ContextInspector() {
         </Section>
 
         <Section title="Project">
-          <p className="m-0 text-xs text-muted">
+          <p className="m-0 text-xs text-fg-3">
             {activeProject ? activeProject.name : "No project attached."}
           </p>
         </Section>
 
         <Section title="Messages" tokens={Math.ceil(messageChars / 4)}>
-          <p className="m-0 text-xs text-muted">
+          <p className="m-0 text-xs text-fg-3">
             {messages.length} message{messages.length === 1 ? "" : "s"} in this chat. Full history is
             sent unless the chat is compacted.
           </p>
@@ -351,9 +380,9 @@ export function ContextInspector() {
 
         <Section title="Attachments" count={docs.length}>
           {docs.length === 0 ? (
-            <p className="m-0 text-xs text-muted">No documents attached.</p>
+            <p className="m-0 text-xs text-fg-3">No documents attached.</p>
           ) : (
-            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs text-muted">
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs text-fg-3">
               {docs.map((doc) => (
                 <li key={`${doc.name}-${doc.sha256}`} className="flex items-center gap-1.5">
                   <FileText size={12} />
@@ -366,7 +395,7 @@ export function ContextInspector() {
 
         <Section title="Skills" count={skills.length}>
           {skills.length === 0 ? (
-            <p className="m-0 text-xs text-muted">No skills indexed.</p>
+            <p className="m-0 text-xs text-fg-3">No skills indexed.</p>
           ) : (
             <div className="flex flex-wrap gap-1">
               {skills.map((name) => (

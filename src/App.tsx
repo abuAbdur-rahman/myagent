@@ -4,7 +4,6 @@ import { useFocusTrap } from "./lib/useFocusTrap";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { ChatHeader } from "./components/ChatHeader";
-import { ContextBar } from "./components/ContextBar";
 import { SandboxBuildStatus } from "./components/SandboxBuildStatus";
 import { ProjectsGrid } from "./components/ProjectsGrid";
 import { OutputsGallery } from "./components/OutputsGallery";
@@ -83,13 +82,11 @@ function Shell() {
     streaming,
     compacting,
     voicePhase,
-    showContextBar,
     messages,
     activeConversationId,
     togglePanel,
     panelOpen,
     panelMode,
-    panelView,
     panelWidth,
     closePanel,
     view,
@@ -171,26 +168,28 @@ function Shell() {
   const docked = panelOpen && panelMode !== "full" && wide;
   const overlayPanel = panelOpen && panelMode !== "full" && !wide;
   const panelCols = docked
-    ? panelView === "session"
-      ? 344
-      : panelMode === "mini"
-        ? 300
-        : panelWidth
+    ? panelMode === "mini"
+      ? 300
+      : panelWidth
     : 0;
 
   useFocusTrap(overlayRef, overlayPanel, closePanel);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-sunken text-fg">
       <TitleBar />
       <div
         className="shell-grid grid min-h-0 flex-1"
         style={{
-          gridTemplateColumns: `${sidebarCollapsed ? 56 : 260}px minmax(0, 1fr) ${panelCols}px`,
+          gridTemplateColumns: `${sidebarCollapsed ? 56 : 264}px minmax(0, 1fr) ${panelCols}px`,
         }}
       >
         <Sidebar onOpenProject={(id) => setProjectDialog({ open: true, id })} />
-        <main className="flex min-w-0 flex-col overflow-hidden bg-surface">
+        <main
+          className={`flex min-w-0 flex-col overflow-hidden bg-canvas ${
+            sidebarCollapsed ? "" : "rounded-tl-2xl shadow-[inset_1px_1px_0_var(--line-subtle)]"
+          }`}
+        >
           {view === "projects" ? (
             <ProjectsGrid onNew={() => setProjectDialog({ open: true, id: null })} />
           ) : view === "outputs" ? (
@@ -206,7 +205,7 @@ function Shell() {
                 <MessageList />
                 {pill === "center" ? <ActivityPill placement="center" /> : null}
               </div>
-              <div className="flex-none px-4 pb-2">
+              <div className="dock relative flex-none px-6 pb-3">
                 <div className="relative mx-auto w-full max-w-[760px]">
                   <PendingMemoryBar />
                   <TurnCards />
@@ -214,8 +213,6 @@ function Shell() {
                     <div className="mb-3 flex h-6 items-center justify-center">
                       <ActivityPill placement="inline" />
                     </div>
-                  ) : showContextBar ? (
-                    <ContextBar />
                   ) : null}
                   <Composer />
                 </div>
@@ -237,7 +234,7 @@ function Shell() {
           <div
             className="h-full shadow-[var(--shadow)]"
             style={{
-              width: panelView === "session" ? 344 : panelMode === "mini" ? 300 : panelWidth,
+              width: panelMode === "mini" ? 300 : panelWidth,
             }}
           >
             <ArtifactsPanel />

@@ -58,7 +58,7 @@ export function PendingMemoryBar({
             ? "Memory waiting for review"
             : `${rows.length} memories waiting for review`}
         </span>
-        <span className="text-muted">Nothing is saved until you approve it.</span>
+        <span className="text-fg-3">Nothing is saved until you approve it.</span>
         {hidden > 0 && (
           <button
             type="button"

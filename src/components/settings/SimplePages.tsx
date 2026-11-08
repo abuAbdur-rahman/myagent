@@ -43,6 +43,7 @@ import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText, copyText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
 import { timeAgo } from "../../lib/grouping";
+import { ACCENT_PRESETS, accentSwatch } from "../../lib/accent";
 import { cn } from "../../lib/utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAppUpdate } from "./useAppUpdate";
@@ -71,7 +72,7 @@ import {
 } from "../../lib/audit";
 import { formatBytes } from "../../lib/chat-docs";
 import { filterMemories, memoryJson } from "../../lib/memory-export";
-import { densityLabel, fontScaleLabel } from "../../lib/appearance";
+import { fontScaleLabel } from "../../lib/appearance";
 import {
   buildModelRow,
   contextLabel,
@@ -88,6 +89,7 @@ import {
   type StoragePart,
   type StorageUsage,
 } from "../../lib/storage";
+import { ProviderIcon } from "../ProviderIcon";
 
 const MEMORY_KIND_NAMES = ["fact", "preference", "summary", "note"] as const;
 
@@ -121,12 +123,17 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-border px-2 py-3" data-setting-term={label}>
+    <div
+      className="flex min-h-[56px] items-center justify-between gap-6 border-b border-line-subtle py-3.5"
+      data-setting-term={label}
+    >
       <div className="min-w-0">
         <div className="text-sm font-medium">{label}</div>
-        {description && <div className="text-xs text-muted">{description}</div>}
+        {description && <div className="mt-0.5 text-[13px] text-fg-3">{description}</div>}
       </div>
-      <div className="flex w-[260px] flex-none items-center justify-end gap-1.5">{children}</div>
+      <div className="flex max-w-[60%] flex-none flex-wrap items-center justify-end gap-1.5">
+        {children}
+      </div>
     </div>
   );
 }
@@ -555,6 +562,7 @@ function McpToolList({
               options={MCP_DECISIONS}
               onChange={(value) => onDecision(server, tool.name, value)}
               label={"Approval for " + tool.name}
+              tone="policy"
             />
           </li>
         ))}
@@ -756,6 +764,7 @@ function McpServerDefaults({
           options={MCP_MODES}
           onChange={(value) => onApproval(server.id, value)}
           label={"Default approval for " + server.name}
+          tone="policy"
         />
       </div>
       <div className="flex items-center gap-3">
@@ -1754,13 +1763,13 @@ export function GeneralPage() {
         />
       </SettingRow>
       <SettingRow
-        label="Context bar"
-        description="Show the used-tokens bar above the composer"
+        label="Context meter"
+        description="Show the live token ring in the composer"
       >
         <Toggle
           checked={showContextBar}
           onChange={setShowContextBar}
-          label="Show the context bar"
+          label="Show the context meter"
         />
       </SettingRow>
       <SettingRow label="Collapse thinking" description="Fold reasoning blocks once the reply is done">
@@ -3274,23 +3283,14 @@ export function SearchPage() {
   );
 }
 
-const ACCENTS: [string, string][] = [
-  ["Clay", "#c96442"],
-  ["Blue", "#0067c0"],
-  ["Green", "#0f7b0f"],
-  ["Purple", "#7a42d6"],
-  ["Pink", "#c239b3"],
-  ["Graphite", "#5c5c5c"],
-];
-
 const THEME_TILES: { id: ThemeMode; label: string; icon: React.ReactNode; preview: string }[] = [
-  { id: "light", label: "Light", icon: <Sun size={16} />, preview: "#ffffff" },
-  { id: "dark", label: "Dark", icon: <Moon size={16} />, preview: "#2b2b2b" },
+  { id: "light", label: "Light", icon: <Sun size={14} />, preview: "#faf9f6" },
+  { id: "dark", label: "Dark", icon: <Moon size={14} />, preview: "#232220" },
   {
     id: "system",
     label: "System",
-    icon: <Monitor size={16} />,
-    preview: "linear-gradient(90deg,#fff 50%,#2b2b2b 50%)",
+    icon: <Monitor size={14} />,
+    preview: "linear-gradient(90deg,#faf9f6 50%,#232220 50%)",
   },
 ];
 
@@ -3310,7 +3310,7 @@ export function AppearancePage() {
   return (
     <div>
       <SettingRow label="Theme" description="Applies instantly">
-        <div className="flex gap-2.5">
+        <div className="flex gap-2">
           {THEME_TILES.map((tile) => (
             <button
               key={tile.id}
@@ -3318,15 +3318,17 @@ export function AppearancePage() {
               onClick={() => setTheme(tile.id)}
               aria-pressed={theme === tile.id}
               className={cn(
-                "flex w-[110px] flex-col items-center gap-1.5 rounded-card border-2 bg-surface p-2 hover:bg-hover",
-                theme === tile.id ? "border-accent" : "border-border",
+                "flex w-[96px] flex-col items-center gap-1.5 rounded-card p-1.5 text-xs transition-colors",
+                "bg-fill-1 ring-1 ring-inset ring-line hover:bg-fill-2",
+                theme === tile.id && "bg-accent-soft ring-2 ring-accent",
               )}
             >
               <span
-                className="block h-10 w-full rounded border border-border"
+                className="block h-9 w-full overflow-hidden rounded-[7px] ring-1 ring-inset ring-line-subtle"
                 style={{ background: tile.preview }}
+                aria-hidden="true"
               />
-              <span className="flex items-center gap-1 text-xs">
+              <span className="flex items-center gap-1">
                 {tile.icon}
                 {tile.label}
               </span>
@@ -3334,21 +3336,28 @@ export function AppearancePage() {
           ))}
         </div>
       </SettingRow>
-      <SettingRow label="Accent color" description="Highlights, selections and actions">
-        <div className="flex gap-2">
-          {ACCENTS.map(([name, value]) => (
-            <button
-              key={name}
-              type="button"
-              aria-label={name}
-              title={name}
-              onClick={() => setAccent(value)}
-              className="grid h-7 w-7 place-items-center rounded-full text-white"
-              style={{ background: value }}
-            >
-              {accent.toLowerCase() === value.toLowerCase() && <Check size={14} />}
-            </button>
-          ))}
+      <SettingRow label="Accent color" description="Primary buttons, toggles and focus">
+        <div className="flex items-center gap-2.5">
+          {ACCENT_PRESETS.map((preset) => {
+            const selected = accent === preset.id;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                aria-label={preset.label}
+                title={preset.label}
+                aria-pressed={selected}
+                onClick={() => setAccent(preset.id)}
+                className={cn(
+                  "grid h-6 w-6 place-items-center rounded-full text-white transition-shadow",
+                  selected && "ring-2 ring-fg ring-offset-2 ring-offset-surface",
+                )}
+                style={{ background: accentSwatch(preset.id) }}
+              >
+                {selected && <Check size={12} />}
+              </button>
+            );
+          })}
         </div>
       </SettingRow>
       <SettingRow
@@ -3368,7 +3377,7 @@ export function AppearancePage() {
             onChange={(event) => setFontScale(Number(event.target.value))}
             aria-label="Text size"
             aria-valuetext={fontScaleLabel(fontScale)}
-            className="h-4 w-40 cursor-pointer accent-[var(--accent)]"
+            className="h-4 w-40 cursor-pointer accent-[var(--accent-solid)]"
           />
           <span className="text-base text-muted" aria-hidden="true">
             A
@@ -3379,14 +3388,13 @@ export function AppearancePage() {
         </div>
       </SettingRow>
       <SettingRow label="Density" description="Row height in the sidebar and the gap between messages">
-        <Select
-          size="sm"
+        <Segmented
           value={density}
           onChange={(value) => setDensity(value === "compact" ? "compact" : "comfortable")}
-          aria-label="Density"
+          label="Density"
           options={[
-            { value: "comfortable", label: densityLabel("comfortable") },
-            { value: "compact", label: densityLabel("compact") },
+            { value: "comfortable", label: "Comfortable" },
+            { value: "compact", label: "Compact" },
           ]}
         />
       </SettingRow>
@@ -3795,7 +3803,11 @@ function ModelCapabilityTable({
           value={connectionId}
           onChange={setConnectionId}
           aria-label="Provider"
-          options={connections.map((item) => ({ value: item.id, label: item.name }))}
+          options={connections.map((item) => ({
+            value: item.id,
+            label: item.name,
+            icon: <ProviderIcon kind={item.kind} size={18} />,
+          }))}
         />
         <Input
           value={query}

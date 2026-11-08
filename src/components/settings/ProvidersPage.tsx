@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, Eye, EyeOff, PlugZap, Plus, RotateCcw, X } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Eye, EyeOff, Pencil, PlugZap, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { useApp } from "../../lib/store";
 import * as api from "../../lib/api";
 import * as db from "../../lib/db";
@@ -13,8 +13,9 @@ import {
   type ConnectionInput,
   type ProviderKind,
 } from "../../lib/types";
-import { Button, Dialog, Input, Pill, Spinner, type PillTone } from "../ui";
+import { Button, Dialog, IconButton, Input, Pill, Spinner, type PillTone } from "../ui";
 import { Select } from "../ui/select";
+import { ProviderIcon } from "../ProviderIcon";
 import { confirmDialog } from "../ConfirmDialog";
 import { toast } from "../../lib/toast";
 import { errorText, rollbackConnection } from "../../lib/utils";
@@ -51,7 +52,17 @@ function KeyPill({
     hint: state?.hint ?? null,
     testedAt: connection.key_tested_at ?? null,
   });
-  return <Pill tone={STATUS_TONE[status]}>{KEY_STATUS_TEXT[status]}</Pill>;
+  const icon =
+    status === "connected" ? (
+      <Check size={12} />
+    ) : status === "untested" || status === "missing" || status === "unreadable" ? (
+      <CircleAlert size={12} />
+    ) : undefined;
+  return (
+    <Pill tone={STATUS_TONE[status]} icon={icon}>
+      {KEY_STATUS_TEXT[status]}
+    </Pill>
+  );
 }
 
 function ProviderKeyField({
@@ -70,10 +81,10 @@ function ProviderKeyField({
   onToggleShow: () => void;
 }) {
   return (
-    <label className="flex flex-col gap-1 text-xs text-muted">
+    <label className="flex flex-col gap-1 text-xs text-fg-3">
       API key
       {KEYLESS_KINDS.has(kind) ? (
-        <span className="text-xs text-muted">
+        <span className="text-xs text-fg-3">
           {PROVIDER_LABELS[kind]} needs no key.
         </span>
       ) : (
@@ -319,7 +330,7 @@ export function ProviderDialog({
   return (
     <Dialog open={open} onClose={onClose} title={connection ? "Edit provider" : "Add provider"}>
       <div className="flex flex-col gap-2.5">
-        <label className="flex flex-col gap-1 text-xs text-muted">
+        <label className="flex flex-col gap-1 text-xs text-fg-3">
           Type
           <Select
             value={kind}
@@ -334,14 +345,15 @@ export function ProviderDialog({
             options={PROVIDER_KINDS.map((value) => ({
               value,
               label: PROVIDER_LABELS[value],
+              icon: <ProviderIcon kind={value} size={18} />,
             }))}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs text-muted">
+        <label className="flex flex-col gap-1 text-xs text-fg-3">
           Name
           <Input value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label className="flex flex-col gap-1 text-xs text-muted">
+        <label className="flex flex-col gap-1 text-xs text-fg-3">
           Base URL
           <Input
             value={baseUrl}
@@ -357,8 +369,8 @@ export function ProviderDialog({
           onChange={setKey}
           onToggleShow={() => setShowKey((v) => !v)}
         />
-        <label className="flex flex-col gap-1 text-xs text-muted">
-          Default model <span className="text-muted">(optional)</span>
+        <label className="flex flex-col gap-1 text-xs text-fg-3">
+          Default model <span className="text-fg-3">(optional)</span>
           <Input
             value={defaultModel}
             onChange={(e) => setDefaultModel(e.target.value)}
@@ -366,7 +378,7 @@ export function ProviderDialog({
           />
         </label>
         {status && (
-          <p className="text-xs text-muted" role="status">
+          <p className="text-xs text-fg-3" role="status">
             {status}
           </p>
         )}
@@ -462,12 +474,12 @@ function ProviderModels({ connection }: { connection: Connection }) {
   };
 
   return (
-    <div className="mt-1.5 border-t border-border pt-1.5">
+    <div className="mt-1.5 border-t border-line pt-1.5">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1 text-xs text-muted hover:text-text"
+        className="flex items-center gap-1 text-xs text-fg-3 hover:text-fg"
       >
         <ChevronDown size={14} className={open ? "rotate-180" : ""} />
         Models{models !== null && ` (${models.length - hidden.size} shown)`}
@@ -484,14 +496,14 @@ function ProviderModels({ connection }: { connection: Connection }) {
                 aria-label="Filter models"
               />
               <div className="flex items-center gap-2 px-1.5">
-                <span className="flex-1 text-xs text-muted">
+                <span className="flex-1 text-xs text-fg-3">
                   {hidden.size} of {models.length} hidden
                 </span>
                 <button
                   type="button"
                   disabled={bulkBusy || filtered.length === 0}
                   onClick={() => void setAll(true)}
-                  className="text-xs text-muted hover:text-text disabled:opacity-50"
+                  className="text-xs text-fg-3 hover:text-fg disabled:opacity-50"
                 >
                   Hide all
                 </button>
@@ -499,7 +511,7 @@ function ProviderModels({ connection }: { connection: Connection }) {
                   type="button"
                   disabled={bulkBusy || hidden.size === 0}
                   onClick={() => void setAll(false)}
-                  className="text-xs text-muted hover:text-text disabled:opacity-50"
+                  className="text-xs text-fg-3 hover:text-fg disabled:opacity-50"
                 >
                   Show all
                 </button>
@@ -508,7 +520,7 @@ function ProviderModels({ connection }: { connection: Connection }) {
                 {filtered.map((modelId) => (
                   <div
                     key={modelId}
-                    className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-hover"
+                    className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-fill-2"
                   >
                     <span className="min-w-0 flex-1 truncate font-mono">{modelId}</span>
                     <button
@@ -517,14 +529,14 @@ function ProviderModels({ connection }: { connection: Connection }) {
                       onClick={() => void toggle(modelId)}
                       aria-label={hidden.has(modelId) ? `Show ${modelId}` : `Hide ${modelId}`}
                       title={hidden.has(modelId) ? "Show in picker" : "Hide from picker"}
-                      className="grid h-6 w-6 flex-none place-items-center rounded text-muted hover:bg-active hover:text-text"
+                      className="grid h-6 w-6 flex-none place-items-center rounded text-fg-3 hover:bg-fill-3 hover:text-fg"
                     >
                       {hidden.has(modelId) ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                   </div>
                 ))}
                 {filtered.length === 0 && (
-                  <p className="px-1.5 py-2 text-xs text-muted">No models match.</p>
+                  <p className="px-1.5 py-2 text-xs text-fg-3">No models match.</p>
                 )}
               </div>
             </>
@@ -645,8 +657,7 @@ export function ProvidersPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm text-muted">Bring your own API keys.</span>
+      <div className="mb-3 flex items-center justify-end">
         <Button variant="primary" onClick={() => setDialog({ open: true, connection: null })}>
           <Plus size={16} /> Add provider
         </Button>
@@ -654,7 +665,7 @@ export function ProvidersPage() {
 
       {connections.length === 0 && (
         <div className="flex flex-col items-center gap-2.5 py-6 text-center">
-          <PlugZap size={40} className="text-muted" />
+          <PlugZap size={40} className="text-fg-3" />
           <h3 className="m-0 text-sm font-semibold">No providers yet</h3>
           <Button variant="primary" onClick={() => setDialog({ open: true, connection: null })}>
             Add your first provider
@@ -669,30 +680,20 @@ export function ProvidersPage() {
           return (
             <div
               key={connection.id}
-              className="rounded-card border border-border bg-surface p-3"
+              className="rounded-card bg-fill-1 p-4 shadow-[inset_0_0_0_1px_var(--line-subtle)]"
               data-setting-term={connection.name}
             >
-              <div className="flex items-center gap-2.5">
-                <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-xs font-semibold text-accent-contrast">
-                  {connection.name.slice(0, 2).toUpperCase()}
-                </span>
+              <div className="flex items-center gap-3">
+                <ProviderIcon kind={connection.kind} size={36} title={connection.name} />
                 <div className="min-w-0 flex-1">
-                  <b className="block truncate text-sm">{connection.name}</b>
-                  <div className="truncate font-mono text-xs text-muted">{connection.base_url}</div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                    {state?.hint && <span className="font-mono">{state.hint}</span>}
-                    {state && state.keys.length > 1 && <span>{state.keys.length} keys</span>}
-                    {state?.error && <span className="text-danger">{state.error}</span>}
-                    {tested ? (
-                      <span>Tested {timeAgo(tested)}</span>
-                    ) : (
-                      state?.hint && <span>Never tested</span>
-                    )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <b className="truncate text-sm font-semibold">{connection.name}</b>
+                    <KeyPill connection={connection} state={state} />
                   </div>
+                  <div className="truncate font-mono text-xs text-fg-3">{connection.base_url}</div>
                 </div>
-                <KeyPill connection={connection} state={state} />
                 <Button
-                  variant="default"
+                  variant="secondary"
                   size="sm"
                   disabled={testingId === connection.id}
                   onClick={() => void test(connection)}
@@ -700,49 +701,63 @@ export function ProvidersPage() {
                   {testingId === connection.id ? <Spinner label="Testing…" /> : "Test"}
                 </Button>
                 {state && state.keys.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Remove all stored keys for ${connection.name}`}
+                  <IconButton
+                    label={`Remove all stored keys for ${connection.name}`}
                     title="Remove all stored keys"
+                    size={28}
                     onClick={() => void removeKey(connection)}
                   >
                     <RotateCcw size={14} />
-                  </Button>
+                  </IconButton>
                 )}
-                <Button
-                  variant="default"
-                  size="sm"
+                <IconButton
+                  label={`Edit ${connection.name}`}
+                  size={28}
                   onClick={() => setDialog({ open: true, connection })}
                 >
-                  Edit
-                </Button>
-                <Button variant="danger" size="sm" onClick={() => void remove(connection)}>
-                  Delete
-                </Button>
+                  <Pencil size={14} />
+                </IconButton>
+                <IconButton
+                  label={`Delete ${connection.name}`}
+                  size={28}
+                  className="hover:bg-danger-soft hover:text-danger"
+                  onClick={() => void remove(connection)}
+                >
+                  <Trash2 size={14} />
+                </IconButton>
               </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-subtle pt-2.5 text-xs text-fg-3">
+                {state && state.keys.length > 1 && <span>{state.keys.length} keys</span>}
+                {state?.error && <span className="text-danger">{state.error}</span>}
+                {tested ? (
+                  <span>Tested {timeAgo(tested)}</span>
+                ) : state?.hint ? (
+                  <span>Never tested</span>
+                ) : null}
+              </div>
+
               {state && state.keys.length > 0 && (
-                <div className="mt-2 flex flex-col gap-1 border-t border-border pt-2">
+                <div className="mt-2 flex flex-col gap-1">
                   {state.keys.map((key) => (
                     <div
                       key={key.index}
-                      className="flex items-center gap-2 text-xs text-muted"
+                      className="flex items-center gap-2 text-xs text-fg-3"
                     >
-                      <span className="font-mono">{key.hint}</span>
+                      <span className="font-mono text-fg-2">{key.hint}</span>
                       {key.cooldown_secs !== null && (
-                        <span className="text-warn">
+                        <span className="text-warning">
                           Cooling down {Math.ceil(key.cooldown_secs / 60)} min
                         </span>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Remove key ${key.hint} for ${connection.name}`}
+                      <IconButton
+                        label={`Remove key ${key.hint} for ${connection.name}`}
                         title="Remove this key"
+                        size={24}
                         onClick={() => void removeOneKey(connection, key.index)}
                       >
                         <X size={12} />
-                      </Button>
+                      </IconButton>
                     </div>
                   ))}
                 </div>
@@ -765,7 +780,7 @@ export function ProvidersPage() {
         })}
       </div>
 
-      <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
+      <p className="mt-3 flex items-center gap-1.5 text-xs text-fg-3">
         Keys are stored in the Windows Credential Manager on this device only. The page shows the
         last four characters, never the key. Add up to ten keys per provider; a key that reports a
         quota error cools down for ten minutes before it is tried again.

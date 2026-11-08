@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Mic, RefreshCw, TriangleAlert } from "lucide-react";
 import * as api from "../../lib/api";
@@ -9,6 +9,9 @@ import { useApp } from "../../lib/store";
 import { toast } from "../../lib/toast";
 import { Badge, Button, Input, Spinner } from "../ui";
 import { Select } from "../ui/select";
+import { canReadAloud, voices } from "../../lib/read-aloud";
+import type { ProviderKind } from "../../lib/types";
+import { ProviderIcon } from "../ProviderIcon";
 
 function needsModel(status: VoiceStatus | null): boolean {
   return status !== null && status.enabled && !status.ready && status.provider === null;
@@ -166,7 +169,7 @@ function ProviderSelect({
   onRemote,
 }: {
   remote: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; icon?: ReactNode }[];
   onRemote: (value: string) => void;
 }) {
   return (
@@ -197,7 +200,7 @@ function ProviderCard({
   onModel,
   onSave,
 }: {
-  connections: { id: string; name: string; kind: string }[];
+  connections: { id: string; name: string; kind: ProviderKind }[];
   remote: string;
   remoteModel: string;
   busy: string | null;
@@ -207,7 +210,11 @@ function ProviderCard({
 }) {
   const options = connections
     .filter((connection) => connection.kind !== "openrouter")
-    .map((connection) => ({ value: connection.id, label: connection.name }));
+    .map((connection) => ({
+      value: connection.id,
+      label: connection.name,
+      icon: <ProviderIcon kind={connection.kind} size={18} />,
+    }));
   const empty = remote !== "" && options.length === 0;
   return (
     <div className="rounded-card border border-border bg-surface-2 p-3" data-setting-term="Transcription provider">
@@ -237,6 +244,79 @@ function ProviderCard({
           No custom connection is configured. Add one under Providers first.
         </p>
       )}
+    </div>
+  );
+}
+
+function ReadAloudCard() {
+  const [voiceUri, setVoiceUri] = useState(() => localStorage.getItem("readAloudVoice") ?? "");
+  const [rate, setRate] = useState(() => {
+    const stored = Number(localStorage.getItem("readAloudRate"));
+    return Number.isFinite(stored) && stored >= 0.75 && stored <= 1.5 ? stored : 1;
+  });
+  const [available, setAvailable] = useState(() => voices());
+
+  useEffect(() => {
+    if (!canReadAloud()) return;
+    const refresh = () => setAvailable(voices());
+    refresh();
+    window.speechSynthesis.addEventListener("voiceschanged", refresh);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", refresh);
+  }, []);
+
+  const pick = (value: string) => {
+    setVoiceUri(value);
+    localStorage.setItem("readAloudVoice", value);
+  };
+
+  const changeRate = (value: number) => {
+    setRate(value);
+    localStorage.setItem("readAloudRate", String(value));
+  };
+
+  return (
+    <div className="rounded-card bg-fill-1 p-3" data-setting-term="Read aloud">
+      <div className="flex items-center gap-2 font-medium">
+        <Mic size={15} />
+        Read aloud
+        <Badge>{canReadAloud() ? "Windows voices" : "Unavailable"}</Badge>
+      </div>
+      <p className="mt-1 text-xs text-fg-3">
+        Speaks assistant replies with the voices installed in Windows, and with the online natural
+        voices when Windows offers them. No model download; online voices need a connection.
+      </p>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <div className="sm:flex-1">
+          <Select
+            size="sm"
+            value={voiceUri}
+            onChange={pick}
+            aria-label="Read aloud voice"
+            placeholder="System default"
+            options={[
+              { value: "", label: "System default" },
+              ...available.map((voice) => ({
+                value: voice.voiceURI,
+                label: `${voice.name} (${voice.lang})${voice.localService ? "" : " · online"}`,
+              })),
+            ]}
+          />
+        </div>
+        <label className="flex items-center gap-2 text-xs text-fg-3">
+          Speed
+          <input
+            type="range"
+            min={0.75}
+            max={1.5}
+            step={0.05}
+            value={rate}
+            onChange={(event) => changeRate(Number(event.target.value))}
+            aria-label="Read aloud speed"
+            className="w-28 accent-[var(--accent-solid)]"
+          />
+          <span className="w-9 text-right tabular-nums">{rate.toFixed(2)}×</span>
+        </label>
+      </div>
     </div>
   );
 }
@@ -323,6 +403,8 @@ export function VoicePage() {
           <span>{error}</span>
         </div>
       )}
+
+      <ReadAloudCard />
 
       {status === null ? (
         error ? null : <Spinner label="Loading voice settings" />

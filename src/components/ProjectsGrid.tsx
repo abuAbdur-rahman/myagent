@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useApp } from "../lib/store";
 import { projectColor, timeAgo } from "../lib/grouping";
-import { Input } from "./ui";
+import { EmptyState, Input, Button } from "./ui";
 
 export function ProjectsGrid({ onNew }: { onNew: () => void }) {
   const { projects, conversations, selectProject } = useApp();
@@ -14,25 +14,22 @@ export function ProjectsGrid({ onNew }: { onNew: () => void }) {
   );
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto w-full max-w-[760px]">
-        <div className="mb-3.5 flex items-center justify-between">
-          <h1 className="m-0 font-serif text-[28px] font-semibold">Projects</h1>
-          <button
-            type="button"
-            onClick={onNew}
-            className="inline-flex h-8 items-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-[13px] font-medium text-accent-contrast hover:brightness-110"
-          >
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-[920px] px-8 pb-12 pt-6">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h1 className="m-0 font-serif text-[1.75rem] font-normal leading-tight">Projects</h1>
+          <Button variant="primary" onClick={onNew}>
             <Plus size={16} /> New project
-          </button>
+          </Button>
         </div>
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search projects"
           aria-label="Search projects"
+          className="max-w-[320px]"
         />
-        <div className="mt-3.5 grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3">
+        <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
           {visible.map((project) => {
             const chats = conversations.filter((c) => c.project_id === project.id);
             return (
@@ -40,19 +37,19 @@ export function ProjectsGrid({ onNew }: { onNew: () => void }) {
                 key={project.id}
                 type="button"
                 onClick={() => selectProject(project.id)}
-                className="flex min-h-[120px] flex-col gap-1.5 rounded-card border border-border bg-surface p-3 text-left hover:bg-hover"
+                className="flex min-h-[124px] flex-col gap-1.5 rounded-card bg-raised p-4 text-left shadow-[inset_0_0_0_1px_var(--line)] hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
               >
                 <span className="flex items-center gap-2">
                   <span
                     className="h-2 w-2 flex-none rounded-full"
                     style={{ background: projectColor(project.id) }}
                   />
-                  <b className="truncate text-sm">{project.name}</b>
+                  <b className="truncate text-sm font-medium">{project.name}</b>
                 </span>
-                <span className="line-clamp-2 text-[13px] text-muted">
+                <span className="line-clamp-2 text-[13px] text-fg-3">
                   {project.description || "No description"}
                 </span>
-                <span className="mt-auto text-xs text-muted">
+                <span className="mt-auto text-xs text-fg-3">
                   {chats.length} chats · Updated {timeAgo(project.updated_at)}
                 </span>
               </button>
@@ -60,7 +57,15 @@ export function ProjectsGrid({ onNew }: { onNew: () => void }) {
           })}
         </div>
         {visible.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted">No projects found.</p>
+          <EmptyState
+            title="No projects found."
+            body="Create one to group chats and shared context."
+            action={
+              <Button variant="primary" onClick={onNew}>
+                <Plus size={16} /> New project
+              </Button>
+            }
+          />
         )}
       </div>
     </div>

@@ -57,4 +57,13 @@ describe("chat export", () => {
     const parsed = chatExportSchema.parse(exported);
     expect(parsed.messages[0].rating).toBe(1);
   });
+
+  it("carries reply duration and completion time", () => {
+    const exported = buildChatExport(chat, [
+      message({ duration_ms: 26_700, completed_at: 30 }),
+    ]);
+    const parsed = chatExportSchema.parse(exported);
+    expect(parsed.messages[0].durationMs).toBe(26_700);
+    expect(parsed.messages[0].completedAt).toBe(30);
+  });
 });

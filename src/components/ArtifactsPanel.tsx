@@ -12,11 +12,11 @@ import {
 } from "lucide-react";
 import { useApp, type PanelMode, type PanelTab } from "../lib/store";
 import { Markdown } from "./Markdown";
-import { Badge } from "./ui";
+import { Badge, Segmented } from "./ui";
 import { SessionPanel } from "./SessionPanel";
 import { FilePreview } from "./FilePreview";
 import { ContextInspector } from "./ContextInspector";
-import { cn, copyText, downloadText } from "../lib/utils";
+import { copyText, downloadText } from "../lib/utils";
 import { toast } from "../lib/toast";
 import { ArtifactPreview } from "./ArtifactPreview";
 
@@ -153,7 +153,7 @@ export function ArtifactsPanel() {
 
   return (
     <section
-      className="relative flex h-full shrink-0 flex-col overflow-hidden border-l border-border bg-surface"
+      className="relative flex h-full shrink-0 flex-col overflow-hidden bg-canvas shadow-[inset_1px_0_0_var(--line)]"
       style={{ width: panelMode === "full" ? "100%" : width }}
     >
       {panelMode !== "full" && (
@@ -161,8 +161,8 @@ export function ArtifactsPanel() {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize artifact panel"
-          aria-valuemin={380}
-          aria-valuemax={1000}
+          aria-valuemin={360}
+          aria-valuemax={640}
           aria-valuenow={panelWidth}
           tabIndex={0}
           title="Drag to resize"
@@ -176,44 +176,48 @@ export function ArtifactsPanel() {
               setPanelWidth(panelWidth - 20);
             } else if (event.key === "Home") {
               event.preventDefault();
-              setPanelWidth(380);
+              setPanelWidth(360);
             } else if (event.key === "End") {
               event.preventDefault();
-              setPanelWidth(1000);
+              setPanelWidth(640);
             }
           }}
-          className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1/2 cursor-ew-resize touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1/2 cursor-ew-resize touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line"
         />
       )}
-      <div className="flex h-12 flex-none items-center gap-2 px-2 pl-3.5">
+      <div className="flex h-12 flex-none items-center gap-2 border-b border-line-subtle px-2 pl-3">
         <button
           type="button"
           aria-label="Back to progress"
           title="Progress"
           onClick={showSessionView}
-          className="grid h-7 w-7 flex-none place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+          className="grid h-7 w-7 flex-none place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
         >
           <ChevronLeft size={16} />
         </button>
-        <b className="truncate text-sm" title={panelArtifact.title}>
+        <b className="min-w-0 truncate text-sm font-semibold" title={panelArtifact.title}>
           {panelArtifact.title}
         </b>
         <Badge>{panelArtifact.lang}</Badge>
-        <div className="ml-2 flex gap-0.5">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setPanelTab(tab.id)}
-              className={cn(
-                "rounded-control px-2.5 py-1 text-sm",
-                activeTab === tab.id ? "bg-active text-text" : "text-muted hover:text-text",
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <span className="flex-1" />
+        <button
+          type="button"
+          aria-label="Close panel"
+          title="Close"
+          onClick={closePanel}
+          className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex h-11 flex-none items-center gap-2 border-b border-line-subtle px-3">
+        <Segmented
+          value={activeTab}
+          options={tabs.map((tab) => ({ value: tab.id, label: tab.label }))}
+          onChange={(value) => setPanelTab(value)}
+          label="Artifact view"
+        />
         <span className="flex-1" />
         {!panelArtifact.path && (
           <>
@@ -222,47 +226,39 @@ export function ArtifactsPanel() {
               aria-label="Copy artifact"
               title="Copy"
               onClick={() => void copy()}
-              className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+              className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
             >
-              <Copy size={16} />
+              <Copy size={15} />
             </button>
             <button
               type="button"
               aria-label="Download artifact"
               title="Download"
               onClick={download}
-              className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+              className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
             >
-              <Download size={16} />
+              <Download size={15} />
             </button>
           </>
         )}
+        <span className="mx-1 h-4 w-px bg-line-subtle" aria-hidden="true" />
         <button
           type="button"
           aria-label={panelMode === "mini" ? "Restore panel size" : "Minimize panel"}
           title={panelMode === "mini" ? "Restore" : "Minimize"}
           onClick={() => toggleMode("mini")}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+          className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
         >
-          <Minimize2 size={16} />
+          <Minimize2 size={15} />
         </button>
         <button
           type="button"
           aria-label={panelMode === "full" ? "Exit fullscreen" : "Fullscreen panel"}
           title={panelMode === "full" ? "Exit fullscreen" : "Fullscreen"}
           onClick={() => toggleMode("full")}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+          className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
         >
-          <Maximize2 size={16} />
-        </button>
-        <button
-          type="button"
-          aria-label="Close panel"
-          title="Close"
-          onClick={closePanel}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
-        >
-          <X size={16} />
+          <Maximize2 size={15} />
         </button>
       </div>
 
@@ -282,16 +278,16 @@ export function ArtifactsPanel() {
           </div>
         )}
         {activeTab !== "preview" && activeTab !== "doc" && (
-          <pre className="m-0 flex-1 overflow-auto p-3.5 font-mono text-sm leading-relaxed">
+          <pre className="m-0 flex-1 overflow-auto bg-code p-3.5 font-mono text-[13px] leading-relaxed">
             <code>{panelArtifact.code}</code>
           </pre>
         )}
       </div>
 
-      <div className="flex-none border-t border-border px-3.5 py-2 text-xs text-muted">
+      <div className="flex h-8 flex-none items-center gap-1.5 border-t border-line-subtle px-3 text-xs text-fg-3">
         {activeTab === "preview" && (
           <span className="inline-flex items-center gap-1.5">
-            <Eye size={12} /> {panelArtifact.path ? "Converted in the sandbox" : "Sandboxed preview"}
+            <Eye size={12} /> {panelArtifact.path ? "Converted in the sandbox" : "Sandboxed preview · scripts and CDN assets allowed"}
           </span>
         )}
         {activeTab === "doc" && (

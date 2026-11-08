@@ -413,6 +413,18 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN error TEXT;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 33,
+            description: "add_message_duration",
+            sql: "ALTER TABLE messages ADD COLUMN duration_ms INTEGER;",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 34,
+            description: "add_message_completed_at",
+            sql: "ALTER TABLE messages ADD COLUMN completed_at INTEGER;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -504,6 +516,7 @@ pub fn run() {
             llm::chat_stream,
             llm::suggest_title,
             llm::summarize,
+            llm::extract_memory,
             memory::commands::memory_migrate,
             memory::commands::memory_read,
             memory::commands::memory_append,

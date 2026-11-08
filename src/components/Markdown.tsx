@@ -4,7 +4,6 @@ import DOMPurify from "dompurify";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import githubDark from "shiki/themes/github-dark.mjs";
 import typescript from "shiki/langs/typescript.mjs";
 import tsx from "shiki/langs/tsx.mjs";
 import javascript from "shiki/langs/javascript.mjs";
@@ -24,13 +23,15 @@ import airtableGrammar from "../lib/grammars/airtable.tmLanguage.json";
 import { normalizeFenceLang } from "../lib/languages";
 import { copyText } from "../lib/utils";
 import { toast } from "../lib/toast";
+import { myagentDark, myagentLight } from "../lib/shiki-theme";
+import { useThemeName, type ThemeName } from "../lib/useThemeName";
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;
 
 function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [githubDark],
+      themes: [myagentDark, myagentLight],
       langs: [
         typescript,
         tsx,
@@ -64,7 +65,16 @@ function unescapeMarked(text: string): string {
     .replace(/&#39;/g, "'");
 }
 
-function renderHtml(content: string, highlighter: HighlighterCore | null): string {
+function looksLikeMarkdown(text: string): boolean {
+  return /(^|\n)(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|(\*\*[^*]+\*\*)/.test(text);
+}
+
+function renderMarkdownFence(source: string): string {
+  const html = marked.parse(unescapeMarked(source), { async: false, breaks: true }) as string;
+  return `<div class="md-fence">${DOMPurify.sanitize(html)}</div>`;
+}
+
+function renderHtml(content: string, highlighter: HighlighterCore | null, theme: ThemeName): string {
   const raw = marked.parse(content, { async: false, breaks: true }) as string;
   let html = DOMPurify.sanitize(raw);
 
@@ -77,13 +87,23 @@ function renderHtml(content: string, highlighter: HighlighterCore | null): strin
         .find((item) => item.startsWith("language-"))
         ?.slice("language-".length);
       const fence = (languageClass ?? "").trim();
+      const plain = unescapeMarked(escaped).replace(/\n$/, "");
+
+      if (
+        fence === "md" ||
+        fence === "markdown" ||
+        (fence === "txt" && looksLikeMarkdown(plain))
+      ) {
+        return renderMarkdownFence(escaped);
+      }
+
       const lang = normalizeFenceLang(fence.toLowerCase());
       const label = fence || "text";
       const highlighted =
         highlighter && lang && highlighter.getLoadedLanguages().includes(lang)
-          ? highlighter.codeToHtml(unescapeMarked(escaped).replace(/\n$/, ""), {
+          ? highlighter.codeToHtml(plain, {
               lang,
-              theme: "github-dark",
+              theme: theme === "dark" ? "myagent-dark" : "myagent-light",
             })
           : `<pre class="codeblock-body"><code>${escaped.replace(/\n$/, "")}</code></pre>`;
       const header =
@@ -95,9 +115,10 @@ function renderHtml(content: string, highlighter: HighlighterCore | null): strin
   return DOMPurify.sanitize(html);
 }
 
-export function Markdown({ content }: { content: string }) {
+export function Markdown({ content, compact }: { content: string; compact?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [highlighter, setHighlighter] = useState<HighlighterCore | null>(null);
+  const theme = useThemeName();
 
   useEffect(() => {
     let live = true;
@@ -113,7 +134,10 @@ export function Markdown({ content }: { content: string }) {
     };
   }, []);
 
-  const html = useMemo(() => renderHtml(content, highlighter), [content, highlighter]);
+  const html = useMemo(
+    () => renderHtml(content, highlighter, theme),
+    [content, highlighter, theme],
+  );
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
@@ -136,7 +160,7 @@ export function Markdown({ content }: { content: string }) {
   return (
     <div
       ref={ref}
-      className="markdown text-sm leading-relaxed text-neutral-200 [&_a]:text-accent-link [&_code]:rounded-control [&_code]:bg-vault-raised [&_code]:px-1 [&_pre_code]:rounded-none [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_h1]:mt-4 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:ml-5 [&_ul>li]:list-disc [&_ol>li]:list-decimal [&_p]:mb-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-panel [&_pre]:p-3 [&_table]:w-full [&_td]:border [&_td]:border-vault-line [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-vault-line [&_th]:px-2 [&_th]:py-1 [&_ul]:mb-2 [&_.codeblock]:my-3 [&_.codeblock]:overflow-hidden [&_.codeblock]:rounded-panel [&_.codeblock]:border [&_.codeblock]:border-vault-line [&_.codeblock]:bg-surface [&_.codeblock-head]:flex [&_.codeblock-head]:items-center [&_.codeblock-head]:justify-between [&_.codeblock-head]:border-b [&_.codeblock-head]:border-vault-line [&_.codeblock-head]:bg-vault-raised [&_.codeblock-head]:px-3 [&_.codeblock-head]:py-1 [&_.codeblock-head]:text-xs [&_.codeblock-head]:text-muted [&_.codeblock-head>button]:rounded-control [&_.codeblock-head>button]:px-2 [&_.codeblock-head>button]:py-0.5 [&_.codeblock-head>button:hover]:bg-hover [&_.codeblock-head>button:hover]:text-text [&_.codeblock>pre]:my-0 [&_.codeblock>pre]:rounded-none [&_.codeblock>pre]:font-mono [&_.codeblock>pre]:text-sm [&_.codeblock>pre]:leading-relaxed [&_.codeblock-body]:bg-surface [&_.codeblock-body]:font-mono [&_.codeblock-body]:text-sm [&_.codeblock-body]:leading-relaxed"
+      className={compact ? "markdown markdown-compact" : "markdown"}
       onClick={handleClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />

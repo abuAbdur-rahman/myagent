@@ -6,7 +6,7 @@ import type { ScreenVerdict } from "../lib/types";
 import { Button, Input } from "./ui";
 
 function Kbd({ children }: { children: string }) {
-  return <kbd className="border-border bg-transparent text-inherit">{children}</kbd>;
+  return <kbd className="border-line-subtle bg-transparent text-inherit">{children}</kbd>;
 }
 
 function useFocusOnShow(dep: string | null) {
@@ -48,7 +48,7 @@ function ScreenNotice({
   const flagged = screen?.suggest_deny === true;
   if (flagged && screen) {
     return (
-      <div className="mt-1 pl-6 text-xs text-warn">
+      <div className="mt-1 pl-6 text-xs text-warning">
         Machine check: {screenNote(screen)}. Flagged calls can only be allowed
         once.
       </div>
@@ -56,7 +56,7 @@ function ScreenNotice({
   }
   if (failed) {
     return (
-      <div className="mt-1 pl-6 text-xs text-warn">
+      <div className="mt-1 pl-6 text-xs text-warning">
         Machine check unavailable, so this call can only be allowed once.
       </div>
     );
@@ -109,7 +109,7 @@ function ApprovalCard() {
       className="rounded-control bg-warn/10 px-3 py-2 text-sm"
     >
       <div className="flex items-center gap-2">
-        <ShieldQuestion size={16} className="flex-none text-warn" />
+        <ShieldQuestion size={16} className="flex-none text-warning" />
         <div id="approval-title" className="font-medium">
           {memory ? (
             approval.tool === "delete_memory" ? (
@@ -124,16 +124,16 @@ function ApprovalCard() {
           )}
         </div>
       </div>
-      <div className="mt-0.5 pl-6 text-xs text-muted">
+      <div className="mt-0.5 pl-6 text-xs text-fg-3">
         {approvalSubtitle(approval.tool)}
       </div>
       <ScreenNotice screen={approval.screen} failed={approval.screenFailed} />
       {approval.command && (
-        <pre className="m-0 mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-vault-raised p-2 font-mono text-xs text-text">
+        <pre className="m-0 mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-control border border-line-subtle bg-vault-raised p-2 font-mono text-xs text-fg">
           {approval.command}
         </pre>
       )}
-      <div className="mt-1 font-mono text-[11px] text-muted">{footnote}</div>
+      <div className="mt-1 font-mono text-[11px] text-fg-3">{footnote}</div>
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" onClick={() => void replyApproval("once")}>
           Allow once <Kbd>1</Kbd>
@@ -223,7 +223,7 @@ function QuestionCard() {
           {question.question}
         </div>
       </div>
-      <div className="mt-0.5 pl-6 text-xs text-muted">
+      <div className="mt-0.5 pl-6 text-xs text-fg-3">
         The model is waiting on your choice before it continues.
       </div>
       <div className="mt-2 flex flex-col gap-1">
@@ -236,10 +236,10 @@ function QuestionCard() {
             className={
               highlight === i
                 ? "flex items-center gap-2.5 rounded-control border border-accent bg-accent/15 px-2.5 py-1.5 text-left"
-                : "flex items-center gap-2.5 rounded-control border border-border px-2.5 py-1.5 text-left hover:border-accent/60"
+                : "flex items-center gap-2.5 rounded-control border border-line-subtle px-2.5 py-1.5 text-left hover:border-accent/60"
             }
           >
-            <span className="grid h-5 w-5 flex-none place-items-center rounded-control border border-border font-mono text-[11px] text-muted">
+            <span className="grid h-5 w-5 flex-none place-items-center rounded-control border border-line-subtle font-mono text-[11px] text-fg-3">
               {i + 1}
             </span>
             <span className="min-w-0 flex-1 truncate" title={option}>
@@ -252,14 +252,14 @@ function QuestionCard() {
             className={
               highlight === question.options.length
                 ? "flex items-center gap-2.5 rounded-control border border-accent bg-accent/15 px-2.5 py-1.5"
-                : "flex items-center gap-2.5 rounded-control border border-border px-2.5 py-1.5"
+                : "flex items-center gap-2.5 rounded-control border border-line-subtle px-2.5 py-1.5"
             }
             onSubmit={(e) => {
               e.preventDefault();
               sendCustom();
             }}
           >
-            <span className="grid h-5 w-5 flex-none place-items-center rounded-control border border-border font-mono text-[11px] text-muted">
+            <span className="grid h-5 w-5 flex-none place-items-center rounded-control border border-line-subtle font-mono text-[11px] text-fg-3">
               {question.options.length + 1}
             </span>
             <label htmlFor="question-custom" className="sr-only">
@@ -295,7 +295,7 @@ function QuestionCard() {
           Skip <Kbd>Esc</Kbd>
         </Button>
         <span className="flex-1" />
-        <span className="hidden text-[11px] text-muted sm:inline">↑↓ move · 1–{question.options.length + (question.allowCustom ? 1 : 0)} pick</span>
+        <span className="hidden text-[11px] text-fg-3 sm:inline">↑↓ move · 1–{question.options.length + (question.allowCustom ? 1 : 0)} pick</span>
       </div>
     </div>
   );
@@ -306,11 +306,11 @@ export function TurnCards() {
   if (!approval && !question) return null;
   return (
     <div className="absolute inset-x-0 bottom-full z-20 mb-2">
-      <div className="space-y-2 rounded-control border border-border bg-surface p-2 shadow-[var(--shadow)]">
+      <div className="space-y-2 rounded-control border border-line-subtle bg-surface p-2 shadow-[var(--shadow)]">
         <ApprovalCard />
         <QuestionCard />
       </div>
-      <div className="mt-1 text-center text-[11px] text-muted">
+      <div className="mt-1 text-center text-[11px] text-fg-3">
         Waiting for your answer above…
       </div>
     </div>

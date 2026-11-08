@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, Mic, Paperclip, Square, X } from "lucide-react";
 import { useApp } from "../lib/store";
 import { ModelPickerHost, openModelPicker } from "./ModelPicker";
+import { ProviderIcon } from "./ProviderIcon";
 import { Select } from "./ui/select";
+import { ContextRing } from "./ContextRing";
 import { toast } from "../lib/toast";
 import { cn, downloadText } from "../lib/utils";
 import { buildChatExport, conversationToMarkdown, safeFilename } from "../lib/export";
@@ -252,22 +254,22 @@ function SlashMenu({
 }) {
   if (items.length === 0) return null;
   return (
-    <div className="absolute bottom-full left-2 z-10 mb-1.5 min-w-[260px] rounded-card border border-border bg-surface p-1 shadow-[var(--shadow)]">
+    <div className="absolute bottom-full left-2 z-10 mb-2 min-w-[260px] rounded-card bg-overlay p-1 shadow-[var(--shadow-md)] ring-1 ring-line">
       {items.map((command, i) => (
         <button
           key={command.name}
           type="button"
           onClick={() => onPick(command.name)}
           className={cn(
-            "flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-sm",
-            i === index && "bg-active",
+            "flex w-full items-center gap-2 rounded-field px-2.5 py-1.5 text-left text-sm",
+            i === index ? "bg-fill-2" : "hover:bg-fill-2",
           )}
         >
-          <b className="font-mono text-[13px]">
+          <b className="font-mono text-[13px] text-fg">
             /{command.name}
             {command.hint ? ` ${command.hint}` : ""}
           </b>
-          <span className="text-muted">{command.label}</span>
+          <span className="text-fg-3">{command.label}</span>
         </button>
       ))}
     </div>
@@ -295,6 +297,10 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
     setSettingsPage,
     newConversation,
     compactActive,
+    uncompactActive,
+    contextInfo,
+    showContextBar,
+    openContextPanel,
     reasoningEffort,
     setReasoningEffort,
     supportedEfforts,
@@ -516,6 +522,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
 
   const modelLabel =
     activeConnection && model ? `${activeConnection.name} · ${model}` : "Select model";
+  const conversation = conversations.find((item) => item.id === activeConversationId) ?? null;
+  const contextPct = contextInfo.pct;
+  const canCompact = messages.length > 4 && !streaming;
 
   const slashIndexRef = useRef(slashIndex);
   slashIndexRef.current = slashIndex;
@@ -567,7 +576,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           .catch(() => toast("Couldn't read the pasted image."));
       }}
     >
-      <div className="composer relative rounded-composer border border-border bg-surface-2 px-2.5 pb-2 pt-2 focus-within:border-accent/70">
+      <div className="composer relative rounded-composer bg-raised px-2 pb-2 pt-2 shadow-[inset_0_0_0_1px_var(--line),var(--shadow-sm)]">
         <SlashMenu
           items={slashItems}
           index={Math.min(slashIndex, Math.max(0, slashItems.length - 1))}
@@ -578,18 +587,18 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             {chips.map((chip) => (
               <span
                 key={chip.key}
-                className="flex max-w-[220px] items-center gap-1 rounded-control border border-border bg-surface px-2 py-0.5 text-xs"
+                className="flex max-w-[220px] items-center gap-1 rounded-chip bg-fill-2 px-2 py-0.5 text-xs text-fg-2"
                 title={chip.name}
               >
                 <span className="truncate">{chip.name}</span>
                 {chip.detail && (
-                  <span className="flex-none text-muted">{chip.detail}</span>
+                  <span className="flex-none text-fg-3">{chip.detail}</span>
                 )}
                 <button
                   type="button"
                   onClick={() => removeChip(chip.key)}
                   aria-label={`Remove ${chip.name}`}
-                  className="flex-none text-muted hover:text-fg"
+                  className="flex-none text-fg-3 hover:text-fg"
                 >
                   <X size={12} />
                 </button>
@@ -598,7 +607,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
           </div>
         )}
         <TipTapEditor
-          placeholder="Message MyAgent… (Markdown supported, / for commands)"
+          placeholder="Message MyAgent"
           autoFocus={autoFocus}
           signal={composerSignal}
           handleRef={editorRef}
@@ -626,9 +635,9 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             aria-label="Attach files"
             title="Attach documents (pdf, docx, xlsx, md, txt…) or images"
             disabled={attaching || streaming}
-            className="grid h-7 w-7 flex-none place-items-center rounded-control border border-border bg-surface text-muted hover:bg-hover disabled:text-faint"
+            className="grid h-7 w-7 flex-none place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg disabled:text-text-off"
           >
-            <Paperclip size={14} />
+            <Paperclip size={16} />
           </button>
           <button
             type="button"
@@ -639,14 +648,17 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             }}
             aria-label="Choose model"
             title={modelLabel}
-            className="flex h-7 max-w-[260px] items-center gap-1 truncate rounded-control border border-border bg-surface px-2 text-[13px] hover:bg-hover"
+            className="flex h-7 max-w-[260px] items-center gap-1.5 truncate rounded-field px-2 text-[13px] text-fg-2 hover:bg-fill-2 hover:text-fg"
           >
+            {activeConnection && (
+              <ProviderIcon kind={activeConnection.kind} size={16} className="flex-none" />
+            )}
             <span className="truncate">{modelLabel}</span>
-            <ChevronDown size={14} className="flex-none text-muted" />
+            <ChevronDown size={14} className="flex-none text-fg-3" />
           </button>
           <Select
             size="sm"
-            className="w-36 min-w-0 shrink"
+            className="w-auto min-w-0 shrink border-transparent bg-transparent shadow-none hover:border-transparent hover:bg-fill-2"
             value={effortValue}
             onChange={(level) => setReasoningEffort(level)}
             aria-label="Reasoning effort"
@@ -662,6 +674,22 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             }))}
           />
           <span className="flex-1" />
+          {showContextBar && (
+            <button
+              type="button"
+              onClick={openContextPanel}
+              title={`Context · ${contextPct ?? 0}% used`}
+              aria-label={`Open context inspector · ${contextPct ?? 0}% used`}
+              className="flex h-7 items-center gap-1.5 rounded-field px-2 text-xs text-fg-3 hover:bg-fill-2 hover:text-fg-2"
+            >
+              <ContextRing
+                pct={contextPct}
+                size={14}
+                warn={contextPct !== null && contextPct >= 80}
+              />
+              {contextPct === null ? "Context" : `${contextPct}%`}
+            </button>
+          )}
           <button
             type="button"
             onPointerDown={(event) => {
@@ -702,15 +730,16 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
                   : "Hold to talk"
             }
             className={cn(
-              "grid h-7 w-7 flex-none place-items-center rounded-control border border-border disabled:text-faint",
+              "grid h-7 w-7 flex-none place-items-center rounded-field",
               voice.recording
-                ? "bg-danger text-accent-contrast"
+                ? "bg-danger text-on-danger"
                 : voice.starting
-                  ? "bg-active text-muted"
-                  : "bg-surface text-muted hover:bg-hover",
+                  ? "bg-fill-3 text-fg-2"
+                  : "text-fg-2 hover:bg-fill-2 hover:text-fg",
+              "disabled:text-text-off",
             )}
           >
-            <Mic size={14} />
+            <Mic size={16} />
           </button>
           {streaming ? (
             <button
@@ -718,7 +747,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
               onClick={stopStream}
               aria-label="Stop (Esc)"
               title="Stop (Esc)"
-              className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-accent-contrast"
+              className="ml-1 grid h-8 w-8 flex-none place-items-center rounded-[10px] bg-accent text-accent-contrast"
             >
               <Square size={14} fill="currentColor" />
             </button>
@@ -728,17 +757,44 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
               onClick={() => submitRef.current()}
               aria-label="Send"
               disabled={!canSend}
-              className="grid h-8 w-8 flex-none place-items-center rounded-full bg-accent text-accent-contrast disabled:bg-active disabled:text-muted"
+              className="ml-1 grid h-8 w-8 flex-none place-items-center rounded-[10px] bg-accent text-accent-contrast disabled:bg-fill-2 disabled:text-text-off"
             >
               <ArrowUp size={16} />
             </button>
           )}
         </div>
       </div>
-      <div className="mt-1.5 text-center text-xs text-muted">
-        {workingConversationId && workingConversationId !== activeConversationId
-          ? "Another chat is working — open it to stop it before sending here."
-          : "MyAgent can make mistakes. Check important info."}
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-fg-3">
+        {workingConversationId && workingConversationId !== activeConversationId ? (
+          <span>Another chat is working — open it to stop it before sending here.</span>
+        ) : (
+          <>
+            <span>Markdown supported</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono">/</span>
+            <span>for commands</span>
+            <span aria-hidden="true">·</span>
+            <span>keys stay in Windows Credential Manager</span>
+            {conversation?.compacted === 1 && (
+              <button
+                type="button"
+                onClick={() => void uncompactActive()}
+                className="text-accent-text underline underline-offset-2 hover:text-fg"
+              >
+                Show all messages
+              </button>
+            )}
+            {canCompact && (
+              <button
+                type="button"
+                onClick={() => void compactActive()}
+                className="text-fg-3 underline underline-offset-2 hover:text-fg-2"
+              >
+                Compact
+              </button>
+            )}
+          </>
+        )}
       </div>
       <ModelPickerHost />
     </div>

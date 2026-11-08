@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
-  ChevronUp,
-  ChevronsLeft,
+  ChevronRight,
   ChevronsRight,
   Folder,
   FolderInput,
@@ -21,11 +20,12 @@ import {
 import { useApp } from "../lib/store";
 import { sessionOutputs } from "../lib/session";
 import * as db from "../lib/db";
-import { arrangeChats, projectColor } from "../lib/grouping";
+import { arrangeChats } from "../lib/grouping";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
 import { Avatar, Button, Dialog, Input } from "./ui";
 import { Select } from "./ui/select";
+import { ProviderIcon } from "./ProviderIcon";
 import { cn } from "../lib/utils";
 import type { Conversation } from "../lib/types";
 
@@ -35,21 +35,10 @@ function initialsOf(name: string): string {
   return trimmed.slice(0, 2).toUpperCase();
 }
 
-function WorkingSpinner() {
-  return (
-    <span
-      role="status"
-      aria-label="Working"
-      className="h-3 w-3 flex-none animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
-    />
-  );
-}
-
 function ChatRow({
   chat,
-  projectName,
-  dotColor,
   working,
+  active,
   renaming,
   onOpen,
   menu,
@@ -58,9 +47,8 @@ function ChatRow({
   onRenameChange,
 }: {
   chat: Conversation;
-  projectName: string | null;
-  dotColor: string | null;
   working?: boolean;
+  active?: boolean;
   renaming: boolean;
   onOpen: () => void;
   menu: MenuEntry[];
@@ -90,7 +78,7 @@ function ChatRow({
           }}
           onBlur={onRenameCommit}
           aria-label="Rename chat"
-          className="h-7 w-full rounded-control border border-accent bg-surface px-1.5 text-sm outline-none"
+          className="h-7 w-full rounded-field bg-fill-1 px-2 text-sm shadow-[inset_0_0_0_1px_var(--accent-line)] outline-none"
         />
       </div>
     );
@@ -104,16 +92,23 @@ function ChatRow({
       onKeyDown={(e) => {
         if (e.key === "Enter") onOpen();
       }}
-      className="group flex h-[var(--chat-row-h)] cursor-pointer items-center gap-2 rounded-control px-2.5"
-    >
-      {dotColor && (
-        <span
-          className="h-2 w-2 flex-none rounded-full"
-          style={{ background: dotColor }}
-          title={projectName ?? undefined}
-        />
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "group flex h-[var(--chat-row-h)] cursor-pointer items-center gap-2 rounded-field px-2.5 hover:text-fg",
+        active ? "bg-fill-3 text-fg" : "text-fg-2 hover:bg-fill-2",
       )}
-      {working && <WorkingSpinner />}
+    >
+      <span className="grid w-4 flex-none place-items-center">
+        {working ? (
+          <span
+            role="status"
+            aria-label="Working"
+            className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
+          />
+        ) : chat.pinned === 1 ? (
+          <Pin size={12} className="text-fg-3" />
+        ) : null}
+      </span>
       <span className="min-w-0 flex-1 truncate text-sm">{chat.title}</span>
       <DropdownMenu
         align="end"
@@ -123,9 +118,9 @@ function ChatRow({
             type="button"
             aria-label={`Options for ${chat.title}`}
             onClick={(e) => e.stopPropagation()}
-            className="invisible ml-auto rounded-control text-muted hover:text-text focus-visible:visible group-hover:visible"
+            className="rounded-chip p-0.5 text-fg-3 opacity-0 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
           >
-            <MoreHorizontal size={16} />
+            <MoreHorizontal size={14} />
           </button>
         }
         items={menu}
@@ -253,6 +248,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     groupByDate,
     messages,
     pendingMemories,
+    activeConnection,
   } = useApp();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -279,10 +275,44 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
-    () => new Set(["Older"]),
-  );
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem("sidebar.projects");
+    if (saved !== null) {
+      try {
+        const parsed = JSON.parse(saved);
+        return new Set<string>(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        return new Set<string>();
+      }
+    }
+    return new Set<string>();
+  });
+  const projectsInitRef = useRef(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("sidebar.groups") ?? "null");
+      if (Array.isArray(saved)) return new Set<string>(saved);
+    } catch {
+      // fall through to the default
+    }
+    return new Set(["Older"]);
+  });
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    if (!projectsInitRef.current) {
+      projectsInitRef.current = true;
+      if (localStorage.getItem("sidebar.projects") === null) {
+        setExpandedProjects(new Set(projects.map((project) => project.id)));
+        return;
+      }
+    }
+    localStorage.setItem("sidebar.projects", JSON.stringify([...expandedProjects]));
+  }, [projects, expandedProjects]);
+
+  useEffect(() => {
+    localStorage.setItem("sidebar.groups", JSON.stringify([...collapsedGroups]));
+  }, [collapsedGroups]);
 
   const toggleGroupCollapsed = (name: string) => {
     setCollapsedGroups((prev) => {
@@ -293,15 +323,17 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     });
   };
 
-  const projectById = new Map(projects.map((p) => [p.id, p]));
-
   const shown = tagFilter
     ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
     : conversations;
-  const groups = arrangeChats(shown, groupByDate);
+  const pinnedChats = shown.filter((chat) => chat.pinned === 1);
+  const groups = arrangeChats(
+    shown.filter((chat) => !chat.project_id && chat.pinned !== 1),
+    groupByDate,
+  ).filter((group) => group.items.length > 0);
   const threadsByProject = new Map<string, Conversation[]>();
   for (const chat of shown) {
-    if (!chat.project_id) continue;
+    if (!chat.project_id || chat.pinned === 1) continue;
     const list = threadsByProject.get(chat.project_id) ?? [];
     list.push(chat);
     threadsByProject.set(chat.project_id, list);
@@ -312,10 +344,9 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         .slice()
         .sort((a, b) => b.updated_at - a.updated_at);
       const activity = threads[0]?.updated_at ?? project.updated_at;
-      return { project, threads: threads.slice(0, 5), activity };
+      return { project, threads, activity };
     })
-    .sort((a, b) => b.activity - a.activity)
-    .slice(0, 2);
+    .sort((a, b) => b.activity - a.activity);
 
   const toggleProjectExpanded = (id: string) => {
     setExpandedProjects((prev) => {
@@ -474,72 +505,62 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
   }
 
   return (
-    <aside className="flex h-full w-[260px] shrink-0 flex-col overflow-hidden bg-sidebar">
-      <div className="flex justify-end px-2 pt-1.5">
-        <button
-          type="button"
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar (Ctrl+B)"
-          onClick={toggleSidebar}
-          className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
-        >
-          <ChevronsLeft size={16} />
-        </button>
-      </div>
-
-      <div className="flex flex-col gap-0.5 px-2.5 py-1.5">
+    <aside className="flex h-full w-[264px] shrink-0 flex-col overflow-hidden bg-sunken">
+      <div className="flex flex-col gap-1 px-2 pb-1 pt-2">
         <Button
           variant="primary"
-          className="w-full justify-start"
+          className="h-9 w-full justify-start px-3 text-sm"
           onClick={() => void newConversation().catch(() => undefined)}
           title="New chat (Ctrl+N)"
         >
           <Plus size={16} />
           <span>New chat</span>
-          <kbd className="ml-auto border-white/40 bg-transparent text-inherit">Ctrl+N</kbd>
+          <kbd className="ml-auto border-0 bg-white/15 text-white/80">Ctrl N</kbd>
         </Button>
-        <button
-          type="button"
-          onClick={() => setPaletteOpen(true)}
-          title="Search (Ctrl+K)"
-          className="flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm hover:bg-hover"
-        >
-          <Search size={16} className="text-muted" />
-          <span>Search</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setView("projects")}
-          title="Projects"
-          className={cn(
-            "flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm hover:bg-hover",
-            (view === "projects" || view === "project") && "bg-active",
-          )}
-        >
-          <Folder size={16} className="text-muted" />
-          <span>Projects</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setView("outputs")}
-          title="Outputs"
-          className={cn(
-            "flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm hover:bg-hover",
-            view === "outputs" && "bg-active",
-          )}
-        >
-          <Package size={16} className="text-muted" />
-          <span>Outputs</span>
-          {outputCount > 0 && (
-            <span className="ml-auto text-xs tabular-nums text-muted">{outputCount}</span>
-          )}
-        </button>
+        <nav className="mt-1 flex flex-col gap-0.5">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            title="Search (Ctrl+K)"
+            className="flex h-[34px] items-center gap-2.5 rounded-field px-2.5 text-sm text-fg-2 hover:bg-fill-2 hover:text-fg"
+          >
+            <Search size={16} className="text-fg-3" />
+            <span>Search</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("projects")}
+            title="All projects"
+            className={cn(
+              "flex h-[34px] items-center gap-2.5 rounded-field px-2.5 text-sm text-fg-2 hover:bg-fill-2 hover:text-fg",
+              (view === "projects") && "bg-fill-3 text-fg",
+            )}
+          >
+            <Folder size={16} className="text-fg-3" />
+            <span>All projects</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("outputs")}
+            title="Outputs"
+            className={cn(
+              "flex h-[34px] items-center gap-2.5 rounded-field px-2.5 text-sm text-fg-2 hover:bg-fill-2 hover:text-fg",
+              view === "outputs" && "bg-fill-3 text-fg",
+            )}
+          >
+            <Package size={16} className="text-fg-3" />
+            <span>Outputs</span>
+            {outputCount > 0 && (
+              <span className="ml-auto text-xs tabular-nums text-fg-3">{outputCount}</span>
+            )}
+          </button>
+        </nav>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
         {allTags.length > 0 && (
-          <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2">
-            <Tag size={14} className="flex-none text-muted" />
+          <div className="flex items-center gap-1.5 px-1 pb-1 pt-2">
+            <Tag size={14} className="flex-none text-fg-3" />
             <Select
               size="sm"
               className="min-w-0 flex-1"
@@ -556,22 +577,49 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 type="button"
                 aria-label="Clear tag filter"
                 onClick={() => setTagFilter(null)}
-                className="text-xs text-muted hover:text-text"
+                className="text-xs text-fg-3 hover:text-fg"
               >
                 ×
               </button>
             )}
           </div>
         )}
-        <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted">
-          Projects
+
+        {pinnedChats.length > 0 && (
+          <>
+            <div className="mt-3 flex h-7 items-center gap-1 px-2 text-xs font-medium text-fg-3">
+              <Pin size={12} />
+              <span>Pinned</span>
+            </div>
+            {pinnedChats.map((chat) => (
+              <ChatRow
+                key={chat.id}
+                chat={chat}
+                working={chat.id === workingConversationId}
+                active={chat.id === activeConversationId}
+                renaming={renamingId === chat.id}
+                onOpen={() => openChat(chat.id)}
+                menu={chatMenu(chat)}
+                onRenameCommit={() => void commitRename()}
+                onRenameCancel={() => setRenamingId(null)}
+                onRenameChange={setRenameDraft}
+              />
+            ))}
+          </>
+        )}
+
+        <div className="mt-3 flex h-7 items-center gap-1 px-2 text-xs font-medium text-fg-3">
+          <span>Projects</span>
+          {projects.length > 0 && <span className="text-text-off">{projects.length}</span>}
         </div>
         {topProjects.map((entry) => (
           <div key={entry.project.id}>
             <div
               className={cn(
-                "group flex h-8 items-center gap-1 rounded-control px-2",
-                activeProjectId === entry.project.id ? "bg-active" : "hover:bg-hover",
+                "group flex h-[var(--chat-row-h)] items-center gap-1 rounded-field px-1.5 text-fg-2",
+                activeProjectId === entry.project.id
+                  ? "bg-fill-3 text-fg"
+                  : "hover:bg-fill-2 hover:text-fg",
               )}
             >
               <button
@@ -579,7 +627,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 aria-label={expandedProjects.has(entry.project.id) ? "Collapse" : "Expand"}
                 aria-expanded={expandedProjects.has(entry.project.id)}
                 onClick={() => toggleProjectExpanded(entry.project.id)}
-                className="grid h-6 w-6 flex-none place-items-center rounded text-muted hover:text-text"
+                className="grid w-4 flex-none place-items-center text-fg-3 hover:text-fg"
               >
                 {expandedProjects.has(entry.project.id) ? (
                   <FolderOpen size={14} />
@@ -600,7 +648,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 aria-label={`New chat in ${entry.project.name}`}
                 title={`New chat in ${entry.project.name}`}
                 onClick={() => selectProject(entry.project.id)}
-                className="invisible rounded-control px-1 text-muted hover:text-text focus-visible:visible group-hover:visible"
+                className="rounded-chip p-0.5 text-fg-3 opacity-0 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
               >
                 <Plus size={14} />
               </button>
@@ -608,13 +656,13 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 type="button"
                 aria-label={`Edit ${entry.project.name}`}
                 onClick={() => onOpenProject(entry.project.id)}
-                className="invisible rounded-control px-1 text-muted hover:text-text focus-visible:visible group-hover:visible"
+                className="rounded-chip p-0.5 text-fg-3 opacity-0 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
               >
                 <Settings size={14} />
               </button>
             </div>
             {expandedProjects.has(entry.project.id) && (
-              <div className="ml-7 flex flex-col">
+              <div className="flex flex-col">
                 {entry.threads.map((thread) => (
                   <button
                     key={thread.id}
@@ -622,16 +670,24 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                     onClick={() => openChat(thread.id)}
                     title={thread.title}
                     className={cn(
-                      "flex h-7 items-center gap-1.5 truncate rounded-control px-2 text-left text-[13px] text-muted hover:bg-hover hover:text-text",
-                      activeConversationId === thread.id && "bg-active text-text",
+                      "flex h-[var(--chat-row-h)] w-full items-center gap-2 rounded-field pl-7 pr-2.5 text-left text-sm text-fg-2 hover:bg-fill-2 hover:text-fg",
+                      activeConversationId === thread.id && "bg-fill-3 text-fg",
                     )}
                   >
-                    {thread.id === workingConversationId && <WorkingSpinner />}
+                    <span className="grid w-4 flex-none place-items-center">
+                      {thread.id === workingConversationId && (
+                        <span
+                          role="status"
+                          aria-label="Working"
+                          className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent motion-reduce:animate-none"
+                        />
+                      )}
+                    </span>
                     <span className="truncate">{thread.title}</span>
                   </button>
                 ))}
                 {entry.threads.length === 0 && (
-                  <span className="px-2 py-1 text-xs text-muted">No chats yet</span>
+                  <span className="px-2 py-1 pl-7 text-xs text-fg-3">No chats yet</span>
                 )}
               </div>
             )}
@@ -640,9 +696,12 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
         <button
           type="button"
           onClick={() => onOpenProject(null)}
-          className="flex h-8 items-center gap-2 rounded-control px-2 text-left text-[13px] text-muted hover:bg-hover hover:text-text"
+          className="flex h-[var(--chat-row-h)] items-center gap-2 rounded-field px-1.5 text-left text-sm text-fg-3 hover:bg-fill-2 hover:text-fg-2"
         >
-          <Plus size={14} /> New project
+          <span className="grid w-4 place-items-center">
+            <Plus size={14} />
+          </span>
+          New project
         </button>
 
         {groups.map((group) => {
@@ -654,49 +713,60 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
                 onClick={() => toggleGroupCollapsed(group.name)}
                 aria-expanded={!collapsed}
                 aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.name}`}
-                className="group sticky top-0 flex w-full items-center gap-1 bg-sidebar px-2.5 pb-1 pt-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-muted"
+                className="group mt-3 flex h-7 w-full items-center gap-1 rounded-chip px-2 text-left text-xs font-medium text-fg-3 hover:text-fg-2"
               >
+                {collapsed ? (
+                  <ChevronRight size={12} />
+                ) : (
+                  <ChevronDown size={12} />
+                )}
                 <span className="flex-1">{group.name}</span>
-                <span className="grid h-5 w-5 place-items-center rounded-control opacity-40 hover:text-text hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100">
-                  {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                </span>
               </button>
               {!collapsed &&
-                group.items.map((chat) => {
-                  const project = chat.project_id ? projectById.get(chat.project_id) : undefined;
-                  const isActive = chat.id === activeConversationId;
-                  return (
-                    <div
-                      key={chat.id}
-                      className={cn("relative rounded-control", isActive && "bg-active")}
-                    >
-                      {isActive && (
-                        <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded bg-accent" />
-                      )}
-                      <ChatRow
-                        chat={chat}
-                        projectName={project?.name ?? null}
-                        dotColor={project ? projectColor(project.id) : null}
-                        working={chat.id === workingConversationId}
-                        renaming={renamingId === chat.id}
-                        onOpen={() => openChat(chat.id)}
-                        menu={chatMenu(chat)}
-                        onRenameCommit={() => void commitRename()}
-                        onRenameCancel={() => setRenamingId(null)}
-                        onRenameChange={setRenameDraft}
-                      />
-                    </div>
-                  );
-                })}
+                group.items.map((chat) => (
+                  <ChatRow
+                    key={chat.id}
+                    chat={chat}
+                    working={chat.id === workingConversationId}
+                    active={chat.id === activeConversationId}
+                    renaming={renamingId === chat.id}
+                    onOpen={() => openChat(chat.id)}
+                    menu={chatMenu(chat)}
+                    onRenameCommit={() => void commitRename()}
+                    onRenameCancel={() => setRenamingId(null)}
+                    onRenameChange={setRenameDraft}
+                  />
+                ))}
             </div>
           );
         })}
         {ready && conversations.length === 0 && (
-          <p className="px-2.5 py-4 text-xs text-muted">No chats yet.</p>
+          <p className="px-2.5 py-4 text-xs text-fg-3">No chats yet.</p>
         )}
       </div>
 
-      <div className="flex items-center gap-1.5 border-t border-border p-2">
+      <div className="mt-1 flex items-center gap-1 border-t border-line-subtle px-2 py-2">
+        <DropdownMenu
+          align="start"
+          aria-label="Profile"
+          className="min-w-48"
+          trigger={
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-field p-1 text-left hover:bg-fill-2"
+            >
+              <Avatar initials={initialsOf(displayName)} />
+              <span className="flex min-w-0 flex-col leading-tight">
+                <b className="truncate text-[13px] font-medium">{displayName || "Local user"}</b>
+                <small className="flex items-center gap-1.5 text-xs text-fg-3">
+                  {activeConnection && <ProviderIcon kind={activeConnection.kind} size={14} />}
+                  {activeConnection ? activeConnection.name : "No provider"}
+                </small>
+              </span>
+            </button>
+          }
+          items={profileMenu}
+        />
         <button
           type="button"
           aria-label={
@@ -708,33 +778,15 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
           }
           title="Settings (Ctrl+,)"
           onClick={() => setSettingsPage("general")}
-          className="relative grid h-8 w-8 flex-none place-items-center rounded-control text-muted hover:bg-hover hover:text-text"
+          className="relative grid h-8 w-8 flex-none place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
         >
-          <Settings size={16} />
+          <Settings size={18} />
           {pendingMemories.length > 0 && (
             <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-contrast">
               {pendingMemories.length > 9 ? "9+" : pendingMemories.length}
             </span>
           )}
         </button>
-        <DropdownMenu
-          align="start"
-          aria-label="Profile"
-          className="min-w-48"
-          trigger={
-            <button
-              type="button"
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-control p-1 text-left hover:bg-hover"
-            >
-              <Avatar initials={initialsOf(displayName)} />
-              <span className="flex min-w-0 flex-col leading-tight">
-                <b className="truncate text-[13px]">{displayName || "Local user"}</b>
-                <small className="text-muted">BYOK</small>
-              </span>
-            </button>
-          }
-          items={profileMenu}
-        />
       </div>
       {tagDialogChat && (
         <TagDialog

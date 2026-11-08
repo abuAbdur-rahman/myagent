@@ -143,7 +143,7 @@ export function useFloating(
 export function Popup({ pos, children }: { pos: Pos; children: ReactNode }) {
   return createPortal(
     <div
-      className="fixed z-[1000] box-border flex origin-top flex-col rounded-[12px] border border-ui-line bg-ui-popup p-1 text-sm leading-snug text-ui-fg shadow-ui animate-ui-in data-[placement=top]:origin-bottom data-[placement=top]:animate-ui-in-up motion-reduce:animate-none"
+      className="fixed z-[1000] box-border flex origin-top flex-col rounded-card bg-ui-popup p-1 text-sm leading-snug text-ui-fg shadow-[var(--shadow-md)] ring-1 ring-line animate-ui-in data-[placement=top]:origin-bottom data-[placement=top]:animate-ui-in-up motion-reduce:animate-none"
       data-placement={pos.placement}
       onMouseDown={(e) => e.preventDefault()}
       style={{

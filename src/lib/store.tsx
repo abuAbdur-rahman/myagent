@@ -42,6 +42,7 @@ import {
   parseGroupByDate,
   type Density,
 } from "./appearance";
+import { accentIdOf, parseAccent } from "./accent";
 import {
   readVisionFallback,
   readVisionOverrides,
@@ -194,7 +195,7 @@ async function collectModelOptions(
 }
 
 function clampPanelWidth(width: number): number {
-  return Math.min(1000, Math.max(380, Math.round(width)));
+  return Math.min(640, Math.max(360, Math.round(width)));
 }
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -405,6 +406,7 @@ interface AppContextValue {
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
+  queueMemories: (notes: string[], kind?: MemoryKind) => Promise<PendingMemory[]>;
   editMemory: (
     id: string,
     draft: MemoryDraft,
@@ -722,6 +724,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
   const streamConversationIdRef = useRef<string | null>(null);
+  const turnStartRef = useRef<number | null>(null);
+  const priorDurationRef = useRef(0);
   const bufferRef = useRef("");
   const trimNextDeltaRef = useRef(false);
   const reasoningRef = useRef("");
@@ -1090,11 +1094,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const dark =
         theme === "dark" ||
         (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-      if (dark) {
-        document.documentElement.setAttribute("data-theme", "dark");
-      } else {
-        document.documentElement.removeAttribute("data-theme");
-      }
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     };
     apply();
     const query = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1128,14 +1128,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("data-density", density);
   }, [density]);
 
-  const [accent, setAccentState] = useState(() => localStorage.getItem("accent") ?? "#c96442");
+  const [accent, setAccentState] = useState(() => parseAccent(localStorage.getItem("accent")));
   const setAccent = useCallback((value: string) => {
-    setAccentState(value);
-    localStorage.setItem("accent", value);
+    const id = accentIdOf(value);
+    setAccentState(id);
+    localStorage.setItem("accent", id);
   }, []);
 
   useEffect(() => {
-    document.documentElement.style.setProperty("--accent", accent);
+    document.documentElement.setAttribute("data-accent", accent);
   }, [accent]);
 
   const setComposerDraft = useCallback((value: string) => {
@@ -1246,7 +1247,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [panelView, setPanelViewState] = useState<PanelView>("session");
   const [panelWidth, setPanelWidthState] = useState(() => {
     const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 640);
+    return clampPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 400);
   });
 
   const setPanelWidth = useCallback((width: number) => {
@@ -1678,6 +1679,35 @@ setKnowledgeSummary([]);
     [memoryCompat, refreshMemories],
   );
 
+  const queueMemories = useCallback(
+    async (notes: string[], kind: MemoryKind = "fact"): Promise<PendingMemory[]> => {
+      const scope: MemoryScope = activeProject ? "project" : "global";
+      const projectId = activeProject ? activeProject.id : null;
+      const now = Date.now();
+      const rows: PendingMemory[] = [];
+      for (const raw of notes) {
+        const content = raw.replace(/\s+/g, " ").trim().slice(0, 2000);
+        if (!content) continue;
+        rows.push({
+          id: newId(),
+          scope,
+          project_id: projectId,
+          kind,
+          content,
+          conversation_id: activeConversationId,
+          created_at: now,
+          trust: "trusted",
+        });
+      }
+      if (rows.length > 0) {
+        await db.addPendingMemories(rows);
+        await refreshPendingMemories();
+      }
+      return rows;
+    },
+    [activeConversationId, activeProject, refreshPendingMemories],
+  );
+
   const editMemory = useCallback(
     async (
       id: string,
@@ -1980,13 +2010,22 @@ setKnowledgeSummary([]);
     }
   }, []);
 
-  const finalize = useCallback((assistantId: string, conversationId: string) => {
+  const finalize = useCallback((assistantId: string, conversationId: string, endedAt?: number) => {
     setActiveStep(null);
     setTurnStartedAt(null);
     setActiveTool(null);
     const content = bufferRef.current;
     const reasoning = reasoningRef.current;
     const error = streamErrorRef.current;
+    const startedAt = turnStartRef.current;
+    const priorDuration = priorDurationRef.current;
+    turnStartRef.current = null;
+    priorDurationRef.current = 0;
+    const completedAt = startedAt === null ? null : (endedAt ?? Date.now());
+    const durationMs =
+      startedAt === null || completedAt === null
+        ? null
+        : Math.max(0, completedAt - startedAt) + priorDuration;
     const settledLog = settleToolLog(toolLogRef.current);
     const changed = settledLog.some((entry, index) => entry !== toolLogRef.current[index]);
     toolLogRef.current = settledLog;
@@ -2011,7 +2050,18 @@ setKnowledgeSummary([]);
       toolLogJson,
       artifactsJson,
       error: error ?? null,
+      durationMs,
+      completedAt,
     };
+    if (durationMs !== null) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, duration_ms: durationMs, completed_at: completedAt }
+            : m,
+        ),
+      );
+    }
     const persist = content || toolLogJson || artifactsJson || error
       ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
@@ -2080,8 +2130,10 @@ setKnowledgeSummary([]);
       requestIdRef.current = requestId;
       lastPayloadRef.current = payload;
       setCanRetry(false);
+      const startedAt = Date.now();
       setActiveStep(null);
-      setTurnStartedAt(Date.now());
+      setTurnStartedAt(startedAt);
+      turnStartRef.current = startedAt;
       const memoryIdsBefore = new Set(
         [...globalMemoriesRef.current, ...projectMemoriesRef.current].map(
           (memory) => memory.id,
@@ -2090,6 +2142,7 @@ setKnowledgeSummary([]);
       const seed = keepSeed
         ? messagesRef.current.find((m) => m.id === assistantMsg.id)
         : undefined;
+      priorDurationRef.current = seed?.duration_ms ?? 0;
       bufferRef.current = seed?.content ?? "";
       trimNextDeltaRef.current = false;
       reasoningRef.current = seed?.reasoning ?? "";
@@ -2380,6 +2433,7 @@ setKnowledgeSummary([]);
         }
       } finally {
         if (requestIdRef.current === requestId) {
+          const endedAt = Date.now();
           if (thinkingStartRef.current !== null && thinkingMsRef.current === null) {
             thinkingMsRef.current = Date.now() - thinkingStartRef.current;
           }
@@ -2399,7 +2453,7 @@ setKnowledgeSummary([]);
           setStreamConversationId(null);
           streamConversationIdRef.current = null;
           pendingVisionFallbackRef.current = null;
-          finalize(assistantMsg.id, conversationId);
+          finalize(assistantMsg.id, conversationId, endedAt);
         }
       }
     },
@@ -3227,6 +3281,7 @@ setKnowledgeSummary([]);
     refreshPendingMemories,
     loadMemories,
     addMemory: saveMemoryToScope,
+    queueMemories,
     editMemory,
     deleteMemory,
     approvePendingMemory,

@@ -1249,6 +1249,17 @@ pub struct SummaryRequest {
     pub connection_kind: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct ExtractMemoryRequest {
+    pub connection_id: String,
+    pub model: String,
+    pub text: String,
+    #[serde(default)]
+    pub connection_kind: Option<String>,
+}
+
+const MEMORY_SYSTEM: &str = "You extract durable memory from an assistant reply. Reply with ONLY a JSON array of 1-5 short strings: facts, preferences, decisions or constraints worth remembering in future conversations. No task narration, no code, no markdown fences, no commentary. Each string under 240 characters. If nothing is durable, reply with [].";
+
 fn summary_body(model: &str, text: &str) -> serde_json::Value {
     serde_json::json!({
         "model": model,
@@ -1411,6 +1422,35 @@ pub async fn summarize(
         return Err(AppError::Upstream("empty summary".to_string()));
     }
     Ok(summary.chars().take(2000).collect())
+}
+
+#[tauri::command]
+pub async fn extract_memory(
+    req: ExtractMemoryRequest,
+    client: State<'_, reqwest::Client>,
+    app: AppHandle,
+) -> AppResult<String> {
+    let base_url = connections::base_url_for(&app, &req.connection_id).await?;
+    let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
+    let cancel = Notify::new();
+    let text = truncate_chars(req.text.trim(), 12_000);
+    let request = TextCompletion {
+        client: &client,
+        base_url: &base_url,
+        key: &key,
+        model: &req.model,
+        system: MEMORY_SYSTEM,
+        user: &text,
+        cancel: &cancel,
+        connection_kind: req.connection_kind.as_deref(),
+        connection_id: Some(&req.connection_id),
+    };
+    match tokio::time::timeout(Duration::from_secs(60), complete_text(request)).await {
+        Ok(result) => result,
+        Err(_) => Err(AppError::Upstream(
+            "memory extraction timed out".to_string(),
+        )),
+    }
 }
 
 fn clean_title(raw: &str) -> String {
