@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (for example v0.11.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -20,6 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Set up Node
@@ -46,6 +53,49 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Cache NSIS toolchain
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:LOCALAPPDATA "tauri"
+          $nsis = Join-Path $tools "NSIS"
+          if (Test-Path (Join-Path $nsis "makensis.exe")) {
+            Write-Host "NSIS already cached at $nsis"
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP "nsis-3.11.zip"
+          $urls = @(
+            "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip",
+            "https://gh-proxy.com/https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip"
+          )
+          $downloaded = $false
+          foreach ($url in $urls) {
+            curl.exe -L --fail --retry 3 --retry-delay 5 --max-time 300 -o $zip $url
+            if ($LASTEXITCODE -eq 0) {
+              $downloaded = $true
+              break
+            }
+          }
+          if (-not $downloaded) { throw "NSIS download failed" }
+          Expand-Archive -Path $zip -DestinationPath $tools -Force
+          if (Test-Path $nsis) { Remove-Item -Path $nsis -Recurse -Force }
+          Rename-Item -Path (Join-Path $tools "nsis-3.11") -NewName $nsis
+          $dll = Join-Path $nsis "Plugins\x86-unicode\additional\nsis_tauri_utils.dll"
+          New-Item -ItemType Directory -Force -Path (Split-Path $dll) | Out-Null
+          $dllUrls = @(
+            "https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll",
+            "https://gh-proxy.com/https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll"
+          )
+          $copied = $false
+          foreach ($url in $dllUrls) {
+            curl.exe -L --fail --retry 5 --retry-delay 5 --max-time 300 -o $dll $url
+            if ($LASTEXITCODE -eq 0) {
+              $copied = $true
+              break
+            }
+          }
+          if (-not $copied) { throw "NSIS plugin download failed" }
+
       - name: Build and publish release
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
@@ -53,8 +103,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "MyAgent ${{ github.ref_name }}"
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "MyAgent ${{ inputs.tag || github.ref_name }}"
           releaseBody: "Windows installer (NSIS) is attached below."
           releaseDraft: false
           prerelease: false
