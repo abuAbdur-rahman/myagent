@@ -60,3 +60,17 @@ describe("Markdown code blocks", () => {
     expect(document.querySelector(".codeblock")).not.toBeNull();
   });
 });
+
+describe("Markdown math and diagrams", () => {
+  it("renders inline math with KaTeX", () => {
+    render(<Markdown content={"$x^2$"} />);
+    expect(document.querySelector(".katex")).not.toBeNull();
+  });
+
+  it("reserves a mermaid block and keeps its source", () => {
+    render(<Markdown content={"```mermaid\ngraph TD; A-->B;\n```"} />);
+    const node = document.querySelector(".mermaid-src");
+    expect(node).not.toBeNull();
+    expect(node?.getAttribute("data-src")).toContain("graph");
+  });
+});

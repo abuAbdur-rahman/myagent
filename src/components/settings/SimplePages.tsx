@@ -42,6 +42,7 @@ import { DropdownMenu, Select, type MenuEntry } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText, copyText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
+import { debugReport } from "../../lib/debug";
 import { timeAgo } from "../../lib/grouping";
 import { ACCENT_PRESETS, accentSwatch } from "../../lib/accent";
 import { cn } from "../../lib/utils";
@@ -4810,8 +4811,33 @@ export function ShortcutsPage() {
 }
 
 export function AboutPage() {
-  const { setSettingsPage } = useApp();
+  const { setSettingsPage, activeConnection, model } = useApp();
   const { version, update, checking, progress, status, checkNow, install } = useAppUpdate();
+
+  const copyDiagnostics = async () => {
+    const report = debugReport({
+      version,
+      connection: activeConnection
+        ? `${activeConnection.name} (${activeConnection.kind})`
+        : "none",
+      model: model || "none",
+      theme:
+        typeof document === "undefined"
+          ? "unknown"
+          : (document.documentElement.getAttribute("data-theme") ?? "unknown"),
+    });
+    const copied = await copyText(report);
+    toast(copied ? "Debug info copied" : "Couldn't copy debug info");
+  };
+
+  const copyLogPath = async () => {
+    try {
+      const copied = await copyText(await api.debugLogPath());
+      toast(copied ? "Log path copied" : "Couldn't copy the log path");
+    } catch (error) {
+      toast(errorText(error));
+    }
+  };
 
   return (
     <div>
@@ -4855,6 +4881,19 @@ export function AboutPage() {
           {status}
         </p>
       )}
+      <SettingRow
+        label="Diagnostics"
+        description="Version, OS, model and recent events. No keys or prompts."
+      >
+        <div className="flex gap-2">
+          <Button variant="default" size="sm" onClick={() => void copyDiagnostics()}>
+            Copy debug info
+          </Button>
+          <Button variant="default" size="sm" onClick={() => void copyLogPath()}>
+            Copy log path
+          </Button>
+        </div>
+      </SettingRow>
       <SettingRow label="What's new" description="Every release, newest first">
         <Button variant="default" size="sm" onClick={() => setSettingsPage("changelog")}>
           Changelog

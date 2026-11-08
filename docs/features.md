@@ -85,7 +85,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** The acceptance list from the composer spec passes.
 
 ## A12. Message actions
-- **Status:** Have (destructive edit. 0.4.1: thumbs up/down set and clear a stored rating with `aria-pressed`; the rating is exported as data. next: read aloud with the installed Windows voices plus online natural voices when offered, a speed control in Settings → Voice, completion clock time and reply duration (`26.7s`, `33m 42s`) persisted as `messages.duration_ms`, and Remember extracts 1-5 durable notes with one model call and queues them in the pending-memory bar instead of saving the whole reply)
+- **Status:** Have (0.12.0: edit and regenerate insert siblings instead of overwriting, and a version switcher moves between them. 0.4.1: thumbs up/down set and clear a stored rating with `aria-pressed`; the rating is exported as data. Read aloud, a speed control in Settings → Voice, completion clock time and reply duration persisted as `messages.duration_ms`, and Remember extracts 1-5 durable notes with one model call and queues them in the pending-memory bar instead of saving the whole reply)
 - **Ref:** † OpenWebUI edits and regenerates by adding branches; Claude shows `< 2/3 >` version switchers.
 - **Build:** Copy, Regenerate, Edit (user messages). Edit and Regenerate create new branches (see B2). Delete only on explicit confirm.
 - **Done:** Edit never removes the old version.
@@ -129,7 +129,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** A migration test upgrades an old DB without data loss.
 
 ## B2. Message tree (branches)
-- **Status:** Missing (what exists is a chat fork: `branchFrom` copies the whole conversation and regenerate/edit-resubmit replace the tail in place; there is no `parent_id` tree and no version switcher)
+- **Status:** Have (0.12.0: migration 35 adds `parent_id` and `current_leaf_id`; reads return the leaf path; edit and regenerate insert siblings instead of overwriting; a `‹ n/m ›` switcher moves between versions and selects the deepest leaf. The tree view is still J7.)
 - **Ref:** † OpenWebUI stores messages as a tree with `parentId` and `childrenIds`; `history.currentId` points at the leaf of the active branch. Claude has version switchers. OpenCode can fork sessions.
 - **Build:** Rows with `id`, `parent_id`, `role`, `content`, `created_at`; chat holds `current_leaf_id`. The visible thread is the path from root to leaf. Edit or regenerate inserts a sibling; switching a sibling selects its deepest last descendant.
 - **Not:** Merge, diff between branches, full event log.
@@ -151,7 +151,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Missing (0.1.6 shipped FTS5 and a sidebar box; both were removed with the box in 0.5.0. The Ctrl+K palette switches chats by title.)
+- **Status:** Have (0.12.0: Ctrl+K queries `message_fts`, shows the chat title and a snippet under Messages, and opening a hit selects the chat and scrolls to the message. Temporary chats are excluded.)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.
@@ -177,7 +177,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Filtering by a tag returns only tagged chats.
 
 ## B8. Temporary chat
-- **Status:** Missing
+- **Status:** Have (0.12.0: sidebar action creates a `temporary` conversation, excluded from the sidebar and palette, badged in the header, dropped when you leave it, and swept at boot. Messages stay in SQLite until then; the model's `remember` tool refuses to write memory inside one, while the manual Remember button still queues notes.)
 - **Ref:** OpenWebUI and Claude have an incognito mode: not saved, no history.
 - **Build:** A `temporary` flag: messages held in memory, no DB rows, no memory writes, no title generation, gone on close. A clear badge in the UI.
 - **Done:** After closing, nothing about it exists on disk.
@@ -196,7 +196,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Round trip with B9 passes.
 
 ## B11. Delete data
-- **Status:** Partial (0.1.6: delete-everything added, needs filesystem test. 0.3.5: chat and project documents are released as soon as no chat or project row points at them)
+- **Status:** Partial (0.12.0: `wipeAll` has a table-level test and the documents directory has a real-filesystem Rust test; spill files are deleted per conversation and any leftover is reported, so a single end-to-end leftover check is still missing. 0.3.5: chat and project documents are released as soon as no chat or project row points at them)
 - **Ref:** † OpenWebUI lets you delete one chat or clear all history from settings.
 - **Build:** Delete chat (including spill files and attachments for it). "Delete everything" removes DB, attachments, spill files, caches, then confirms. Memory included, with a warning.
 - **Done:** A test against the real filesystem finds no leftover files.
@@ -345,13 +345,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Stale or ambiguous edits fail with a clear message to the model.
 
 ## D11. Diff view
-- **Status:** Missing
+- **Status:** Have (0.12.0: every `sandbox_run`, write, edit and delete records a pre-exec checkpoint; a Changes button on the tool entry shows the patch against that checkpoint.)
 - **Ref:** OpenCode and Claude Code show a diff for edits.
 - **Build:** Store before and after for each edit; render a unified diff in the tool card and in the approval card for edits.
 - **Done:** The diff matches the file change.
 
 ## D12. Checkpoints / undo
-- **Status:** Missing
+- **Status:** Have (0.12.0: `sandbox_checkpoint_restore` returns the recorded paths to their pre-step bytes after a confirm; untracked files created by the step are left in place.)
 - **Ref:** † Claude Code `/rewind` restores code, conversation, or both, but only tracks files edited through its own tools in the current session (not shell changes).
 - **Build:** Before each edit/write, copy the original into a per-chat snapshot folder. "Undo this change" restores it. Rewinding the conversation just moves the branch leaf (B2).
 - **Not:** Git integration as the undo mechanism (S1 stores one git snapshot per sandbox exec as recovery data, with no UI — see D22), tracking shell-made changes.
@@ -539,7 +539,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A non-vision model never receives an image part.
 
 ## F5. Mermaid and LaTeX
-- **Status:** Missing
+- **Status:** Have (0.12.0: KaTeX renders inline and display math through `marked-katex-extension`; a mermaid fence renders lazily after the text settles, on the current theme, and falls back to its source when parsing fails.)
 - **Ref:** † OpenWebUI renders Mermaid diagrams in some views.
 - **Build:** Later: lazy-loaded renderers inside A9. Never block text on them.
 - **Done:** n/a for now.
@@ -573,12 +573,12 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** No hard-coded colors outside the variable file.
 
 ## G5. Completion notification
-- **Status:** Missing
+- **Status:** Have (0.12.0: `tauri-plugin-notification`; a finished turn sends the chat title and a short reply preview only when the window is unfocused. Permission is requested once.)
 - **Build:** Native notification when a long turn or an approval request finishes while the window is unfocused.
 - **Done:** No notification when the window is focused.
 
 ## G6. Debug log view
-- **Status:** Missing
+- **Status:** Have (0.12.0: `logs/myagent.log` rotates at 512 KB; frontend errors, rejections and store failures append to it. Settings → About copies a report with version, OS, locale, connection, model and the newest 80 events. No keys or prompts.)
 - **Ref:** † OpenCode has `/debug`.
 - **Build:** Rolling log file plus a "Copy debug info" button (app version, OS, model). Never log keys or full prompts by default.
 - **Done:** Log contains no secrets (test with a fake key).

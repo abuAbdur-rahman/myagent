@@ -125,6 +125,7 @@ const conversationSchema = z.object({
   summary_through: z.number().nullable(),
   system_prompt: z.string().nullable().optional(),
   current_leaf_id: z.string().nullish(),
+  temporary: z.number().nullish(),
   created_at: z.number(),
   updated_at: z.number(),
 });

@@ -233,6 +233,11 @@ export function ChatHeader() {
           ) : (
             <span className="px-1 py-0.5 font-medium">New chat</span>
           )}
+          {chat?.temporary === 1 && (
+            <span className="rounded-full bg-fill-2 px-2 py-0.5 text-[11px] text-fg-3">
+              Temporary
+            </span>
+          )}
         </div>
       )}
 

@@ -24,6 +24,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-updater = "2"
+tauri-plugin-notification = "2"
+zip = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"

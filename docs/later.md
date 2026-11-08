@@ -23,8 +23,10 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 - Scope decision 2026-11-08: 1.0.0 is data safety, daily-driver polish and the
   security gate. Cost control, compare, quick-ask, folders, scheduled runs,
   branch tree and code mode move past 1.0.0.
-- 0.12.0 also carries A16 inline visual (`/visualize` plus the `viz` fence) and
-  A8 queued messages in the composer.
+- 0.12.0 also carries A16 inline visual (`/visualize` plus the `viz` fence),
+  A8 queued messages, B2 message versions, B4 message search, B8 temporary
+  chats, D11/D12 diff and undo, F5 Mermaid/LaTeX, G5 notifications, G6
+  diagnostics, and the MCP alias, envelope, skill-cap and zip pre-scan fixes.
 
 ### v1.0.0 scope (owner decision 2026-11-08)
 
@@ -33,16 +35,16 @@ closed and the installer passes on a clean Windows machine.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | B2 | Message tree + version switcher | Missing | M | H1 |
-| [ ] | D12 | Checkpoints / undo (D11 diff rides with it) | Missing | M | D10, B2 |
-| [ ] | A8 | Queue messages while streaming | Missing | S | A2 |
-| [ ] | B4 | Chat search UI over `message_fts` | Missing | S | B1 |
-| [ ] | B8 | Temporary chat | Missing | S | B2 |
-| [ ] | G5 | Completion notification | Missing | S | none |
-| [ ] | G6 | Debug log and copy diagnostics | Missing | S | none |
-| [ ] | F5 | Mermaid and LaTeX renderers | Missing | M | A9 |
-| [ ] | B11 | Delete-everything filesystem test | Partial | S | D13, F3 |
-| [ ] | — | Hardening: MCP alias collision, untrusted framing, `SKILL.md` cap, document decompression | Missing | M | none |
+| [x] | B2 | Message tree + version switcher | Have (0.12.0) | M | H1 |
+| [x] | D12 | Checkpoints / undo (D11 diff rides with it) | Have (0.12.0) | M | D10, B2 |
+| [x] | A8 | Queue messages while streaming | Have (0.12.0) | S | A2 |
+| [x] | B4 | Chat search UI over `message_fts` | Have (0.12.0) | S | B1 |
+| [x] | B8 | Temporary chat | Have (0.12.0) | S | B2 |
+| [x] | G5 | Completion notification | Have (0.12.0) | S | none |
+| [x] | G6 | Debug log and copy diagnostics | Have (0.12.0) | S | none |
+| [x] | F5 | Mermaid and LaTeX renderers | Have (0.12.0) | M | A9 |
+| [ ] | B11 | Delete-everything filesystem test | Partial (table + documents dir tests) | S | D13, F3 |
+| [x] | — | Hardening: MCP alias collision, untrusted framing, `SKILL.md` cap, document decompression | Have (0.12.0; PDF streams still uncapped) | M | none |
 | [ ] | — | Clean-machine MCP + computer-use eval, security review, installer check | Planned | M | 0.11.0 |
 
 Deferred past 1.0.0: J2 cost cap, J3 compare, J5 cheap-model routing, J6
@@ -150,14 +152,15 @@ chose to defer.
 
 | Item | Where | Note |
 |---|---|---|
-| MCP alias collision | `src-tauri/src/mcp.rs` namespace encoding | Two servers can expose the same tool name and the model sees one of them. Needs a namespacing scheme that survives reconnects. |
-| Untrusted framing | MCP tool descriptions and results, `web_fetch` bodies, `web_search` hits | Tool output is delimited but not neutralised, so a hostile page can forge the delimiter or a trailer. Phase 1 framing work. |
-| Deny-table ordering | `mcp.rs` `filter_tools` / `blocked` | Deny-only today; revisit when allow-lists land. |
 | Bidi and C1 controls | raw tool output preview | Not stripped; they can reorder or hide text in the preview. |
-| `SKILL.md` size cap | skills loader | A skill's text reaches context with no cap. |
 | Attachment parse cache | `src/lib/attachments.ts` `parseMessageAttachments` | Re-parses on every read; memoise when transcripts grow. |
-| Frontend tests not in CI | `.github/workflows/ci.yml` | `npm test` (vitest) is green locally but CI runs only the Rust suite. Add the step with the next CI change. |
 | `mcp_add` accepts any stdio command | Settings | Intentional: the user types it themselves behind the approval gate. Recorded so it is not re-flagged. |
+
+Resolved since this table was written: MCP aliases now escape unsafe characters as
+`_u<hex>` instead of collapsing them to `_`, so two servers cannot share a
+namespace; tool output is neutralised at every envelope boundary
+(`mcp`, `web_fetch`, `web_search`, `research`); `SKILL.md` is capped at 24,000
+chars; frontend tests run in CI.
 
 ### Dependency advisories
 
@@ -172,7 +175,7 @@ first two are the abort class the extraction guard cannot catch.
 
 | Item | Where | Note |
 |---|---|---|
-| Unbounded decompression of a document | `extract.rs` via `docx-rs` and `pdf-extract` | Neither caps `read_to_end`, so a zip bomb inside a 10 MB docx or pdf inflates to gigabytes; an allocation failure aborts the process and `catch_unwind` cannot catch an abort. Fix by extracting in a helper process or under a job-object memory limit. |
+| Unbounded decompression of a document | `extract.rs` via `docx-rs` and `pdf-extract` | 0.12.0 adds a zip pre-scan: a docx/ods/xlsx whose entries sum past 200 MB or compress past a 200:1 ratio is refused before extraction. PDF streams are still handed to `pdf-extract` with only the 10 MB input cap, so a crafted PDF can still exhaust memory and abort. Fix by extracting in a helper process or under a job-object memory limit. |
 | Deep nesting in HTML | `extract.rs` `html_body` | A pre-scan refuses more than 512 nested tags, which covers the measured recursion bomb, but the check is a heuristic (void-element list) and `htmd`'s recursive drop is still bounded by the stack. |
 | Extractor version in the store address | `documents.rs` `attachment_ingest` | The address is the caller's hash and the write is skipped when the file exists, so a later extractor improvement never refreshes an existing file. |
 | Caller-supplied digest | `documents.rs` `attachment_ingest` | The digest is never recomputed Rust-side, so a buggy renderer could point a row at another document's text (path traversal is closed). |

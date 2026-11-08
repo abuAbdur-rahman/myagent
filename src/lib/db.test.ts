@@ -12,6 +12,7 @@ import {
   findChatDoc,
   listChatDocs,
   listMemories,
+  listMessages,
   listPendingMemories,
   restorePendingMemory,
   updateMessageAttachments,
@@ -247,5 +248,25 @@ describe("listMemories", () => {
     select.mockClear();
     await expect(listMemories("project", null)).resolves.toEqual([]);
     expect(select).not.toHaveBeenCalled();
+  });
+});
+
+describe("listMessages", () => {
+  it("returns only the path to the current leaf", async () => {
+    const original = select.getMockImplementation();
+    select.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM conversations")) return [{ current_leaf_id: "b" }];
+      if (sql.includes("FROM messages")) {
+        return [
+          { id: "a", conversation_id: "c1", parent_id: null, role: "user", content: "a", created_at: 1 },
+          { id: "b", conversation_id: "c1", parent_id: "a", role: "assistant", content: "b", created_at: 2 },
+          { id: "c", conversation_id: "c1", parent_id: "a", role: "assistant", content: "c", created_at: 3 },
+        ];
+      }
+      return [];
+    });
+    const rows = await listMessages("c1");
+    expect(rows.map((row) => row.id)).toEqual(["a", "b"]);
+    if (original) select.mockImplementation(original);
   });
 });

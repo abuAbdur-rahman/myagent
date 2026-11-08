@@ -1673,6 +1673,18 @@ pub async fn execute(
             })
         }
         "remember" => {
+            if let Some(conv) = conversation_id {
+                let pool = memory_pool(app).await.map_err(|e| e.to_string())?;
+                let temporary: Option<(i64,)> =
+                    sqlx::query_as("SELECT 1 FROM conversations WHERE id = ?1 AND temporary = 1")
+                        .bind(conv)
+                        .fetch_optional(&pool)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                if temporary.is_some() {
+                    return Err("Temporary chats do not write memory.".to_string());
+                }
+            }
             let content = arg_str(&args, "content").ok_or("missing content")?;
             if content.chars().count() > MEMORY_CAP {
                 return Err("content too long (max 2000 chars)".to_string());

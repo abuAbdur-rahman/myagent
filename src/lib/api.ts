@@ -499,6 +499,14 @@ export function artifactExport(path: string, destination: string) {
   return invoke<string>("artifact_export", { path, destination });
 }
 
+export function sandboxCheckpointDiff(checkpoint: string) {
+  return invoke<string>("sandbox_checkpoint_diff", { checkpoint });
+}
+
+export function sandboxCheckpointRestore(checkpoint: string, paths: string[]) {
+  return invoke<number>("sandbox_checkpoint_restore", { checkpoint, paths });
+}
+
 export interface ArtifactPreviewHandle {
   id: string;
   url: string;
@@ -514,6 +522,14 @@ export function artifactInlineUrl(html: string): Promise<ArtifactPreviewHandle> 
 
 export function artifactPreviewDrop(id: string) {
   return invoke<void>("artifact_preview_drop", { id });
+}
+
+export function debugLogAppend(line: string) {
+  return invoke<void>("debug_log_append", { line });
+}
+
+export function debugLogPath() {
+  return invoke<string>("debug_log_path");
 }
 
 export function todoFinish(conversationId: string, complete: boolean) {

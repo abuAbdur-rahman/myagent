@@ -6,6 +6,7 @@ mod computer_use_hotkey;
 #[cfg(windows)]
 mod computer_use_server;
 mod connections;
+mod debuglog;
 mod documents;
 mod error;
 mod extract;
@@ -448,6 +449,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             ",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 36,
+            description: "add_conversation_temporary",
+            sql: "ALTER TABLE conversations ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -470,6 +477,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .on_permission_request(|webview, kind| {
             if matches!(kind, tauri::webview::PermissionKind::Microphone)
                 && webview.label() == "main"
@@ -635,9 +643,13 @@ pub fn run() {
             sandbox::sandbox_set_allow_installs,
             sandbox::sandbox_preview,
             sandbox::artifact_export,
+            sandbox::sandbox_checkpoint_diff,
+            sandbox::sandbox_checkpoint_restore,
             artifacts::artifact_preview_url,
             artifacts::artifact_inline_url,
             artifacts::artifact_preview_drop,
+            debuglog::debug_log_append,
+            debuglog::debug_log_path,
             voice::voice_status,
             voice::voice_enable,
             voice::voice_disable,

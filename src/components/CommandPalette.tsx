@@ -10,6 +10,7 @@ import {
   Database,
 } from "lucide-react";
 import { useApp } from "../lib/store";
+import * as db from "../lib/db";
 import { cn } from "../lib/utils";
 
 interface Entry {
@@ -17,6 +18,7 @@ interface Entry {
   label: string;
   icon: React.ReactNode;
   run: () => void;
+  raw?: boolean;
 }
 
 export function CommandPalette({
@@ -38,7 +40,47 @@ export function CommandPalette({
   } = useApp();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
+  const [hits, setHits] = useState<db.MessageSearchHit[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const openHit = async (hit: db.MessageSearchHit) => {
+    await selectConversation(hit.conversation_id).catch(() => undefined);
+    setTimeout(() => {
+      const node = document.querySelector<HTMLElement>(`[data-mid="${hit.message_id}"]`);
+      if (!node) return;
+      node.scrollIntoView({ block: "center" });
+      node.style.outline = "2px solid var(--accent)";
+      node.style.outlineOffset = "2px";
+      setTimeout(() => {
+        node.style.outline = "";
+        node.style.outlineOffset = "";
+      }, 1400);
+    }, 400);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const needle = query.trim();
+    if (needle.length < 2) {
+      setHits([]);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      db.searchMessages(needle)
+        .then((rows) => {
+          if (live) setHits(rows);
+        })
+        .catch((error: unknown) => {
+          console.warn("message search failed", error);
+          if (live) setHits([]);
+        });
+    }, 180);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [open, query]);
 
   const entries = useMemo<Entry[]>(() => {
     return [
@@ -72,7 +114,14 @@ export function CommandPalette({
         icon: <Sparkles size={16} />,
         run: () => setSettingsPage("changelog"),
       },
-      ...conversations.map((c) => ({
+      ...hits.map((hit) => ({
+        section: "Messages" as const,
+        label: `${hit.title} · ${hit.snippet.replace(/[[\]]/g, "")}`,
+        icon: <MessageSquare size={16} />,
+        raw: true,
+        run: () => void openHit(hit),
+      })),
+      ...conversations.filter((c) => !c.temporary).map((c) => ({
         section: "Chats" as const,
         label: c.title,
         icon: <MessageSquare size={16} />,
@@ -85,11 +134,11 @@ export function CommandPalette({
         run: () => selectProject(p.id),
       })),
     ];
-  }, [conversations, projects, selectConversation, selectProject, newConversation, toggleSidebar, setSettingsPage]);
+  }, [conversations, hits, projects, selectConversation, selectProject, newConversation, toggleSidebar, setSettingsPage]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
-    return entries.filter((e) => !q || e.label.toLowerCase().includes(q));
+    return entries.filter((e) => e.raw || !q || e.label.toLowerCase().includes(q));
   }, [entries, query]);
 
   useEffect(() => {
@@ -159,7 +208,7 @@ export function CommandPalette({
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search chats, projects, actions…"
+            placeholder="Search messages, chats, projects…"
             aria-label="Command palette"
             autoComplete="off"
             className="flex-1 border-0 bg-transparent text-[15px] outline-none placeholder:text-fg-3"

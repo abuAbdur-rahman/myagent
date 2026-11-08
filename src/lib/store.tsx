@@ -24,6 +24,15 @@ import {
   type ChatDocument,
 } from "./chat-docs";
 import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
+import { notifyTurnDone } from "./notify";
+import { logEvent } from "./debug";
+import {
+  deepestLeaf,
+  messagePath,
+  siblingVersions,
+  versionMap,
+  type VersionInfo,
+} from "./message-tree";
 import { fitImageBudget } from "./image";
 import {
   lookupContextLength,
@@ -424,6 +433,7 @@ interface AppContextValue {
   refreshConversations: () => Promise<void>;
   selectConversation: (id: string | null) => Promise<void>;
   newConversation: () => Promise<void>;
+  newTemporaryChat: () => Promise<void>;
   removeConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
@@ -471,6 +481,8 @@ interface AppContextValue {
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
   branchFrom: (messageId: string) => Promise<void>;
+  messageVersions: Record<string, VersionInfo>;
+  switchVersion: (messageId: string, direction: 1 | -1) => Promise<void>;
   rateMessage: (messageId: string, rating: number | null) => Promise<void>;
   clearActiveConversation: () => Promise<void>;
   compactActive: (quiet?: boolean) => Promise<void>;
@@ -541,6 +553,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   } | null>(null);
 
   const reportError = useCallback((cause: unknown) => {
+    logEvent("error", cause);
     console.error(cause);
     setError(api.formatInvokeError(cause));
   }, []);
@@ -637,6 +650,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messageVersions, setMessageVersions] = useState<Record<string, VersionInfo>>({});
   const [fileCommands, setFileCommands] = useState<FileCommand[]>([]);
   const fileCommandsRef = useRef<FileCommand[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -1051,6 +1065,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         await refreshMemories();
         await refreshPendingMemories();
+        await db.sweepTemporaryConversations();
         setConversations(await db.listConversations());
       } catch (e) {
         reportError(e);
@@ -1059,6 +1074,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, [refreshConnections, refreshProjects, refreshMemories, refreshPendingMemories]);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => logEvent("window.error", event.message);
+    const onRejection = (event: PromiseRejectionEvent) =>
+      logEvent("unhandledrejection", event.reason);
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
 
   useEffect(() => {
     void refreshMemories();
@@ -1860,7 +1887,20 @@ setKnowledgeSummary([]);
     [memoryCompat],
   );
 
+  const discardTemporary = useCallback(async () => {
+    const active = conversationsRef.current.find((c) => c.id === convIdRef.current);
+    if (!active?.temporary) return;
+    try {
+      await db.deleteConversation(active.id);
+    } catch (e) {
+      reportError(e);
+      return;
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== active.id));
+  }, [reportError]);
+
   const selectConversation = useCallback(async (id: string | null) => {
+    if (id !== convIdRef.current) await discardTemporary();
     setActiveConversationId(id);
     setError(null);
     setCanRetry(false);
@@ -1882,6 +1922,7 @@ setKnowledgeSummary([]);
     );
     if (!id) {
       setMessages([]);
+      setMessageVersions({});
       setTodos([]);
       return;
     }
@@ -1901,13 +1942,18 @@ setKnowledgeSummary([]);
       });
     }
     setMessages(rows);
+    setMessageVersions(
+      versionMap(rows, await db.listMessageTree(id)),
+    );
     setTodos(await db.listTodos(id));
-  }, []);
+  }, [discardTemporary]);
 
   const newConversation = useCallback(async () => {
+    await discardTemporary();
     setActiveConversationId(null);
     setActiveProjectId(null);
     setMessages([]);
+    setMessageVersions({});
     setTodos([]);
     setError(null);
     setView("chat");
@@ -1923,7 +1969,42 @@ setKnowledgeSummary([]);
 setKnowledgeSummary([]);
     setEpisodeSummary([]);
     lastPayloadRef.current = null;
-  }, []);
+  }, [discardTemporary]);
+
+  const newTemporaryChat = useCallback(async () => {
+    const connection = connRef.current;
+    if (!connection || !modelRef.current) {
+      setError("Add a connection and model first.");
+      return;
+    }
+    await discardTemporary();
+    try {
+      const created = await db.createConversation(connection.id, modelRef.current, null, true);
+      await db.touchConversation(created.id, { title: "Temporary chat" });
+      setConversations((prev) => [{ ...created, title: "Temporary chat" }, ...prev]);
+      setActiveConversationId(created.id);
+      setActiveProjectId(null);
+      setMessages([]);
+      setMessageVersions({});
+      setTodos([]);
+      setError(null);
+      setView("chat");
+      recallRequestRef.current += 1;
+      knowledgeRequestRef.current += 1;
+      episodeRequestRef.current += 1;
+      relevantMemoriesRef.current = [];
+      episodicBlockRef.current = "";
+      setRecalledMemories([]);
+      recalledDetailsRef.current = [];
+      setRecalledDetails([]);
+      knowledgeBlockRef.current = "";
+      setKnowledgeSummary([]);
+      setEpisodeSummary([]);
+      lastPayloadRef.current = null;
+    } catch (e) {
+      reportError(e);
+    }
+  }, [discardTemporary, reportError]);
 
   const refreshTodos = useCallback(async (conversationId: string | null) => {
     if (!conversationId) {
@@ -2454,6 +2535,12 @@ setKnowledgeSummary([]);
           streamConversationIdRef.current = null;
           pendingVisionFallbackRef.current = null;
           finalize(assistantMsg.id, conversationId, endedAt);
+          const title =
+            conversationsRef.current.find((conversation) => conversation.id === conversationId)
+              ?.title ?? "Reply ready";
+          void notifyTurnDone(title, bufferRef.current).catch((error: unknown) => {
+            console.warn("completion notification failed", error);
+          });
         }
       }
     },
@@ -2483,6 +2570,7 @@ setKnowledgeSummary([]);
     ) => {
       const connection = connRef.current;
       if (!connection || !modelRef.current || !assistantText.trim()) return;
+      if (conversationsRef.current.find((c) => c.id === conversationId)?.temporary) return;
       const candidates = [modelRef.current];
       const fallback = connection.default_model;
       if (fallback && fallback !== modelRef.current) candidates.push(fallback);
@@ -2725,8 +2813,20 @@ setKnowledgeSummary([]);
           setTodos([]);
         }
 
-        userMsg = await db.addMessage(conversationId, "user", text);
-        assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+        userMsg = await db.addMessage(
+          conversationId,
+          "user",
+          text,
+          null,
+          history[history.length - 1]?.id ?? null,
+        );
+        assistantMsg = await db.addMessage(
+          conversationId,
+          "assistant",
+          "",
+          modelRef.current,
+          userMsg.id,
+        );
         setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
         const current = conversations.find((c) => c.id === conversationId);
@@ -2900,6 +3000,18 @@ setKnowledgeSummary([]);
     ],
   );
 
+  const refreshVersions = useCallback(
+    async (conversationId: string, path: Message[]) => {
+      try {
+        const tree = await db.listMessageTree(conversationId);
+        setMessageVersions(versionMap(path, tree));
+      } catch (error) {
+        reportError(error);
+      }
+    },
+    [reportError],
+  );
+
   const regenerate = useCallback(async () => {
     const conversationId = convIdRef.current;
     const connection = connRef.current;
@@ -2908,21 +3020,21 @@ setKnowledgeSummary([]);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const dropped = turns[turns.length - 1];
     const kept = turns.slice(0, -1);
-    try {
-      await db.deleteMessage(dropped.id);
-    } catch (e) {
-      reportError(e);
-      return;
-    }
-    setMessages(kept);
     let assistantMsg: Message;
     try {
-      assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+      assistantMsg = await db.addMessage(
+        conversationId,
+        "assistant",
+        "",
+        modelRef.current,
+        dropped.parent_id ?? null,
+      );
     } catch (e) {
       reportError(e);
       return;
     }
     setMessages([...kept, assistantMsg]);
+    void refreshVersions(conversationId, [...kept, assistantMsg]);
     const lastUser = [...kept].reverse().find((message) => message.role === "user");
     auditTurn(
       conversationId,
@@ -2938,7 +3050,7 @@ setKnowledgeSummary([]);
       buildPayload(conversationId, await withDocumentBlock(kept, projectRef.current?.id ?? null)),
       assistantMsg,
     );
-  }, [auditTurn, streamConversationId, streamTurn, buildPayload]);
+  }, [auditTurn, refreshVersions, streamConversationId, streamTurn, buildPayload]);
 
   const continueTurn = useCallback(async () => {
     const conversationId = convIdRef.current;
@@ -2976,7 +3088,13 @@ setKnowledgeSummary([]);
     setError(null);
     let assistantMsg: Message;
     try {
-      assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+      assistantMsg = await db.addMessage(
+        conversationId,
+        "assistant",
+        "",
+        modelRef.current,
+        messagesRef.current[messagesRef.current.length - 1]?.id ?? null,
+      );
     } catch (e) {
       reportError(e);
       return;
@@ -3020,24 +3138,39 @@ setKnowledgeSummary([]);
       if (!conversationId || !connection || !modelRef.current || streamConversationId !== null) return false;
       const trimmed = text.trim();
       if (!trimmed) return false;
-      try {
-        await db.updateMessage(userId, trimmed);
-        await db.truncateConversation(conversationId, userId);
-      } catch (e) {
-        reportError(e);
-        return false;
-      }
-      const kept = (await db.listMessages(conversationId)).filter(
-        (m) => m.content.length > 0,
-      );
+      const current = messagesRef.current;
+      const at = current.findIndex((message) => message.id === userId);
+      if (at < 0) return false;
+      const edited = current[at];
+      const kept = current.slice(0, at).filter((message) => message.content.length > 0);
+      let userMsg: Message;
       let assistantMsg: Message;
       try {
-        assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+        userMsg = await db.addMessage(
+          conversationId,
+          "user",
+          trimmed,
+          null,
+          edited.parent_id ?? null,
+        );
+        if (edited.attachments) {
+          await db.copyMessageAttachments(edited.id, userMsg.id);
+          userMsg.attachments = edited.attachments;
+        }
+        assistantMsg = await db.addMessage(
+          conversationId,
+          "assistant",
+          "",
+          modelRef.current,
+          userMsg.id,
+        );
       } catch (e) {
         reportError(e);
         return false;
       }
-      setMessages([...kept, assistantMsg]);
+      const nextPath = [...kept, userMsg, assistantMsg];
+      setMessages(nextPath);
+      void refreshVersions(conversationId, nextPath);
       auditTurn(
         conversationId,
         trimmed,
@@ -3051,14 +3184,26 @@ setKnowledgeSummary([]);
         modelRef.current,
         buildPayload(
           conversationId,
-          await withDocumentBlock(kept, projectRef.current?.id ?? null),
+          await withDocumentBlock([...kept, userMsg], projectRef.current?.id ?? null),
         ),
         assistantMsg,
       );
       return true;
     },
-    [auditTurn, streamConversationId, streamTurn, buildPayload],
+    [auditTurn, refreshVersions, streamConversationId, streamTurn, buildPayload],
   );
+
+  const clearTurnContext = useCallback(() => {
+    relevantMemoriesRef.current = [];
+    recalledDetailsRef.current = [];
+    setRecalledMemories([]);
+    setRecalledDetails([]);
+    knowledgeBlockRef.current = "";
+    setKnowledgeSummary([]);
+    episodicBlockRef.current = "";
+    setEpisodeSummary([]);
+    lastPayloadRef.current = null;
+  }, []);
 
   const branchFrom = useCallback(
     async (messageId: string) => {
@@ -3077,22 +3222,41 @@ setKnowledgeSummary([]);
         await copyChatDocs(conversationId, branched.id);
         const rows = await db.listMessages(branched.id);
         setMessages(rows);
-        relevantMemoriesRef.current = [];
-        recalledDetailsRef.current = [];
-        setRecalledMemories([]);
-        setRecalledDetails([]);
-        knowledgeBlockRef.current = "";
-        knowledgeBlockRef.current = "";
-setKnowledgeSummary([]);
-        episodicBlockRef.current = "";
-        setEpisodeSummary([]);
-        lastPayloadRef.current = null;
+        setMessageVersions(versionMap(rows, await db.listMessageTree(branched.id)));
+        clearTurnContext();
         toast("Branched into new chat");
       } catch (e) {
         reportError(e);
       }
     },
-    [conversations, streamConversationId],
+    [clearTurnContext, conversations, streamConversationId],
+  );
+
+  const switchVersion = useCallback(
+    async (messageId: string, direction: 1 | -1) => {
+      const conversationId = convIdRef.current;
+      if (!conversationId || streamConversationId !== null) return;
+      try {
+        const tree = await db.listMessageTree(conversationId);
+        const target = tree.find((message) => message.id === messageId);
+        if (!target) return;
+        const siblings = siblingVersions(target, tree);
+        if (siblings.length < 2) return;
+        const at = siblings.findIndex((sibling) => sibling.id === messageId);
+        const nextSibling = siblings[(at + direction + siblings.length) % siblings.length];
+        const leaf = deepestLeaf(nextSibling.id, tree);
+        await db.setCurrentLeaf(conversationId, leaf);
+        if (convIdRef.current !== conversationId) return;
+        const byId = new Map(tree.map((message) => [message.id, message]));
+        const path = messagePath(leaf, byId);
+        setMessages(path);
+        setMessageVersions(versionMap(path, tree));
+        clearTurnContext();
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [clearTurnContext, streamConversationId],
   );
 
   const rateMessage = useCallback(
@@ -3119,7 +3283,13 @@ setKnowledgeSummary([]);
       try {
         const created = await db.createConversation(connection.id, modelRef.current, projectId);
         const userMsg = await db.addMessage(created.id, "user", trimmed);
-        const assistantMsg = await db.addMessage(created.id, "assistant", "", modelRef.current);
+        const assistantMsg = await db.addMessage(
+          created.id,
+          "assistant",
+          "",
+          modelRef.current,
+          userMsg.id,
+        );
         const title = deriveFallbackTitle(trimmed);
         await db.touchConversation(created.id, { title });
         setConversations((prev) => [{ ...created, title }, ...prev]);
@@ -3293,6 +3463,7 @@ setKnowledgeSummary([]);
     selectConversation,
     refreshConversations,
     newConversation,
+    newTemporaryChat,
     removeConversation,
     renameConversation,
     setChatPrompt,
@@ -3335,6 +3506,8 @@ setKnowledgeSummary([]);
     continueTurn,
     editAndResubmit,
     branchFrom,
+    messageVersions,
+    switchVersion,
     rateMessage,
     clearActiveConversation,
     compactActive,

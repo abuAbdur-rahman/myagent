@@ -8,6 +8,29 @@ const MAX_SHEETS: usize = 20;
 const MAX_SHEET_ROWS: usize = 5000;
 const MAX_SHEET_COLS: usize = 64;
 const MAX_HTML_DEPTH: usize = 512;
+const MAX_ZIP_UNCOMPRESSED: u64 = 200 * 1024 * 1024;
+const MAX_ZIP_RATIO: u64 = 200;
+
+fn zip_bomb_risk(bytes: &[u8]) -> bool {
+    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
+        return false;
+    };
+    let mut total: u64 = 0;
+    for index in 0..archive.len() {
+        let Ok(file) = archive.by_index_raw(index) else {
+            continue;
+        };
+        total = total.saturating_add(file.size());
+        if total > MAX_ZIP_UNCOMPRESSED {
+            return true;
+        }
+        let compressed = file.compressed_size().max(1);
+        if file.size() / compressed > MAX_ZIP_RATIO {
+            return true;
+        }
+    }
+    false
+}
 
 const VOID_TAGS: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
@@ -176,7 +199,13 @@ pub fn extract(name: &str, mime: &str, bytes: &[u8]) -> ExtractResult<String> {
         return Err(ExtractError::Empty);
     }
 
-    let text = match classify(name, mime)? {
+    let kind = classify(name, mime)?;
+    if matches!(&kind, Kind::Docx | Kind::Spreadsheet(_)) && zip_bomb_risk(bytes) {
+        return Err(ExtractError::Failed(
+            "file expands too much to read safely".to_string(),
+        ));
+    }
+    let text = match kind {
         Kind::Text => decode_utf8(bytes)?,
         Kind::Html => html_body(bytes)?,
         Kind::Pdf => pdf_body(bytes)?,
@@ -649,6 +678,43 @@ fn cap(text: String) -> String {
 mod tests {
     use super::*;
     use calamine::Cell;
+    use std::io::Write as _;
+
+    #[test]
+    fn rejects_a_zip_bomb_ratio() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file(
+                    "word/document.xml",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .expect("entry");
+            writer.write_all(&vec![0u8; 4 * 1024 * 1024]).expect("bomb");
+            writer.finish().expect("finish");
+        }
+        assert!(zip_bomb_risk(buffer.get_ref()));
+    }
+
+    #[test]
+    fn accepts_a_small_zip() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file(
+                    "word/document.xml",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .expect("entry");
+            writer
+                .write_all(b"<w:document>hello</w:document>")
+                .expect("text");
+            writer.finish().expect("finish");
+        }
+        assert!(!zip_bomb_risk(buffer.get_ref()));
+    }
 
     fn code(result: Result<String, ExtractFailure>) -> String {
         match result {
