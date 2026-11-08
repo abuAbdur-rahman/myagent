@@ -18,6 +18,8 @@ describe("accent", () => {
     expect(accentIdOf("  PINK ")).toBe("pink");
     expect(accentIdOf("#7a42d6")).toBe("violet");
     expect(accentIdOf("#123456")).toBe("clay");
+    expect(accentIdOf("constructor")).toBe("clay");
+    expect(accentIdOf("__proto__")).toBe("clay");
   });
 
   it("labels and swatches every preset", () => {

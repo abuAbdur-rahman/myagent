@@ -732,7 +732,7 @@ export function Composer({ autoFocus }: { autoFocus?: boolean }) {
             className={cn(
               "grid h-7 w-7 flex-none place-items-center rounded-field",
               voice.recording
-                ? "bg-danger text-white"
+                ? "bg-danger text-on-danger"
                 : voice.starting
                   ? "bg-fill-3 text-fg-2"
                   : "text-fg-2 hover:bg-fill-2 hover:text-fg",

@@ -746,7 +746,7 @@ export function ProvidersPage() {
                     >
                       <span className="font-mono text-fg-2">{key.hint}</span>
                       {key.cooldown_secs !== null && (
-                        <span className="text-warninging">
+                        <span className="text-warning">
                           Cooling down {Math.ceil(key.cooldown_secs / 60)} min
                         </span>
                       )}

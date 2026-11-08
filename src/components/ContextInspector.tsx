@@ -27,10 +27,10 @@ function Section({
       <div className="mb-2.5 flex items-baseline gap-2">
         <h3 className="m-0 text-xs font-medium text-fg-3">{title}</h3>
         {typeof tokens === "number" && (
-          <span className="text-xs tabular-nums text-text-off">≈{tokens} tok</span>
+          <span className="text-xs tabular-nums text-fg-3">≈{tokens} tok</span>
         )}
         {typeof count === "number" && (
-          <span className="text-xs tabular-nums text-text-off">{count}</span>
+          <span className="text-xs tabular-nums text-fg-3">{count}</span>
         )}
       </div>
       {children}
@@ -266,7 +266,7 @@ export function ContextInspector() {
                     <span className="min-w-0 flex-1 truncate text-fg-2" title={memory.content}>
                       {memory.content}
                     </span>
-                    <span className="flex-none tabular-nums text-text-off">
+                    <span className="flex-none tabular-nums text-fg-3">
                       {score === undefined ? "" : score.toFixed(3)}
                     </span>
                   </li>
@@ -301,7 +301,7 @@ export function ContextInspector() {
                     {hit.name}
                     {hit.heading ? ` · ${hit.heading}` : ""} · #{hit.ord + 1}
                   </span>
-                  <span className="flex-none tabular-nums text-text-off">
+                  <span className="flex-none tabular-nums text-fg-3">
                     {hit.score.toFixed(3)}
                   </span>
                 </li>
@@ -331,7 +331,7 @@ export function ContextInspector() {
                 <li key={hit.message_id} className="flex min-w-0 gap-1.5" title={hit.snippet}>
                   <span className="flex-none text-fg-3">{hit.date}</span>
                   <span className="min-w-0 flex-1 truncate text-fg-3">{hit.title}</span>
-                  <span className="flex-none tabular-nums text-text-off">
+                  <span className="flex-none tabular-nums text-fg-3">
                     {hit.score.toFixed(3)}
                   </span>
                 </li>
@@ -355,7 +355,7 @@ export function ContextInspector() {
               {promptBudget(modelContextLimit ?? DEFAULT_MODEL_CONTEXT).total.toLocaleString()}
             </span>
             <span>characters for memory and knowledge</span>
-            <span className="text-text-off">·</span>
+            <span className="text-fg-3">·</span>
             <span className="tabular-nums">
               ×{promptBudget(modelContextLimit ?? DEFAULT_MODEL_CONTEXT).factor}
             </span>

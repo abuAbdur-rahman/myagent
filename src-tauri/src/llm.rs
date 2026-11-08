@@ -1433,18 +1433,24 @@ pub async fn extract_memory(
     let base_url = connections::base_url_for(&app, &req.connection_id).await?;
     let key = read_key(&req.connection_id, req.connection_kind.as_deref())?;
     let cancel = Notify::new();
-    complete_text(TextCompletion {
+    let text = truncate_chars(req.text.trim(), 12_000);
+    let request = TextCompletion {
         client: &client,
         base_url: &base_url,
         key: &key,
         model: &req.model,
         system: MEMORY_SYSTEM,
-        user: &truncate_chars(req.text.trim(), 12_000),
+        user: &text,
         cancel: &cancel,
         connection_kind: req.connection_kind.as_deref(),
         connection_id: Some(&req.connection_id),
-    })
-    .await
+    };
+    match tokio::time::timeout(Duration::from_secs(60), complete_text(request)).await {
+        Ok(result) => result,
+        Err(_) => Err(AppError::Upstream(
+            "memory extraction timed out".to_string(),
+        )),
+    }
 }
 
 fn clean_title(raw: &str) -> String {

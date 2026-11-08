@@ -9,7 +9,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { page: "general", term: "Collapse thinking" },
   { page: "general", term: "Collapse tool calls" },
   { page: "general", term: "Generative UI" },
-  { page: "general", term: "Context bar" },
+  { page: "general", term: "Context meter" },
   { page: "general", term: "Standing instructions" },
   { page: "appearance", term: "Theme" },
   { page: "appearance", term: "Accent color" },

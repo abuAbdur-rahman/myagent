@@ -29,7 +29,7 @@ const buttonVariants = cva(
           "bg-accent text-accent-contrast hover:bg-[var(--accent-solid-hover)]",
         ghost: "text-fg-2 hover:bg-fill-2 hover:text-fg",
         danger: "text-danger hover:bg-danger-soft",
-        dangerFill: "bg-danger text-white hover:brightness-95",
+        dangerFill: "bg-danger text-on-danger hover:brightness-95",
       },
       size: {
         default: "h-8 px-3",

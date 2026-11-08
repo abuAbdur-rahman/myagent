@@ -27,7 +27,8 @@ const LEGACY_HEX: Record<string, string> = {
 export function accentIdOf(value: string): string {
   const raw = value.trim().toLowerCase();
   if (ACCENT_PRESETS.some((preset) => preset.id === raw)) return raw;
-  return LEGACY_HEX[raw] ?? DEFAULT_ACCENT;
+  if (!Object.prototype.hasOwnProperty.call(LEGACY_HEX, raw)) return DEFAULT_ACCENT;
+  return LEGACY_HEX[raw];
 }
 
 export function parseAccent(raw: string | null): string {
