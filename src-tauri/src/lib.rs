@@ -24,6 +24,8 @@ mod skills;
 mod sse;
 mod state;
 mod storage;
+#[cfg(test)]
+mod test_support;
 mod tools;
 mod tooltext;
 mod vault;

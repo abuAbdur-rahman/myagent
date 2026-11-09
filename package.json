@@ -11,7 +11,9 @@
     "clean:target": "node -e \"require('fs').rmSync('src-tauri/target/debug/incremental', { recursive: true, force: true })\"",
     "model:screen": "node scripts/prepare-screen-model.mjs",
     "eval:memory": "cargo test --quiet --manifest-path src-tauri/Cargo.toml --lib memory::eval -- --nocapture",
-    "test": "vitest run"
+    "test": "vitest run && tsc --noEmit && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:web": "vitest run",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@openuidev/react-lang": "1.1.0",

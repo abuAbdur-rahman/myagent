@@ -4274,12 +4274,12 @@ mod tests {
             "scoped to the document"
         );
     }
+    use crate::test_support::{fixture_provider, fixture_text};
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn serve_script(script: Vec<(&'static str, &'static str, &'static str)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -4320,7 +4320,10 @@ mod tests {
     }
 
     fn test_client() -> reqwest::Client {
-        reqwest::Client::builder().build().expect("test client")
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("test client")
     }
 
     fn body() -> serde_json::Value {
@@ -4363,57 +4366,6 @@ mod tests {
         req
     }
 
-    fn serve_sse(
-        first: &'static str,
-        rest: Vec<&'static str>,
-        gate: std::sync::mpsc::Receiver<()>,
-        connections: Arc<AtomicUsize>,
-    ) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-        let addr = listener.local_addr().expect("test server addr");
-        std::thread::spawn(move || {
-            let Ok((stream, _)) = listener.accept() else {
-                return;
-            };
-            connections.fetch_add(1, AtomicOrdering::SeqCst);
-            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-            let mut content_length = 0usize;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
-                let trimmed = line.trim_end();
-                if trimmed.is_empty() {
-                    break;
-                }
-                if let Some((name, value)) = trimmed.split_once(':')
-                    && name.eq_ignore_ascii_case("Content-Length")
-                {
-                    content_length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut request_body = vec![0u8; content_length];
-            let _ = reader.read_exact(&mut request_body);
-            let mut stream = reader.into_inner();
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
-            );
-            let _ = stream.flush();
-            let _ = stream.write_all(first.as_bytes());
-            let _ = stream.flush();
-            let _ = gate.recv();
-            for chunk in rest {
-                if stream.write_all(chunk.as_bytes()).is_err() {
-                    return;
-                }
-                let _ = stream.flush();
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        });
-        format!("http://{addr}")
-    }
-
     #[test]
     fn retryable_status_covers_429_and_5xx_only() {
         assert!(retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
@@ -4442,7 +4394,7 @@ mod tests {
             (
                 "429 Too Many Requests",
                 "Retry-After: 0\r\n",
-                r#"{"error":"slow down"}"#,
+                include_str!("../tests/fixtures/rate_limit.json"),
             ),
             ("200 OK", "", r#"{"choices":[]}"#),
         ]);
@@ -4557,16 +4509,8 @@ mod tests {
 
     #[tokio::test]
     async fn stream_error_mid_flight_is_not_retried() {
-        let connections = Arc::new(AtomicUsize::new(0));
-        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
-        gate_tx.send(()).expect("pre-release the gate");
-        let url = serve_sse(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
-            vec!["data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n"],
-            gate_rx,
-            connections.clone(),
-        );
-        let req = stream_request(&url);
+        let provider = fixture_provider("mid_error", 17, false);
+        let req = stream_request(&provider.base_url);
         let (channel, seen) = collect_events();
         let cancel = Notify::new();
         let error = stream_completion(
@@ -4580,26 +4524,91 @@ mod tests {
         .await
         .expect_err("a mid-stream error is not retried");
         assert!(
-            matches!(error, AppError::Upstream(message) if message.contains("upstream exploded"))
+            matches!(error, AppError::Upstream(message) if message.contains("upstream overloaded"))
         );
-        assert_eq!(delta_texts(&seen), vec!["one"]);
-        assert_eq!(connections.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(delta_texts(&seen), vec!["partial"]);
+        assert_eq!(provider.connections(), 1);
+    }
+
+    #[tokio::test]
+    async fn smoke_send_plain_fixture_streams_to_done() {
+        let provider = fixture_provider("plain", 11, false);
+        let req = stream_request(&provider.base_url);
+        let (channel, seen) = collect_events();
+        let text = stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![serde_json::json!({"role": "user", "content": "hi"})],
+            &channel,
+            &Notify::new(),
+        )
+        .await
+        .expect("plain fixture streams");
+        let deltas = delta_texts(&seen);
+        let events = seen.lock().expect("events");
+        assert_eq!(text, "Hello world");
+        assert_eq!(deltas, vec!["Hello", " world"]);
+        assert!(events.iter().any(|event| event["type"] == "finish"));
+        assert!(events.iter().any(|event| event["type"] == "done"));
+        assert_eq!(provider.connections(), 1);
+    }
+
+    #[tokio::test]
+    async fn smoke_stream_fixture_emits_reasoning_and_usage() {
+        let reasoning_provider = fixture_provider("reasoning", 13, false);
+        let req = stream_request(&reasoning_provider.base_url);
+        let (channel, reasoning_seen) = collect_events();
+        let text = stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![],
+            &channel,
+            &Notify::new(),
+        )
+        .await
+        .expect("reasoning fixture streams");
+        assert_eq!(text, "42");
+        assert!(
+            reasoning_seen
+                .lock()
+                .expect("reasoning events")
+                .iter()
+                .any(|event| event["type"] == "reasoning")
+        );
+
+        let usage_provider = fixture_provider("usage", 9, false);
+        let req = stream_request(&usage_provider.base_url);
+        let (channel, usage_seen) = collect_events();
+        stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![],
+            &channel,
+            &Notify::new(),
+        )
+        .await
+        .expect("usage fixture streams");
+        assert!(
+            usage_seen
+                .lock()
+                .expect("usage events")
+                .iter()
+                .any(|event| {
+                    event["type"] == "usage"
+                        && event["prompt_tokens"] == 44
+                        && event["completion_tokens"] == 6
+                        && event["total_tokens"] == 50
+                })
+        );
     }
 
     #[tokio::test]
     async fn cancel_mid_stream_keeps_the_text_already_sent() {
-        let connections = Arc::new(AtomicUsize::new(0));
-        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
-        let url = serve_sse(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
-            vec![
-                "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
-                "data: [DONE]\n\n",
-            ],
-            gate_rx,
-            connections.clone(),
-        );
-        let req = stream_request(&url);
+        let mut provider = fixture_provider("plain", 7, true);
+        let req = stream_request(&provider.base_url);
         let (channel, seen) = collect_events();
         let cancel = Arc::new(Notify::new());
         let client = test_client();
@@ -4619,12 +4628,12 @@ mod tests {
         }
         assert_eq!(
             delta_texts(&seen),
-            vec!["one"],
+            vec!["Hello"],
             "the first delta must arrive before the cancel"
         );
         cancel.notify_one();
         let result = tokio::time::timeout(Duration::from_secs(5), turn).await;
-        gate_tx.send(()).expect("release the rest of the stream");
+        provider.release();
         let result = result
             .expect("the turn must resolve after a cancel")
             .expect("stream task");
@@ -4632,7 +4641,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(
             delta_texts(&seen),
-            vec!["one"],
+            vec!["Hello"],
             "later chunks never arrive after a cancel"
         );
     }
@@ -4729,19 +4738,37 @@ mod tests {
         assert_eq!(history[0]["reasoning_content"], "");
     }
 
-    enum FakeStep {
-        Text(&'static str),
-        Tool,
+    fn fixture_iteration(name: &str) -> Iteration {
+        let mut parser = sse::SseParser::new();
+        let mut accumulator = sse::ToolCallAccumulator::new();
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        for item in parser.feed(fixture_text(name).as_bytes()) {
+            if let sse::SseItem::Payload(payload) = item {
+                let value: serde_json::Value =
+                    serde_json::from_str(&payload).expect("fixture payload");
+                let chunk = sse::map_chunk(&value);
+                text.push_str(&chunk.text);
+                reasoning.push_str(&chunk.reasoning);
+                accumulator.apply(chunk.tool_deltas);
+            }
+        }
+        Iteration {
+            text,
+            calls: accumulator.calls(),
+            reasoning,
+            responses_items: Vec::new(),
+        }
     }
 
-    struct FakeModel {
-        script: RefCell<VecDeque<FakeStep>>,
+    struct FixtureModel {
+        script: RefCell<VecDeque<&'static str>>,
         calls: Cell<usize>,
         tools_flags: RefCell<Vec<bool>>,
     }
 
-    impl FakeModel {
-        fn new(script: Vec<FakeStep>) -> Self {
+    impl FixtureModel {
+        fn new(script: Vec<&'static str>) -> Self {
             Self {
                 script: RefCell::new(script.into()),
                 calls: Cell::new(0),
@@ -4758,7 +4785,7 @@ mod tests {
         }
     }
 
-    impl ModelClient for FakeModel {
+    impl ModelClient for FixtureModel {
         async fn stream_step(
             &self,
             _messages: &[serde_json::Value],
@@ -4766,29 +4793,12 @@ mod tests {
         ) -> AppResult<Option<Iteration>> {
             self.calls.set(self.calls.get() + 1);
             self.tools_flags.borrow_mut().push(use_tools);
-            let step = self
-                .script
-                .borrow_mut()
-                .pop_front()
-                .unwrap_or(FakeStep::Tool);
-            Ok(Some(match step {
-                FakeStep::Text(text) => Iteration {
-                    text: text.to_string(),
-                    calls: Vec::new(),
-                    reasoning: String::new(),
-                    responses_items: Vec::new(),
-                },
-                FakeStep::Tool => Iteration {
-                    text: String::new(),
-                    calls: vec![serde_json::json!({
-                        "id": "call-1",
-                        "type": "function",
-                        "function": { "name": "get_time", "arguments": "{}" },
-                    })],
-                    reasoning: String::new(),
-                    responses_items: Vec::new(),
-                },
-            }))
+            let name = if use_tools {
+                self.script.borrow_mut().pop_front().unwrap_or("tools")
+            } else {
+                "plain"
+            };
+            Ok(Some(fixture_iteration(name)))
         }
     }
 
@@ -4815,8 +4825,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_loop_runs_one_tool_round_then_answers() {
-        let model = FakeModel::new(vec![FakeStep::Tool, FakeStep::Text("done")]);
+    async fn agent_loop_runs_fixture_tool_round_then_answers() {
+        let model = FixtureModel::new(vec!["tools", "plain"]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4832,7 +4842,7 @@ mod tests {
         .await
         .expect("loop");
         assert_eq!(model.call_count(), 2);
-        assert_eq!(tools.runs.get(), 1);
+        assert_eq!(tools.runs.get(), 2);
         assert_eq!(model.tools_flags(), vec![true, true]);
         assert_eq!(step_events(&sink), vec![1]);
         assert!(history_has_tool_message(&history));
@@ -4840,7 +4850,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_loop_answers_immediately_without_calling_tools() {
-        let model = FakeModel::new(vec![FakeStep::Text("hi")]);
+        let model = FixtureModel::new(vec!["plain"]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4863,7 +4873,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_loop_falls_back_without_tools_after_max_iterations() {
-        let model = FakeModel::new(Vec::new());
+        let model = FixtureModel::new(Vec::new());
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4879,13 +4889,13 @@ mod tests {
         .await
         .expect("loop");
         assert_eq!(model.call_count(), 4);
-        assert_eq!(tools.runs.get(), 3);
+        assert_eq!(tools.runs.get(), 6);
         assert_eq!(model.tools_flags(), vec![true, true, true, false]);
     }
 
     #[tokio::test]
     async fn agent_loop_returns_the_final_answer_when_the_time_budget_is_gone() {
-        let model = FakeModel::new(vec![FakeStep::Text("final answer")]);
+        let model = FixtureModel::new(vec!["plain"]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4901,7 +4911,7 @@ mod tests {
         .await
         .expect("loop");
         assert!(exhausted);
-        assert_eq!(text, "final answer");
+        assert_eq!(text, "Hello world");
         assert_eq!(model.tools_flags(), vec![false]);
     }
 
