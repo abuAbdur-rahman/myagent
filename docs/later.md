@@ -88,9 +88,9 @@ Exit: one command runs green tests on a clean checkout.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | H1 | Test harness | Partial (CI runs the Rust suite only) | S | none |
-| [x] | H2 | Recorded fixtures | Missing | S | H1 |
-| [x] | A11 | Composer fixes (in progress) | Partial | S | none |
+| [x] | H1 | Test harness | Have (0.12.0) | S | none |
+| [x] | H2 | Recorded fixtures | Have (0.12.0) | S | H1 |
+| [x] | A11 | Composer fixes (in progress) | Have (0.12.0) | S | none |
 
 ### Phase 2: Stream reliability
 Exit: every fixture (plain, reasoning, `length`, mid-stream error, 429) ends in the right UI state.
@@ -109,8 +109,8 @@ Exit: the same markdown renders identically for user and assistant messages.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | A9 | Markdown rendering (assistant and user) | Unknown | S | none |
-| [x] | A10 | Code blocks in messages | Unknown | S | A9 |
+| [x] | A9 | Markdown rendering (assistant and user) | Have (0.12.0) | S | none |
+| [x] | A10 | Code blocks in messages | Have (0.12.0) | S | A9 |
 
 ### Phase 4: Safety
 Exit: no shell call runs without approval; deny beats allow; hostile artifact reaches nothing.
@@ -119,8 +119,8 @@ Exit: no shell call runs without approval; deny beats allow; hostile artifact re
 |---|---|---|---|---|---|
 | [x] | D4 | Permission engine | Have (0.1.3) | M | H1 |
 | [x] | D5 | Approval UI | Have (0.1.3) | M | D4 |
-| [x] | D7 | Shell tool (gated) | Partial (0.1.3: cwd still home) | M | D4, D5 |
-| [x] | F2 | Artifact isolation | Missing | M | H1 |
+| [x] | D7 | Shell tool (gated) | Have (0.12.0) | M | D4, D5 |
+| [x] | F2 | Artifact isolation | Have (0.12.0) | M | H1 |
 | [x] | E2 | Secret refusal in memory | Missing | S | none |
 
 ### Phase 5: Data safety
@@ -128,7 +128,7 @@ Exit: edit and regenerate never destroy a message.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | B2 | Message tree (branches) | Missing | M | H1 |
+| [x] | B2 | Message tree (branches) | Have (0.12.0) | M | H1 |
 | [x] | A12 | Message actions rewired to branches | Have | S | B2 |
 
 ### Phase 6: Scoped memory
@@ -217,7 +217,7 @@ Exit: the agent runs gated tools with capped output and a loop guard. No file wo
 |---|---|---|---|---|---|
 | [ ] | D13 | Output cap and spill files | Have (0.1.4) | S | D7 |
 | [ ] | D3 | Step cap and doom-loop guard | Have (0.3.3) | S | D1 |
-| [ ] | D2 | Streaming tool loop | Missing | L | A3, D1 |
+| [x] | D2 | Streaming tool loop | Have (0.12.0) | L | A3, D1 |
 
 ### Phase 9: Conversation management
 Exit: find, organize, back up and wipe chats.
@@ -229,7 +229,7 @@ Exit: find, organize, back up and wipe chats.
 | [x] | B9 | Export | Have | S | B2 |
 | [x] | B10 | Import | Have | S | B9 |
 | [x] | B11 | Delete data (every byte) | Have (0.12.0) | S | D13, F3 |
-| [ ] | B7 | Tags | Missing | S | B1 |
+| [x] | B7 | Tags | Have (0.12.0) | S | B1 |
 | [ ] | B6 | Folders | Missing | M | B1 |
 | [ ] | B5 | Pins | Have | S | none |
 | [ ] | B3 | Chat list polish | Have | S | none |
@@ -240,11 +240,11 @@ Exit: the app is comfortable to use daily.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | C1 | Provider and API key storage (verify first) | Partial (0.6.0: ten keys + rotation) | S | none |
+| [x] | C1 | Provider and API key storage (verify first) | Have (0.12.0) | S | none |
 | [ ] | C2 | Model picker polish | Have | S | C3 |
 | [ ] | G3 | Settings page | Unknown | M | C1, D4 |
 | [ ] | G1 | Slash commands | Have (0.2.0) | M | C9, B9 |
-| [ ] | G2 | Keyboard shortcuts | Partial | S | none |
+| [x] | G2 | Keyboard shortcuts | Have (0.12.0) | S | none |
 | [ ] | A8 | Queue messages while streaming | Missing | S | A2 |
 | [ ] | G4 | Theme | Unknown | S | none |
 | [ ] | G5 | Completion notification | Missing | S | none |

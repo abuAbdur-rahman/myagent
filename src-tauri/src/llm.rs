@@ -3032,7 +3032,11 @@ impl ToolRunner for RealTools<'_> {
             let cwd = if name == "update_memory" || name == "delete_memory" {
                 "saved memory".to_string()
             } else {
-                std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string())
+                crate::sandbox::configured_project_root(self.app)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| {
+                        std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string())
+                    })
             };
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.state.insert_pending(

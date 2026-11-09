@@ -21,6 +21,7 @@ import {
 import { useApp } from "../lib/store";
 import { sessionOutputs } from "../lib/session";
 import * as db from "../lib/db";
+import { filterChatsByTag } from "../lib/chat-tags";
 import { arrangeChats } from "../lib/grouping";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
@@ -325,12 +326,10 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     });
   };
 
-  const shown = (() => {
-    const listed = conversations.filter((c) => !c.temporary);
-    return tagFilter
-      ? listed.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
-      : listed;
-  })();
+  const shown = useMemo(
+    () => filterChatsByTag(conversations, tagFilter, tagMap),
+    [conversations, tagFilter, tagMap],
+  );
   const pinnedChats = shown.filter((chat) => chat.pinned === 1);
   const groups = arrangeChats(
     shown.filter((chat) => !chat.project_id && chat.pinned !== 1),

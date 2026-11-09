@@ -121,6 +121,34 @@ fn capped_chars(args: &Value, key: &str, default: usize) -> usize {
         .clamp(MIN_CHARS_CAP, OUTPUT_CAP)
 }
 
+fn resolve_powershell_dir(
+    project_root: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    project_root
+        .or(home)
+        .unwrap_or_else(|| std::path::PathBuf::from("C:\\"))
+}
+
+fn powershell_working_dir(app: &AppHandle) -> std::path::PathBuf {
+    resolve_powershell_dir(
+        crate::sandbox::configured_project_root(app),
+        std::env::var_os("USERPROFILE").map(std::path::PathBuf::from),
+    )
+}
+
+fn powershell_child(dir: &Path, command: &str) -> tokio::process::Command {
+    let mut child = tokio::process::Command::new("powershell");
+    child
+        .args(["-NoProfile", "-NonInteractive", "-Command", command])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    child
+}
+
 fn search_fields(args: &Value) -> Result<Vec<String>, String> {
     let Some(items) = args.get("fields").and_then(|v| v.as_array()) else {
         return Ok(Vec::new());
@@ -566,7 +594,7 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "run_powershell",
-                "description": "Run a non-interactive Windows PowerShell command and return its output. While the sandbox is on, only read-only inspection is allowed: ls, cat, head, tail, rg, Get-ChildItem, Get-Content, Get-Process, Select-String and similar. Writes, deletes, installs and process launches are refused. A refusal is final: do not retry the same command or another path expression. Use grep to keep only matching lines, head or tail for a line range, and max_chars to cap the result.",
+                "description": "Run a non-interactive Windows PowerShell command and return its output. Commands start in the project folder when one is configured, otherwise in the user's home folder. While the sandbox is on, only read-only inspection is allowed: ls, cat, head, tail, rg, Get-ChildItem, Get-Content, Get-Process, Select-String and similar. Writes, deletes, installs and process launches are refused. A refusal is final: do not retry the same command or another path expression. Use grep to keep only matching lines, head or tail for a line range, and max_chars to cap the result.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -2233,14 +2261,8 @@ pub async fn execute(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(60)
                 .clamp(5, 300);
-            let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string());
-            let child = tokio::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &command])
-                .current_dir(&home)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
+            let dir = powershell_working_dir(app);
+            let child = powershell_child(&dir, &command)
                 .spawn()
                 .map_err(|e| format!("spawn: {e}"))?;
             let work = async move {
@@ -2835,6 +2857,42 @@ pub(crate) async fn trim_audit_log(pool: &SqlitePool) -> Result<(), sqlx::Error>
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn shell_prefers_the_project_folder_then_home() {
+        let project = std::path::PathBuf::from(r"D:\oss\demo");
+        let home = std::path::PathBuf::from(r"C:\Users\demo");
+        assert_eq!(
+            resolve_powershell_dir(Some(project.clone()), Some(home.clone())),
+            project
+        );
+        assert_eq!(resolve_powershell_dir(None, Some(home.clone())), home);
+        assert_eq!(
+            resolve_powershell_dir(None, None),
+            std::path::PathBuf::from(r"C:\")
+        );
+    }
+
+    #[tokio::test]
+    async fn powershell_starts_in_the_resolved_directory() {
+        let dir = std::env::temp_dir();
+        let output = powershell_child(&dir, "Get-Location")
+            .output()
+            .await
+            .expect("run powershell");
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        let expected = dir
+            .display()
+            .to_string()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase();
+        assert!(
+            stdout.contains(&expected),
+            "expected {stdout} to name {}",
+            dir.display()
+        );
+    }
 
     #[test]
     fn sandbox_host_shell_is_inspection_only() {

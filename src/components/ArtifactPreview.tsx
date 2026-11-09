@@ -72,7 +72,7 @@ export function ArtifactPreview({
       src={state.url}
       title="Artifact preview"
       referrerPolicy="no-referrer"
-      allow="camera 'none'; microphone 'none'; geolocation 'none'"
+      allow="camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'"
       className="h-full w-full flex-1 border-0 bg-white"
     />
   );

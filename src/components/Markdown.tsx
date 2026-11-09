@@ -78,7 +78,11 @@ function renderMarkdownFence(source: string): string {
   return `<div class="md-fence">${DOMPurify.sanitize(html)}</div>`;
 }
 
-function renderHtml(content: string, highlighter: HighlighterCore | null, theme: ThemeName): string {
+function renderHtml(
+  content: string,
+  highlighter: HighlighterCore | null,
+  theme: ThemeName,
+): string {
   const raw = marked.parse(content, { async: false, breaks: true }) as string;
   let html = DOMPurify.sanitize(raw);
 
@@ -123,7 +127,15 @@ function renderHtml(content: string, highlighter: HighlighterCore | null, theme:
   return DOMPurify.sanitize(html);
 }
 
-export function Markdown({ content, compact }: { content: string; compact?: boolean }) {
+export function Markdown({
+  content,
+  compact,
+  streaming,
+}: {
+  content: string;
+  compact?: boolean;
+  streaming?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [highlighter, setHighlighter] = useState<HighlighterCore | null>(null);
   const theme = useThemeName();
@@ -143,8 +155,8 @@ export function Markdown({ content, compact }: { content: string; compact?: bool
   }, []);
 
   const html = useMemo(
-    () => renderHtml(content, highlighter, theme),
-    [content, highlighter, theme],
+    () => renderHtml(content, streaming ? null : highlighter, theme),
+    [content, highlighter, theme, streaming],
   );
 
   const mermaidSeq = useRef(0);

@@ -128,7 +128,7 @@ export function InlineVisual({ code, isStreaming }: { code: string; isStreaming:
         src={state.url}
         title="Interactive visual"
         referrerPolicy="no-referrer"
-        allow="camera 'none'; microphone 'none'; geolocation 'none'"
+        allow="camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'"
         onLoad={sendTheme}
         style={{ height, backgroundColor: "transparent" }}
         className="block w-full border-0"

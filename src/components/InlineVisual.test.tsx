@@ -36,5 +36,8 @@ describe("InlineVisual", () => {
     expect(frame.getAttribute("src")).toBe("http://artifact.localhost/i/v1");
     expect(frame.getAttribute("sandbox")).toContain("allow-scripts");
     expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame.getAttribute("allow")).toBe(
+      "camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'",
+    );
   });
 });

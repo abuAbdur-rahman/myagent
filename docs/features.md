@@ -66,20 +66,20 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Two quick sends produce two ordered turns.
 
 ## A9. Markdown rendering (assistant and user)
-- **Status:** Partial (one Markdown component for both roles; marked renders markdown and HTML, DOMPurify sanitizes it, links open externally; the identical-render acceptance test is missing)
+- **Status:** Have (one Markdown component for both roles; marked renders markdown and HTML, DOMPurify sanitizes it, links open externally; 0.12.0: a render test proves the same markdown string produces identical DOM in the user and assistant bubbles)
 - **Ref:** All three render markdown for both sides. OpenWebUI and Claude store raw text and render on display.
 - **Build:** Store raw markdown only. One renderer for both roles (`react-markdown`, `remark-gfm`, `remark-breaks`). No raw HTML. Links get `rel="noopener noreferrer"` and open externally. Throttle re-render during streaming.
 - **Done:** The same markdown string renders identically for user and assistant bubbles.
 
 ## A10. Code blocks in messages
-- **Status:** Partial (shiki highlighting, language label and Copy ship; highlighting runs on every content change, so the Build line's lazy highlight after streaming is unimplemented; the Copy-equals-fenced-source acceptance test is missing. 0.4.1: fence aliases moved to `lib/languages.ts`, `script`/`airtable-script`/`airscript`/`apps-script`/`gs` route to javascript, and `airtable`/`airtable-formula` render through a new TextMate grammar proven in the same JS regex engine the composer uses; the header shows the fence as the author wrote it. 0.10.0: every fenced block, including `text` and unknown or unlabelled fences, gets the same header, Copy button, border and background; the language label is never blank)
+- **Status:** Have (shiki highlighting, language label and Copy ship; 0.12.0: a streaming reply renders code plain and highlights it once the turn finishes, and a test proves Copy returns the fenced source exactly. 0.4.1: fence aliases moved to `lib/languages.ts`, `script`/`airtable-script`/`airscript`/`apps-script`/`gs` route to javascript, and `airtable`/`airtable-formula` render through a new TextMate grammar proven in the same JS regex engine the composer uses; the header shows the fence as the author wrote it. 0.10.0: every fenced block, including `text` and unknown or unlabelled fences, gets the same header, Copy button, border and background; the language label is never blank)
 - **Ref:** Claude and OpenWebUI: language label, copy button, syntax highlighting; OpenWebUI also allows editable code blocks.
 - **Build:** Header with language and Copy; monospace; horizontal scroll; highlight lazily after streaming finishes. Copy copies raw text only.
 - **Not:** Editable code blocks, run buttons.
 - **Done:** Copy output equals the fenced source exactly.
 
 ## A11. Composer (input)
-- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; the composer acceptance list is still unverified; 0.6.0: the hold-to-talk mic sits beside Send)
+- **Status:** Have (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; 0.6.0: the hold-to-talk mic sits beside Send; 0.12.0: acceptance tests cover markdown round-trip and immediate clear, Enter sending outside a code block and yielding inside one, ArrowUp/ArrowDown history at the document edges, and the list and fence rules)
 - **Ref:** Claude Code: multiline input, history with Up arrow, Esc Esc for rewind. Claude app: rich input with shortcuts.
 - **Build:** Rich-text editor serializing to markdown. Single focus ring on the container. Clear immediately on send. History on ArrowUp at doc start, ArrowDown at doc end. Lists continue with Shift+Enter. "```lang" plus Space or Shift+Enter makes a code block. Enter sends outside code blocks.
 - **Done:** The acceptance list from the composer spec passes.
@@ -171,7 +171,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Move a chat into a folder and back.
 
 ## B7. Tags
-- **Status:** Partial (0.1.6: manual add/remove + sidebar filter)
+- **Status:** Have (0.1.6: manual add/remove + sidebar filter; 0.12.0: the filter is a tested pure function that returns only non-temporary chats carrying the selected tag)
 - **Ref:** † OpenWebUI tags are keyword labels, searchable.
 - **Build:** `chat_tags(chat_id, tag)`. Manual add/remove first; auto-suggest from the title model later.
 - **Done:** Filtering by a tag returns only tagged chats.
@@ -206,7 +206,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it. 0.6.0: up to ten keys per connection; Providers lists each key and can remove one key or all keys. 0.6.1: every request starts with the first key not cooling down; a quota-flavoured 429 or 402 marks the active key exhausted and moves to another key when one is available, otherwise reports the cooldown; a plain 429 keeps normal backoff; retrying a draft provider replaces its draft key)
+- **Status:** Have (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it. 0.6.0: up to ten keys per connection; Providers lists each key and can remove one key or all keys. 0.6.1: every request starts with the first key not cooling down; a quota-flavoured 429 or 402 marks the active key exhausted and moves to another key when one is available, otherwise reports the cooldown; a plain 429 keeps normal backoff; retrying a draft provider replaces its draft key. 0.12.0: a `SecretBackend` trait lets tests drive the whole key lifecycle against an in-memory store, proving store/read/add/remove/delete round-trip while every hint masks all but the last four characters; debug diagnostics accept only fixed event kinds and redact provider keys, bearer tokens and key-shaped fields before they reach the log or a copied report)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
@@ -278,7 +278,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** A two-tool turn completes with both results visible.
 
 ## D2. Streaming tool loop
-- **Status:** Missing
+- **Status:** Have (0.12.0: `agent_loop` assembles `ToolCallDelta` by `index`, executes the round after the `tool_calls` finish reason, and the UI shows running from `tool_start`; `agent_loop_runs_one_tool_round_then_answers` covers it)
 - **Ref:** † Stream tool-call arguments as deltas keyed by `index`; assemble before executing.
 - **Build:** Accumulate `ToolCallDelta` events (A3) into complete calls; execute after the finish reason `tool_calls`. Show "running" state in the UI as soon as the name arrives.
 - **Done:** Split argument fixtures assemble into valid JSON.
@@ -319,7 +319,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** In Plan mode, write and shell tools are not even sent to the model; in Sandbox mode a host call outside the project still asks and an explicit Deny rule beats auto-allow.
 
 ## D7. Shell tool
-- **Status:** Partial (0.1.3: approval + per-segment rules + kill-on-stop; cwd still home, not project. 0.8.2: in Sandbox mode, read-only host inspection is allowed outside the project — ls, cat, rg, Get-ChildItem, Get-Content and similar, with quoted paths, $HOME and pipelines — while writes, deletes, installs, process launches, redirection, subexpressions and credential paths stay refused)
+- **Status:** Have (0.1.3: approval + per-segment rules + kill-on-stop. 0.8.2: in Sandbox mode, read-only host inspection is allowed outside the project — ls, cat, rg, Get-ChildItem, Get-Content and similar, with quoted paths, $HOME and pipelines — while writes, deletes, installs, process launches, redirection, subexpressions and credential paths stay refused. 0.12.0: `run_powershell` and the approval card start in the configured project folder and fall back to the user's home only when no project folder is set; a resolver test and a live `Get-Location` test prove the working directory)
 - **Ref:** † OpenCode parses bash with tree-sitter to apply per-command rules. Claude Code asks per command pattern.
 - **Build:** `run_powershell` goes through D4 and D5. Timeout (default 60s), working directory fixed to the project, output captured and capped (D13), kill process tree on stop. Parse the command into segments (`;`, `&&`, `|`) and evaluate each, so `ls; rm x` cannot hide behind an allowed `ls`. In Sandbox mode (D6) the host shell is inspection only: reading state (time, disk, largest files, process and network state) is allowed, and anything that creates, updates or deletes files, or runs project code, is refused with a reason that points at the sandbox (D22).
 - **Not:** Persistent shell sessions, PTY.
@@ -452,7 +452,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Unit tests cover obvious keys and ordinary notes; the tool path refuses `remember this sk-…` with a reason.
 
 ## E3. Projects
-- **Status:** Partial (threads + instructions + shared memory have; knowledge files missing)
+- **Status:** Have (0.12.0: a project carries threads, instructions, shared project memory and stored knowledge; the project Docs panel adds and removes documents and every thread in the project inherits them)
 - **Ref:** † OpenWebUI folders act as project workspaces with a system prompt and files. Claude app Projects hold instructions and knowledge; every chat in the project inherits both, but chats stay independent otherwise.
 - **Build:** Project = name + description + instructions + knowledge (text notes plus stored docs) + chats (threads) + shared project memory. Every thread in the project gets the same instructions, knowledge excerpt, and project memory in context. Project folder is docs storage only in v1; tool sandbox enforcement waits for v2.
 - **Done:** Two threads in one project receive identical instructions and project memory; thread-private history never leaks across.
@@ -519,11 +519,11 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Regenerating adds a version instead of replacing.
 
 ## F2. Artifact isolation
-- **Status:** Partial (0.4.1: gallery thumbnails are a stricter case — `sandbox=""` with `<script>`, inline handlers and `javascript:` URLs stripped by a tested function, so a thumbnail cannot run anything. 0.10.0: inline JS runs in the artifact preview again. next: the preview also loads CDN assets — external scripts, styles, images and fonts over `https:` — and allows `eval`, forms, modals and popups, while `connect-src 'none'`, `form-action 'none'`, `default-src 'none'` and `base-uri 'none'` keep fetch/XHR, form and base traffic closed. Rust serves a per-artifact shell from the `artifact` protocol (Windows `http://artifact.localhost`) with its own CSP; the shell puts the untrusted HTML in a nested `sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"` `srcdoc` iframe without `allow-same-origin`, so the artifact keeps an opaque origin and cannot reach the app document, origin storage, IPC, or top navigation. `frame-src 'self'` still blocks external frames; WebRTC is not covered. The shell's own script is trusted and the artifact source is JSON-escaped. No `postMessage` bridge is provided; Tauri's IPC ACL denies the artifact origin. Thumbnails stay script-free.)
+- **Status:** Have (0.4.1: gallery thumbnails are a stricter case — `sandbox=""` with `<script>`, inline handlers and `javascript:` URLs stripped by a tested function, so a thumbnail cannot run anything. 0.10.0: inline JS runs in the artifact preview again. next: the preview also loads CDN assets — external scripts, styles, images and fonts over `https:` — and allows `eval`, forms, modals and popups, while `connect-src 'none'`, `form-action 'none'`, `default-src 'none'` and `base-uri 'none'` keep fetch/XHR, form and base traffic closed. Rust serves a per-artifact shell from the `artifact` protocol (Windows `http://artifact.localhost`) with its own CSP; the shell puts the untrusted HTML in a nested `sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"` `srcdoc` iframe without `allow-same-origin`, so the artifact keeps an opaque origin and cannot reach the app document, origin storage, IPC, or top navigation. `frame-src 'self'` still blocks external frames. The shell's own script is trusted and the artifact source is JSON-escaped. No `postMessage` bridge is provided; Tauri's IPC ACL denies the artifact origin. Thumbnails stay script-free. 0.12.0: the shell's `Permissions-Policy` and every in-app preview frame also deny `display-capture`, so an artifact cannot record the screen; tests assert the shell policy, the nested frame's allow list and the absence of `allow-same-origin`)
 - **Ref:** † OpenWebUI renders in an iframe with an injected CSP. † Tauri's Isolation pattern guards the IPC channel from untrusted frontend code but does not sandbox artifact HTML.
 - **Build:** `src-tauri/src/artifacts.rs` stores at most sixteen 2 MB artifacts, serves `http://artifact.localhost/s/<id>` with `Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; worker-src blob:; form-action 'none'; base-uri 'none'; frame-src 'self'`, and drops the entry when the panel closes or the artifact changes. The app CSP adds `frame-src` for the shell. No `postMessage` bridge.
 - **Not:** Per-artifact origins, artifact storage, WebRTC exfiltration, or a hard CPU watchdog.
-- **Done:** Unit tests cover the shell CSP, JSON escaping and artifact path handling; a runtime test artifact that calls `fetch`, `parent`, `localStorage` and `invoke` is still a manual check. Inline scripts, canvas, data images and CDN assets work, and the shell never injects the artifact markup as HTML.
+- **Done:** Unit tests cover the shell CSP, JSON escaping, artifact path handling, each frame's sandbox/allow list and the denial of camera, microphone, geolocation and display capture; a runtime artifact that calls `fetch`, `parent`, `localStorage` and `invoke` stays a manual smoke check because the repo has no browser harness. Inline scripts, canvas, data images and CDN assets work, and the shell never injects the artifact markup as HTML.
 
 ## F3. Attachments and project knowledge
 - **Status:** Have (0.3.0: project Docs tab with sha256 dedupe and capped excerpts. 0.3.5: any chat can attach documents — text, markdown, code, HTML, PDF, DOCX, XLSX/XLS/ODS — extracted in Rust, injected into the user turn, and reachable later through the `read_document` tool; docs in a project also leave a reference in the project bucket; stored text is freed when nothing points at it. 0.4.1: attachments render as a 168 px card with a type chip, a two-line name and a size/character meta line that says Size unknown rather than guessing. Project knowledge is chunked at headings and 1,000 characters with 150 of overlap, indexed by FTS5 plus MiniLM vectors and fused with RRF, so a paraphrased question returns up to three chunks injected as `## Attached knowledge` with `doc`, `chunk` and `heading` attributes; the Settings-free Docs panel reindexes on demand, an upload reindexes in the background, and removing a doc or a project drops its chunks and vectors immediately. When the index has nothing the old name/excerpt path still answers)
@@ -556,7 +556,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Each command has a test and appears in the menu.
 
 ## G2. Keyboard shortcuts
-- **Status:** Partial (composer only)
+- **Status:** Have (0.12.0: global Esc stop, Ctrl+K palette, Ctrl+N new chat, Ctrl+, settings, Ctrl+B sidebar and Shift+Ctrl+A panel, with a Shortcuts page in Settings listing them)
 - **Ref:** † Claude Code: Esc stops, Esc Esc rewinds, Shift+Tab cycles modes.
 - **Build:** Esc stop, Ctrl+N new chat, Ctrl+K search, Ctrl+, settings. A shortcuts list in settings.
 - **Done:** Shortcuts do not fire while an IME is composing.
@@ -609,14 +609,14 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # H. Quality
 
 ## H1. Test harness
-- **Status:** Partial (CI runs the Rust suite, vitest, `tsc`, the frontend build and `fallow dead-code`; the mock-provider smoke tests and a single `test` command are still missing)
-- **Build:** Rust unit tests for pure logic (A3, A4, A5, D4, E2, B2 path). A mock provider that replays SSE fixtures. Three smoke tests: send, stream, stop. One command runs all; CI blocks merge on failure.
-- **Done:** `test` command is green on a clean checkout.
+- **Status:** Have (0.12.0: `npm test` runs vitest, `tsc --noEmit` and the Rust suite; a test-only loopback provider replays recorded SSE; send, stream and stop smoke tests; CI blocks merge on that command)
+- **Build:** Rust unit tests for pure logic (A3, A4, A5, D4, E2, B2 path). A `cfg(test)` mock provider replays SSE fixtures through the real HTTP streaming path, while fixture-derived model steps drive the agent loop. One command runs all; CI blocks merge on failure.
+- **Done:** `npm test` is green on a clean checkout and the stop smoke test preserves partial text while ignoring later events.
 
 ## H2. Recorded fixtures
-- **Status:** Missing
-- **Build:** A `fixtures/` folder of real recorded streams: plain text, reasoning, tool calls, `length`, mid-stream `error`, comment lines, usage chunk, 429. Each fixture has an expected-events file.
-- **Done:** Every parser and loop test uses a fixture, not an inline string.
+- **Status:** Have (0.12.0: ten recorded `tests/fixtures/*.sse` streams — plain, reasoning, tools, length, mid-stream error, comments, usage, coalesced, multibyte and multiline — each have an expected-events JSONL sidecar and drive parser, provider and loop tests; a recorded 429 body covers rate limiting)
+- **Build:** A `fixtures/` folder of real recorded streams plus a 429 response body. Each SSE fixture has a human-diffable `.events.jsonl` file and is replayed at one-byte, seven-byte and 64-byte chunk boundaries.
+- **Done:** Every parser and agent-loop stream test uses a fixture rather than an inline SSE string.
 
 ---
 

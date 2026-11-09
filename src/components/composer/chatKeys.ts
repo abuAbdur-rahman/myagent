@@ -35,6 +35,14 @@ function atEnd(editor: Editor): boolean {
   return selection.empty && selection.from === Selection.atEnd(editor.state.doc).from;
 }
 
+export function shouldSendOnEnter(state: {
+  inCodeBlock: boolean;
+  popupOpen: boolean;
+  sendOnEnter: boolean;
+}): boolean {
+  return !state.inCodeBlock && !state.popupOpen && state.sendOnEnter;
+}
+
 function loadSnapshot(editor: Editor, markdown: string, pos: "start" | "end"): boolean {
   return editor.chain().setContent(markdown).focus(pos).run();
 }
@@ -86,9 +94,12 @@ export const ChatKeys = Extension.create<ChatKeysOptions, ChatKeysStorage>({
       },
 
       Enter: ({ editor }) => {
-        if (editor.isActive("codeBlock")) return false;
-        if (callbacks().isPopupOpen()) return false;
-        if (!callbacks().sendOnEnter()) return false;
+        const send = shouldSendOnEnter({
+          inCodeBlock: editor.isActive("codeBlock"),
+          popupOpen: callbacks().isPopupOpen(),
+          sendOnEnter: callbacks().sendOnEnter(),
+        });
+        if (!send) return false;
         callbacks().send();
         return true;
       },

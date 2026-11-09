@@ -530,7 +530,7 @@ function ThinkingBlock({
       >
         {title}
       </button>
-      {open && <Markdown content={message.reasoning} />}
+      {open && <Markdown content={message.reasoning} streaming={live} />}
     </div>
   );
 }
@@ -687,7 +687,7 @@ function AssistantMessage({
           <>
             {segments.map((segment, i) =>
               segment.kind === "text" ? (
-                <Markdown key={i} content={segment.text} />
+                <Markdown key={i} content={segment.text} streaming={live} />
               ) : segment.kind === "openui" ? (
                 <OpenUIRenderer
                   key={`openui-${i}`}

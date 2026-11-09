@@ -19,7 +19,7 @@ iframe { display: block; width: 100%; height: 100%; border: 0; }
 </style>
 </head>
 <body>
-<iframe id="artifact-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe>
+<iframe id="artifact-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'"></iframe>
 <script>
 const artifact = __ARTIFACT__;
 document.getElementById("artifact-frame").srcdoc = artifact;
@@ -130,7 +130,7 @@ fn secure_headers(builder: tauri::http::response::Builder) -> tauri::http::respo
         .header("Content-Security-Policy", CSP)
         .header(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(), clipboard-write=()",
+            "camera=(), microphone=(), geolocation=(), display-capture=(), clipboard-write=()",
         )
 }
 
@@ -296,6 +296,20 @@ mod tests {
         assert!(csp.contains("img-src data: blob: https:"));
         assert!(csp.contains("default-src 'none'"));
         assert_eq!(header_value(&response, "cache-control"), "no-store");
+    }
+
+    #[test]
+    fn artifact_frames_deny_device_capture_and_geolocation() {
+        let response = shell_response("<h1>ok</h1>");
+        assert_eq!(
+            header_value(&response, "permissions-policy"),
+            "camera=(), microphone=(), geolocation=(), display-capture=(), clipboard-write=()"
+        );
+        let body = shell("<h1>ok</h1>").unwrap();
+        assert!(body.contains(
+            "allow=\"camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'\""
+        ));
+        assert!(!body.contains("allow-same-origin"));
     }
 
     #[test]
