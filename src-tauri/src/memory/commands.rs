@@ -86,15 +86,26 @@ fn memory_date(date: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn memory_validate(text: String) -> Result<(), String> {
+    if text.chars().count() > 2000 {
+        return Err("content too long (max 2000 chars)".to_string());
+    }
+    if super::looks_secret(&text) {
+        return Err(super::secret_message().to_string());
+    }
+    if super::looks_like_meta(&text) {
+        return Err(
+            "Memory stores durable facts, not narration about the memory system.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn memory_append(app: AppHandle, input: AppendInput) -> Result<store::EntryView, String> {
     let project = target(&input.scope, input.project_id.as_deref())?;
     let kind = kind_of(&input.kind)?;
-    if input.text.chars().count() > 2000 {
-        return Err("content too long (max 2000 chars)".to_string());
-    }
-    if super::looks_secret(&input.text) {
-        return Err(super::secret_message().to_string());
-    }
+    memory_validate(input.text.clone())?;
     let id = input.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let date = memory_date(input.date)?;
     let untrusted = input.trust.as_deref() == Some("untrusted");
@@ -118,12 +129,7 @@ pub fn memory_update(
         return Err("nothing to update: pass text or kind".to_string());
     }
     if let Some(value) = text.as_deref() {
-        if value.chars().count() > 2000 {
-            return Err("content too long (max 2000 chars)".to_string());
-        }
-        if super::looks_secret(value) {
-            return Err(super::secret_message().to_string());
-        }
+        memory_validate(value.to_string())?;
     }
     let kind = match kind.as_deref() {
         Some(value) => Some(kind_of(value)?),
@@ -185,6 +191,57 @@ pub async fn memory_search(
         limit.unwrap_or(8),
     )
     .await
+}
+
+#[derive(Debug, Serialize)]
+pub struct PromptView {
+    pub items: Vec<index::SearchHit>,
+    pub omitted: usize,
+    pub chars: usize,
+}
+
+fn prompt_view(hits: Vec<index::SearchHit>, total: usize) -> PromptView {
+    let mut items = Vec::new();
+    let mut chars = 0;
+    for hit in hits.into_iter().filter(|hit| hit.trusted) {
+        if items.len() >= file::MEMORY_MAX_NOTES {
+            break;
+        }
+        let line = format!("- ({}) {}", hit.kind, file::one_line(&hit.text));
+        let cost = line.chars().count() + 1;
+        if chars + cost > file::MEMORY_BUDGET {
+            break;
+        }
+        chars += cost;
+        items.push(hit);
+    }
+    PromptView {
+        omitted: total.saturating_sub(items.len()),
+        items,
+        chars,
+    }
+}
+
+#[tauri::command]
+pub async fn memory_prompt(
+    app: AppHandle,
+    query: String,
+    project_id: Option<String>,
+) -> Result<PromptView, String> {
+    let root = store::root(&app)?;
+    let global = store::read(&root, None)?;
+    let project = match project_id.as_deref() {
+        Some(id) => Some(store::read(&root, Some(id))?),
+        None => None,
+    };
+    let total = global
+        .entries()
+        .chain(project.iter().flat_map(|doc| doc.entries()))
+        .filter(|entry| !entry.untrusted)
+        .count();
+    let pool = memory_pool(&app).await.map_err(|error| error.to_string())?;
+    let hits = index::search(&pool, &app, &query, project_id.as_deref(), 20).await?;
+    Ok(prompt_view(hits, total))
 }
 
 #[tauri::command]
@@ -447,7 +504,20 @@ pub fn memory_discard_unassigned(app: AppHandle, id: String) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use super::memory_date;
+    use super::{memory_date, memory_validate, prompt_view};
+    use crate::memory::index::SearchHit;
+
+    fn hit(id: &str, text: &str, score: f64, trusted: bool) -> SearchHit {
+        SearchHit {
+            id: id.to_string(),
+            text: text.to_string(),
+            kind: "note".to_string(),
+            date: "2026-11-09".to_string(),
+            scope: "global".to_string(),
+            score,
+            trusted,
+        }
+    }
 
     #[test]
     fn append_dates_must_be_iso_days() {
@@ -464,5 +534,48 @@ mod tests {
             "date must be YYYY-MM-DD"
         );
         assert_eq!(memory_date(None).expect("today").len(), 10);
+    }
+
+    #[test]
+    fn proposals_reject_secrets_and_memory_narration() {
+        assert!(memory_validate("Project releases use NSIS".to_string()).is_ok());
+        assert!(memory_validate("remember sk-abcdefghijklmnop123".to_string()).is_err());
+        assert!(memory_validate("Queued for the user to review".to_string()).is_err());
+    }
+
+    #[test]
+    fn prompt_keeps_rank_order_and_excludes_untrusted_notes() {
+        let view = prompt_view(
+            vec![
+                hit("best", "The project uses Tauri", 0.9, true),
+                hit("unsafe", "Text copied from a fetched page", 0.8, false),
+                hit("next", "The release target is Windows", 0.7, true),
+            ],
+            5,
+        );
+        assert_eq!(
+            view.items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["best", "next"]
+        );
+        assert_eq!(view.omitted, 3);
+        assert!(view.chars <= crate::memory::file::MEMORY_BUDGET);
+    }
+
+    #[test]
+    fn prompt_stops_at_the_character_budget_without_cutting_a_note() {
+        let view = prompt_view(
+            vec![
+                hit("first", &"a".repeat(2_000), 0.9, true),
+                hit("second", &"b".repeat(800), 0.8, true),
+                hit("third", "short but lower ranked", 0.7, true),
+            ],
+            3,
+        );
+        assert_eq!(view.items.len(), 1);
+        assert_eq!(view.items[0].id, "first");
+        assert_eq!(view.omitted, 2);
     }
 }

@@ -42,22 +42,24 @@ export function toolGroupLabel(name: string): string {
 
 export type ToolLogRow =
   | { kind: "single"; entry: ToolLogEntry }
-  | { kind: "group"; name: string; label: string; entries: ToolLogEntry[] };
+  | { kind: "group"; key: string; name: string; label: string; entries: ToolLogEntry[] };
 
 export function groupToolEntries(entries: ToolLogEntry[]): ToolLogRow[] {
-  const order: string[] = [];
-  const byName = new Map<string, ToolLogEntry[]>();
+  const runs: ToolLogEntry[][] = [];
   for (const entry of entries) {
-    const list = byName.get(entry.name);
-    if (list) list.push(entry);
-    else {
-      byName.set(entry.name, [entry]);
-      order.push(entry.name);
-    }
+    const current = runs[runs.length - 1];
+    if (current?.[0]?.name === entry.name) current.push(entry);
+    else runs.push([entry]);
   }
-  return order.map((name) => {
-    const list = byName.get(name) ?? [];
+  return runs.map((list) => {
     if (list.length === 1) return { kind: "single", entry: list[0] };
-    return { kind: "group", name, label: toolGroupLabel(name), entries: list };
+    const name = list[0].name;
+    return {
+      kind: "group",
+      key: list[0].id,
+      name,
+      label: toolGroupLabel(name),
+      entries: list,
+    };
   });
 }

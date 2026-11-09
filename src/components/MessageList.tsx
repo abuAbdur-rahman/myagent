@@ -200,7 +200,7 @@ export function ToolLogView({
             row.kind === "single" ? (
               <ToolEntryRow key={row.entry.id} entry={row.entry} />
             ) : (
-              <details key={`group-${row.name}`} className="group text-[13px]">
+              <details key={row.key} className="group text-[13px]">
                 <summary className="flex cursor-pointer list-none items-center gap-2 rounded-chip py-0.5 text-fg-3 hover:text-fg">
                   <ToolIcon name={row.name} />
                   <span className="truncate">{row.label}</span>

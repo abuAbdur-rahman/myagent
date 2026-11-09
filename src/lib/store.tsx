@@ -26,6 +26,13 @@ import {
 import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
 import { notifyTurnDone } from "./notify";
 import { logEvent } from "./debug";
+import { parseExtractedNotes } from "./memory-extract";
+import {
+  rollupReason,
+  rollupTranscript,
+  uniqueRollupNotes,
+  type RollupReason,
+} from "./memory-rollup";
 import {
   deepestLeaf,
   messagePath,
@@ -118,8 +125,13 @@ function canonicalMemoryId(id: string): string {
   return id.replace(/-/g, "").toLowerCase();
 }
 
-function sentMemories(memories: Memory[], ids: Set<string> | null): Memory[] {
-  return ids === null ? memories : memories.filter((memory) => ids.has(memory.id));
+function sentMemories(memories: Memory[], ids: readonly string[] | null): Memory[] {
+  if (ids === null) return memories;
+  const byId = new Map(memories.map((memory) => [memory.id, memory]));
+  return ids.flatMap((id) => {
+    const memory = byId.get(id);
+    return memory ? [memory] : [];
+  });
 }
 
 function canSeeFor(
@@ -222,6 +234,28 @@ const MEMORY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "update_memory",
   "delete_memory",
 ]);
+
+const UNTRUSTED_MEMORY_TOOLS: ReadonlySet<string> = new Set([
+  "web_search",
+  "web_fetch",
+  "research_run",
+  "run_powershell",
+  "sandbox_run",
+  "sandbox_read",
+  "sandbox_glob",
+  "sandbox_grep",
+  "read_document",
+  "describe_image",
+  "delegate_task",
+]);
+
+function hasUntrustedMemorySource(messages: Message[]): boolean {
+  return messages.some((message) =>
+    db
+      .parseToolLog(message.tool_log)
+      .some((entry) => UNTRUSTED_MEMORY_TOOLS.has(entry.name) || entry.name.startsWith("mcp__")),
+  );
+}
 
 export function settleToolLog(entries: ToolEntry[]): ToolEntry[] {
   return entries.map((entry) =>
@@ -382,6 +416,7 @@ interface AppContextValue {
     lastOut: number | null;
     prompt: string;
   };
+  inspectContext: () => Promise<api.RequestInspection>;
 
   projects: Project[];
   activeProject: Project | null;
@@ -724,16 +759,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
   const pendingMemoriesRef = useRef<PendingMemory[]>([]);
-  const globalSentRef = useRef<Set<string> | null>(null);
-  const projectSentRef = useRef<Set<string> | null>(null);
-  const globalSentMemories = useMemo(
-    () => (memoryPaused ? [] : sentMemories(globalMemories, globalSentRef.current)),
-    [globalMemories, memoryPaused],
-  );
-  const projectSentMemories = useMemo(
-    () => (memoryPaused ? [] : sentMemories(projectMemories, projectSentRef.current)),
-    [projectMemories, memoryPaused],
-  );
+  const rollupInFlightRef = useRef<Set<string>>(new Set());
+  const globalSentRef = useRef<string[] | null>(null);
+  const projectSentRef = useRef<string[] | null>(null);
+  const globalSentMemories = memoryPaused
+    ? []
+    : sentMemories(globalMemories, globalSentRef.current);
+  const projectSentMemories = memoryPaused
+    ? []
+    : sentMemories(projectMemories, projectSentRef.current);
   const [recalledMemories, setRecalledMemories] = useState<Memory[]>([]);
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
@@ -848,8 +882,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProjectMemories(project);
       setMemoryCompat(false);
       setMemoryOmitted(read.global.omitted);
-      globalSentRef.current = new Set(read.global.sent);
-      projectSentRef.current = new Set(read.project?.sent ?? []);
+      globalSentRef.current = read.global.sent;
+      projectSentRef.current = read.project?.sent ?? [];
       return { global, project };
     }
     const [global, project] = await Promise.all([
@@ -884,20 +918,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return [];
       }
       try {
-        const hits = await api.memorySearch(text, projectId, 20);
+        const prompt = await api.memoryPrompt(text, projectId);
         if (request !== recallRequestRef.current) return [];
         if (memoryPausedRef.current) return [];
         if ((projectRef.current?.id ?? null) !== projectId) return [];
-        const alreadySent = new Set([
-          ...(globalSentRef.current ?? []),
-          ...(projectSentRef.current ?? []),
-        ]);
+        globalSentRef.current = prompt.items
+          .filter((hit) => hit.scope === "global")
+          .map((hit) => hit.id);
+        projectSentRef.current = prompt.items
+          .filter((hit) => projectId !== null && hit.scope === `project:${projectId}`)
+          .map((hit) => hit.id);
+        setMemoryOmitted(prompt.omitted);
         const recalled: Memory[] = [];
-        for (const hit of hits) {
-          if (recalled.length >= 4) break;
-          if (!hit.trusted) continue;
-          if (alreadySent.has(hit.id)) continue;
-          if (recalled.some((memory) => memory.id === hit.id)) continue;
+        for (const hit of prompt.items) {
           const inProject =
             projectId !== null && hit.scope === `project:${projectId}`;
           if (hit.scope !== "global" && !inProject) continue;
@@ -917,17 +950,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
             updated_at: stamp,
           });
         }
-        relevantMemoriesRef.current = recalled;
+        relevantMemoriesRef.current = [];
         setRecalledMemories(recalled);
         const details = recalled.map((memory) => ({
           id: memory.id,
-          score: hits.find((hit) => hit.id === memory.id)?.score ?? 0,
+          score: prompt.items.find((hit) => hit.id === memory.id)?.score ?? 0,
         }));
         recalledDetailsRef.current = details;
         setRecalledDetails(details);
         return recalled;
       } catch (error) {
         console.warn("memory: recall failed", error);
+        globalSentRef.current = [];
+        projectSentRef.current = [];
+        setMemoryOmitted(globalMemoriesRef.current.length + projectMemoriesRef.current.length);
         relevantMemoriesRef.current = [];
         setRecalledMemories([]);
         recalledDetailsRef.current = [];
@@ -996,11 +1032,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         score?: number;
         trust?: string;
       }[] = [];
+      const durableIds = new Set<string>();
       if (!memoryPausedRef.current) {
         for (const memory of sentMemories(
           globalMemoriesRef.current,
           globalSentRef.current,
         )) {
+          durableIds.add(memory.id);
           items.push({
             source: "durable",
             item_id: memory.id,
@@ -1011,6 +1049,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           projectMemoriesRef.current,
           projectSentRef.current,
         )) {
+          durableIds.add(memory.id);
           items.push({
             source: "durable",
             item_id: memory.id,
@@ -1018,6 +1057,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         }
         for (const memory of recalled) {
+          if (durableIds.has(memory.id)) continue;
           items.push({
             source: "recalled",
             item_id: memory.id,
@@ -1554,7 +1594,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       globalMemories: globalSentMemories,
       project: activeProject,
       projectMemories: projectSentMemories,
-      relevantMemories: memoryPaused ? [] : recalledMemories,
+      relevantMemories: [],
       episodicBlock: episodicRecall ? episodicBlockRef.current || undefined : undefined,
       userName: displayName || undefined,
       standingPrompt: standingPrompt || undefined,
@@ -1715,6 +1755,7 @@ setKnowledgeSummary([]);
       for (const raw of notes) {
         const content = raw.replace(/\s+/g, " ").trim().slice(0, 2000);
         if (!content) continue;
+        await api.memoryValidate(content);
         rows.push({
           id: newId(),
           scope,
@@ -1733,6 +1774,85 @@ setKnowledgeSummary([]);
       return rows;
     },
     [activeConversationId, activeProject, refreshPendingMemories],
+  );
+
+  const rollupConversation = useCallback(
+    async (
+      conversationId: string,
+      projectId: string,
+      reason: RollupReason,
+    ): Promise<void> => {
+      if (rollupInFlightRef.current.has(conversationId)) return;
+      const connection = connRef.current;
+      const modelName = modelRef.current;
+      if (!connection || !modelName) return;
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      if (conversation?.temporary) return;
+      const saved = projectMemoriesRef.current
+        .filter((memory) => memory.project_id === projectId)
+        .map((memory) => memory.content);
+      rollupInFlightRef.current.add(conversationId);
+      try {
+        const messages = await db.listMessages(conversationId);
+        const through = messages.reduce(
+          (latest, message) => Math.max(latest, message.created_at),
+          0,
+        );
+        const marker = `memoryRollup:${conversationId}`;
+        const prior = Number(localStorage.getItem(marker) ?? 0);
+        if (through === 0 || through <= prior) return;
+        const transcript = rollupTranscript(messages);
+        if (!transcript) return;
+        const raw = await api.extractMemory(
+          connection.id,
+          modelName,
+          transcript,
+          connection.kind,
+          "project_rollup",
+        );
+        const pending = await db.listPendingMemories();
+        const existing = [
+          ...saved,
+          ...pending
+            .filter((memory) => memory.project_id === projectId)
+            .map((memory) => memory.content),
+        ];
+        const proposals = uniqueRollupNotes(parseExtractedNotes(raw), existing);
+        const safe: string[] = [];
+        for (const proposal of proposals) {
+          try {
+            await api.memoryValidate(proposal);
+            safe.push(proposal);
+          } catch (error) {
+            console.warn("memory: rejected roll-up proposal", error);
+          }
+        }
+        if (safe.length > 0) {
+          const createdAt = Date.now();
+          const trust = hasUntrustedMemorySource(messages) ? "untrusted" : "trusted";
+          await db.addPendingMemories(
+            safe.map((content, index): PendingMemory => ({
+              id: newId(),
+              scope: "project",
+              project_id: projectId,
+              kind: "summary",
+              content,
+              conversation_id: conversationId,
+              created_at: createdAt + index,
+              trust,
+            })),
+          );
+          await refreshPendingMemories();
+          toast(`${safe.length} project ${safe.length === 1 ? "note" : "notes"} waiting for review.`);
+        }
+        localStorage.setItem(marker, String(through));
+      } catch (error) {
+        console.warn(`memory: ${reason} roll-up failed`, error);
+      } finally {
+        rollupInFlightRef.current.delete(conversationId);
+      }
+    },
+    [refreshPendingMemories],
   );
 
   const editMemory = useCallback(
@@ -1900,6 +2020,18 @@ setKnowledgeSummary([]);
   }, [reportError]);
 
   const selectConversation = useCallback(async (id: string | null) => {
+    const previousId = convIdRef.current;
+    const previous = conversationsRef.current.find((conversation) => conversation.id === previousId);
+    if (id !== previousId && previousId && previous?.project_id) {
+      const userMessages = messagesRef.current.filter((message) => message.role === "user");
+      const reason = rollupReason({
+        projectId: previous.project_id,
+        leaving: true,
+        userTurns: userMessages.length,
+        userText: userMessages[userMessages.length - 1]?.content ?? "",
+      });
+      if (reason) void rollupConversation(previousId, previous.project_id, reason);
+    }
     if (id !== convIdRef.current) await discardTemporary();
     setActiveConversationId(id);
     setError(null);
@@ -1946,9 +2078,21 @@ setKnowledgeSummary([]);
       versionMap(rows, await db.listMessageTree(id)),
     );
     setTodos(await db.listTodos(id));
-  }, [discardTemporary]);
+  }, [discardTemporary, rollupConversation]);
 
   const newConversation = useCallback(async () => {
+    const previousId = convIdRef.current;
+    const previous = conversationsRef.current.find((conversation) => conversation.id === previousId);
+    if (previousId && previous?.project_id) {
+      const userMessages = messagesRef.current.filter((message) => message.role === "user");
+      const reason = rollupReason({
+        projectId: previous.project_id,
+        leaving: true,
+        userTurns: userMessages.length,
+        userText: userMessages[userMessages.length - 1]?.content ?? "",
+      });
+      if (reason) void rollupConversation(previousId, previous.project_id, reason);
+    }
     await discardTemporary();
     setActiveConversationId(null);
     setActiveProjectId(null);
@@ -1969,7 +2113,7 @@ setKnowledgeSummary([]);
 setKnowledgeSummary([]);
     setEpisodeSummary([]);
     lastPayloadRef.current = null;
-  }, [discardTemporary]);
+  }, [discardTemporary, rollupConversation]);
 
   const newTemporaryChat = useCallback(async () => {
     const connection = connRef.current;
@@ -2759,6 +2903,49 @@ setKnowledgeSummary([]);
     [canSeeImages, connections, resolveCompact, resolveTools, summaryFor, withSystem],
   );
 
+  const inspectContext = useCallback(async (): Promise<api.RequestInspection> => {
+    const connection = connRef.current;
+    const modelName = modelRef.current;
+    if (!connection || !modelName) throw new Error("Choose a provider and model first");
+    const conversationId = convIdRef.current;
+    const payload = buildPayload(
+      conversationId,
+      messagesRef.current.filter((message) => message.content.length > 0),
+    );
+    const hasImages = payload.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "image_url"),
+    );
+    const fallback = visionFallbackFor(
+      hasImages,
+      visionFallbackRef.current,
+      resolveTools(),
+      canSeeImages(connection.id, modelName),
+      connection.id,
+      connections,
+    );
+    return api.inspectRequest({
+      requestId: "context-inspector",
+      connectionId: connection.id,
+      model: modelName,
+      messages: payload,
+      enableTools: resolveTools(),
+      projectId: projectRef.current?.id ?? null,
+      conversationId,
+      reasoningEffort: resolveEffort(),
+      connectionKind: connection.kind,
+      searchBackend,
+      searchEndpoint,
+      childSystem: buildChildSystemPrompt({
+        userName: displayNameRef.current || undefined,
+        project: projectRef.current,
+        now: new Date(),
+      }),
+      ...fallbackFields(fallback),
+    });
+  }, [buildPayload, canSeeImages, connections, resolveEffort, resolveTools, searchBackend, searchEndpoint]);
+
   const sendMessage = useCallback(
     async (
       text: string,
@@ -2981,6 +3168,14 @@ setKnowledgeSummary([]);
         void maybeGenerateTitle(conversationId, provisionalTitle, text, bufferRef.current);
       }
       await maybeAutoCompact(conversationId);
+      const projectId = projectRef.current?.id ?? null;
+      const reason = rollupReason({
+        projectId,
+        leaving: false,
+        userTurns: outgoing.filter((turn) => turn.role === "user").length,
+        userText: sendText,
+      });
+      if (reason && projectId) void rollupConversation(conversationId, projectId, reason);
       return true;
     },
     [
@@ -2997,6 +3192,7 @@ setKnowledgeSummary([]);
       resolveTools,
       maybeGenerateTitle,
       maybeAutoCompact,
+      rollupConversation,
     ],
   );
 
@@ -3420,6 +3616,7 @@ setKnowledgeSummary([]);
     supportedEfforts,
     modelContextLimit,
     contextInfo,
+    inspectContext,
     projects,
     activeProject,
     activeProjectId,

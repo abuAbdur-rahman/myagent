@@ -4241,7 +4241,7 @@ export function MemoryPage() {
             emptyHint={
               query.trim() || kindFilter !== "all"
                 ? "Nothing matches these filters."
-                : "No global memory yet. These notes are sent with every chat."
+                : "No global memory yet. Relevant notes are ranked for each turn."
             }
             meta={(memory) => memoryMeta(memory)}
             onAdd={async (draft) => {
@@ -4306,14 +4306,14 @@ export function MemoryPage() {
           <div className="flex items-baseline justify-between gap-2">
             <b className="text-sm">Memory health</b>
             <span className="text-xs text-muted">
-              {sent}/{memories.length} sent
+              {sent}/{memories.length} selected
             </span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-active">
             <div className="h-full bg-accent" style={{ width: `${budgetPct}%` }} />
           </div>
           <label className="mt-3 flex items-center justify-between gap-2 text-xs">
-            <span className="text-muted">Send memory with chats</span>
+            <span className="text-muted">Send relevant memory with chats</span>
             <input
               type="checkbox"
               className="h-4 w-4"
@@ -4333,21 +4333,21 @@ export function MemoryPage() {
           <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-xs">
             <dt className="text-muted">Stored notes</dt>
             <dd className="m-0">{memories.length}</dd>
-            <dt className="text-muted">Sent every turn</dt>
+            <dt className="text-muted">Selected last turn</dt>
             <dd className="m-0">{sent}</dd>
             <dt className="text-muted">Waiting for review</dt>
             <dd className="m-0">{pendingMemories.length}</dd>
-            <dt className="text-muted">Over budget</dt>
+            <dt className="text-muted">Not selected</dt>
             <dd className={memoryOmitted > 0 ? "m-0 text-warn" : "m-0"}>{memoryOmitted}</dd>
           </dl>
           {memoryOmitted > 0 ? (
             <p className="mt-2 text-xs text-warn">
-              Each scope sends at most 2,500 characters. Shorten or merge notes, or move
-              reference material into project documents.
+              Selection keeps only notes relevant to the latest message, within 2,500
+              characters. Use Recall memory when you need a broader search.
             </p>
           ) : (
             <p className="mt-2 text-xs text-muted">
-              Every saved note fits in the current send budget.
+              Every saved note relevant to the latest message fit the send budget.
             </p>
           )}
         </div>

@@ -434,6 +434,38 @@ fn strip_tool_spec(specs: &mut serde_json::Value, name: &str) {
     }
 }
 
+async fn request_tool_specs(app: &AppHandle, req: &ChatRequest) -> serde_json::Value {
+    let blind_model = req
+        .vision_fallback_model
+        .as_deref()
+        .is_some_and(|model| !model.trim().is_empty());
+    let has_documents = match req.conversation_id.as_deref() {
+        Some(conversation) => {
+            match crate::documents::conversation_documents(app, conversation).await {
+                Ok(documents) => !documents.is_empty(),
+                Err(error) => {
+                    eprintln!("read_document gating: {error}");
+                    false
+                }
+            }
+        }
+        None => false,
+    };
+    let mut specs = tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app));
+    if req.subagent {
+        strip_tool_spec(&mut specs, "delegate_task");
+    }
+    let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
+        .await
+        .unwrap_or_default();
+    if let Some(list) = specs.as_array_mut() {
+        for definition in &mcp_tools {
+            list.push(crate::mcp::spec_for(definition));
+        }
+    }
+    specs
+}
+
 pub(crate) struct TextCompletion<'a> {
     pub client: &'a reqwest::Client,
     pub base_url: &'a str,
@@ -1256,9 +1288,22 @@ pub struct ExtractMemoryRequest {
     pub text: String,
     #[serde(default)]
     pub connection_kind: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 const MEMORY_SYSTEM: &str = "You extract durable memory from an assistant reply. Reply with ONLY a JSON array of 1-5 short strings: facts, preferences, decisions or constraints worth remembering in future conversations. No task narration, no code, no markdown fences, no commentary. Each string under 240 characters. If nothing is durable, reply with [].";
+const PROJECT_ROLLUP_SYSTEM: &str = "You extract durable shared project memory from a private chat transcript. Reply with ONLY a JSON array of 1-5 short strings. Include only lasting project facts, decisions, constraints, or stable conventions useful in another project thread. Exclude personal details, transcript quotes, task narration, temporary status, speculation, credentials, and secrets. Paraphrase rather than copying sentences. Each string must be factual and under 240 characters. If nothing belongs in shared project memory, reply with [].";
+
+fn memory_system(mode: Option<&str>) -> AppResult<&'static str> {
+    match mode {
+        None | Some("reply") => Ok(MEMORY_SYSTEM),
+        Some("project_rollup") => Ok(PROJECT_ROLLUP_SYSTEM),
+        Some(_) => Err(AppError::Internal(
+            "unknown memory extraction mode".to_string(),
+        )),
+    }
+}
 
 fn summary_body(model: &str, text: &str) -> serde_json::Value {
     serde_json::json!({
@@ -1439,7 +1484,7 @@ pub async fn extract_memory(
         base_url: &base_url,
         key: &key,
         model: &req.model,
-        system: MEMORY_SYSTEM,
+        system: memory_system(req.mode.as_deref())?,
         user: &text,
         cancel: &cancel,
         connection_kind: req.connection_kind.as_deref(),
@@ -1606,6 +1651,178 @@ pub async fn chat_stream(
     };
     state.finish(&req.request_id);
     result
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolInspection {
+    pub name: String,
+    pub tokens: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestInspection {
+    pub json: String,
+    pub total_tokens: usize,
+    pub message_tokens: usize,
+    pub tools: Vec<ToolInspection>,
+}
+
+fn inspect_tokens(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value)
+        .map(|text| text.chars().count().div_ceil(4))
+        .unwrap_or(0)
+}
+
+fn request_secret_pattern() -> &'static regex::Regex {
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(sk-[a-z0-9_-]{8,}|gh[opsu]_[a-z0-9]{12,}|Bearer\s+[A-Za-z0-9\-._~+/=]{8,}|(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;}"]+)"#,
+        )
+        .expect("request secret pattern compiles")
+    })
+}
+
+fn redact_request_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                let key = key.to_ascii_lowercase();
+                if key.contains("api_key")
+                    || key.contains("apikey")
+                    || key.contains("authorization")
+                    || key == "token"
+                    || key == "password"
+                    || key == "secret"
+                {
+                    *item = serde_json::Value::String("[redacted]".to_string());
+                } else {
+                    redact_request_value(item);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_request_value(item);
+            }
+        }
+        serde_json::Value::String(text) => {
+            *text = request_secret_pattern()
+                .replace_all(text, "[redacted]")
+                .to_string();
+        }
+        _ => {}
+    }
+}
+
+fn inspected_tools(body: &serde_json::Value) -> Vec<ToolInspection> {
+    body.get("tools")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            let name = tool
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .or_else(|| tool.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            ToolInspection {
+                name,
+                tokens: inspect_tokens(tool),
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<RequestInspection> {
+    req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
+    let url = endpoint(&req.base_url, "chat/completions");
+    let mut history = if req.enable_tools {
+        chat_history(
+            &req.messages,
+            uses_deepseek_reasoning_replay(&req.model),
+            true,
+        )
+    } else {
+        req.messages
+            .iter()
+            .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
+            .collect()
+    };
+    history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
+    if req.enable_tools {
+        let (_, note) = route_vision(&mut history, req.vision_fallback_model.as_deref());
+        if let Some(note) = note {
+            let at = history
+                .iter()
+                .position(|message| {
+                    message.get("role").and_then(|role| role.as_str()) == Some("system")
+                })
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            history.insert(at, serde_json::json!({ "role": "system", "content": note }));
+        }
+    }
+    let specs = if req.enable_tools {
+        Some(request_tool_specs(&app, &req).await)
+    } else {
+        None
+    };
+    let mut body = if responses::only(&req.base_url, &req.model) {
+        responses::body(
+            &req.model,
+            &prune_tool_history(&history),
+            specs.as_ref(),
+            req.reasoning_effort.as_deref(),
+            true,
+            !is_agentrouter(req.connection_kind.as_deref(), &req.base_url),
+        )
+    } else {
+        let mut body = serde_json::json!({
+            "model": req.model,
+            "messages": if req.enable_tools { prune_chat_history(&history) } else { history },
+            "stream": true,
+        });
+        if let Some(specs) = specs {
+            body["tools"] = specs;
+        }
+        if let Some(temperature) = req.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+        if let Some(effort) = req
+            .reasoning_effort
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            if req.connection_kind.as_deref() == Some("deepseek")
+                && is_deepseek_v4_model(&req.model)
+            {
+                attach_deepseek_effort(&mut body, effort);
+            } else if effort != "none" {
+                attach_effort(&mut body, req.connection_kind.as_deref(), effort);
+            }
+        }
+        body
+    };
+    redact_request_value(&mut body);
+    let tools = inspected_tools(&body);
+    let message_tokens = body
+        .get("messages")
+        .or_else(|| body.get("input"))
+        .map(inspect_tokens)
+        .unwrap_or(0);
+    let total_tokens = inspect_tokens(&body);
+    let json = serde_json::to_string_pretty(&body)
+        .map_err(|error| AppError::Internal(format!("inspect request json: {error}")))?;
+    Ok(RequestInspection {
+        json,
+        total_tokens,
+        message_tokens,
+        tools,
+    })
 }
 
 const MAX_ATTEMPTS: u32 = 10;
@@ -3398,23 +3615,7 @@ async fn run_agentic(
         history.insert(at, serde_json::json!({"role": "system", "content": note}));
     }
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
-    let blind_model = req
-        .vision_fallback_model
-        .as_deref()
-        .is_some_and(|model| !model.trim().is_empty());
-    let has_documents = match req.conversation_id.as_deref() {
-        Some(conversation) => {
-            match crate::documents::conversation_documents(app, conversation).await {
-                Ok(documents) => !documents.is_empty(),
-                Err(error) => {
-                    eprintln!("read_document gating: {error}");
-                    false
-                }
-            }
-        }
-        None => false,
-    };
-    let mut model = RealModel {
+    let model = RealModel {
         client,
         url,
         key: key.clone(),
@@ -3422,25 +3623,8 @@ async fn run_agentic(
         cancel,
         state,
         on_event,
-        tool_specs: {
-            let mut specs =
-                tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app));
-            if req.subagent {
-                strip_tool_spec(&mut specs, "delegate_task");
-            }
-            specs
-        },
+        tool_specs: request_tool_specs(app, req).await,
     };
-    let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
-        .await
-        .unwrap_or_default();
-    if !mcp_tools.is_empty()
-        && let Some(specs) = model.tool_specs.as_array_mut()
-    {
-        for def in &mcp_tools {
-            specs.push(crate::mcp::spec_for(def));
-        }
-    }
     let mut runner = RealTools {
         client,
         app,
@@ -3663,6 +3847,43 @@ async fn stream_responses_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_rollups_use_the_private_thread_extraction_rules() {
+        let prompt = memory_system(Some("project_rollup")).expect("roll-up mode");
+        assert!(prompt.contains("shared project memory"));
+        assert!(prompt.contains("Exclude personal details"));
+        assert!(prompt.contains("transcript quotes"));
+        assert!(memory_system(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn request_inspection_redacts_secret_fields_and_message_keys() {
+        let mut value = serde_json::json!({
+            "authorization": "Bearer abcdefghijklmnop",
+            "messages": [{"role": "user", "content": "key sk-abcdefghijklmnop123"}],
+            "nested": {"api_key": "plain-secret"}
+        });
+        redact_request_value(&mut value);
+        let text = serde_json::to_string(&value).expect("json");
+        assert!(!text.contains("abcdefghijklmnop"));
+        assert!(!text.contains("plain-secret"));
+        assert!(text.contains("[redacted]"));
+    }
+
+    #[test]
+    fn request_inspection_counts_each_tool_definition() {
+        let body = serde_json::json!({
+            "tools": [
+                {"type": "function", "function": {"name": "alpha", "description": "A"}},
+                {"type": "function", "function": {"name": "beta", "description": "B"}}
+            ]
+        });
+        let tools = inspected_tools(&body);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "alpha");
+        assert!(tools.iter().all(|tool| tool.tokens > 0));
+    }
 
     #[test]
     fn attached_documents_do_not_feed_the_explicit_save_gate() {

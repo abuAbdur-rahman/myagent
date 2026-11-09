@@ -5,6 +5,7 @@ import { DEFAULT_MODEL_CONTEXT, promptBudget } from "../lib/context";
 import { parseDocAttachments } from "../lib/attachments";
 import * as api from "../lib/api";
 import { copyWithToast } from "./ChatHeader";
+import { errorText } from "../lib/utils";
 import { Badge, Button, Pill } from "./ui";
 
 function estimate(text: string): number {
@@ -56,11 +57,14 @@ export function ContextInspector() {
     standingPrompt,
     chatPrompt,
     contextInfo,
+    inspectContext,
     todos,
     closePanel,
   } = useApp();
   const [skills, setSkills] = useState<string[]>([]);
   const [promptOpen, setPromptOpen] = useState(false);
+  const [inspection, setInspection] = useState<api.RequestInspection | null>(null);
+  const [inspectionError, setInspectionError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -74,6 +78,22 @@ export function ContextInspector() {
       live = false;
     };
   }, []);
+
+  useEffect(() => {
+    let live = true;
+    setInspection(null);
+    setInspectionError(null);
+    void inspectContext()
+      .then((value) => {
+        if (live) setInspection(value);
+      })
+      .catch((error: unknown) => {
+        if (live) setInspectionError(errorText(error));
+      });
+    return () => {
+      live = false;
+    };
+  }, [inspectContext, messages.length, contextInfo.prompt]);
 
   const docs = useMemo(
     () => messages.flatMap((message) => parseDocAttachments(message.attachments)),
@@ -90,6 +110,14 @@ export function ContextInspector() {
         <Brain size={16} className="text-fg-3" />
         <b className="text-sm font-semibold">Context</b>
         <span className="flex-1" />
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!inspection}
+          onClick={() => inspection && void copyWithToast(inspection.json)}
+        >
+          <Copy size={12} /> Request JSON
+        </Button>
         <button
           type="button"
           aria-label="Close context inspector"
@@ -133,6 +161,14 @@ export function ContextInspector() {
                 : `in ${contextInfo.lastIn.toLocaleString()} · out ${(contextInfo.lastOut ?? 0).toLocaleString()}`}
             </span>
           </div>
+          {inspection && (
+            <div className="mt-1 flex items-center justify-between text-xs text-fg-3">
+              <span>Next request estimate</span>
+              <span className="tabular-nums text-fg-2">
+                ≈{inspection.total_tokens.toLocaleString()} tokens
+              </span>
+            </div>
+          )}
         </Section>
 
         <Section title="Checklist" count={todos.length}>
@@ -241,7 +277,7 @@ export function ContextInspector() {
         </Section>
 
         <Section
-          title="Recalled for this turn"
+          title="Ranked for this turn"
           tokens={estimate(recalledMemories.map((m) => m.content).join("\n"))}
           count={recalledMemories.length}
         >
@@ -343,8 +379,8 @@ export function ContextInspector() {
         {memoryOmitted > 0 && (
           <Section title="Dropped">
             <p className="m-0 text-xs text-warning">
-              {memoryOmitted} global note{memoryOmitted === 1 ? "" : "s"} over the 2,500-character
-              send budget. Shorten or merge them in Settings → Memory.
+              {memoryOmitted} note{memoryOmitted === 1 ? " was" : "s were"} not selected by
+              relevance or the 2,500-character send budget.
             </p>
           </Section>
         )}
@@ -371,11 +407,37 @@ export function ContextInspector() {
           </p>
         </Section>
 
-        <Section title="Messages" tokens={Math.ceil(messageChars / 4)}>
+        <Section
+          title="Messages"
+          tokens={inspection?.message_tokens ?? Math.ceil(messageChars / 4)}
+        >
           <p className="m-0 text-xs text-fg-3">
             {messages.length} message{messages.length === 1 ? "" : "s"} in this chat. Full history is
             sent unless the chat is compacted.
           </p>
+        </Section>
+
+        <Section
+          title="Tool definitions"
+          tokens={inspection?.tools.reduce((sum, tool) => sum + tool.tokens, 0)}
+          count={inspection?.tools.length ?? 0}
+        >
+          {inspectionError ? (
+            <p className="m-0 text-xs text-warning">{inspectionError}</p>
+          ) : !inspection ? (
+            <p className="m-0 text-xs text-fg-3">Inspecting the next request…</p>
+          ) : inspection.tools.length === 0 ? (
+            <p className="m-0 text-xs text-fg-3">Tools are off for the next request.</p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs">
+              {inspection.tools.map((tool) => (
+                <li key={tool.name} className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-fg-2">{tool.name}</span>
+                  <span className="flex-none tabular-nums text-fg-3">≈{tool.tokens} tok</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Section>
 
         <Section title="Attachments" count={docs.length}>

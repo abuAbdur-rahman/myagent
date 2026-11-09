@@ -121,6 +121,7 @@ fn fuse(fts: &[String], vectors: &[String]) -> Vec<(String, f64)> {
             .1
             .partial_cmp(&left.1)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
     });
     ranked
 }
@@ -577,6 +578,16 @@ mod tests {
         assert!(fuse(&[], &[]).is_empty());
     }
 
+    #[test]
+    fn fusion_breaks_equal_scores_stably() {
+        let ranked = fuse(
+            &["b".to_string(), "a".to_string()],
+            &["a".to_string(), "b".to_string()],
+        );
+        assert_eq!(ranked[0].0, "a");
+        assert_eq!(ranked[1].0, "b");
+    }
+
     #[tokio::test]
     async fn fts_search_ranks_and_scopes_notes() {
         let pool = SqlitePool::connect("sqlite::memory:")
@@ -585,6 +596,11 @@ mod tests {
         ensure_schema(&pool).await.expect("schema");
         for (id, scope, text) in [
             ("g1", "global", "The user prefers short answers"),
+            (
+                "g2",
+                "global",
+                "The release pipeline builds an NSIS installer",
+            ),
             (
                 "p1",
                 "project:alpha",
@@ -618,5 +634,9 @@ mod tests {
             .await
             .expect("global search");
         assert!(ids.is_empty());
+        let ids = fts_candidates(&pool, &fts_query("short answers"), "")
+            .await
+            .expect("global memory search");
+        assert_eq!(ids, vec!["g1"]);
     }
 }

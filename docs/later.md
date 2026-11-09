@@ -136,8 +136,8 @@ Exit: memory writes only bio, preferences, or explicit asks; thread summary stay
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | E1 | Scoped memory recall | Partial | S | H1 |
-| [x] | E6 | Write-only-what-matters memory + thread roll-up | Missing | S | E2 |
+| [x] | E1 | Scoped memory recall | Have (0.12.0) | S | H1 |
+| [x] | E6 | Write-only-what-matters memory + thread roll-up | Have (0.12.0) | S | E2 |
 | [x] | E9 | Past-chat search | Have | S | E1 |
 | [x] | E10 | Retrieval audit and probe gate | Have | S | E1 |
 
@@ -274,7 +274,7 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | J1 | Context inspector | Missing | S | C7, C8 |
+| [x] | J1 | Context inspector | Have (0.12.0) | S | C7, C8 |
 | [ ] | J2 | Cost cap and budget | Missing | M | C3, C5 |
 | [ ] | J5 | Cheap-model routing | Missing | S | A13, C8 |
 | [ ] | J4 | Local models | Missing | S | C1, C3 |
