@@ -250,7 +250,7 @@ Exit: the app is comfortable to use daily.
 | [ ] | G5 | Completion notification | Missing | S | none |
 | [ ] | G6 | Debug log view | Missing | S | none |
 | [ ] | E5 | System prompt per chat | Unknown | S | E3 |
-| [ ] | F1 | Artifact drawer (versions) | Partial | M | F2, B2 |
+| [x] | F1 | Artifact drawer (versions) | Have (0.12.0) | M | F2, B2 |
 
 ### Phase 11: Extra capabilities
 Exit: each added one at a time with its own tests.
@@ -282,7 +282,7 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J8 | Action audit log | Have (0.3.0: audit log; 0.5.0: columns) | S | D5 |
 | [ ] | J7 | Branch tree view | Missing | M | B2 |
 | [ ] | J9 | Prompt and command files | Missing | M | G1 |
-| [ ] | J10 | Artifact export | Missing | S | F1 |
+| [x] | J10 | Artifact export | Have (0.12.0) | S | F1 |
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
 | [ ] | J11 | Scheduled runs | Missing | L | B8 |
 | [ ] | J12 | MCP and skills | Partial (0.6.0: auth/HTTP; 0.7.0 setup UX; 0.8.0 protocol refresh, state machine and details/composer remain) | L | D4, D5 |

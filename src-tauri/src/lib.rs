@@ -654,6 +654,7 @@ pub fn run() {
             artifacts::artifact_preview_url,
             artifacts::artifact_inline_url,
             artifacts::artifact_preview_drop,
+            artifacts::artifact_zip_export,
             debuglog::debug_log_append,
             debuglog::debug_log_path,
             wipe::wipe_app_files,

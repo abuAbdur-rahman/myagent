@@ -26,6 +26,11 @@ import {
 import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
 import { notifyTurnDone } from "./notify";
 import { logEvent } from "./debug";
+import {
+  artifactVersions,
+  type ArtifactLocator,
+  type ArtifactVersion,
+} from "./artifact-versions";
 import { parseExtractedNotes } from "./memory-extract";
 import {
   rollupReason,
@@ -316,6 +321,8 @@ interface PanelArtifact {
   lang: string;
   code: string;
   path?: string;
+  messageId?: string;
+  locator?: ArtifactLocator;
 }
 
 function defaultPanelTab(lang: string): PanelTab {
@@ -551,6 +558,7 @@ interface AppContextValue {
   refreshTodos: (conversationId: string | null) => Promise<void>;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
+  panelArtifactVersions: ArtifactVersion[];
   panelTab: PanelTab;
   panelMode: PanelMode;
   panelView: PanelView;
@@ -1309,6 +1317,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
+  const [panelArtifactVersions, setPanelArtifactVersions] = useState<ArtifactVersion[]>([]);
   const [panelTab, setPanelTabState] = useState<PanelTab>("code");
   const [panelMode, setPanelModeState] = useState<PanelMode>("dock");
   const [panelView, setPanelViewState] = useState<PanelView>("session");
@@ -1338,6 +1347,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPanelTabState(defaultPanelTab(artifact.lang));
     setPanelOpen(true);
   }, []);
+
+  useEffect(() => {
+    const artifact = panelArtifact;
+    const conversationId = convIdRef.current;
+    if (!artifact?.messageId || !artifact.locator || !conversationId) {
+      setPanelArtifactVersions([]);
+      return;
+    }
+    let live = true;
+    void db
+      .listMessageTree(conversationId)
+      .then((rows) => {
+        if (live) {
+          setPanelArtifactVersions(
+            artifactVersions(artifact.messageId as string, artifact.locator as ArtifactLocator, rows),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (live) {
+          setPanelArtifactVersions([]);
+          console.warn("artifact versions: read failed", error);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [panelArtifact, messageVersions]);
 
   const openSessionPanel = useCallback(() => {
     if (!panelOpenRef.current) setPanelModeState("dock");
@@ -3738,6 +3775,7 @@ setKnowledgeSummary([]);
     refreshTodos,
     panelOpen,
     panelArtifact,
+    panelArtifactVersions,
     panelTab,
     panelMode,
     panelView,

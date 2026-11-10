@@ -36,6 +36,7 @@ import { speakMessage, stopSpeaking, stopSpeakingFor, useSpeakingId, canReadAlou
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
+import type { ArtifactLocator } from "../lib/artifact-versions";
 import { splitOpenUISegments, type OpenUISegment } from "../lib/openui/segments";
 import { splitVizSegments, type VizSegment } from "../lib/viz";
 import { OpenUIRenderer } from "./openui/OpenUIRenderer";
@@ -537,11 +538,15 @@ function ThinkingBlock({
 
 function ArtifactCard({
   id,
+  messageId,
+  locator,
   title,
   lang,
   code,
 }: {
   id: string;
+  messageId: string;
+  locator: ArtifactLocator;
   title: string;
   lang: string;
   code: string;
@@ -551,7 +556,9 @@ function ArtifactCard({
   return (
     <button
       type="button"
-      onClick={() => (isOpen ? closePanel() : openArtifact({ id, title, lang, code }))}
+      onClick={() =>
+        isOpen ? closePanel() : openArtifact({ id, messageId, locator, title, lang, code })
+      }
       className="my-1 flex w-full items-center gap-3 rounded-card bg-raised px-3 py-2.5 text-left shadow-[inset_0_0_0_1px_var(--line)] hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
     >
       <span className="grid h-9 w-9 flex-none place-items-center rounded-field bg-fill-2 text-fg-2">
@@ -704,6 +711,8 @@ function AssistantMessage({
                 <ArtifactCard
                   key={`fence-${segment.artifact.index}`}
                   id={`${message.id}:fence:${segment.artifact.index}`}
+                  messageId={message.id}
+                  locator={{ kind: "fence", index: segment.artifact.index }}
                   title={`${segment.artifact.title}.html`}
                   lang={segment.artifact.lang}
                   code={segment.artifact.code}
@@ -711,17 +720,20 @@ function AssistantMessage({
               ),
             )}
             {declared
+              .map((artifact, position) => ({ artifact, position }))
               .filter(
-                (artifact) =>
+                ({ artifact }) =>
                   !isBinaryArtifact(artifact.lang) ||
                   !outputFiles.some((path) =>
                     path.toLowerCase().endsWith(`.${artifact.lang}`),
                   ),
               )
-              .map((artifact, position) => (
+              .map(({ artifact, position }) => (
               <ArtifactCard
                 key={`tool-${position}`}
                 id={`${message.id}:tool:${position}`}
+                messageId={message.id}
+                locator={{ kind: "tool", index: position }}
                 title={artifact.title}
                 lang={artifact.lang}
                 code={artifact.code}

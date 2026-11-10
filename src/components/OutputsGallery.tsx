@@ -45,10 +45,12 @@ export function OutputsGallery() {
                   type="button"
                   onClick={() =>
                     openArtifact({
-                      id: output.key,
+                      id: output.artifactId ?? output.key,
                       title: output.title,
                       lang: output.lang,
                       code: output.code,
+                      messageId: output.messageId,
+                      locator: output.locator,
                     })
                   }
                   className="flex flex-col gap-2 rounded-card bg-raised p-2 shadow-[inset_0_0_0_1px_var(--line)] hover:shadow-[inset_0_0_0_1px_var(--line-strong)] text-left hover:border-accent/60 hover:bg-hover"

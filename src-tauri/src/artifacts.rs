@@ -1,12 +1,107 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
+use serde::Deserialize;
 use tauri::http::{Request, Response, StatusCode, header};
 use tauri::{Manager, Runtime, UriSchemeContext};
 
 const MAX_ARTIFACT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 16;
+const MAX_ZIP_ARTIFACTS: usize = 64;
+const MAX_ZIP_BYTES: usize = 16 * 1024 * 1024;
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; worker-src blob:; form-action 'none'; base-uri 'none'; frame-src 'self'";
+
+#[derive(Debug, Deserialize)]
+pub struct ArtifactZipEntry {
+    name: String,
+    content: String,
+}
+
+fn zip_entry_name(raw: &str, index: usize, used: &mut HashSet<String>) -> String {
+    let leaf = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
+    let cleaned = leaf
+        .chars()
+        .map(|value| {
+            if value.is_control()
+                || matches!(value, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                ' '
+            } else {
+                value
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(['.', ' '])
+        .chars()
+        .take(100)
+        .collect::<String>();
+    let base = if cleaned.is_empty() {
+        format!("artifact-{}", index + 1)
+    } else {
+        cleaned
+    };
+    let (stem, extension) = match base.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
+            (stem.to_string(), format!(".{extension}"))
+        }
+        _ => (base, String::new()),
+    };
+    let mut candidate = format!("{stem}{extension}");
+    let mut suffix = 2;
+    while !used.insert(candidate.to_ascii_lowercase()) {
+        candidate = format!("{stem}-{suffix}{extension}");
+        suffix += 1;
+    }
+    candidate
+}
+
+#[tauri::command]
+pub fn artifact_zip_export(
+    destination: String,
+    entries: Vec<ArtifactZipEntry>,
+) -> Result<usize, String> {
+    if entries.is_empty() || entries.len() > MAX_ZIP_ARTIFACTS {
+        return Err(format!("artifact zip needs 1-{MAX_ZIP_ARTIFACTS} versions"));
+    }
+    let bytes = entries
+        .iter()
+        .map(|entry| entry.content.len())
+        .sum::<usize>();
+    if bytes > MAX_ZIP_BYTES
+        || entries
+            .iter()
+            .any(|entry| entry.content.len() > MAX_ARTIFACT_BYTES)
+    {
+        return Err("artifact zip is too large".to_string());
+    }
+    let path = PathBuf::from(destination);
+    if path.as_os_str().is_empty() || path.is_dir() {
+        return Err("choose a zip file destination".to_string());
+    }
+    let file = std::fs::File::create(&path).map_err(|error| format!("create zip: {error}"))?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut used = HashSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let name = zip_entry_name(&entry.name, index, &mut used);
+        archive
+            .start_file(name, options)
+            .map_err(|error| format!("start zip entry: {error}"))?;
+        archive
+            .write_all(entry.content.as_bytes())
+            .map_err(|error| format!("write zip entry: {error}"))?;
+    }
+    archive
+        .finish()
+        .map_err(|error| format!("finish zip: {error}"))?;
+    Ok(entries.len())
+}
 
 const SHELL: &str = r#"<!doctype html>
 <html lang="en">
@@ -245,6 +340,7 @@ pub fn artifact_preview_drop(app: tauri::AppHandle, id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     fn header_value(response: &Response<Vec<u8>>, name: &str) -> String {
         response
@@ -352,5 +448,62 @@ mod tests {
         assert!(csp.contains("connect-src 'none'"));
         assert!(csp.contains("script-src 'unsafe-inline' 'unsafe-eval' https:"));
         assert!(csp.contains("default-src 'none'"));
+    }
+
+    #[test]
+    fn zip_export_writes_every_version_with_safe_unique_names() {
+        let path = std::env::temp_dir().join(format!(
+            "myagent-artifact-versions-{}.zip",
+            uuid::Uuid::new_v4()
+        ));
+        let count = artifact_zip_export(
+            path.to_string_lossy().to_string(),
+            vec![
+                ArtifactZipEntry {
+                    name: "../Page.html".to_string(),
+                    content: "<h1>one</h1>".to_string(),
+                },
+                ArtifactZipEntry {
+                    name: "Page.html".to_string(),
+                    content: "<h1>two</h1>".to_string(),
+                },
+            ],
+        )
+        .expect("zip export");
+        assert_eq!(count, 2);
+
+        let file = std::fs::File::open(&path).expect("open zip");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+        assert_eq!(archive.len(), 2);
+        assert_eq!(archive.by_index(0).expect("first").name(), "Page.html");
+        assert_eq!(archive.by_index(1).expect("second").name(), "Page-2.html");
+        let mut content = String::new();
+        archive
+            .by_name("Page-2.html")
+            .expect("named entry")
+            .read_to_string(&mut content)
+            .expect("entry text");
+        assert_eq!(content, "<h1>two</h1>");
+        drop(archive);
+        std::fs::remove_file(&path).expect("remove zip");
+    }
+
+    #[test]
+    fn zip_export_rejects_empty_and_oversized_sets() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "myagent-artifact-empty-{}.zip",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .to_string();
+        assert!(artifact_zip_export(path.clone(), Vec::new()).is_err());
+        let entries = (0..=MAX_ZIP_ARTIFACTS)
+            .map(|index| ArtifactZipEntry {
+                name: format!("{index}.txt"),
+                content: String::new(),
+            })
+            .collect();
+        assert!(artifact_zip_export(path, entries).is_err());
     }
 }

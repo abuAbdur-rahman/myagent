@@ -512,10 +512,10 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # F. Rendering and files
 
 ## F1. Artifact drawer
-- **Status:** Partial (preview exists. 0.4.1: the dock is a 344 px Progress panel — steps, outputs, used in this session — with the artifact view one Back arrow away; the artifact dock defaults to 480 px and resizes; below 1100 px the panel overlays with a focus trap; a sidebar Outputs entry opens a gallery of the chat's artifacts and written files. 0.10.0: an HTML fence is named from `title="..."`, `<title>`, `<h1>` or `HTML preview`; downloads use that name instead of `artifact.html`)
+- **Status:** Have (preview exists. 0.4.1: the dock is a 344 px Progress panel — steps, outputs, used in this session — with the artifact view one Back arrow away; the artifact dock defaults to 480 px and resizes; below 1100 px the panel overlays with a focus trap; a sidebar Outputs entry opens a gallery of the chat's artifacts and written files. 0.10.0: an HTML fence is named from `title="..."`, `<title>`, `<h1>` or `HTML preview`; downloads use that name instead of `artifact.html`. 0.12.0: opening an inline or declared artifact resolves the same artifact position across the assistant message's sibling regenerations, shows a version selector in chronological order, and swaps the preview/source without replacing older content)
 - **Ref:** † OpenWebUI renders web content and SVGs in the interface with live updates. Claude shows artifacts in a side panel with Preview and Code tabs.
 - **Build:** Side drawer: Preview and Code tabs, Copy, Download, version list from regenerations. Triggered by a fenced block with an artifact marker.
-- **Not:** Version list from regenerations.
+- **Not:** Cross-chat artifact history.
 - **Done:** Regenerating adds a version instead of replacing.
 
 ## F2. Artifact isolation
@@ -678,7 +678,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Adding a file adds a command with no restart.
 
 ## J10. Artifact export
-- **Status:** Partial (a single artifact downloads from the panel and preview with its derived name; an all-versions zip is missing)
+- **Status:** Have (a single artifact downloads from the panel and preview with its derived name; 0.12.0: artifacts with regeneration history offer Download all versions, choose a `.zip` destination, and export every complete version under a safe, stable, numbered filename)
 - **Build:** Download a single artifact as `.html`, or all versions of a chat as a zip. Builds on F1.
 - **Done:** The downloaded HTML opens standalone.
 

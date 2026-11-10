@@ -519,6 +519,13 @@ export function artifactExport(path: string, destination: string) {
   return invoke<string>("artifact_export", { path, destination });
 }
 
+export function artifactZipExport(
+  destination: string,
+  entries: { name: string; content: string }[],
+) {
+  return invoke<number>("artifact_zip_export", { destination, entries });
+}
+
 export function sandboxCheckpointDiff(checkpoint: string) {
   return invoke<string>("sandbox_checkpoint_diff", { checkpoint });
 }
