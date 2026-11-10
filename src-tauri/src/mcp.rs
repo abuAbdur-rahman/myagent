@@ -210,16 +210,28 @@ impl ClientHandler for ToolChangeHandler {
 }
 
 pub fn mcp_namespace(server: &str) -> String {
-    server
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
+    let chars: Vec<char> = server.chars().collect();
+    let mut out = String::new();
+    for (index, ch) in chars.iter().enumerate() {
+        if ch.is_ascii_alphanumeric() || *ch == '-' {
+            out.push(*ch);
+            continue;
+        }
+        if *ch == '_' {
+            let escaped = index + 3 < chars.len()
+                && chars[index + 1] == 'u'
+                && chars[index + 2].is_ascii_hexdigit()
+                && chars[index + 3].is_ascii_hexdigit();
+            if escaped {
+                out.push_str("_u5f");
             } else {
-                '_'
+                out.push('_');
             }
-        })
-        .collect()
+            continue;
+        }
+        out.push_str(&format!("_u{:x}", *ch as u32));
+    }
+    out
 }
 
 pub fn mcp_name(server: &str, tool: &str) -> String {
@@ -480,8 +492,17 @@ mod tests {
 
     #[test]
     fn names_sanitize_and_join() {
-        assert_eq!(mcp_name("srv-a", "do.things"), "mcp__srv-a__do_things");
-        assert_eq!(mcp_name("weird name!", "x/y"), "mcp__weird_name___x_y");
+        assert_eq!(mcp_name("srv-a", "do.things"), "mcp__srv-a__do_u2ethings");
+        assert_eq!(
+            mcp_name("weird name!", "x/y"),
+            "mcp__weird_u20name_u21__x_u2fy"
+        );
+    }
+
+    #[test]
+    fn escaped_names_do_not_collide() {
+        assert_ne!(mcp_name("a b", "x"), mcp_name("a_b", "x"));
+        assert_ne!(mcp_name("a_u20b", "x"), mcp_name("a b", "x"));
     }
 
     #[test]
@@ -979,7 +1000,7 @@ mod tests {
     fn per_tool_policy_beats_the_server_default() {
         let blocked = row(None, [None, None, Some("[\"do.things\"]")], "allow");
         assert_eq!(
-            row_policy(&blocked, "mcp__fs__do_things"),
+            row_policy(&blocked, &mcp_name("fs", "do.things")),
             Some(Effect::Deny),
             "an explicit block survives an allow-everything server"
         );

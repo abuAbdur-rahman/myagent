@@ -1,5 +1,7 @@
 import { skillRead, type SkillInfo } from "./api";
 
+const SKILL_COMMAND = /^\/skill(?:\s+([\s\S]*))?$/;
+
 const BOUNDARY_TAG = /<\/?(?:skill_content|skill_files|file)(?=[\s\u0085/>])[^>]*>/gi;
 const BOUNDARY_PREFIX = /<\/?(?:skill_content|skill_files|file)(?=[\s\u0085/]|$)/gi;
 const MAX_STRIP_PASSES = 8;
@@ -34,6 +36,29 @@ export function parseSkillMentions(text: string): string[] {
 }
 
 export type SkillSummary = Pick<SkillInfo, "id" | "name" | "description">;
+
+export function parseSkillCommand(text: string): string | null {
+  const match = text.trim().match(SKILL_COMMAND);
+  return match ? (match[1] ?? "").trim() : null;
+}
+
+export function matchSkills(skills: SkillInfo[], query: string): SkillInfo[] {
+  const needle = query.trim().toLowerCase();
+  const enabled = skills.filter((skill) => skill.enabled);
+  if (!needle) return enabled;
+  return enabled.filter(
+    (skill) =>
+      skill.id.toLowerCase().includes(needle) ||
+      skill.name.toLowerCase().includes(needle) ||
+      skill.title.toLowerCase().includes(needle) ||
+      skill.description.toLowerCase().includes(needle) ||
+      skill.triggers.some((trigger) => trigger.toLowerCase().includes(needle)),
+  );
+}
+
+export function skillMention(name: string): string {
+  return `@${name} `;
+}
 
 export function buildSkillIndexBlock(skills: SkillSummary[]): string {
   if (skills.length === 0) return "";

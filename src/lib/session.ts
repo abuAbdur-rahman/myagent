@@ -1,6 +1,7 @@
 import { parseDocAttachments, parseImageAttachments } from "./attachments";
 import { parseDeclaredArtifacts, parseToolLog } from "./message-parse";
 import type { Message, Todo } from "./types";
+import type { ArtifactLocator } from "./artifact-versions";
 
 export interface SessionOutput {
   key: string;
@@ -9,6 +10,9 @@ export interface SessionOutput {
   code: string;
   path?: string;
   kind: "artifact" | "file";
+  messageId?: string;
+  locator?: ArtifactLocator;
+  artifactId?: string;
 }
 
 function extensionOf(name: string): string {
@@ -69,7 +73,7 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
         if (!writtenPaths.includes(path)) writtenPaths.push(path);
       }
     }
-    for (const artifact of parseDeclaredArtifacts(message.artifacts)) {
+    for (const [index, artifact] of parseDeclaredArtifacts(message.artifacts).entries()) {
       const key = `${artifact.title}::${artifact.lang}`;
       if (artifactKeys.has(key)) continue;
       artifactKeys.add(key);
@@ -79,6 +83,9 @@ export function sessionOutputs(messages: Message[]): SessionOutput[] {
         lang: artifact.lang,
         code: artifact.code,
         kind: "artifact",
+        messageId: message.id,
+        locator: { kind: "tool", index },
+        artifactId: `${message.id}:tool:${index}`,
       });
     }
   }

@@ -264,6 +264,24 @@ pub fn map_chunk(value: &Value) -> ChatChunk {
 mod tests {
     use super::*;
 
+    #[test]
+    fn every_recorded_fixture_matches_expected_events() {
+        for name in [
+            "plain",
+            "reasoning",
+            "tools",
+            "length",
+            "mid_error",
+            "comments",
+            "usage",
+            "coalesced",
+            "multibyte",
+            "multiline",
+        ] {
+            crate::test_support::assert_fixture_events(name);
+        }
+    }
+
     fn feed_all(parser: &mut SseParser, raw: &str, cut: usize) -> Vec<SseItem> {
         let bytes = raw.as_bytes();
         let mut out = Vec::new();
@@ -345,9 +363,10 @@ mod tests {
         let mut parser = SseParser::new();
         let items = feed_all(&mut parser, raw, 100);
         assert_eq!(payloads(items), vec!["line1\nline2"]);
-        let mut parser = SseParser::new();
-        let done = parser.feed(b"data: [DONE]\n\n");
-        assert!(matches!(done.as_slice(), [SseItem::Done]));
+        assert!(matches!(
+            parser.feed(b"data: [DONE]\n\n").as_slice(),
+            [SseItem::Done]
+        ));
     }
 
     #[test]

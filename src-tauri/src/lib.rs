@@ -6,6 +6,7 @@ mod computer_use_hotkey;
 #[cfg(windows)]
 mod computer_use_server;
 mod connections;
+mod debuglog;
 mod documents;
 mod error;
 mod extract;
@@ -23,12 +24,15 @@ mod skills;
 mod sse;
 mod state;
 mod storage;
+#[cfg(test)]
+mod test_support;
 mod tools;
 mod tooltext;
 mod vault;
 mod voice;
 mod webfetch;
 mod websearch;
+mod wipe;
 
 use std::time::Duration;
 
@@ -425,6 +429,41 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE messages ADD COLUMN completed_at INTEGER;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 35,
+            description: "add_message_tree",
+            sql: "
+                ALTER TABLE messages ADD COLUMN parent_id TEXT;
+                ALTER TABLE conversations ADD COLUMN current_leaf_id TEXT;
+                UPDATE messages SET parent_id = (
+                    SELECT prev.id FROM messages AS prev
+                    WHERE prev.conversation_id = messages.conversation_id
+                      AND (prev.created_at < messages.created_at
+                        OR (prev.created_at = messages.created_at AND prev.id < messages.id))
+                    ORDER BY prev.created_at DESC, prev.id DESC
+                    LIMIT 1
+                );
+                UPDATE conversations SET current_leaf_id = (
+                    SELECT m.id FROM messages AS m
+                    WHERE m.conversation_id = conversations.id
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                );
+            ",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 36,
+            description: "add_conversation_temporary",
+            sql: "ALTER TABLE conversations ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0;",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 37,
+            description: "add_memory_trust",
+            sql: "ALTER TABLE memories ADD COLUMN trust TEXT NOT NULL DEFAULT 'trusted';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -447,6 +486,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .on_permission_request(|webview, kind| {
             if matches!(kind, tauri::webview::PermissionKind::Microphone)
                 && webview.label() == "main"
@@ -514,17 +554,20 @@ pub fn run() {
             llm::list_model_caps,
             llm::cancel_stream,
             llm::chat_stream,
+            llm::inspect_request,
             llm::suggest_title,
             llm::summarize,
             llm::extract_memory,
             memory::commands::memory_migrate,
             memory::commands::memory_read,
+            memory::commands::memory_validate,
             memory::commands::memory_append,
             memory::commands::memory_update,
             memory::commands::memory_forget,
             memory::commands::memory_write_raw,
             memory::commands::memory_project_delete,
             memory::commands::memory_search,
+            memory::commands::memory_prompt,
             memory::commands::memory_reindex,
             memory::commands::knowledge_search,
             memory::commands::knowledge_reindex,
@@ -612,8 +655,15 @@ pub fn run() {
             sandbox::sandbox_set_allow_installs,
             sandbox::sandbox_preview,
             sandbox::artifact_export,
+            sandbox::sandbox_checkpoint_diff,
+            sandbox::sandbox_checkpoint_restore,
             artifacts::artifact_preview_url,
+            artifacts::artifact_inline_url,
             artifacts::artifact_preview_drop,
+            artifacts::artifact_zip_export,
+            debuglog::debug_log_append,
+            debuglog::debug_log_path,
+            wipe::wipe_app_files,
             voice::voice_status,
             voice::voice_enable,
             voice::voice_disable,
@@ -822,6 +872,13 @@ mod migration_tests {
                 .await
                 .expect("pending survives");
         assert_eq!(trust, "trusted");
+        let memory_trust: String = sqlx::query_scalar(
+            "SELECT trust FROM memories WHERE id = 'aaaaaaaa-1111-2222-3333-444444444444'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("memory trust defaults");
+        assert_eq!(memory_trust, "trusted");
 
         let again = crate::memory::migrate::run(&pool, &dir, "0.5.0")
             .await
@@ -871,6 +928,42 @@ mod migration_tests {
         .expect("bm25 ranks")
         .get("r");
         assert!(rank.is_finite(), "bm25 returns a score");
+    }
+
+    #[tokio::test]
+    async fn message_tree_backfills_a_single_chain() {
+        let pool = pool().await;
+        apply_versions(&pool, |version| version <= 34).await;
+        sqlx::query("INSERT INTO conversations (id, title, connection_id, model, created_at, updated_at) VALUES ('c1', 't', NULL, NULL, 1, 1)")
+            .execute(&pool)
+            .await
+            .expect("seed chat");
+        for (id, at) in [("m1", 2), ("m2", 3), ("m3", 4)] {
+            sqlx::query(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, 'c1', 'user', 'x', ?)",
+            )
+            .bind(id)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .expect("seed message");
+        }
+        apply_versions(&pool, |version| version == 35).await;
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, parent_id FROM messages ORDER BY created_at")
+                .fetch_all(&pool)
+                .await
+                .expect("tree rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].1, None);
+        assert_eq!(rows[1].1.as_deref(), Some("m1"));
+        assert_eq!(rows[2].1.as_deref(), Some("m2"));
+        let leaf: Option<String> =
+            sqlx::query_scalar("SELECT current_leaf_id FROM conversations WHERE id = 'c1'")
+                .fetch_one(&pool)
+                .await
+                .expect("leaf");
+        assert_eq!(leaf.as_deref(), Some("m3"));
     }
 
     #[tokio::test]

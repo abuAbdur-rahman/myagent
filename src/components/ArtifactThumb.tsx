@@ -29,6 +29,7 @@ export function ArtifactThumb({ artifact }: { artifact: ThumbArtifact }) {
           sandbox=""
           tabIndex={-1}
           title=""
+          allow="camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'"
           srcDoc={stripActiveContent(artifact.code)}
           className="pointer-events-none origin-top-left border-0"
           style={{ width: "400%", height: "400%", transform: "scale(0.25)" }}

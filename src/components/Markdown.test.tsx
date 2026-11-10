@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Markdown } from "./Markdown";
+
+const writeText = vi.fn(async () => undefined);
 
 afterEach(cleanup);
 
@@ -58,5 +60,48 @@ describe("Markdown code blocks", () => {
     render(<Markdown content={"```txt\nplain words only\n```"} />);
     expect(await screen.findByText("txt")).toBeTruthy();
     expect(document.querySelector(".codeblock")).not.toBeNull();
+  });
+
+  it("copies the fenced source exactly", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const source = 'const s = "a & b < c";\nsecond()';
+    render(<Markdown content={`\`\`\`ts\n${source}\n\`\`\``} />);
+    await waitFor(
+      () => expect(document.querySelector(".codeblock pre code span")).not.toBeNull(),
+      { timeout: 15000 },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(source));
+  }, 20000);
+
+  it("leaves code plain while streaming and highlights once finished", async () => {
+    const content = "```ts\nconst answer = 42;\n```";
+    const { container, rerender } = render(<Markdown content={content} streaming />);
+    await screen.findByText("ts");
+    expect(container.querySelector(".codeblock-body")).not.toBeNull();
+    expect(container.querySelector(".codeblock pre code span")).toBeNull();
+
+    rerender(<Markdown content={content} />);
+    await waitFor(
+      () => expect(container.querySelector(".codeblock pre code span")).not.toBeNull(),
+      { timeout: 15000 },
+    );
+  }, 20000);
+});
+
+describe("Markdown math and diagrams", () => {
+  it("renders inline math with KaTeX", () => {
+    render(<Markdown content={"$x^2$"} />);
+    expect(document.querySelector(".katex")).not.toBeNull();
+  });
+
+  it("reserves a mermaid block and keeps its source", () => {
+    render(<Markdown content={"```mermaid\ngraph TD; A-->B;\n```"} />);
+    const node = document.querySelector(".mermaid-src");
+    expect(node).not.toBeNull();
+    expect(node?.getAttribute("data-src")).toContain("graph");
   });
 });

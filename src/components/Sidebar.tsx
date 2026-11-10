@@ -6,6 +6,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  Ghost,
   MoreHorizontal,
   Package,
   Pencil,
@@ -20,6 +21,7 @@ import {
 import { useApp } from "../lib/store";
 import { sessionOutputs } from "../lib/session";
 import * as db from "../lib/db";
+import { filterChatsByTag } from "../lib/chat-tags";
 import { arrangeChats } from "../lib/grouping";
 import { DropdownMenu, type MenuEntry } from "./ui/select";
 import { confirmDialog } from "./ConfirmDialog";
@@ -231,6 +233,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     workingConversationId,
     selectConversation,
     newConversation,
+    newTemporaryChat,
     removeConversation,
     renameConversation,
     togglePin,
@@ -323,9 +326,10 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
     });
   };
 
-  const shown = tagFilter
-    ? conversations.filter((c) => tagMap.get(c.id)?.includes(tagFilter))
-    : conversations;
+  const shown = useMemo(
+    () => filterChatsByTag(conversations, tagFilter, tagMap),
+    [conversations, tagFilter, tagMap],
+  );
   const pinnedChats = shown.filter((chat) => chat.pinned === 1);
   const groups = arrangeChats(
     shown.filter((chat) => !chat.project_id && chat.pinned !== 1),
@@ -526,6 +530,15 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
           >
             <Search size={16} className="text-fg-3" />
             <span>Search</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void newTemporaryChat()}
+            title="Temporary chat — not saved after you leave it"
+            className="flex h-[34px] items-center gap-2.5 rounded-field px-2.5 text-sm text-fg-2 hover:bg-fill-2 hover:text-fg"
+          >
+            <Ghost size={16} className="text-fg-3" />
+            <span>Temporary</span>
           </button>
           <button
             type="button"
@@ -740,7 +753,7 @@ export function Sidebar({ onOpenProject }: { onOpenProject: (id: string | null) 
             </div>
           );
         })}
-        {ready && conversations.length === 0 && (
+        {ready && conversations.filter((c) => !c.temporary).length === 0 && (
           <p className="px-2.5 py-4 text-xs text-fg-3">No chats yet.</p>
         )}
       </div>

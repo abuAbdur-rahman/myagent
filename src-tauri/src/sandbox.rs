@@ -1079,6 +1079,111 @@ fn best_effort_checkpoint(app: &tauri::AppHandle, root: &Path) -> Option<String>
     }
 }
 
+fn valid_checkpoint(reference: &str) -> Result<(), String> {
+    if !reference.starts_with("refs/myagent/pre-exec/") {
+        return Err("unknown checkpoint".to_string());
+    }
+    if reference
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '$' | '`' | '"' | '\''))
+    {
+        return Err("invalid checkpoint".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sandbox_checkpoint_diff(
+    app: tauri::AppHandle,
+    checkpoint: String,
+) -> Result<String, String> {
+    valid_checkpoint(&checkpoint)?;
+    let root = project_root(&app)?;
+    tokio::task::spawn_blocking(move || {
+        let mut text = String::new();
+        let stat = git(
+            &[
+                "diff".into(),
+                "--stat".into(),
+                checkpoint.clone(),
+                "--".into(),
+            ],
+            &root,
+            &[],
+        )?;
+        text.push_str(&String::from_utf8_lossy(&stat.stdout));
+        let patch = git(&["diff".into(), checkpoint, "--".into()], &root, &[])?;
+        text.push_str(&String::from_utf8_lossy(&patch.stdout));
+        if text.len() > 120_000 {
+            let mut end = 120_000;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+            text.push_str("\n[diff truncated]");
+        }
+        if text.trim().is_empty() {
+            text.push_str("No tracked changes since this checkpoint.");
+        }
+        Ok(text)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn sandbox_checkpoint_restore(
+    app: tauri::AppHandle,
+    checkpoint: String,
+    paths: Vec<String>,
+) -> Result<usize, String> {
+    valid_checkpoint(&checkpoint)?;
+    if paths.is_empty() {
+        return Err("no files to restore".to_string());
+    }
+    let root = project_root(&app)?;
+    tokio::task::spawn_blocking(move || {
+        let mut safe = Vec::new();
+        for path in paths {
+            let candidate = std::path::Path::new(&path);
+            if candidate.is_absolute()
+                || candidate
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(format!("refusing path: {path}"));
+            }
+            safe.push(path);
+        }
+        let mut args = vec![
+            "restore".to_string(),
+            "--source".to_string(),
+            checkpoint.clone(),
+            "--worktree".to_string(),
+            "--".to_string(),
+        ];
+        let mut restorable = Vec::new();
+        for path in safe {
+            let spec = format!("{checkpoint}:{path}");
+            let exists = git(&["cat-file".into(), "-e".into(), spec], &root, &[])?;
+            if exists.status.success() {
+                restorable.push(path);
+            }
+        }
+        if restorable.is_empty() {
+            return Err("no tracked files to restore for this step".to_string());
+        }
+        args.extend(restorable.iter().cloned());
+        let out = git(&args, &root, &[])?;
+        if !out.status.success() {
+            return Err(format!("restore failed: {}", text(&out.stderr)));
+        }
+        Ok(restorable.len())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn prune_checkpoints(root: &Path) {
     let Ok(list) = git(
         &[
@@ -1565,10 +1670,15 @@ pub(crate) async fn run_inner(
     })
 }
 
+pub fn configured_project_root(app: &tauri::AppHandle) -> Option<PathBuf> {
+    project_root(app).ok()
+}
+
 pub fn project_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let cfg = config(app);
-    let root = cfg.project_root.ok_or("sandbox has no project folder")?;
-    let root = std::fs::canonicalize(root).map_err(|e| format!("project folder: {e}"))?;
+    let root = config(app)
+        .project_root
+        .ok_or("sandbox has no project folder")?;
+    let root = std::fs::canonicalize(root).map_err(|error| format!("project folder: {error}"))?;
     if !root.is_dir() {
         return Err("project folder is not a directory".to_string());
     }
@@ -1730,14 +1840,20 @@ pub fn write_file(app: &tauri::AppHandle, rel: &str, content: &str) -> Result<St
     if content.len() > 2_000_000 {
         return Err("content too large (max 2 MB)".to_string());
     }
-    if path.exists() {
-        best_effort_checkpoint(app, &project_root(app)?);
-    }
+    let checkpoint = if path.exists() {
+        best_effort_checkpoint(app, &project_root(app)?)
+    } else {
+        None
+    };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create folder: {e}"))?;
     }
     std::fs::write(&path, content).map_err(|e| format!("write: {e}"))?;
-    Ok(format!("wrote {} bytes to {rel}", content.len()))
+    let mut out = format!("wrote {} bytes to {rel}", content.len());
+    if let Some(reference) = checkpoint {
+        out.push_str(&format!("\ncheckpoint: {reference}"));
+    }
+    Ok(out)
 }
 
 pub fn edit_file(
@@ -1752,7 +1868,7 @@ pub fn edit_file(
     }
     let path = resolve_write(app, rel)?;
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))?;
-    best_effort_checkpoint(app, &project_root(app)?);
+    let checkpoint = best_effort_checkpoint(app, &project_root(app)?);
     let count = text.matches(old).count();
     if count == 0 {
         return Err("old text was not found".to_string());
@@ -1763,11 +1879,15 @@ pub fn edit_file(
         text.replacen(old, new, 1)
     };
     std::fs::write(&path, updated).map_err(|e| format!("write: {e}"))?;
-    Ok(format!(
+    let mut out = format!(
         "edited {rel}: {} replacement{}",
         if replace_all { count } else { 1 },
         if count == 1 { "" } else { "s" }
-    ))
+    );
+    if let Some(reference) = checkpoint {
+        out.push_str(&format!("\ncheckpoint: {reference}"));
+    }
+    Ok(out)
 }
 
 pub fn delete_file(app: &tauri::AppHandle, rel: &str) -> Result<String, String> {
@@ -1776,7 +1896,7 @@ pub fn delete_file(app: &tauri::AppHandle, rel: &str) -> Result<String, String> 
     if is_reparse(&meta) {
         return Err("refusing to delete a link".to_string());
     }
-    best_effort_checkpoint(app, &project_root(app)?);
+    let checkpoint = best_effort_checkpoint(app, &project_root(app)?);
     if meta.is_dir() {
         let empty = std::fs::read_dir(&path)
             .map_err(|e| format!("delete: {e}"))?
@@ -1789,7 +1909,11 @@ pub fn delete_file(app: &tauri::AppHandle, rel: &str) -> Result<String, String> 
     } else {
         std::fs::remove_file(&path).map_err(|e| format!("delete: {e}"))?;
     }
-    Ok(format!("deleted {rel}"))
+    let mut out = format!("deleted {rel}");
+    if let Some(reference) = checkpoint {
+        out.push_str(&format!("\ncheckpoint: {reference}"));
+    }
+    Ok(out)
 }
 
 fn walk_project(root: &Path) -> ignore::Walk {

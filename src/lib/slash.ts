@@ -16,6 +16,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "compact", label: "Compact context now" },
   { name: "export", label: "Export chat", hint: "[md|json]", takesArgs: true },
   { name: "model", label: "Switch model", hint: "[id]", takesArgs: true },
+  { name: "skill", label: "Use a skill", hint: "[name]", takesArgs: true },
+  { name: "visualize", label: "Build an inline visual", hint: "[what]", takesArgs: true },
   { name: "memory", label: "Open memory" },
   { name: "settings", label: "Open settings" },
 ];
@@ -94,6 +96,7 @@ export interface SlashHandlers {
   compact: (args: string) => void;
   export: (args: string) => void;
   model: (args: string) => void;
+  visualize: (args: string) => void;
   memory: (args: string) => void;
   settings: (args: string) => void;
 }

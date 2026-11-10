@@ -15,9 +15,44 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ## Current
 
-- Shipped: 0.7.0 (MCP setup UX + Windows computer use), 0.7.1 (DeepSeek V4).
-- Next: 0.8.0 - `docs/plan/v0.8.0-hardening.md`.
-- After that: 1.0.0 - `docs/releases/v1.0.0.md`.
+- Release candidate: 0.12.0 (message versions, queued turns, inline visuals,
+  trusted context, checkpoints, diagnostics and artifact version export).
+- Next: 1.0.0. The 0.8.0 plan and the old v1 wishlist are history, not a gate.
+- Status audit 2026-11-10: every formerly partial entry was verified and closed.
+  Eleven catalogue entries remain Missing; J14 is separately unshipped. Verify
+  a row in code before trusting it.
+- Scope decision 2026-11-08: 1.0.0 is data safety, daily-driver polish and the
+  security gate. Cost control, compare, quick-ask, folders, scheduled runs,
+  branch tree and code mode move past 1.0.0.
+- 0.12.0 also carries A16 inline visual (`/visualize` plus the `viz` fence),
+  A8 queued messages, B2 message versions, B4 message search, B8 temporary
+  chats, D11/D12 diff and undo, F5 Mermaid/LaTeX, G5 notifications, G6
+  diagnostics, B11 file-wipe coverage, and the MCP alias, envelope, skill-cap
+  and zip pre-scan fixes.
+
+### v1.0.0 scope (owner decision 2026-11-08)
+
+Exit: no known data-loss path, daily chat is comfortable, the security review is
+closed and the installer passes on a clean Windows machine.
+
+| Do | ID | Feature | Status | Size | Depends |
+|---|---|---|---|---|---|
+| [x] | B2 | Message tree + version switcher | Have (0.12.0) | M | H1 |
+| [x] | D12 | Checkpoints / undo (D11 diff rides with it) | Have (0.12.0) | M | D10, B2 |
+| [x] | A8 | Queue messages while streaming | Have (0.12.0) | S | A2 |
+| [x] | B4 | Chat search UI over `message_fts` | Have (0.12.0) | S | B1 |
+| [x] | B8 | Temporary chat | Have (0.12.0) | S | B2 |
+| [x] | G5 | Completion notification | Have (0.12.0) | S | none |
+| [x] | G6 | Debug log and copy diagnostics | Have (0.12.0) | S | none |
+| [x] | F5 | Mermaid and LaTeX renderers | Have (0.12.0) | M | A9 |
+| [x] | B11 | Delete-everything filesystem test | Have (0.12.0) | S | D13, F3 |
+| [x] | — | Hardening: MCP alias collision, untrusted framing, `SKILL.md` cap, document decompression | Have (0.12.0; PDF streams still uncapped) | M | none |
+| [ ] | — | Clean-machine MCP + computer-use eval, security review, installer check | Planned | M | 0.11.0 |
+
+Deferred past 1.0.0: B6 folders, D6 permission modes, D20 result handles and
+on-demand tool definitions, D21 code mode, E4 project instruction files, J2
+cost cap, J3 compare, J5 cheap-model routing, J6 quick-ask, J7 branch tree, J11
+scheduled runs and J14 local navigator.
 
 ## Now
 
@@ -55,9 +90,9 @@ Exit: one command runs green tests on a clean checkout.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | H1 | Test harness | Partial (CI runs the Rust suite only) | S | none |
-| [x] | H2 | Recorded fixtures | Missing | S | H1 |
-| [x] | A11 | Composer fixes (in progress) | Partial | S | none |
+| [x] | H1 | Test harness | Have (0.12.0) | S | none |
+| [x] | H2 | Recorded fixtures | Have (0.12.0) | S | H1 |
+| [x] | A11 | Composer fixes (in progress) | Have (0.12.0) | S | none |
 
 ### Phase 2: Stream reliability
 Exit: every fixture (plain, reasoning, `length`, mid-stream error, 429) ends in the right UI state.
@@ -76,8 +111,8 @@ Exit: the same markdown renders identically for user and assistant messages.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | A9 | Markdown rendering (assistant and user) | Unknown | S | none |
-| [x] | A10 | Code blocks in messages | Unknown | S | A9 |
+| [x] | A9 | Markdown rendering (assistant and user) | Have (0.12.0) | S | none |
+| [x] | A10 | Code blocks in messages | Have (0.12.0) | S | A9 |
 
 ### Phase 4: Safety
 Exit: no shell call runs without approval; deny beats allow; hostile artifact reaches nothing.
@@ -86,8 +121,8 @@ Exit: no shell call runs without approval; deny beats allow; hostile artifact re
 |---|---|---|---|---|---|
 | [x] | D4 | Permission engine | Have (0.1.3) | M | H1 |
 | [x] | D5 | Approval UI | Have (0.1.3) | M | D4 |
-| [x] | D7 | Shell tool (gated) | Partial (0.1.3: cwd still home) | M | D4, D5 |
-| [x] | F2 | Artifact isolation | Missing | M | H1 |
+| [x] | D7 | Shell tool (gated) | Have (0.12.0) | M | D4, D5 |
+| [x] | F2 | Artifact isolation | Have (0.12.0) | M | H1 |
 | [x] | E2 | Secret refusal in memory | Missing | S | none |
 
 ### Phase 5: Data safety
@@ -95,7 +130,7 @@ Exit: edit and regenerate never destroy a message.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | B2 | Message tree (branches) | Missing | M | H1 |
+| [x] | B2 | Message tree (branches) | Have (0.12.0) | M | H1 |
 | [x] | A12 | Message actions rewired to branches | Have | S | B2 |
 
 ### Phase 6: Scoped memory
@@ -103,8 +138,8 @@ Exit: memory writes only bio, preferences, or explicit asks; thread summary stay
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [x] | E1 | Scoped memory recall | Partial | S | H1 |
-| [x] | E6 | Write-only-what-matters memory + thread roll-up | Missing | S | E2 |
+| [x] | E1 | Scoped memory recall | Have (0.12.0) | S | H1 |
+| [x] | E6 | Write-only-what-matters memory + thread roll-up | Have (0.12.0) | S | E2 |
 | [x] | E9 | Past-chat search | Have | S | E1 |
 | [x] | E10 | Retrieval audit and probe gate | Have | S | E1 |
 
@@ -120,14 +155,15 @@ chose to defer.
 
 | Item | Where | Note |
 |---|---|---|
-| MCP alias collision | `src-tauri/src/mcp.rs` namespace encoding | Two servers can expose the same tool name and the model sees one of them. Needs a namespacing scheme that survives reconnects. |
-| Untrusted framing | MCP tool descriptions and results, `web_fetch` bodies, `web_search` hits | Tool output is delimited but not neutralised, so a hostile page can forge the delimiter or a trailer. Phase 1 framing work. |
-| Deny-table ordering | `mcp.rs` `filter_tools` / `blocked` | Deny-only today; revisit when allow-lists land. |
 | Bidi and C1 controls | raw tool output preview | Not stripped; they can reorder or hide text in the preview. |
-| `SKILL.md` size cap | skills loader | A skill's text reaches context with no cap. |
 | Attachment parse cache | `src/lib/attachments.ts` `parseMessageAttachments` | Re-parses on every read; memoise when transcripts grow. |
-| Frontend tests not in CI | `.github/workflows/ci.yml` | `npm test` (vitest) is green locally but CI runs only the Rust suite. Add the step with the next CI change. |
 | `mcp_add` accepts any stdio command | Settings | Intentional: the user types it themselves behind the approval gate. Recorded so it is not re-flagged. |
+
+Resolved since this table was written: MCP aliases now escape unsafe characters as
+`_u<hex>` instead of collapsing them to `_`, so two servers cannot share a
+namespace; tool output is neutralised at every envelope boundary
+(`mcp`, `web_fetch`, `web_search`, `research`); `SKILL.md` is capped at 24,000
+chars; frontend tests run in CI.
 
 ### Dependency advisories
 
@@ -142,7 +178,7 @@ first two are the abort class the extraction guard cannot catch.
 
 | Item | Where | Note |
 |---|---|---|
-| Unbounded decompression of a document | `extract.rs` via `docx-rs` and `pdf-extract` | Neither caps `read_to_end`, so a zip bomb inside a 10 MB docx or pdf inflates to gigabytes; an allocation failure aborts the process and `catch_unwind` cannot catch an abort. Fix by extracting in a helper process or under a job-object memory limit. |
+| Unbounded decompression of a document | `extract.rs` via `docx-rs` and `pdf-extract` | 0.12.0 adds a zip pre-scan: a docx/ods/xlsx whose entries sum past 200 MB or compress past a 200:1 ratio is refused before extraction. PDF streams are still handed to `pdf-extract` with only the 10 MB input cap, so a crafted PDF can still exhaust memory and abort. Fix by extracting in a helper process or under a job-object memory limit. |
 | Deep nesting in HTML | `extract.rs` `html_body` | A pre-scan refuses more than 512 nested tags, which covers the measured recursion bomb, but the check is a heuristic (void-element list) and `htmd`'s recursive drop is still bounded by the stack. |
 | Extractor version in the store address | `documents.rs` `attachment_ingest` | The address is the caller's hash and the write is skipped when the file exists, so a later extractor improvement never refreshes an existing file. |
 | Caller-supplied digest | `documents.rs` `attachment_ingest` | The digest is never recomputed Rust-side, so a buggy renderer could point a row at another document's text (path traversal is closed). |
@@ -183,19 +219,19 @@ Exit: the agent runs gated tools with capped output and a loop guard. No file wo
 |---|---|---|---|---|---|
 | [ ] | D13 | Output cap and spill files | Have (0.1.4) | S | D7 |
 | [ ] | D3 | Step cap and doom-loop guard | Have (0.3.3) | S | D1 |
-| [ ] | D2 | Streaming tool loop | Missing | L | A3, D1 |
+| [x] | D2 | Streaming tool loop | Have (0.12.0) | L | A3, D1 |
 
 ### Phase 9: Conversation management
 Exit: find, organize, back up and wipe chats.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | B8 | Temporary chat | Missing | S | B2 |
-| [ ] | B4 | Search | Missing | M | B1 |
-| [ ] | B9 | Export | Partial | S | B2 |
-| [ ] | B10 | Import | Missing | S | B9 |
-| [ ] | B11 | Delete data (every byte) | Partial | S | D13, F3 |
-| [ ] | B7 | Tags | Missing | S | B1 |
+| [x] | B8 | Temporary chat | Have (0.12.0) | S | B2 |
+| [x] | B4 | Search | Have (0.12.0) | M | B1 |
+| [x] | B9 | Export | Have | S | B2 |
+| [x] | B10 | Import | Have | S | B9 |
+| [x] | B11 | Delete data (every byte) | Have (0.12.0) | S | D13, F3 |
+| [x] | B7 | Tags | Have (0.12.0) | S | B1 |
 | [ ] | B6 | Folders | Missing | M | B1 |
 | [ ] | B5 | Pins | Have | S | none |
 | [ ] | B3 | Chat list polish | Have | S | none |
@@ -206,17 +242,17 @@ Exit: the app is comfortable to use daily.
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | C1 | Provider and API key storage (verify first) | Partial (0.6.0: ten keys + rotation) | S | none |
+| [x] | C1 | Provider and API key storage (verify first) | Have (0.12.0) | S | none |
 | [ ] | C2 | Model picker polish | Have | S | C3 |
 | [ ] | G3 | Settings page | Unknown | M | C1, D4 |
 | [ ] | G1 | Slash commands | Have (0.2.0) | M | C9, B9 |
-| [ ] | G2 | Keyboard shortcuts | Partial | S | none |
+| [x] | G2 | Keyboard shortcuts | Have (0.12.0) | S | none |
 | [ ] | A8 | Queue messages while streaming | Missing | S | A2 |
 | [ ] | G4 | Theme | Unknown | S | none |
 | [ ] | G5 | Completion notification | Missing | S | none |
 | [ ] | G6 | Debug log view | Missing | S | none |
 | [ ] | E5 | System prompt per chat | Unknown | S | E3 |
-| [ ] | F1 | Artifact drawer (versions) | Partial | M | F2, B2 |
+| [x] | F1 | Artifact drawer (versions) | Have (0.12.0) | M | F2, B2 |
 
 ### Phase 11: Extra capabilities
 Exit: each added one at a time with its own tests.
@@ -240,7 +276,7 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 
 | Do | ID | Feature | Status | Size | Depends |
 |---|---|---|---|---|---|
-| [ ] | J1 | Context inspector | Missing | S | C7, C8 |
+| [x] | J1 | Context inspector | Have (0.12.0) | S | C7, C8 |
 | [ ] | J2 | Cost cap and budget | Missing | M | C3, C5 |
 | [ ] | J5 | Cheap-model routing | Missing | S | A13, C8 |
 | [ ] | J4 | Local models | Missing | S | C1, C3 |
@@ -248,7 +284,7 @@ Exit: each shipped one at a time, with its own tests. Do not start before Phase 
 | [ ] | J8 | Action audit log | Have (0.3.0: audit log; 0.5.0: columns) | S | D5 |
 | [ ] | J7 | Branch tree view | Missing | M | B2 |
 | [ ] | J9 | Prompt and command files | Missing | M | G1 |
-| [ ] | J10 | Artifact export | Missing | S | F1 |
+| [x] | J10 | Artifact export | Have (0.12.0) | S | F1 |
 | [ ] | J6 | Quick-ask hotkey | Missing | M | B8 |
 | [ ] | J11 | Scheduled runs | Missing | L | B8 |
 | [ ] | J12 | MCP and skills | Partial (0.6.0: auth/HTTP; 0.7.0 setup UX; 0.8.0 protocol refresh, state machine and details/composer remain) | L | D4, D5 |

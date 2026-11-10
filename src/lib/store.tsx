@@ -24,6 +24,29 @@ import {
   type ChatDocument,
 } from "./chat-docs";
 import { buildSkillIndexBlock, resolveSkillMentions } from "./skills";
+import { notifyTurnDone } from "./notify";
+import { logEvent } from "./debug";
+import {
+  artifactVersions,
+  type ArtifactLocator,
+  type ArtifactVersion,
+} from "./artifact-versions";
+import { parseExtractedNotes } from "./memory-extract";
+import {
+  hasUntrustedProvenance,
+  projectScopedNotes,
+  rollupReason,
+  rollupTranscript,
+  uniqueRollupNotes,
+  type RollupReason,
+} from "./memory-rollup";
+import {
+  deepestLeaf,
+  messagePath,
+  siblingVersions,
+  versionMap,
+  type VersionInfo,
+} from "./message-tree";
 import { fitImageBudget } from "./image";
 import {
   lookupContextLength,
@@ -109,8 +132,34 @@ function canonicalMemoryId(id: string): string {
   return id.replace(/-/g, "").toLowerCase();
 }
 
-function sentMemories(memories: Memory[], ids: Set<string> | null): Memory[] {
-  return ids === null ? memories : memories.filter((memory) => ids.has(memory.id));
+function sentMemories(memories: Memory[], ids: readonly string[] | null): Memory[] {
+  if (ids === null) return memories;
+  const byId = new Map(memories.map((memory) => [memory.id, memory]));
+  return ids.flatMap((id) => {
+    const memory = byId.get(id);
+    return memory ? [memory] : [];
+  });
+}
+
+export function orderedSentMemories(
+  global: Memory[],
+  project: Memory[],
+  ids: readonly string[] | null,
+): Memory[] {
+  const memories = [...global, ...project];
+  return sentMemories(memories, ids);
+}
+
+function rollupTrustKey(conversationId: string): string {
+  return `memoryRollupUntrusted:${conversationId}`;
+}
+
+function markRollupUntrusted(conversationId: string): void {
+  localStorage.setItem(rollupTrustKey(conversationId), "1");
+}
+
+function wasRollupUntrusted(conversationId: string): boolean {
+  return localStorage.getItem(rollupTrustKey(conversationId)) === "1";
 }
 
 function canSeeFor(
@@ -273,6 +322,8 @@ interface PanelArtifact {
   lang: string;
   code: string;
   path?: string;
+  messageId?: string;
+  locator?: ArtifactLocator;
 }
 
 function defaultPanelTab(lang: string): PanelTab {
@@ -373,6 +424,7 @@ interface AppContextValue {
     lastOut: number | null;
     prompt: string;
   };
+  inspectContext: () => Promise<api.RequestInspection>;
 
   projects: Project[];
   activeProject: Project | null;
@@ -406,7 +458,11 @@ interface AppContextValue {
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
-  queueMemories: (notes: string[], kind?: MemoryKind) => Promise<PendingMemory[]>;
+  queueMemories: (
+    notes: string[],
+    kind?: MemoryKind,
+    trust?: "trusted" | "untrusted",
+  ) => Promise<PendingMemory[]>;
   editMemory: (
     id: string,
     draft: MemoryDraft,
@@ -424,6 +480,7 @@ interface AppContextValue {
   refreshConversations: () => Promise<void>;
   selectConversation: (id: string | null) => Promise<void>;
   newConversation: () => Promise<void>;
+  newTemporaryChat: () => Promise<void>;
   removeConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
@@ -471,6 +528,8 @@ interface AppContextValue {
   continueTurn: () => Promise<void>;
   editAndResubmit: (userId: string, text: string) => Promise<boolean>;
   branchFrom: (messageId: string) => Promise<void>;
+  messageVersions: Record<string, VersionInfo>;
+  switchVersion: (messageId: string, direction: 1 | -1) => Promise<void>;
   rateMessage: (messageId: string, rating: number | null) => Promise<void>;
   clearActiveConversation: () => Promise<void>;
   compactActive: (quiet?: boolean) => Promise<void>;
@@ -504,6 +563,7 @@ interface AppContextValue {
   refreshTodos: (conversationId: string | null) => Promise<void>;
   panelOpen: boolean;
   panelArtifact: PanelArtifact | null;
+  panelArtifactVersions: ArtifactVersion[];
   panelTab: PanelTab;
   panelMode: PanelMode;
   panelView: PanelView;
@@ -541,6 +601,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   } | null>(null);
 
   const reportError = useCallback((cause: unknown) => {
+    logEvent("error", cause);
     console.error(cause);
     setError(api.formatInvokeError(cause));
   }, []);
@@ -588,6 +649,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const memoryPausedRef = useRef(memoryPaused);
   const relevantMemoriesRef = useRef<Memory[]>([]);
   const recallRequestRef = useRef(0);
+  const memoryRefreshRequestRef = useRef(0);
   const knowledgeRequestRef = useRef(0);
   const setMemoryPaused = useCallback((value: boolean) => {
     memoryPausedRef.current = value;
@@ -637,6 +699,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messageVersions, setMessageVersions] = useState<Record<string, VersionInfo>>({});
   const [fileCommands, setFileCommands] = useState<FileCommand[]>([]);
   const fileCommandsRef = useRef<FileCommand[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -710,16 +773,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const globalMemoriesRef = useRef<Memory[]>([]);
   const projectMemoriesRef = useRef<Memory[]>([]);
   const pendingMemoriesRef = useRef<PendingMemory[]>([]);
-  const globalSentRef = useRef<Set<string> | null>(null);
-  const projectSentRef = useRef<Set<string> | null>(null);
-  const globalSentMemories = useMemo(
-    () => (memoryPaused ? [] : sentMemories(globalMemories, globalSentRef.current)),
-    [globalMemories, memoryPaused],
-  );
-  const projectSentMemories = useMemo(
-    () => (memoryPaused ? [] : sentMemories(projectMemories, projectSentRef.current)),
-    [projectMemories, memoryPaused],
-  );
+  const rollupInFlightRef = useRef<Set<string>>(new Set());
+  const rollupAfterStreamRef = useRef<Set<string>>(new Set());
+  const globalSentRef = useRef<string[] | null>(null);
+  const projectSentRef = useRef<string[] | null>(null);
+  const sentOrderRef = useRef<string[] | null>(null);
+  const globalSentMemories = memoryPaused
+    ? []
+    : sentMemories(globalMemories, globalSentRef.current);
+  const projectSentMemories = memoryPaused
+    ? []
+    : sentMemories(projectMemories, projectSentRef.current);
+  const orderedDurableMemories = memoryPaused
+    ? []
+    : orderedSentMemories(globalMemories, projectMemories, sentOrderRef.current);
   const [recalledMemories, setRecalledMemories] = useState<Memory[]>([]);
   const approvedMemoryRef = useRef<Map<string, PendingMemory>>(new Map());
   const requestIdRef = useRef<string | null>(null);
@@ -813,6 +880,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshMemories = useCallback(async () => {
+    const request = ++memoryRefreshRequestRef.current;
     const projectId = projectRef.current?.id ?? null;
     relevantMemoriesRef.current = [];
     setRecalledMemories([]);
@@ -822,6 +890,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       reportError(e);
       return { global: [], project: [] };
+    }
+    if (
+      request !== memoryRefreshRequestRef.current ||
+      (projectRef.current?.id ?? null) !== projectId
+    ) {
+      return {
+        global: globalMemoriesRef.current,
+        project: projectMemoriesRef.current,
+      };
     }
     if (read.available) {
       const global = read.global.entries.map((entry) =>
@@ -834,20 +911,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProjectMemories(project);
       setMemoryCompat(false);
       setMemoryOmitted(read.global.omitted);
-      globalSentRef.current = new Set(read.global.sent);
-      projectSentRef.current = new Set(read.project?.sent ?? []);
+      globalSentRef.current = read.global.sent;
+      projectSentRef.current = read.project?.sent ?? [];
+      sentOrderRef.current = [...read.global.sent, ...(read.project?.sent ?? [])];
       return { global, project };
     }
     const [global, project] = await Promise.all([
       db.listMemories("global", null),
       projectId ? db.listMemories("project", projectId) : Promise.resolve<Memory[]>([]),
     ]);
+    if (
+      request !== memoryRefreshRequestRef.current ||
+      (projectRef.current?.id ?? null) !== projectId
+    ) {
+      return {
+        global: globalMemoriesRef.current,
+        project: projectMemoriesRef.current,
+      };
+    }
     setGlobalMemories(global);
     setProjectMemories(project);
     setMemoryCompat(true);
     setMemoryOmitted(0);
     globalSentRef.current = null;
     projectSentRef.current = null;
+    sentOrderRef.current = null;
     return { global, project };
   }, []);
 
@@ -870,20 +958,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return [];
       }
       try {
-        const hits = await api.memorySearch(text, projectId, 20);
+        const prompt = await api.memoryPrompt(text, projectId);
         if (request !== recallRequestRef.current) return [];
         if (memoryPausedRef.current) return [];
         if ((projectRef.current?.id ?? null) !== projectId) return [];
-        const alreadySent = new Set([
-          ...(globalSentRef.current ?? []),
-          ...(projectSentRef.current ?? []),
-        ]);
+        globalSentRef.current = prompt.items
+          .filter((hit) => hit.scope === "global")
+          .map((hit) => hit.id);
+        projectSentRef.current = prompt.items
+          .filter((hit) => projectId !== null && hit.scope === `project:${projectId}`)
+          .map((hit) => hit.id);
+        sentOrderRef.current = prompt.items
+          .filter(
+            (hit) =>
+              hit.scope === "global" ||
+              (projectId !== null && hit.scope === `project:${projectId}`),
+          )
+          .map((hit) => hit.id);
+        setMemoryOmitted(prompt.omitted);
         const recalled: Memory[] = [];
-        for (const hit of hits) {
-          if (recalled.length >= 4) break;
-          if (!hit.trusted) continue;
-          if (alreadySent.has(hit.id)) continue;
-          if (recalled.some((memory) => memory.id === hit.id)) continue;
+        for (const hit of prompt.items) {
           const inProject =
             projectId !== null && hit.scope === `project:${projectId}`;
           if (hit.scope !== "global" && !inProject) continue;
@@ -903,17 +997,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
             updated_at: stamp,
           });
         }
-        relevantMemoriesRef.current = recalled;
+        relevantMemoriesRef.current = [];
         setRecalledMemories(recalled);
         const details = recalled.map((memory) => ({
           id: memory.id,
-          score: hits.find((hit) => hit.id === memory.id)?.score ?? 0,
+          score: prompt.items.find((hit) => hit.id === memory.id)?.score ?? 0,
         }));
         recalledDetailsRef.current = details;
         setRecalledDetails(details);
         return recalled;
       } catch (error) {
+        if (
+          request !== recallRequestRef.current ||
+          (projectRef.current?.id ?? null) !== projectId
+        ) {
+          return [];
+        }
         console.warn("memory: recall failed", error);
+        globalSentRef.current = [];
+        projectSentRef.current = [];
+        sentOrderRef.current = [];
+        setMemoryOmitted(globalMemoriesRef.current.length + projectMemoriesRef.current.length);
         relevantMemoriesRef.current = [];
         setRecalledMemories([]);
         recalledDetailsRef.current = [];
@@ -972,6 +1076,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       knowledge: api.KnowledgeHit[],
       episodes: api.EpisodeHit[],
     ) => {
+      if (knowledge.length > 0 || episodes.length > 0) {
+        markRollupUntrusted(conversationId);
+      }
       const scores = new Map(
         recalledDetailsRef.current.map((detail) => [detail.id, detail.score]),
       );
@@ -982,21 +1089,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         score?: number;
         trust?: string;
       }[] = [];
+      const durableIds = new Set<string>();
       if (!memoryPausedRef.current) {
-        for (const memory of sentMemories(
+        for (const memory of orderedSentMemories(
           globalMemoriesRef.current,
-          globalSentRef.current,
-        )) {
-          items.push({
-            source: "durable",
-            item_id: memory.id,
-            label: memory.content.slice(0, 120),
-          });
-        }
-        for (const memory of sentMemories(
           projectMemoriesRef.current,
-          projectSentRef.current,
+          sentOrderRef.current,
         )) {
+          durableIds.add(memory.id);
           items.push({
             source: "durable",
             item_id: memory.id,
@@ -1004,6 +1104,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           });
         }
         for (const memory of recalled) {
+          if (durableIds.has(memory.id)) continue;
           items.push({
             source: "recalled",
             item_id: memory.id,
@@ -1051,6 +1152,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         await refreshMemories();
         await refreshPendingMemories();
+        await db.sweepTemporaryConversations();
         setConversations(await db.listConversations());
       } catch (e) {
         reportError(e);
@@ -1059,6 +1161,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, [refreshConnections, refreshProjects, refreshMemories, refreshPendingMemories]);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => logEvent("window.error", event.message);
+    const onRejection = (event: PromiseRejectionEvent) =>
+      logEvent("unhandledrejection", event.reason);
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
 
   useEffect(() => {
     void refreshMemories();
@@ -1242,6 +1356,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelArtifact, setPanelArtifact] = useState<PanelArtifact | null>(null);
+  const [panelArtifactVersions, setPanelArtifactVersions] = useState<ArtifactVersion[]>([]);
+  const [artifactVersionRevision, setArtifactVersionRevision] = useState(0);
   const [panelTab, setPanelTabState] = useState<PanelTab>("code");
   const [panelMode, setPanelModeState] = useState<PanelMode>("dock");
   const [panelView, setPanelViewState] = useState<PanelView>("session");
@@ -1271,6 +1387,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPanelTabState(defaultPanelTab(artifact.lang));
     setPanelOpen(true);
   }, []);
+
+  useEffect(() => {
+    const artifact = panelArtifact;
+    const conversationId = convIdRef.current;
+    if (!artifact?.messageId || !artifact.locator || !conversationId) {
+      setPanelArtifactVersions([]);
+      return;
+    }
+    let live = true;
+    void db
+      .listMessageTree(conversationId)
+      .then((rows) => {
+        if (live) {
+          setPanelArtifactVersions(
+            artifactVersions(artifact.messageId as string, artifact.locator as ArtifactLocator, rows),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (live) {
+          setPanelArtifactVersions([]);
+          console.warn("artifact versions: read failed", error);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [artifactVersionRevision, panelArtifact, messageVersions]);
 
   const openSessionPanel = useCallback(() => {
     if (!panelOpenRef.current) setPanelModeState("dock");
@@ -1524,10 +1668,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const contextInfo = useMemo(() => {
     const base = buildSystemPrompt({
-      globalMemories: globalSentMemories,
+      globalMemories: orderedDurableMemories,
       project: activeProject,
-      projectMemories: projectSentMemories,
-      relevantMemories: memoryPaused ? [] : recalledMemories,
+      projectMemories: [],
+      relevantMemories: [],
       episodicBlock: episodicRecall ? episodicBlockRef.current || undefined : undefined,
       userName: displayName || undefined,
       standingPrompt: standingPrompt || undefined,
@@ -1576,6 +1720,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     globalSentMemories,
     activeProject,
     projectSentMemories,
+    orderedDurableMemories,
     recalledMemories,
     memoryPaused,
     episodicRecall,
@@ -1601,29 +1746,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!connection || !modelName) return false;
     return lookupSupportsTools(catalogRef.current, modelName, connection.kind);
   }, []);
-
-  const selectProject = useCallback(
-    (id: string | null) => {
-      setActiveProjectId(id);
-      setActiveConversationId(null);
-      setMessages([]);
-      setError(null);
-      setView(id ? "project" : "chat");
-      recallRequestRef.current += 1;
-    knowledgeRequestRef.current += 1;
-      episodeRequestRef.current += 1;
-      relevantMemoriesRef.current = [];
-      episodicBlockRef.current = "";
-      setRecalledMemories([]);
-      recalledDetailsRef.current = [];
-      setRecalledDetails([]);
-      knowledgeBlockRef.current = "";
-setKnowledgeSummary([]);
-      setEpisodeSummary([]);
-      lastPayloadRef.current = null;
-    },
-    [],
-  );
 
   const saveProject = useCallback(
     async (input: ProjectInput, id?: string): Promise<Project> => {
@@ -1680,7 +1802,11 @@ setKnowledgeSummary([]);
   );
 
   const queueMemories = useCallback(
-    async (notes: string[], kind: MemoryKind = "fact"): Promise<PendingMemory[]> => {
+    async (
+      notes: string[],
+      kind: MemoryKind = "fact",
+      trust: "trusted" | "untrusted" = "trusted",
+    ): Promise<PendingMemory[]> => {
       const scope: MemoryScope = activeProject ? "project" : "global";
       const projectId = activeProject ? activeProject.id : null;
       const now = Date.now();
@@ -1688,6 +1814,7 @@ setKnowledgeSummary([]);
       for (const raw of notes) {
         const content = raw.replace(/\s+/g, " ").trim().slice(0, 2000);
         if (!content) continue;
+        await api.memoryValidate(content);
         rows.push({
           id: newId(),
           scope,
@@ -1696,7 +1823,7 @@ setKnowledgeSummary([]);
           content,
           conversation_id: activeConversationId,
           created_at: now,
-          trust: "trusted",
+          trust,
         });
       }
       if (rows.length > 0) {
@@ -1706,6 +1833,160 @@ setKnowledgeSummary([]);
       return rows;
     },
     [activeConversationId, activeProject, refreshPendingMemories],
+  );
+
+  const rollupConversation = useCallback(
+    async (
+      conversationId: string,
+      projectId: string,
+      reason: RollupReason,
+    ): Promise<void> => {
+      if (rollupInFlightRef.current.has(conversationId)) return;
+      const connection = connRef.current;
+      const modelName = modelRef.current;
+      if (!connection || !modelName) return;
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      if (!conversation || conversation.temporary || conversation.project_id !== projectId) return;
+      rollupInFlightRef.current.add(conversationId);
+      try {
+        const messages = await db.listMessages(conversationId);
+        const through = messages.reduce(
+          (latest, message) =>
+            Math.max(latest, message.created_at, message.completed_at ?? 0),
+          0,
+        );
+        const marker = `memoryRollup:${conversationId}`;
+        const prior = Number(localStorage.getItem(marker) ?? 0);
+        if (through === 0 || through <= prior) return;
+        const transcript = rollupTranscript(messages);
+        if (!transcript) return;
+        const raw = await api.extractMemory(
+          connection.id,
+          modelName,
+          transcript,
+          connection.kind,
+          "project_rollup",
+        );
+        let saved: string[];
+        try {
+          const read = await api.memoryRead(projectId);
+          saved = read.available
+            ? (read.project?.entries ?? []).map((entry) => entry.text)
+            : (await db.listMemories("project", projectId)).map((memory) => memory.content);
+        } catch (error) {
+          console.warn("memory: project roll-up dedupe read failed", error);
+          saved = projectMemoriesRef.current
+            .filter((memory) => memory.project_id === projectId)
+            .map((memory) => memory.content);
+        }
+        const pending = await db.listPendingMemories();
+        const existing = [
+          ...saved,
+          ...pending
+            .filter((memory) => memory.project_id === projectId)
+            .map((memory) => memory.content),
+        ];
+        const proposals = projectScopedNotes(
+          uniqueRollupNotes(parseExtractedNotes(raw), existing),
+        );
+        const safe: string[] = [];
+        for (const proposal of proposals) {
+          try {
+            await api.memoryValidate(proposal);
+            safe.push(proposal);
+          } catch (error) {
+            console.warn("memory: rejected roll-up proposal", error);
+          }
+        }
+        if (safe.length > 0) {
+          const createdAt = Date.now();
+          const trust =
+            hasUntrustedProvenance(messages) || wasRollupUntrusted(conversationId)
+              ? "untrusted"
+              : "trusted";
+          await db.addPendingMemories(
+            safe.map((content, index): PendingMemory => ({
+              id: newId(),
+              scope: "project",
+              project_id: projectId,
+              kind: "summary",
+              content,
+              conversation_id: conversationId,
+              created_at: createdAt + index,
+              trust,
+            })),
+          );
+          await refreshPendingMemories();
+          toast(`${safe.length} project ${safe.length === 1 ? "note" : "notes"} waiting for review.`);
+        }
+        localStorage.setItem(marker, String(through));
+      } catch (error) {
+        console.warn(`memory: ${reason} roll-up failed`, error);
+      } finally {
+        rollupInFlightRef.current.delete(conversationId);
+      }
+    },
+    [refreshPendingMemories],
+  );
+
+  const leaveConversation = useCallback(
+    (conversationId: string | null) => {
+      if (!conversationId) return;
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      if (!conversation?.project_id) return;
+      const userMessages = messagesRef.current.filter((message) => message.role === "user");
+      const reason = rollupReason({
+        projectId: conversation.project_id,
+        leaving: true,
+        userTurns: userMessages.length,
+        userText: userMessages[userMessages.length - 1]?.content ?? "",
+      });
+      if (!reason) return;
+      if (streamConversationIdRef.current === conversationId) {
+        rollupAfterStreamRef.current.add(conversationId);
+        return;
+      }
+      void rollupConversation(conversationId, conversation.project_id, reason);
+    },
+    [rollupConversation],
+  );
+
+  const scheduleTurnRollup = useCallback(
+    (conversationId: string, projectId: string | null, userTurns: number, userText: string) => {
+      const reason = rollupReason({
+        projectId,
+        leaving: false,
+        userTurns,
+        userText,
+      });
+      if (reason && projectId) void rollupConversation(conversationId, projectId, reason);
+    },
+    [rollupConversation],
+  );
+
+  const selectProject = useCallback(
+    (id: string | null) => {
+      leaveConversation(convIdRef.current);
+      setActiveProjectId(id);
+      setActiveConversationId(null);
+      setMessages([]);
+      setError(null);
+      setView(id ? "project" : "chat");
+      recallRequestRef.current += 1;
+      memoryRefreshRequestRef.current += 1;
+      knowledgeRequestRef.current += 1;
+      episodeRequestRef.current += 1;
+      relevantMemoriesRef.current = [];
+      episodicBlockRef.current = "";
+      setRecalledMemories([]);
+      recalledDetailsRef.current = [];
+      setRecalledDetails([]);
+      knowledgeBlockRef.current = "";
+      setKnowledgeSummary([]);
+      setEpisodeSummary([]);
+      lastPayloadRef.current = null;
+    },
+    [leaveConversation],
   );
 
   const editMemory = useCallback(
@@ -1772,7 +2053,7 @@ setKnowledgeSummary([]);
           kind: row.kind,
           id: row.id,
           date: undefined,
-          trust: "trusted",
+          trust: row.trust,
         });
         approvedMemoryRef.current.set(id, { ...row, content: text });
         await db.dismissPendingMemory(id);
@@ -1804,7 +2085,7 @@ setKnowledgeSummary([]);
             kind: row.kind,
             id: row.id,
             date: undefined,
-            trust: "trusted",
+            trust: row.trust,
           });
           approvedMemoryRef.current.set(row.id, row);
           await db.dismissPendingMemory(row.id);
@@ -1860,7 +2141,22 @@ setKnowledgeSummary([]);
     [memoryCompat],
   );
 
+  const discardTemporary = useCallback(async () => {
+    const active = conversationsRef.current.find((c) => c.id === convIdRef.current);
+    if (!active?.temporary) return;
+    try {
+      await db.deleteConversation(active.id);
+    } catch (e) {
+      reportError(e);
+      return;
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== active.id));
+  }, [reportError]);
+
   const selectConversation = useCallback(async (id: string | null) => {
+    const previousId = convIdRef.current;
+    if (id !== previousId) leaveConversation(previousId);
+    if (id !== convIdRef.current) await discardTemporary();
     setActiveConversationId(id);
     setError(null);
     setCanRetry(false);
@@ -1882,6 +2178,7 @@ setKnowledgeSummary([]);
     );
     if (!id) {
       setMessages([]);
+      setMessageVersions({});
       setTodos([]);
       return;
     }
@@ -1901,13 +2198,20 @@ setKnowledgeSummary([]);
       });
     }
     setMessages(rows);
+    setMessageVersions(
+      versionMap(rows, await db.listMessageTree(id)),
+    );
     setTodos(await db.listTodos(id));
-  }, []);
+  }, [discardTemporary, leaveConversation]);
 
   const newConversation = useCallback(async () => {
+    const previousId = convIdRef.current;
+    leaveConversation(previousId);
+    await discardTemporary();
     setActiveConversationId(null);
     setActiveProjectId(null);
     setMessages([]);
+    setMessageVersions({});
     setTodos([]);
     setError(null);
     setView("chat");
@@ -1923,7 +2227,45 @@ setKnowledgeSummary([]);
 setKnowledgeSummary([]);
     setEpisodeSummary([]);
     lastPayloadRef.current = null;
-  }, []);
+  }, [discardTemporary, leaveConversation]);
+
+  const newTemporaryChat = useCallback(async () => {
+    const connection = connRef.current;
+    if (!connection || !modelRef.current) {
+      setError("Add a connection and model first.");
+      return;
+    }
+    leaveConversation(convIdRef.current);
+    await discardTemporary();
+    try {
+      const created = await db.createConversation(connection.id, modelRef.current, null, true);
+      await db.touchConversation(created.id, { title: "Temporary chat" });
+      const titled = { ...created, title: "Temporary chat" };
+      conversationsRef.current = [titled, ...conversationsRef.current];
+      setConversations((prev) => [titled, ...prev]);
+      setActiveConversationId(created.id);
+      setActiveProjectId(null);
+      setMessages([]);
+      setMessageVersions({});
+      setTodos([]);
+      setError(null);
+      setView("chat");
+      recallRequestRef.current += 1;
+      knowledgeRequestRef.current += 1;
+      episodeRequestRef.current += 1;
+      relevantMemoriesRef.current = [];
+      episodicBlockRef.current = "";
+      setRecalledMemories([]);
+      recalledDetailsRef.current = [];
+      setRecalledDetails([]);
+      knowledgeBlockRef.current = "";
+      setKnowledgeSummary([]);
+      setEpisodeSummary([]);
+      lastPayloadRef.current = null;
+    } catch (e) {
+      reportError(e);
+    }
+  }, [discardTemporary, leaveConversation, reportError]);
 
   const refreshTodos = useCallback(async (conversationId: string | null) => {
     if (!conversationId) {
@@ -2005,12 +2347,17 @@ setKnowledgeSummary([]);
       if (moved) {
         projectMemoriesRef.current = [];
         projectSentRef.current = null;
+        sentOrderRef.current = null;
         setProjectMemories([]);
       }
     }
   }, []);
 
-  const finalize = useCallback((assistantId: string, conversationId: string, endedAt?: number) => {
+  const finalize = useCallback(async (
+    assistantId: string,
+    conversationId: string,
+    endedAt?: number,
+  ): Promise<void> => {
     setActiveStep(null);
     setTurnStartedAt(null);
     setActiveTool(null);
@@ -2065,20 +2412,26 @@ setKnowledgeSummary([]);
     const persist = content || toolLogJson || artifactsJson || error
       ? db.updateMessage(assistantId, content).then(() => db.updateMessageMeta(assistantId, meta))
       : db.deleteMessage(assistantId);
-    persist
-      .then(() => db.touchConversation(conversationId, {}))
-      .catch(reportError);
+    try {
+      await persist;
+      await db.touchConversation(conversationId, {});
+    } catch (error) {
+      reportError(error);
+    }
   }, []);
 
   const systemPromptFromRefs = useCallback(() => {
+    const durableMemories = memoryPausedRef.current
+      ? []
+      : orderedSentMemories(
+          globalMemoriesRef.current,
+          projectMemoriesRef.current,
+          sentOrderRef.current,
+        );
     const base = buildSystemPrompt({
-      globalMemories: memoryPausedRef.current
-        ? []
-        : sentMemories(globalMemoriesRef.current, globalSentRef.current),
+      globalMemories: durableMemories,
       project: projectRef.current,
-      projectMemories: memoryPausedRef.current
-        ? []
-        : sentMemories(projectMemoriesRef.current, projectSentRef.current),
+      projectMemories: [],
       relevantMemories: memoryPausedRef.current ? [] : relevantMemoriesRef.current,
       episodicBlock: episodicRecallRef.current
         ? episodicBlockRef.current || undefined
@@ -2344,6 +2697,7 @@ setKnowledgeSummary([]);
                 ),
               );
             } else if (event.type === "artifact") {
+              const index = artifactsRef.current.length;
               const declared: DeclaredArtifact = {
                 title: event.title,
                 lang: event.lang,
@@ -2357,8 +2711,10 @@ setKnowledgeSummary([]);
                 ),
               );
               openArtifact({
-                id: `${assistantMsg.id}:tool:${artifactsRef.current.length - 1}`,
+                id: `${assistantMsg.id}:tool:${index}`,
                 ...declared,
+                messageId: assistantMsg.id,
+                locator: { kind: "tool", index },
               });
               toast(`Artifact saved: ${event.title}`);
             } else if (event.type === "approval_asked") {
@@ -2449,11 +2805,28 @@ setKnowledgeSummary([]);
           }
           requestIdRef.current = null;
           assistantMsgIdRef.current = null;
-          setStreamingId(null);
-          setStreamConversationId(null);
-          streamConversationIdRef.current = null;
           pendingVisionFallbackRef.current = null;
-          finalize(assistantMsg.id, conversationId, endedAt);
+          await finalize(assistantMsg.id, conversationId, endedAt);
+          if (streamConversationIdRef.current === conversationId) {
+            streamConversationIdRef.current = null;
+            setStreamingId(null);
+            setStreamConversationId(null);
+          }
+          if (artifactsRef.current.length > 0) {
+            setArtifactVersionRevision((revision) => revision + 1);
+          }
+          if (rollupAfterStreamRef.current.delete(conversationId)) {
+            const projectId = conversationsRef.current.find(
+              (conversation) => conversation.id === conversationId,
+            )?.project_id;
+            if (projectId) void rollupConversation(conversationId, projectId, "close");
+          }
+          const title =
+            conversationsRef.current.find((conversation) => conversation.id === conversationId)
+              ?.title ?? "Reply ready";
+          void notifyTurnDone(title, bufferRef.current).catch((error: unknown) => {
+            console.warn("completion notification failed", error);
+          });
         }
       }
     },
@@ -2468,6 +2841,7 @@ setKnowledgeSummary([]);
       refreshMemories,
       refreshPendingMemories,
       deleteMemory,
+      rollupConversation,
       selectConversation,
       searchBackend,
       searchEndpoint,
@@ -2483,6 +2857,7 @@ setKnowledgeSummary([]);
     ) => {
       const connection = connRef.current;
       if (!connection || !modelRef.current || !assistantText.trim()) return;
+      if (conversationsRef.current.find((c) => c.id === conversationId)?.temporary) return;
       const candidates = [modelRef.current];
       const fallback = connection.default_model;
       if (fallback && fallback !== modelRef.current) candidates.push(fallback);
@@ -2671,6 +3046,49 @@ setKnowledgeSummary([]);
     [canSeeImages, connections, resolveCompact, resolveTools, summaryFor, withSystem],
   );
 
+  const inspectContext = useCallback(async (): Promise<api.RequestInspection> => {
+    const connection = connRef.current;
+    const modelName = modelRef.current;
+    if (!connection || !modelName) throw new Error("Choose a provider and model first");
+    const conversationId = convIdRef.current;
+    const payload = buildPayload(
+      conversationId,
+      messagesRef.current.filter((message) => message.content.length > 0),
+    );
+    const hasImages = payload.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "image_url"),
+    );
+    const fallback = visionFallbackFor(
+      hasImages,
+      visionFallbackRef.current,
+      resolveTools(),
+      canSeeImages(connection.id, modelName),
+      connection.id,
+      connections,
+    );
+    return api.inspectRequest({
+      requestId: "context-inspector",
+      connectionId: connection.id,
+      model: modelName,
+      messages: payload,
+      enableTools: resolveTools(),
+      projectId: projectRef.current?.id ?? null,
+      conversationId,
+      reasoningEffort: resolveEffort(),
+      connectionKind: connection.kind,
+      searchBackend,
+      searchEndpoint,
+      childSystem: buildChildSystemPrompt({
+        userName: displayNameRef.current || undefined,
+        project: projectRef.current,
+        now: new Date(),
+      }),
+      ...fallbackFields(fallback),
+    });
+  }, [buildPayload, canSeeImages, connections, resolveEffort, resolveTools, searchBackend, searchEndpoint]);
+
   const sendMessage = useCallback(
     async (
       text: string,
@@ -2708,6 +3126,9 @@ setKnowledgeSummary([]);
       const history = messages.filter((m) => m.content.length > 0);
 
       let conversationId = convIdRef.current;
+      let turnProjectId = conversationId
+        ? (conversationsRef.current.find((item) => item.id === conversationId)?.project_id ?? null)
+        : (projectRef.current?.id ?? null);
       let userMsg: Message;
       let assistantMsg: Message;
       let provisionalTitle: string | null = null;
@@ -2719,14 +3140,28 @@ setKnowledgeSummary([]);
             projectRef.current?.id ?? null,
           );
           conversationId = created.id;
+          turnProjectId = created.project_id;
+          conversationsRef.current = [created, ...conversationsRef.current];
           setConversations((prev) => [created, ...prev]);
           setActiveConversationId(created.id);
           setMessages([]);
           setTodos([]);
         }
 
-        userMsg = await db.addMessage(conversationId, "user", text);
-        assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+        userMsg = await db.addMessage(
+          conversationId,
+          "user",
+          text,
+          null,
+          history[history.length - 1]?.id ?? null,
+        );
+        assistantMsg = await db.addMessage(
+          conversationId,
+          "assistant",
+          "",
+          modelRef.current,
+          userMsg.id,
+        );
         setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
         const current = conversations.find((c) => c.id === conversationId);
@@ -2881,6 +3316,12 @@ setKnowledgeSummary([]);
         void maybeGenerateTitle(conversationId, provisionalTitle, text, bufferRef.current);
       }
       await maybeAutoCompact(conversationId);
+      scheduleTurnRollup(
+        conversationId,
+        turnProjectId,
+        outgoing.filter((turn) => turn.role === "user").length,
+        sendText,
+      );
       return true;
     },
     [
@@ -2897,7 +3338,20 @@ setKnowledgeSummary([]);
       resolveTools,
       maybeGenerateTitle,
       maybeAutoCompact,
+      scheduleTurnRollup,
     ],
+  );
+
+  const refreshVersions = useCallback(
+    async (conversationId: string, path: Message[]) => {
+      try {
+        const tree = await db.listMessageTree(conversationId);
+        setMessageVersions(versionMap(path, tree));
+      } catch (error) {
+        reportError(error);
+      }
+    },
+    [reportError],
   );
 
   const regenerate = useCallback(async () => {
@@ -2908,21 +3362,21 @@ setKnowledgeSummary([]);
     if (turns.length === 0 || turns[turns.length - 1].role !== "assistant") return;
     const dropped = turns[turns.length - 1];
     const kept = turns.slice(0, -1);
-    try {
-      await db.deleteMessage(dropped.id);
-    } catch (e) {
-      reportError(e);
-      return;
-    }
-    setMessages(kept);
     let assistantMsg: Message;
     try {
-      assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+      assistantMsg = await db.addMessage(
+        conversationId,
+        "assistant",
+        "",
+        modelRef.current,
+        dropped.parent_id ?? null,
+      );
     } catch (e) {
       reportError(e);
       return;
     }
     setMessages([...kept, assistantMsg]);
+    void refreshVersions(conversationId, [...kept, assistantMsg]);
     const lastUser = [...kept].reverse().find((message) => message.role === "user");
     auditTurn(
       conversationId,
@@ -2938,7 +3392,7 @@ setKnowledgeSummary([]);
       buildPayload(conversationId, await withDocumentBlock(kept, projectRef.current?.id ?? null)),
       assistantMsg,
     );
-  }, [auditTurn, streamConversationId, streamTurn, buildPayload]);
+  }, [auditTurn, refreshVersions, streamConversationId, streamTurn, buildPayload]);
 
   const continueTurn = useCallback(async () => {
     const conversationId = convIdRef.current;
@@ -2976,7 +3430,13 @@ setKnowledgeSummary([]);
     setError(null);
     let assistantMsg: Message;
     try {
-      assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+      assistantMsg = await db.addMessage(
+        conversationId,
+        "assistant",
+        "",
+        modelRef.current,
+        messagesRef.current[messagesRef.current.length - 1]?.id ?? null,
+      );
     } catch (e) {
       reportError(e);
       return;
@@ -3020,24 +3480,42 @@ setKnowledgeSummary([]);
       if (!conversationId || !connection || !modelRef.current || streamConversationId !== null) return false;
       const trimmed = text.trim();
       if (!trimmed) return false;
-      try {
-        await db.updateMessage(userId, trimmed);
-        await db.truncateConversation(conversationId, userId);
-      } catch (e) {
-        reportError(e);
-        return false;
-      }
-      const kept = (await db.listMessages(conversationId)).filter(
-        (m) => m.content.length > 0,
-      );
+      const current = messagesRef.current;
+      const projectId =
+        conversationsRef.current.find((conversation) => conversation.id === conversationId)
+          ?.project_id ?? null;
+      const at = current.findIndex((message) => message.id === userId);
+      if (at < 0) return false;
+      const edited = current[at];
+      const kept = current.slice(0, at).filter((message) => message.content.length > 0);
+      let userMsg: Message;
       let assistantMsg: Message;
       try {
-        assistantMsg = await db.addMessage(conversationId, "assistant", "", modelRef.current);
+        userMsg = await db.addMessage(
+          conversationId,
+          "user",
+          trimmed,
+          null,
+          edited.parent_id ?? null,
+        );
+        if (edited.attachments) {
+          await db.copyMessageAttachments(edited.id, userMsg.id);
+          userMsg.attachments = edited.attachments;
+        }
+        assistantMsg = await db.addMessage(
+          conversationId,
+          "assistant",
+          "",
+          modelRef.current,
+          userMsg.id,
+        );
       } catch (e) {
         reportError(e);
         return false;
       }
-      setMessages([...kept, assistantMsg]);
+      const nextPath = [...kept, userMsg, assistantMsg];
+      setMessages(nextPath);
+      void refreshVersions(conversationId, nextPath);
       auditTurn(
         conversationId,
         trimmed,
@@ -3051,14 +3529,39 @@ setKnowledgeSummary([]);
         modelRef.current,
         buildPayload(
           conversationId,
-          await withDocumentBlock(kept, projectRef.current?.id ?? null),
+          await withDocumentBlock([...kept, userMsg], projectRef.current?.id ?? null),
         ),
         assistantMsg,
       );
+      scheduleTurnRollup(
+        conversationId,
+        projectId,
+        nextPath.filter((message) => message.role === "user").length,
+        trimmed,
+      );
       return true;
     },
-    [auditTurn, streamConversationId, streamTurn, buildPayload],
+    [
+      auditTurn,
+      refreshVersions,
+      scheduleTurnRollup,
+      streamConversationId,
+      streamTurn,
+      buildPayload,
+    ],
   );
+
+  const clearTurnContext = useCallback(() => {
+    relevantMemoriesRef.current = [];
+    recalledDetailsRef.current = [];
+    setRecalledMemories([]);
+    setRecalledDetails([]);
+    knowledgeBlockRef.current = "";
+    setKnowledgeSummary([]);
+    episodicBlockRef.current = "";
+    setEpisodeSummary([]);
+    lastPayloadRef.current = null;
+  }, []);
 
   const branchFrom = useCallback(
     async (messageId: string) => {
@@ -3072,27 +3575,48 @@ setKnowledgeSummary([]);
           messageId,
           `${source.title} (branch)`,
         );
+        leaveConversation(conversationId);
+        conversationsRef.current = [branched, ...conversationsRef.current];
         setConversations((prev) => [branched, ...prev]);
         setActiveConversationId(branched.id);
         await copyChatDocs(conversationId, branched.id);
         const rows = await db.listMessages(branched.id);
         setMessages(rows);
-        relevantMemoriesRef.current = [];
-        recalledDetailsRef.current = [];
-        setRecalledMemories([]);
-        setRecalledDetails([]);
-        knowledgeBlockRef.current = "";
-        knowledgeBlockRef.current = "";
-setKnowledgeSummary([]);
-        episodicBlockRef.current = "";
-        setEpisodeSummary([]);
-        lastPayloadRef.current = null;
+        setMessageVersions(versionMap(rows, await db.listMessageTree(branched.id)));
+        clearTurnContext();
         toast("Branched into new chat");
       } catch (e) {
         reportError(e);
       }
     },
-    [conversations, streamConversationId],
+    [clearTurnContext, conversations, leaveConversation, streamConversationId],
+  );
+
+  const switchVersion = useCallback(
+    async (messageId: string, direction: 1 | -1) => {
+      const conversationId = convIdRef.current;
+      if (!conversationId || streamConversationId !== null) return;
+      try {
+        const tree = await db.listMessageTree(conversationId);
+        const target = tree.find((message) => message.id === messageId);
+        if (!target) return;
+        const siblings = siblingVersions(target, tree);
+        if (siblings.length < 2) return;
+        const at = siblings.findIndex((sibling) => sibling.id === messageId);
+        const nextSibling = siblings[(at + direction + siblings.length) % siblings.length];
+        const leaf = deepestLeaf(nextSibling.id, tree);
+        await db.setCurrentLeaf(conversationId, leaf);
+        if (convIdRef.current !== conversationId) return;
+        const byId = new Map(tree.map((message) => [message.id, message]));
+        const path = messagePath(leaf, byId);
+        setMessages(path);
+        setMessageVersions(versionMap(path, tree));
+        clearTurnContext();
+      } catch (e) {
+        reportError(e);
+      }
+    },
+    [clearTurnContext, streamConversationId],
   );
 
   const rateMessage = useCallback(
@@ -3119,10 +3643,18 @@ setKnowledgeSummary([]);
       try {
         const created = await db.createConversation(connection.id, modelRef.current, projectId);
         const userMsg = await db.addMessage(created.id, "user", trimmed);
-        const assistantMsg = await db.addMessage(created.id, "assistant", "", modelRef.current);
+        const assistantMsg = await db.addMessage(
+          created.id,
+          "assistant",
+          "",
+          modelRef.current,
+          userMsg.id,
+        );
         const title = deriveFallbackTitle(trimmed);
         await db.touchConversation(created.id, { title });
-        setConversations((prev) => [{ ...created, title }, ...prev]);
+        const titled = { ...created, title };
+        conversationsRef.current = [titled, ...conversationsRef.current];
+        setConversations((prev) => [titled, ...prev]);
         setActiveConversationId(created.id);
         setActiveProjectId(projectId);
         setView("chat");
@@ -3150,13 +3682,23 @@ setKnowledgeSummary([]);
           assistantMsg,
         );
         void maybeGenerateTitle(created.id, title, trimmed, bufferRef.current);
+        scheduleTurnRollup(created.id, projectId, 1, trimmed);
         return true;
       } catch (e) {
         reportError(e);
         return false;
       }
     },
-    [projects, streamConversationId, streamTurn, buildPayload, maybeGenerateTitle, recallFor, recallEpisodes],
+    [
+      projects,
+      streamConversationId,
+      streamTurn,
+      buildPayload,
+      maybeGenerateTitle,
+      recallFor,
+      recallEpisodes,
+      scheduleTurnRollup,
+    ],
   );
 
   const clearActiveConversation = useCallback(async () => {
@@ -3188,9 +3730,6 @@ setKnowledgeSummary([]);
     const id = requestIdRef.current;
     if (!id) return;
     requestIdRef.current = null;
-    setStreamingId(null);
-    setStreamConversationId(null);
-    streamConversationIdRef.current = null;
     setActiveTool(null);
     api.cancelStream(id).catch(reportError);
     const assistantId = assistantMsgIdRef.current;
@@ -3209,9 +3748,28 @@ setKnowledgeSummary([]);
           m.id === assistantId ? { ...m, finish_reason: "stopped" } : m,
         ),
       );
-      finalize(assistantId, conversationId);
+      void finalize(assistantId, conversationId).then(() => {
+        if (streamConversationIdRef.current === conversationId) {
+          streamConversationIdRef.current = null;
+          setStreamingId(null);
+          setStreamConversationId(null);
+        }
+        if (artifactsRef.current.length > 0) {
+          setArtifactVersionRevision((revision) => revision + 1);
+        }
+        if (rollupAfterStreamRef.current.delete(conversationId)) {
+          const projectId = conversationsRef.current.find(
+            (conversation) => conversation.id === conversationId,
+          )?.project_id;
+          if (projectId) void rollupConversation(conversationId, projectId, "close");
+        }
+      });
+    } else {
+      streamConversationIdRef.current = null;
+      setStreamingId(null);
+      setStreamConversationId(null);
     }
-  }, [finalize, refreshTodos, reportError]);
+  }, [finalize, refreshTodos, reportError, rollupConversation]);
 
   const value: AppContextValue = {
     ready,
@@ -3250,6 +3808,7 @@ setKnowledgeSummary([]);
     supportedEfforts,
     modelContextLimit,
     contextInfo,
+    inspectContext,
     projects,
     activeProject,
     activeProjectId,
@@ -3293,6 +3852,7 @@ setKnowledgeSummary([]);
     selectConversation,
     refreshConversations,
     newConversation,
+    newTemporaryChat,
     removeConversation,
     renameConversation,
     setChatPrompt,
@@ -3335,6 +3895,8 @@ setKnowledgeSummary([]);
     continueTurn,
     editAndResubmit,
     branchFrom,
+    messageVersions,
+    switchVersion,
     rateMessage,
     clearActiveConversation,
     compactActive,
@@ -3368,6 +3930,7 @@ setKnowledgeSummary([]);
     refreshTodos,
     panelOpen,
     panelArtifact,
+    panelArtifactVersions,
     panelTab,
     panelMode,
     panelView,

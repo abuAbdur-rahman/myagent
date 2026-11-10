@@ -618,6 +618,36 @@ kbd {
   margin-bottom: 0;
 }
 
+.markdown .mermaid-src {
+  margin: 0 0 12px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-overlay);
+  padding: 12px;
+  text-align: center;
+}
+
+.markdown .mermaid-src svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown .mermaid-error {
+  display: block;
+  white-space: pre-wrap;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-3);
+}
+
+.markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0 6px;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,

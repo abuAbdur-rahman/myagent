@@ -59,33 +59,33 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** Each error class has one fixture and one visible message.
 
 ## A8. Queue messages while streaming
-- **Status:** Missing
+- **Status:** Have (0.12.0: Enter or Send while a reply streams queues the turn with its chips. The panel above the composer shows `Queued messages N`, collapses, drag-reorders, and offers edit, send next and remove. Items are per conversation, drain one at a time when that chat is idle, and stop draining after a failed send until the user acts.)
 - **Ref:** † OpenCode v2 queues or steers prompts while a session is busy and runs them at the next safe boundary.
 - **Build:** While streaming, Enter queues the message (shown as pending). It sends when the current turn ends. Cancel removes it.
 - **Not:** Steering the running turn mid-flight.
 - **Done:** Two quick sends produce two ordered turns.
 
 ## A9. Markdown rendering (assistant and user)
-- **Status:** Partial (one Markdown component for both roles; marked renders markdown and HTML, DOMPurify sanitizes it, links open externally; the identical-render acceptance test is missing)
+- **Status:** Have (one Markdown component for both roles; marked renders markdown and HTML, DOMPurify sanitizes it, links open externally; 0.12.0: a render test proves the same markdown string produces identical DOM in the user and assistant bubbles)
 - **Ref:** All three render markdown for both sides. OpenWebUI and Claude store raw text and render on display.
 - **Build:** Store raw markdown only. One renderer for both roles (`react-markdown`, `remark-gfm`, `remark-breaks`). No raw HTML. Links get `rel="noopener noreferrer"` and open externally. Throttle re-render during streaming.
 - **Done:** The same markdown string renders identically for user and assistant bubbles.
 
 ## A10. Code blocks in messages
-- **Status:** Partial (shiki highlighting, language label and Copy ship; highlighting runs on every content change, so the Build line's lazy highlight after streaming is unimplemented; the Copy-equals-fenced-source acceptance test is missing. 0.4.1: fence aliases moved to `lib/languages.ts`, `script`/`airtable-script`/`airscript`/`apps-script`/`gs` route to javascript, and `airtable`/`airtable-formula` render through a new TextMate grammar proven in the same JS regex engine the composer uses; the header shows the fence as the author wrote it. 0.10.0: every fenced block, including `text` and unknown or unlabelled fences, gets the same header, Copy button, border and background; the language label is never blank)
+- **Status:** Have (shiki highlighting, language label and Copy ship; 0.12.0: a streaming reply renders code plain and highlights it once the turn finishes, and a test proves Copy returns the fenced source exactly. 0.4.1: fence aliases moved to `lib/languages.ts`, `script`/`airtable-script`/`airscript`/`apps-script`/`gs` route to javascript, and `airtable`/`airtable-formula` render through a new TextMate grammar proven in the same JS regex engine the composer uses; the header shows the fence as the author wrote it. 0.10.0: every fenced block, including `text` and unknown or unlabelled fences, gets the same header, Copy button, border and background; the language label is never blank)
 - **Ref:** Claude and OpenWebUI: language label, copy button, syntax highlighting; OpenWebUI also allows editable code blocks.
 - **Build:** Header with language and Copy; monospace; horizontal scroll; highlight lazily after streaming finishes. Copy copies raw text only.
 - **Not:** Editable code blocks, run buttons.
 - **Done:** Copy output equals the fenced source exactly.
 
 ## A11. Composer (input)
-- **Status:** Partial (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; the composer acceptance list is still unverified; 0.6.0: the hold-to-talk mic sits beside Send)
+- **Status:** Have (0.1.3: TipTap rich text, Enter sends, ArrowUp history; 0.3.4: Shift-Enter starts a new block, so the block markdown shortcuts format after existing text; 0.4.1: a pasted block-looking paste is inserted as a fenced code block with a guessed language, and Undo restores the raw paste at the same position; 0.6.0: the hold-to-talk mic sits beside Send; 0.12.0: acceptance tests cover markdown round-trip and immediate clear, Enter sending outside a code block and yielding inside one, ArrowUp/ArrowDown history at the document edges, and the list and fence rules)
 - **Ref:** Claude Code: multiline input, history with Up arrow, Esc Esc for rewind. Claude app: rich input with shortcuts.
 - **Build:** Rich-text editor serializing to markdown. Single focus ring on the container. Clear immediately on send. History on ArrowUp at doc start, ArrowDown at doc end. Lists continue with Shift+Enter. "```lang" plus Space or Shift+Enter makes a code block. Enter sends outside code blocks.
 - **Done:** The acceptance list from the composer spec passes.
 
 ## A12. Message actions
-- **Status:** Have (destructive edit. 0.4.1: thumbs up/down set and clear a stored rating with `aria-pressed`; the rating is exported as data. next: read aloud with the installed Windows voices plus online natural voices when offered, a speed control in Settings → Voice, completion clock time and reply duration (`26.7s`, `33m 42s`) persisted as `messages.duration_ms`, and Remember extracts 1-5 durable notes with one model call and queues them in the pending-memory bar instead of saving the whole reply)
+- **Status:** Have (0.12.0: edit and regenerate insert siblings instead of overwriting, and a version switcher moves between them. 0.4.1: thumbs up/down set and clear a stored rating with `aria-pressed`; the rating is exported as data. Read aloud, a speed control in Settings → Voice, completion clock time and reply duration persisted as `messages.duration_ms`, and Remember extracts 1-5 durable notes with one model call and queues them in the pending-memory bar instead of saving the whole reply)
 - **Ref:** † OpenWebUI edits and regenerates by adding branches; Claude shows `< 2/3 >` version switchers.
 - **Build:** Copy, Regenerate, Edit (user messages). Edit and Regenerate create new branches (see B2). Delete only on explicit confirm.
 - **Done:** Edit never removes the old version.
@@ -111,6 +111,13 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Not:** Forms, live queries, charts beyond horizontal bars, per-message edit mode, or a model-agnostic validity guarantee.
 - **Done:** A valid program renders as native cards and a table; an unclosed fence streams; a broken program shows its source instead of an empty message; the toggle removes the prompt.
 
+## A16. Inline visual
+- **Status:** Have (`/visualize <request>` loads the bundled `visualize` skill and sends `@visualize <request>`; the model may also choose the block on its own. A fence marked `viz` renders inline in an auto-height sandboxed iframe served by the artifact protocol at `/i/<id>` with the artifact CSP: inline JS, no fetch/forms/frames, HTTPS CDN assets allowed. App theme tokens are posted into the frame. Prose before and after the block stays mandatory.)
+- **Ref:** Claude inline artifacts; OpenUI declarative blocks (A15) cover static layouts.
+- **Build:** `src/lib/fences.ts` scanner, `src/lib/viz.ts` splitter, `src/components/InlineVisual.tsx`, `artifacts.rs` inline route plus height/theme reporter, `resources/skills/visualize/SKILL.md`, `/visualize` in the slash registry.
+- **Not:** Persistent per-visual storage, standalone HTML export, drag resize, or theme tokens inside the artifact dock preview.
+- **Done:** A `/visualize` request renders an interactive document inline; controls update results; the block re-renders after reload; an unclosed fence shows a building state and then its source.
+
 ---
 
 # B. Conversation data
@@ -122,7 +129,7 @@ One entry per feature. Grouped only where features share a concern. Priorities a
 - **Done:** A migration test upgrades an old DB without data loss.
 
 ## B2. Message tree (branches)
-- **Status:** Missing (what exists is a chat fork: `branchFrom` copies the whole conversation and regenerate/edit-resubmit replace the tail in place; there is no `parent_id` tree and no version switcher)
+- **Status:** Have (0.12.0: migration 35 adds `parent_id` and `current_leaf_id`; reads return the leaf path; edit and regenerate insert siblings instead of overwriting; a `‹ n/m ›` switcher moves between versions and selects the deepest leaf. The tree view is still J7.)
 - **Ref:** † OpenWebUI stores messages as a tree with `parentId` and `childrenIds`; `history.currentId` points at the leaf of the active branch. Claude has version switchers. OpenCode can fork sessions.
 - **Build:** Rows with `id`, `parent_id`, `role`, `content`, `created_at`; chat holds `current_leaf_id`. The visible thread is the path from root to leaf. Edit or regenerate inserts a sibling; switching a sibling selects its deepest last descendant.
 - **Not:** Merge, diff between branches, full event log.
@@ -144,7 +151,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Ordering is stable and tested.
 
 ## B4. Search
-- **Status:** Missing (0.1.6 shipped FTS5 and a sidebar box; both were removed with the box in 0.5.0. The Ctrl+K palette switches chats by title.)
+- **Status:** Have (0.12.0: Ctrl+K queries `message_fts`, shows the chat title and a snippet under Messages, and opening a hit selects the chat and scrolls to the message. Temporary chats are excluded.)
 - **Ref:** † OpenWebUI searches titles, tags (`tag:name`) and message content, and exposes history search to models as tools.
 - **Build:** SQLite FTS5 over message text; query returns chat id and snippet. Filters: pinned, project, date. A search box above the chat list.
 - **Not:** Semantic search, agent-callable search.
@@ -164,13 +171,13 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Move a chat into a folder and back.
 
 ## B7. Tags
-- **Status:** Partial (0.1.6: manual add/remove + sidebar filter)
+- **Status:** Have (0.1.6: manual add/remove + sidebar filter; 0.12.0: the filter is a tested pure function that returns only non-temporary chats carrying the selected tag)
 - **Ref:** † OpenWebUI tags are keyword labels, searchable.
 - **Build:** `chat_tags(chat_id, tag)`. Manual add/remove first; auto-suggest from the title model later.
 - **Done:** Filtering by a tag returns only tagged chats.
 
 ## B8. Temporary chat
-- **Status:** Missing
+- **Status:** Have (0.12.0: sidebar action creates a `temporary` conversation, excluded from the sidebar and palette, badged in the header, dropped when you leave it, and swept at boot. Messages stay in SQLite until then; the model's `remember` tool refuses to write memory inside one, while the manual Remember button still queues notes.)
 - **Ref:** OpenWebUI and Claude have an incognito mode: not saved, no history.
 - **Build:** A `temporary` flag: messages held in memory, no DB rows, no memory writes, no title generation, gone on close. A clear badge in the UI.
 - **Done:** After closing, nothing about it exists on disk.
@@ -189,7 +196,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** Round trip with B9 passes.
 
 ## B11. Delete data
-- **Status:** Partial (0.1.6: delete-everything added, needs filesystem test. 0.3.5: chat and project documents are released as soon as no chat or project row points at them)
+- **Status:** Have (0.12.0: Delete everything calls `wipeAll` for every table and `wipe_app_files` for `spill`, `documents`, `knowledge` and `memory`. A Rust test creates each store with nested files, proves all four disappear, an unrelated file stays, and a second wipe is a no-op. 0.3.5: chat and project documents are released as soon as no chat or project row points at them.)
 - **Ref:** † OpenWebUI lets you delete one chat or clear all history from settings.
 - **Build:** Delete chat (including spill files and attachments for it). "Delete everything" removes DB, attachments, spill files, caches, then confirms. Memory included, with a warning.
 - **Done:** A test against the real filesystem finds no leftover files.
@@ -199,7 +206,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 # C. Models and context
 
 ## C1. Provider and API key storage
-- **Status:** Partial (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint; credential-storage acceptance tests are missing. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it. 0.6.0: up to ten keys per connection; Providers lists each key and can remove one key or all keys. 0.6.1: every request starts with the first key not cooling down; a quota-flavoured 429 or 402 marks the active key exhausted and moves to another key when one is available, otherwise reports the cooldown; a plain 429 keeps normal backoff; retrying a draft provider replaces its draft key)
+- **Status:** Have (0.1.5: keys live in the Windows Credential Manager and never cross to the renderer, and a rejected key shows a hint. 0.4.1: six kinds — OpenRouter, Agent Router, DeepSeek, Ollama Cloud, Ollama (local) and Custom — each with a default base URL; local Ollama stores no key at all; per-key masking and testing; a missing key blocks the send before the turn starts and names the page that fixes it. 0.6.0: up to ten keys per connection; Providers lists each key and can remove one key or all keys. 0.6.1: every request starts with the first key not cooling down; a quota-flavoured 429 or 402 marks the active key exhausted and moves to another key when one is available, otherwise reports the cooldown; a plain 429 keeps normal backoff; retrying a draft provider replaces its draft key. 0.12.0: a `SecretBackend` trait lets tests drive the whole key lifecycle against an in-memory store, proving store/read/add/remove/delete round-trip while every hint masks all but the last four characters; debug diagnostics accept only fixed event kinds and redact provider keys, bearer tokens and key-shaped fields before they reach the log or a copied report)
 - **Ref:** Claude Code and OpenCode read keys from config or environment; desktop apps use the OS keychain.
 - **Build:** Store the key in the OS credential store (Windows Credential Manager), never in plain JSON or localStorage. Base URL configurable (OpenRouter default). "Test connection" button.
 - **Done:** The key never appears in logs or exports.
@@ -271,7 +278,7 @@ function path(leaf: Msg, byId: Map<string, Msg>) {
 - **Done:** A two-tool turn completes with both results visible.
 
 ## D2. Streaming tool loop
-- **Status:** Missing
+- **Status:** Have (0.12.0: `agent_loop` assembles `ToolCallDelta` by `index`, executes the round after the `tool_calls` finish reason, and the UI shows running from `tool_start`; `agent_loop_runs_one_tool_round_then_answers` covers it)
 - **Ref:** † Stream tool-call arguments as deltas keyed by `index`; assemble before executing.
 - **Build:** Accumulate `ToolCallDelta` events (A3) into complete calls; execute after the finish reason `tool_calls`. Show "running" state in the UI as soon as the name arrives.
 - **Done:** Split argument fixtures assemble into valid JSON.
@@ -312,39 +319,39 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** In Plan mode, write and shell tools are not even sent to the model; in Sandbox mode a host call outside the project still asks and an explicit Deny rule beats auto-allow.
 
 ## D7. Shell tool
-- **Status:** Partial (0.1.3: approval + per-segment rules + kill-on-stop; cwd still home, not project. 0.8.2: in Sandbox mode, read-only host inspection is allowed outside the project — ls, cat, rg, Get-ChildItem, Get-Content and similar, with quoted paths, $HOME and pipelines — while writes, deletes, installs, process launches, redirection, subexpressions and credential paths stay refused)
+- **Status:** Have (0.1.3: approval + per-segment rules + kill-on-stop. 0.8.2: in Sandbox mode, read-only host inspection is allowed outside the project — ls, cat, rg, Get-ChildItem, Get-Content and similar, with quoted paths, $HOME and pipelines — while writes, deletes, installs, process launches, redirection, subexpressions and credential paths stay refused. 0.12.0: `run_powershell` and the approval card start in the configured project folder and fall back to the user's home only when no project folder is set; a resolver test and a live `Get-Location` test prove the working directory)
 - **Ref:** † OpenCode parses bash with tree-sitter to apply per-command rules. Claude Code asks per command pattern.
 - **Build:** `run_powershell` goes through D4 and D5. Timeout (default 60s), working directory fixed to the project, output captured and capped (D13), kill process tree on stop. Parse the command into segments (`;`, `&&`, `|`) and evaluate each, so `ls; rm x` cannot hide behind an allowed `ls`. In Sandbox mode (D6) the host shell is inspection only: reading state (time, disk, largest files, process and network state) is allowed, and anything that creates, updates or deletes files, or runs project code, is refused with a reason that points at the sandbox (D22).
 - **Not:** Persistent shell sessions, PTY.
 - **Done:** Compound commands are checked per segment; timeout kills the child.
 
 ## D8. Read file tool
-- **Status:** Unknown
+- **Status:** Have (shipped as `sandbox_read`, project-bound with `start` and `max_chars`)
 - **Ref:** † OpenCode `read` returns file contents or a directory listing, with size limits.
 - **Build:** Path must resolve inside the project (canonicalize, reject `..` and symlink escapes). Line-range parameters, size cap, binary files refused. Default allow.
 - **Done:** Path escape attempts are rejected.
 
 ## D9. List, glob and grep tools
-- **Status:** Unknown
+- **Status:** Have (shipped as `sandbox_glob` and `sandbox_grep`; capped, relative paths)
 - **Ref:** † OpenCode uses ripgrep under the hood for grep, glob and list, and tells models to prefer grep over bash grep.
 - **Build:** Shell out to bundled ripgrep, or use the `ignore` and `grep` crates. Respect `.gitignore`, cap results, project-bound paths. Default allow.
 - **Done:** A search returns capped, relative paths.
 
 ## D10. Write and edit tools
-- **Status:** Unknown
+- **Status:** Have (shipped as `sandbox_write`, `sandbox_edit`, `sandbox_delete`; edit is exact-match with `replace_all`)
 - **Ref:** † OpenCode requires reading a file before editing or overwriting it. Edit replaces an exact string.
 - **Build:** Edit = exact match replace; fail if the match is zero or multiple. Refuse if the file was not read in this session or changed since. Write goes through D4 (mode `Accept edits` can auto-allow).
 - **Not:** Patch-file format.
 - **Done:** Stale or ambiguous edits fail with a clear message to the model.
 
 ## D11. Diff view
-- **Status:** Missing
+- **Status:** Have (0.12.0: every `sandbox_run`, write, edit and delete records a pre-exec checkpoint; a Changes button on the tool entry shows the patch against that checkpoint.)
 - **Ref:** OpenCode and Claude Code show a diff for edits.
 - **Build:** Store before and after for each edit; render a unified diff in the tool card and in the approval card for edits.
 - **Done:** The diff matches the file change.
 
 ## D12. Checkpoints / undo
-- **Status:** Missing
+- **Status:** Have (0.12.0: `sandbox_checkpoint_restore` returns the recorded paths to their pre-step bytes after a confirm; untracked files created by the step are left in place.)
 - **Ref:** † Claude Code `/rewind` restores code, conversation, or both, but only tracks files edited through its own tools in the current session (not shell changes).
 - **Build:** Before each edit/write, copy the original into a per-chat snapshot folder. "Undo this change" restores it. Rewinding the conversation just moves the branch leaf (B2).
 - **Not:** Git integration as the undo mechanism (S1 stores one git snapshot per sandbox exec as recovery data, with no UI — see D22), tracking shell-made changes.
@@ -431,7 +438,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # E. Memory and instructions
 
 ## E1. Global memory
-- **Status:** Partial (retrieval is hybrid — FTS5 BM25 plus local MiniLM vectors fused with RRF over a derived index; each send ranks up to four notes for the current message and injects them as `## Relevant memory for this turn`, skipping untrusted and already-sent notes. The durable block is still the first 24 notes in file order, capped at 2500 characters, with an “N not sent” counter in Settings. 0.5.0: notes live in `MEMORY.md` and are sent from there. 0.3.6: the model can update and delete a memory by the id `recall_memory` prints. 0.9.1: the prompt renderer excludes untrusted notes from the durable and recalled blocks, and the client carries the file's trust flag instead of dropping it. 0.9.2: approving a pending note promotes it to trusted so it is sent again, and an imported note keeps its exported trust. 0.9.3: the prompt budget scales with the model window (1×/2×/3×/4×, capped at 24,000 characters), documents and past chats scale with it, and the system prompt tells the model to call `read_document` or `recall_memory` for more; the note selection stays at 2,500)
+- **Status:** Have (retrieval is hybrid — FTS5 BM25 plus local MiniLM vectors fused with deterministic RRF ordering over a derived index. 0.12.0: each send replaces the durable block with the trusted global and project notes ranked for that user message, preserving rank order and whole-note boundaries under one 2,500-character cap; unrelated and untrusted notes are omitted, and Settings plus the context inspector show the latest selection. 0.5.0: notes live in `MEMORY.md` and are sent from there. 0.3.6: the model can update and delete a memory by the id `recall_memory` prints. 0.9.2: approving a pending note promotes it to trusted so it is eligible again, and an imported note keeps its exported trust. 0.9.3: the overall prompt budget scales with the model window (1×/2×/3×/4×, capped at 24,000 characters), while note selection stays at 2,500 characters)
 - **Ref:** Claude app memory; † Claude Code `/memory` edits memory files and auto-memory. † OpenWebUI injects only retrieved memories per turn (`add_memory_context`).
 - **Build:** A list of short facts the user can view, edit and delete. Per turn, retrieve by the current user text (keyword match, top-k), char-cap the block, and replace the previous turn's block — never dump all memories. Unrelated memories must not reach the model.
 - **Not:** Sending every memory every turn.
@@ -445,13 +452,13 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Unit tests cover obvious keys and ordinary notes; the tool path refuses `remember this sk-…` with a reason.
 
 ## E3. Projects
-- **Status:** Partial (threads + instructions + shared memory have; knowledge files missing)
+- **Status:** Have (0.12.0: a project carries threads, instructions, shared project memory and stored knowledge; the project Docs panel adds and removes documents and every thread in the project inherits them)
 - **Ref:** † OpenWebUI folders act as project workspaces with a system prompt and files. Claude app Projects hold instructions and knowledge; every chat in the project inherits both, but chats stay independent otherwise.
 - **Build:** Project = name + description + instructions + knowledge (text notes plus stored docs) + chats (threads) + shared project memory. Every thread in the project gets the same instructions, knowledge excerpt, and project memory in context. Project folder is docs storage only in v1; tool sandbox enforcement waits for v2.
 - **Done:** Two threads in one project receive identical instructions and project memory; thread-private history never leaks across.
 
 ## E4. Project instructions file
-- **Status:** Unknown
+- **Status:** Missing (verified: `AGENTS.md`/`CLAUDE.md` are only protected paths in the sandbox, never read into the prompt)
 - **Ref:** † Claude Code reads `CLAUDE.md` (project, user, and path-specific rules); OpenCode reads `AGENTS.md`. Hooks enforce rules, but instructions are only guidance.
 - **Build:** Read `AGENTS.md` from the project root if present, add it to the system prompt, show it in the UI as "Instructions loaded".
 - **Not:** Hierarchies and path-specific rules.
@@ -464,7 +471,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** Override order is tested.
 
 ## E6. Auto memory (agent-written)
-- **Status:** Partial (0.5.0: Save appends the approved note to the memory file and Undo puts the pending row back; E2's secret gate and untrusted tag now guard proposals. 0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces as a Save/Dismiss toast, and `source_conversation_id` keeps the provenance; thread roll-up is still missing)
+- **Status:** Have (0.5.0: Save appends the approved note to the memory file and Undo puts the pending row back; E2's secret gate and untrusted tag guard proposals. 0.3.6: the model writes, updates and deletes memories through tools. 0.4.1: every model write lands in `pending_memories` and surfaces for Save/Dismiss, and `source_conversation_id` keeps the provenance. 0.12.0: project chats propose a 1-5 item shared-memory roll-up when the user explicitly asks, every tenth user turn, and when leaving the thread; a dedicated extraction prompt permits only lasting project facts, decisions, constraints and conventions, excludes private detail and transcript quotes, deduplicates saved and pending notes, applies the Rust secret/meta gate, marks tool-derived roll-ups untrusted, and writes only pending proposals)
 - **Ref:** † Claude Code writes its own notes per project and lets users audit them.
 - **Build:** The model may write memory only for durable bio, preferences, or an explicit "remember this". Thread summary stays primary and private; durable project points roll up from the thread into shared project memory on close, on explicit ask, or about every 10 turns — 1-5 bullets, facts only, never transcript quotes. Everything else stays in chat history. Enforce in the `remember` tool description plus the system prompt. Every write gated by E2. Every saved note visible and deletable.
 - **Not:** Writing memory every turn, or silently.
@@ -505,18 +512,18 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # F. Rendering and files
 
 ## F1. Artifact drawer
-- **Status:** Partial (preview exists. 0.4.1: the dock is a 344 px Progress panel — steps, outputs, used in this session — with the artifact view one Back arrow away; the artifact dock defaults to 480 px and resizes; below 1100 px the panel overlays with a focus trap; a sidebar Outputs entry opens a gallery of the chat's artifacts and written files. 0.10.0: an HTML fence is named from `title="..."`, `<title>`, `<h1>` or `HTML preview`; downloads use that name instead of `artifact.html`)
+- **Status:** Have (preview exists. 0.4.1: the dock is a 344 px Progress panel — steps, outputs, used in this session — with the artifact view one Back arrow away; the artifact dock defaults to 480 px and resizes; below 1100 px the panel overlays with a focus trap; a sidebar Outputs entry opens a gallery of the chat's artifacts and written files. 0.10.0: an HTML fence is named from `title="..."`, `<title>`, `<h1>` or `HTML preview`; downloads use that name instead of `artifact.html`. 0.12.0: opening an inline or declared artifact resolves the same artifact position across the assistant message's sibling regenerations, shows a version selector in chronological order, and swaps the preview/source without replacing older content)
 - **Ref:** † OpenWebUI renders web content and SVGs in the interface with live updates. Claude shows artifacts in a side panel with Preview and Code tabs.
 - **Build:** Side drawer: Preview and Code tabs, Copy, Download, version list from regenerations. Triggered by a fenced block with an artifact marker.
-- **Not:** Version list from regenerations.
+- **Not:** Cross-chat artifact history.
 - **Done:** Regenerating adds a version instead of replacing.
 
 ## F2. Artifact isolation
-- **Status:** Partial (0.4.1: gallery thumbnails are a stricter case — `sandbox=""` with `<script>`, inline handlers and `javascript:` URLs stripped by a tested function, so a thumbnail cannot run anything. 0.10.0: inline JS runs in the artifact preview again. next: the preview also loads CDN assets — external scripts, styles, images and fonts over `https:` — and allows `eval`, forms, modals and popups, while `connect-src 'none'`, `form-action 'none'`, `default-src 'none'` and `base-uri 'none'` keep fetch/XHR, form and base traffic closed. Rust serves a per-artifact shell from the `artifact` protocol (Windows `http://artifact.localhost`) with its own CSP; the shell puts the untrusted HTML in a nested `sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"` `srcdoc` iframe without `allow-same-origin`, so the artifact keeps an opaque origin and cannot reach the app document, origin storage, IPC, or top navigation. `frame-src 'self'` still blocks external frames; WebRTC is not covered. The shell's own script is trusted and the artifact source is JSON-escaped. No `postMessage` bridge is provided; Tauri's IPC ACL denies the artifact origin. Thumbnails stay script-free.)
+- **Status:** Have (0.4.1: gallery thumbnails are a stricter case — `sandbox=""` with `<script>`, inline handlers and `javascript:` URLs stripped by a tested function, so a thumbnail cannot run anything. 0.10.0: inline JS runs in the artifact preview again. next: the preview also loads CDN assets — external scripts, styles, images and fonts over `https:` — and allows `eval`, forms, modals and popups, while `connect-src 'none'`, `form-action 'none'`, `default-src 'none'` and `base-uri 'none'` keep fetch/XHR, form and base traffic closed. Rust serves a per-artifact shell from the `artifact` protocol (Windows `http://artifact.localhost`) with its own CSP; the shell puts the untrusted HTML in a nested `sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"` `srcdoc` iframe without `allow-same-origin`, so the artifact keeps an opaque origin and cannot reach the app document, origin storage, IPC, or top navigation. `frame-src 'self'` still blocks external frames. The shell's own script is trusted and the artifact source is JSON-escaped. No `postMessage` bridge is provided; Tauri's IPC ACL denies the artifact origin. Thumbnails stay script-free. 0.12.0: the shell's `Permissions-Policy` and every in-app preview frame also deny `display-capture`, so an artifact cannot record the screen; tests assert the shell policy, the nested frame's allow list and the absence of `allow-same-origin`)
 - **Ref:** † OpenWebUI renders in an iframe with an injected CSP. † Tauri's Isolation pattern guards the IPC channel from untrusted frontend code but does not sandbox artifact HTML.
 - **Build:** `src-tauri/src/artifacts.rs` stores at most sixteen 2 MB artifacts, serves `http://artifact.localhost/s/<id>` with `Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; worker-src blob:; form-action 'none'; base-uri 'none'; frame-src 'self'`, and drops the entry when the panel closes or the artifact changes. The app CSP adds `frame-src` for the shell. No `postMessage` bridge.
 - **Not:** Per-artifact origins, artifact storage, WebRTC exfiltration, or a hard CPU watchdog.
-- **Done:** Unit tests cover the shell CSP, JSON escaping and artifact path handling; a runtime test artifact that calls `fetch`, `parent`, `localStorage` and `invoke` is still a manual check. Inline scripts, canvas, data images and CDN assets work, and the shell never injects the artifact markup as HTML.
+- **Done:** Unit tests cover the shell CSP, JSON escaping, artifact path handling, each frame's sandbox/allow list and the denial of camera, microphone, geolocation and display capture; a runtime artifact that calls `fetch`, `parent`, `localStorage` and `invoke` stays a manual smoke check because the repo has no browser harness. Inline scripts, canvas, data images and CDN assets work, and the shell never injects the artifact markup as HTML.
 
 ## F3. Attachments and project knowledge
 - **Status:** Have (0.3.0: project Docs tab with sha256 dedupe and capped excerpts. 0.3.5: any chat can attach documents — text, markdown, code, HTML, PDF, DOCX, XLSX/XLS/ODS — extracted in Rust, injected into the user turn, and reachable later through the `read_document` tool; docs in a project also leave a reference in the project bucket; stored text is freed when nothing points at it. 0.4.1: attachments render as a 168 px card with a type chip, a two-line name and a size/character meta line that says Size unknown rather than guessing. Project knowledge is chunked at headings and 1,000 characters with 150 of overlap, indexed by FTS5 plus MiniLM vectors and fused with RRF, so a paraphrased question returns up to three chunks injected as `## Attached knowledge` with `doc`, `chunk` and `heading` attributes; the Settings-free Docs panel reindexes on demand, an upload reindexes in the background, and removing a doc or a project drops its chunks and vectors immediately. When the index has nothing the old name/excerpt path still answers)
@@ -532,7 +539,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** A non-vision model never receives an image part.
 
 ## F5. Mermaid and LaTeX
-- **Status:** Missing
+- **Status:** Have (0.12.0: KaTeX renders inline and display math through `marked-katex-extension`; a mermaid fence renders lazily after the text settles, on the current theme, and falls back to its source when parsing fails.)
 - **Ref:** † OpenWebUI renders Mermaid diagrams in some views.
 - **Build:** Later: lazy-loaded renderers inside A9. Never block text on them.
 - **Done:** n/a for now.
@@ -542,14 +549,14 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # G. App shell
 
 ## G1. Slash commands
-- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest)
+- **Status:** Have (0.2.0: registry with /compact /export /clear /model + /new /memory /settings, vitest. Current: `/skill` opens a searchable picker of enabled skills and inserts an `@name` mention, or takes `/skill <name>` directly; `/visualize <request>` sends an `@visualize` request and builds an inline visual)
 - **Ref:** † Claude Code and OpenCode have `/compact`, `/export`, `/fork`, `/copy` and more; Claude Code custom commands are markdown files that are now part of skills.
 - **Build:** Typing `/` at the start opens a filtered menu. Start with `/compact`, `/export`, `/fork`, `/clear`, `/model`. Commands are a plain registry in code.
 - **Not:** User-defined commands.
 - **Done:** Each command has a test and appears in the menu.
 
 ## G2. Keyboard shortcuts
-- **Status:** Partial (composer only)
+- **Status:** Have (0.12.0: global Esc stop, Ctrl+K palette, Ctrl+N new chat, Ctrl+, settings, Ctrl+B sidebar and Shift+Ctrl+A panel, with a Shortcuts page in Settings listing them)
 - **Ref:** † Claude Code: Esc stops, Esc Esc rewinds, Shift+Tab cycles modes.
 - **Build:** Esc stop, Ctrl+N new chat, Ctrl+K search, Ctrl+, settings. A shortcuts list in settings.
 - **Done:** Shortcuts do not fire while an IME is composing.
@@ -566,20 +573,20 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 - **Done:** No hard-coded colors outside the variable file.
 
 ## G5. Completion notification
-- **Status:** Missing
+- **Status:** Have (0.12.0: `tauri-plugin-notification`; a finished turn sends the chat title and a short reply preview only when the window is unfocused. Permission is requested once.)
 - **Build:** Native notification when a long turn or an approval request finishes while the window is unfocused.
 - **Done:** No notification when the window is focused.
 
 ## G6. Debug log view
-- **Status:** Missing
+- **Status:** Have (0.12.0: `logs/myagent.log` rotates at 512 KB; frontend errors, rejections and store failures append to it. Settings → About copies a report with version, OS, locale, connection, model and the newest 80 events. No keys or prompts.)
 - **Ref:** † OpenCode has `/debug`.
 - **Build:** Rolling log file plus a "Copy debug info" button (app version, OS, model). Never log keys or full prompts by default.
 - **Done:** Log contains no secrets (test with a fake key).
 
 ## G7. Auto-update
-- **Status:** Missing
-- **Build:** Later; use the platform updater with signed releases. Not before the app is stable.
-- **Done:** n/a for now.
+- **Status:** Have (`tauri-plugin-updater` wired; Settings → Changelog and About expose Check for updates, progress and install. Verify the release channel is public before tagging 1.0.0)
+- **Build:** Platform updater with signed releases; NSIS updater JSON in the release workflow.
+- **Done:** Check, download progress and install work from Settings → About on an installed build.
 
 ## G8. Changelog page
 - **Status:** Have (0.3.2: settings page between Shortcuts and About, releases from `src/lib/releasenotes.ts`)
@@ -602,14 +609,14 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 # H. Quality
 
 ## H1. Test harness
-- **Status:** Partial (vitest and cargo test suites exist and are green; CI runs the Rust suite only, the frontend suite is not wired into CI)
-- **Build:** Rust unit tests for pure logic (A3, A4, A5, D4, E2, B2 path). A mock provider that replays SSE fixtures. Three smoke tests: send, stream, stop. One command runs all; CI blocks merge on failure.
-- **Done:** `test` command is green on a clean checkout.
+- **Status:** Have (0.12.0: `npm test` runs vitest, `tsc --noEmit` and the Rust suite; a test-only loopback provider replays recorded SSE; send, stream and stop smoke tests; CI blocks merge on that command)
+- **Build:** Rust unit tests for pure logic (A3, A4, A5, D4, E2, B2 path). A `cfg(test)` mock provider replays SSE fixtures through the real HTTP streaming path, while fixture-derived model steps drive the agent loop. One command runs all; CI blocks merge on failure.
+- **Done:** `npm test` is green on a clean checkout and the stop smoke test preserves partial text while ignoring later events.
 
 ## H2. Recorded fixtures
-- **Status:** Missing
-- **Build:** A `fixtures/` folder of real recorded streams: plain text, reasoning, tool calls, `length`, mid-stream `error`, comment lines, usage chunk, 429. Each fixture has an expected-events file.
-- **Done:** Every parser and loop test uses a fixture, not an inline string.
+- **Status:** Have (0.12.0: ten recorded `tests/fixtures/*.sse` streams — plain, reasoning, tools, length, mid-stream error, comments, usage, coalesced, multibyte and multiline — each have an expected-events JSONL sidecar and drive parser, provider and loop tests; a recorded 429 body covers rate limiting)
+- **Build:** A `fixtures/` folder of real recorded streams plus a 429 response body. Each SSE fixture has a human-diffable `.events.jsonl` file and is replayed at one-byte, seven-byte and 64-byte chunk boundaries.
+- **Done:** Every parser and agent-loop stream test uses a fixture rather than an inline SSE string.
 
 ---
 
@@ -618,7 +625,7 @@ fn decide(rules: &[Rule], tool: &str, target: &str) -> Decision {
 Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": none starts before Phase 5 is done. Sources: product ideas plus the OpenRouter usage and model-list behavior noted earlier.
 
 ## J1. Context inspector
-- **Status:** Partial (0.8.4: Gauge button opens token usage, checklist, important context, assembled system prompt, memory counts, message count, document attachments and indexed skills; system prompt copy. Exact per-tool-definition token counts and request JSON export are still missing)
+- **Status:** Have (0.8.4: Gauge button opens token usage, checklist, important context, assembled system prompt, memory counts, message count, document attachments and indexed skills; system prompt copy. 0.12.0: Rust assembles the next provider request through the same history and tool-definition paths as a real turn, recursively redacts key-shaped fields and secret strings, returns the redacted request JSON for one-click copy, and reports the request, message and each individual tool-definition token estimate)
 - **Ref:** Claude Code `/context` shows context use; no mainstream chat app shows the full request.
 - **Build:** A panel listing exactly what the next request contains: system prompt, memory, project instructions, summary, kept messages, tool definitions, each with token counts. Read-only view over the context builder output (C7, C8), with a "copy request JSON" button that redacts the API key.
 - **Done:** The panel's total matches the tokens reported by the provider within a small margin.
@@ -637,7 +644,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Three parallel streams render independently; one failure does not affect the others.
 
 ## J4. Local models
-- **Status:** Missing
+- **Status:** Have (local Ollama is a first-class provider, no key, `/v1/models` with `/api/tags` fallback)
 - **Ref:** Ollama and LM Studio expose OpenAI-compatible endpoints.
 - **Build:** Provider entry with a custom base URL and optional empty key. Model list from the endpoint's models route. Capabilities default to "unknown" (no tools, no reasoning) until set manually.
 - **Done:** A chat works against a local endpoint with no key.
@@ -671,7 +678,7 @@ Ideas that make MyAgents better than a plain Claude-app clone. All are "Later": 
 - **Done:** Adding a file adds a command with no restart.
 
 ## J10. Artifact export
-- **Status:** Missing
+- **Status:** Have (a single artifact downloads from the panel and preview with its derived name; 0.12.0: artifacts with regeneration history offer Download all versions, choose a `.zip` destination, and export every complete version under a safe, stable, numbered filename)
 - **Build:** Download a single artifact as `.html`, or all versions of a chat as a zip. Builds on F1.
 - **Done:** The downloaded HTML opens standalone.
 

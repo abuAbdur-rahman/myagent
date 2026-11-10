@@ -1,0 +1,4 @@
+{"type":"payload","data":"{\"choices\": [{\"delta\": {\"content\": \"Hello\"}, \"finish_reason\": null}]}"}
+{"type":"payload","data":"{\"choices\": [{\"delta\": {\"content\": \" world\"}, \"finish_reason\": null}]}"}
+{"type":"payload","data":"{\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}"}
+{"type":"done"}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import {
+  Archive,
   BookOpen,
   ChevronLeft,
   Code,
@@ -10,13 +11,15 @@ import {
   Minimize2,
   X,
 } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useApp, type PanelMode, type PanelTab } from "../lib/store";
+import * as api from "../lib/api";
 import { Markdown } from "./Markdown";
 import { Badge, Segmented } from "./ui";
 import { SessionPanel } from "./SessionPanel";
 import { FilePreview } from "./FilePreview";
 import { ContextInspector } from "./ContextInspector";
-import { copyText, downloadText } from "../lib/utils";
+import { copyText, downloadText, errorText } from "../lib/utils";
 import { toast } from "../lib/toast";
 import { ArtifactPreview } from "./ArtifactPreview";
 
@@ -52,6 +55,28 @@ function fileStem(title: string, ext: string): string {
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name) ? `${name}-artifact` : name;
 }
 
+const MAX_ZIP_VERSIONS = 64;
+const MAX_ZIP_ENTRY_BYTES = 2 * 1024 * 1024;
+const MAX_ZIP_BYTES = 16 * 1024 * 1024;
+
+function bytesOf(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+function zipLimitProblem(versions: { code: string }[]): string | null {
+  if (versions.length > MAX_ZIP_VERSIONS) {
+    return `A zip holds up to ${MAX_ZIP_VERSIONS} versions. Save an earlier one on its own first.`;
+  }
+  const sizes = versions.map((version) => bytesOf(version.code));
+  if (sizes.some((size) => size > MAX_ZIP_ENTRY_BYTES)) {
+    return "One version is over 2 MB, so it cannot go in a zip. Download it on its own.";
+  }
+  if (sizes.reduce((total, size) => total + size, 0) > MAX_ZIP_BYTES) {
+    return "These versions are over 16 MB together, so they cannot go in one zip.";
+  }
+  return null;
+}
+
 function tabsFor(lang: string): { id: PanelTab; label: string }[] {
   const normalized = lang.toLowerCase();
   if (normalized === "html" || normalized === "htm") {
@@ -76,6 +101,7 @@ export function ArtifactsPanel() {
   const {
     panelOpen,
     panelArtifact,
+    panelArtifactVersions,
     panelTab,
     panelMode,
     panelView,
@@ -85,6 +111,7 @@ export function ArtifactsPanel() {
     setPanelWidth,
     showSessionView,
     closePanel,
+    openArtifact,
   } = useApp();
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -143,6 +170,34 @@ export function ArtifactsPanel() {
       ext === "html" ? "text/html" : "text/plain",
     );
     toast("Artifact downloaded");
+  };
+
+  const downloadVersions = async () => {
+    const limit = zipLimitProblem(panelArtifactVersions);
+    if (limit) {
+      toast(limit);
+      return;
+    }
+    try {
+      const destination = await save({
+        defaultPath: `${fileStem(panelArtifact.title, ext)}-versions.zip`,
+        filters: [{ name: "Zip archive", extensions: ["zip"] }],
+      });
+      if (!destination) return;
+      await api.artifactZipExport(
+        destination,
+        panelArtifactVersions.map((version) => {
+          const versionExt = EXTENSIONS[version.lang.toLowerCase()] ?? "txt";
+          return {
+            name: `${String(version.index).padStart(2, "0")}-${fileStem(version.title, versionExt)}.${versionExt}`,
+            content: version.code,
+          };
+        }),
+      );
+      toast("Artifact versions downloaded");
+    } catch (error) {
+      toast(errorText(error));
+    }
   };
 
   const width = panelMode === "mini" ? 300 : panelWidth;
@@ -239,6 +294,17 @@ export function ArtifactsPanel() {
             >
               <Download size={15} />
             </button>
+            {panelArtifactVersions.length > 1 && (
+              <button
+                type="button"
+                aria-label="Download all artifact versions"
+                title="Download all versions"
+                onClick={() => void downloadVersions()}
+                className="grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
+              >
+                <Archive size={15} />
+              </button>
+            )}
           </>
         )}
         <span className="mx-1 h-4 w-px bg-line-subtle" aria-hidden="true" />
@@ -299,6 +365,23 @@ export function ArtifactsPanel() {
           <span className="inline-flex items-center gap-1.5">
             <Code size={12} /> Source view
           </span>
+        )}
+        {panelArtifactVersions.length > 1 && (
+          <select
+            value={panelArtifact.id}
+            onChange={(event) => {
+              const version = panelArtifactVersions.find((item) => item.id === event.target.value);
+              if (version) openArtifact(version);
+            }}
+            aria-label="Artifact version"
+            className="ml-auto h-6 max-w-28 rounded-field bg-fill-1 px-1.5 text-[11px] text-fg shadow-[inset_0_0_0_1px_var(--line)] outline-none focus:shadow-[inset_0_0_0_1px_var(--accent-line),0_0_0_3px_var(--accent-ring)]"
+          >
+            {panelArtifactVersions.map((version) => (
+              <option key={version.id} value={version.id}>
+                Version {version.index} of {version.total}
+              </option>
+            ))}
+          </select>
         )}
       </div>
     </section>

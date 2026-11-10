@@ -1,7 +1,7 @@
 {
   "name": "myagent",
   "private": true,
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,12 +11,15 @@
     "clean:target": "node -e \"require('fs').rmSync('src-tauri/target/debug/incremental', { recursive: true, force: true })\"",
     "model:screen": "node scripts/prepare-screen-model.mjs",
     "eval:memory": "cargo test --quiet --manifest-path src-tauri/Cargo.toml --lib memory::eval -- --nocapture",
-    "test": "vitest run"
+    "test": "vitest run && tsc --noEmit && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:web": "vitest run",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@openuidev/react-lang": "1.1.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "~2.7.3",
+    "@tauri-apps/plugin-notification": "^2.8.0",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-sql": "^2.5.0",
     "@tauri-apps/plugin-updater": "^2.12.0",
@@ -28,8 +31,11 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.17",
+    "katex": "^0.16.47",
     "lucide-react": "^1.56.0",
     "marked": "^18.1.1",
+    "marked-katex-extension": "^5.1.13",
+    "mermaid": "^11.17.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "shiki": "^4.5.0",

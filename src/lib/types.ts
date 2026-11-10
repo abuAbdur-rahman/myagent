@@ -108,6 +108,7 @@ const messageSchema = z.object({
   rating: z.number().nullish(),
   duration_ms: z.number().nullish(),
   completed_at: z.number().nullish(),
+  parent_id: z.string().nullish(),
   created_at: z.number(),
 });
 export type Message = z.infer<typeof messageSchema>;
@@ -123,6 +124,8 @@ const conversationSchema = z.object({
   summary: z.string().nullable(),
   summary_through: z.number().nullable(),
   system_prompt: z.string().nullable().optional(),
+  current_leaf_id: z.string().nullish(),
+  temporary: z.number().nullish(),
   created_at: z.number(),
   updated_at: z.number(),
 });

@@ -434,6 +434,42 @@ fn strip_tool_spec(specs: &mut serde_json::Value, name: &str) {
     }
 }
 
+async fn request_tool_specs(app: &AppHandle, req: &ChatRequest) -> serde_json::Value {
+    let blind_model = req
+        .vision_fallback_model
+        .as_deref()
+        .is_some_and(|model| !model.trim().is_empty());
+    let has_documents = match req.conversation_id.as_deref() {
+        Some(conversation) => {
+            match crate::documents::conversation_documents(app, conversation).await {
+                Ok(documents) => !documents.is_empty(),
+                Err(error) => {
+                    eprintln!("read_document gating: {error}");
+                    false
+                }
+            }
+        }
+        None => false,
+    };
+    let mut specs = tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app));
+    if req.subagent {
+        strip_tool_spec(&mut specs, "delegate_task");
+    }
+    let mcp_tools = match crate::mcp::flush(app, req.project_id.as_deref()).await {
+        Ok(tools) => tools,
+        Err(error) => {
+            eprintln!("mcp: tool specs unavailable: {error}");
+            Vec::new()
+        }
+    };
+    if let Some(list) = specs.as_array_mut() {
+        for definition in &mcp_tools {
+            list.push(crate::mcp::spec_for(definition));
+        }
+    }
+    specs
+}
+
 pub(crate) struct TextCompletion<'a> {
     pub client: &'a reqwest::Client,
     pub base_url: &'a str,
@@ -1256,9 +1292,22 @@ pub struct ExtractMemoryRequest {
     pub text: String,
     #[serde(default)]
     pub connection_kind: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 const MEMORY_SYSTEM: &str = "You extract durable memory from an assistant reply. Reply with ONLY a JSON array of 1-5 short strings: facts, preferences, decisions or constraints worth remembering in future conversations. No task narration, no code, no markdown fences, no commentary. Each string under 240 characters. If nothing is durable, reply with [].";
+const PROJECT_ROLLUP_SYSTEM: &str = "You extract durable shared project memory from a private chat transcript. Reply with ONLY a JSON array of 1-5 short strings. Include only lasting project facts, decisions, constraints, or stable conventions useful in another project thread. Exclude personal details, transcript quotes, task narration, temporary status, speculation, credentials, and secrets. Paraphrase rather than copying sentences. Each string must be factual and under 240 characters. If nothing belongs in shared project memory, reply with [].";
+
+fn memory_system(mode: Option<&str>) -> AppResult<&'static str> {
+    match mode {
+        None | Some("reply") => Ok(MEMORY_SYSTEM),
+        Some("project_rollup") => Ok(PROJECT_ROLLUP_SYSTEM),
+        Some(_) => Err(AppError::Internal(
+            "unknown memory extraction mode".to_string(),
+        )),
+    }
+}
 
 fn summary_body(model: &str, text: &str) -> serde_json::Value {
     serde_json::json!({
@@ -1439,7 +1488,7 @@ pub async fn extract_memory(
         base_url: &base_url,
         key: &key,
         model: &req.model,
-        system: MEMORY_SYSTEM,
+        system: memory_system(req.mode.as_deref())?,
         user: &text,
         cancel: &cancel,
         connection_kind: req.connection_kind.as_deref(),
@@ -1606,6 +1655,275 @@ pub async fn chat_stream(
     };
     state.finish(&req.request_id);
     result
+}
+
+const MAX_INSPECTION_CHARS: usize = 400_000;
+
+#[derive(Debug, Serialize)]
+pub struct ToolInspection {
+    pub name: String,
+    pub tokens: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestInspection {
+    pub json: String,
+    pub total_tokens: usize,
+    pub message_tokens: usize,
+    pub tools: Vec<ToolInspection>,
+}
+
+fn inspect_tokens(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value)
+        .map(|text| text.chars().count().div_ceil(4))
+        .unwrap_or(0)
+}
+
+fn sensitive_key(key: &str) -> bool {
+    let mut normalized = String::with_capacity(key.len());
+    let mut previous_lower_or_digit = false;
+    for value in key.chars() {
+        if value == '-' || value == ' ' {
+            normalized.push('_');
+            previous_lower_or_digit = false;
+            continue;
+        }
+        if value.is_ascii_uppercase() && previous_lower_or_digit {
+            normalized.push('_');
+        }
+        normalized.push(value.to_ascii_lowercase());
+        previous_lower_or_digit = value.is_ascii_lowercase() || value.is_ascii_digit();
+    }
+    let names = [
+        "auth",
+        "api_key",
+        "apikey",
+        "authorization",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "client_secret",
+        "private_key",
+        "secret_access_key",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "credential",
+        "credentials",
+    ];
+    names
+        .iter()
+        .any(|name| normalized == *name || normalized.ends_with(&format!("_{name}")))
+}
+
+fn redact_request_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                if sensitive_key(key) {
+                    *item = serde_json::Value::String("[redacted]".to_string());
+                } else {
+                    redact_request_value(item);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_request_value(item);
+            }
+        }
+        serde_json::Value::String(text) => {
+            *text = crate::memory::redact_secrets(text);
+        }
+        _ => {}
+    }
+}
+
+fn mask_inline_images(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(image_url) = map.get_mut("image_url") {
+                match image_url {
+                    serde_json::Value::Object(image) => {
+                        if let Some(serde_json::Value::String(url)) = image.get_mut("url")
+                            && url.starts_with("data:")
+                        {
+                            *url = "[inline image]".to_string();
+                        }
+                    }
+                    serde_json::Value::String(url) if url.starts_with("data:") => {
+                        *url = "[inline image]".to_string();
+                    }
+                    _ => {}
+                }
+            }
+            for item in map.values_mut() {
+                mask_inline_images(item);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                mask_inline_images(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn inspection_chars(value: &serde_json::Value) -> usize {
+    serde_json::to_string_pretty(value)
+        .map(|json| json.chars().count())
+        .unwrap_or(usize::MAX)
+}
+
+fn truncate_inspection_display(value: &mut serde_json::Value) {
+    if inspection_chars(value) <= MAX_INSPECTION_CHARS {
+        return;
+    }
+    if let serde_json::Value::Object(map) = value {
+        map.insert(
+            "_myagent_truncated".to_string(),
+            serde_json::Value::String(
+                "Request display truncated to 400,000 characters".to_string(),
+            ),
+        );
+    }
+    for key in ["messages", "input", "tools"] {
+        if inspection_chars(value) <= MAX_INSPECTION_CHARS {
+            return;
+        }
+        if let serde_json::Value::Object(map) = value
+            && map.contains_key(key)
+        {
+            map.insert(
+                key.to_string(),
+                serde_json::json!([{ "_truncated": format!("{key} omitted from display") }]),
+            );
+        }
+    }
+    if inspection_chars(value) > MAX_INSPECTION_CHARS {
+        *value = serde_json::json!({
+            "_myagent_truncated": "Request display exceeded 400,000 characters"
+        });
+    }
+}
+
+fn inspected_tools(body: &serde_json::Value) -> Vec<ToolInspection> {
+    body.get("tools")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            let name = tool
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .or_else(|| tool.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            ToolInspection {
+                name,
+                tokens: inspect_tokens(tool),
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<RequestInspection> {
+    req.base_url = connections::base_url_for(&app, &req.connection_id).await?;
+    let url = endpoint(&req.base_url, "chat/completions");
+    let mut history = if req.enable_tools {
+        chat_history(
+            &req.messages,
+            uses_deepseek_reasoning_replay(&req.model),
+            true,
+        )
+    } else {
+        req.messages
+            .iter()
+            .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
+            .collect()
+    };
+    history = harden_deepseek_history(history, &req.model, req.connection_kind.as_deref(), &url);
+    if req.enable_tools {
+        let (_, note) = route_vision(&mut history, req.vision_fallback_model.as_deref());
+        if let Some(note) = note {
+            let at = history
+                .iter()
+                .position(|message| {
+                    message.get("role").and_then(|role| role.as_str()) == Some("system")
+                })
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            history.insert(at, serde_json::json!({ "role": "system", "content": note }));
+        }
+    }
+    let specs = if req.enable_tools {
+        Some(request_tool_specs(&app, &req).await)
+    } else {
+        None
+    };
+    let body = if responses::only(&req.base_url, &req.model) {
+        responses::body(
+            &req.model,
+            &prune_tool_history(&history),
+            specs.as_ref(),
+            req.reasoning_effort.as_deref(),
+            true,
+            !is_agentrouter(req.connection_kind.as_deref(), &req.base_url),
+        )
+    } else {
+        let mut body = serde_json::json!({
+            "model": req.model,
+            "messages": if req.enable_tools { prune_chat_history(&history) } else { history },
+            "stream": true,
+        });
+        if let Some(specs) = specs {
+            body["tools"] = specs;
+        }
+        if wants_stream_usage(req.connection_kind.as_deref()) {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+        if let Some(temperature) = req.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+        if let Some(effort) = req
+            .reasoning_effort
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            if req.connection_kind.as_deref() == Some("deepseek")
+                && is_deepseek_v4_model(&req.model)
+            {
+                attach_deepseek_effort(&mut body, effort);
+            } else if effort != "none" {
+                attach_effort(&mut body, req.connection_kind.as_deref(), effort);
+            }
+        }
+        body
+    };
+    let tools = inspected_tools(&body);
+    let message_tokens = body
+        .get("messages")
+        .or_else(|| body.get("input"))
+        .map(inspect_tokens)
+        .unwrap_or(0);
+    let total_tokens = inspect_tokens(&body);
+    let mut display = body;
+    mask_inline_images(&mut display);
+    redact_request_value(&mut display);
+    truncate_inspection_display(&mut display);
+    let json = serde_json::to_string_pretty(&display)
+        .map_err(|error| AppError::Internal(format!("inspect request json: {error}")))?;
+    Ok(RequestInspection {
+        json,
+        total_tokens,
+        message_tokens,
+        tools,
+    })
 }
 
 const MAX_ATTEMPTS: u32 = 10;
@@ -3032,7 +3350,11 @@ impl ToolRunner for RealTools<'_> {
             let cwd = if name == "update_memory" || name == "delete_memory" {
                 "saved memory".to_string()
             } else {
-                std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string())
+                crate::sandbox::configured_project_root(self.app)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| {
+                        std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string())
+                    })
             };
             let (tx, rx) = tokio::sync::oneshot::channel();
             self.state.insert_pending(
@@ -3394,23 +3716,7 @@ async fn run_agentic(
         history.insert(at, serde_json::json!({"role": "system", "content": note}));
     }
     let max = req.max_iterations.unwrap_or(25).clamp(1, 32) as usize;
-    let blind_model = req
-        .vision_fallback_model
-        .as_deref()
-        .is_some_and(|model| !model.trim().is_empty());
-    let has_documents = match req.conversation_id.as_deref() {
-        Some(conversation) => {
-            match crate::documents::conversation_documents(app, conversation).await {
-                Ok(documents) => !documents.is_empty(),
-                Err(error) => {
-                    eprintln!("read_document gating: {error}");
-                    false
-                }
-            }
-        }
-        None => false,
-    };
-    let mut model = RealModel {
+    let model = RealModel {
         client,
         url,
         key: key.clone(),
@@ -3418,25 +3724,8 @@ async fn run_agentic(
         cancel,
         state,
         on_event,
-        tool_specs: {
-            let mut specs =
-                tools::tool_specs(blind_model, has_documents, crate::sandbox::enabled(app));
-            if req.subagent {
-                strip_tool_spec(&mut specs, "delegate_task");
-            }
-            specs
-        },
+        tool_specs: request_tool_specs(app, req).await,
     };
-    let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
-        .await
-        .unwrap_or_default();
-    if !mcp_tools.is_empty()
-        && let Some(specs) = model.tool_specs.as_array_mut()
-    {
-        for def in &mcp_tools {
-            specs.push(crate::mcp::spec_for(def));
-        }
-    }
     let mut runner = RealTools {
         client,
         app,
@@ -3659,6 +3948,108 @@ async fn stream_responses_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_rollups_use_the_private_thread_extraction_rules() {
+        let prompt = memory_system(Some("project_rollup")).expect("roll-up mode");
+        assert!(prompt.contains("shared project memory"));
+        assert!(prompt.contains("Exclude personal details"));
+        assert!(prompt.contains("transcript quotes"));
+        assert!(memory_system(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn request_inspection_redacts_secret_fields_and_message_keys() {
+        let mut value = serde_json::json!({
+            "authorization": "Bearer abcdefghijklmnop",
+            "messages": [{"role": "user", "content": "key sk-abcdefghijklmnop123"}],
+            "nested": {"api_key": "plain-secret", "X-Api-Key": "header-secret"}
+        });
+        redact_request_value(&mut value);
+        let text = serde_json::to_string(&value).expect("json");
+        assert!(!text.contains("abcdefghijklmnop"));
+        assert!(!text.contains("plain-secret"));
+        assert!(!text.contains("header-secret"));
+        assert!(text.contains("[redacted]"));
+    }
+
+    #[test]
+    fn request_inspection_redacts_common_credential_shapes() {
+        for key in [
+            "access_token",
+            "refresh_token",
+            "client_secret",
+            "private_key",
+            "auth",
+            "x-api-key",
+            "passwd",
+            "credential",
+            "privateKey",
+            "OPENAI_API_KEY",
+        ] {
+            assert!(sensitive_key(key), "{key} should be sensitive");
+        }
+        assert!(!sensitive_key("author"));
+        assert!(!sensitive_key("description"));
+        assert!(!sensitive_key("max_tokens"));
+        assert!(!sensitive_key("token_count"));
+
+        let mut value = serde_json::json!({
+            "note": "password: hunter2hunter2 and api_key=\"quoted-value\" and AKIAIOSFODNN7EXAMPLE",
+            "nested": [{"client_secret": "nested-secret"}],
+            "image": {"image_url": {"url": "data:image/png;base64,AAAA"}},
+            "response_image": {"type": "input_image", "image_url": "data:image/png;base64,BBBB"}
+        });
+        mask_inline_images(&mut value);
+        redact_request_value(&mut value);
+        let text = serde_json::to_string(&value).expect("json");
+        assert!(!text.contains("hunter2hunter2"));
+        assert!(!text.contains("quoted-value"));
+        assert!(!text.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!text.contains("nested-secret"));
+        assert!(!text.contains("base64,AAAA"));
+        assert!(!text.contains("base64,BBBB"));
+    }
+
+    #[test]
+    fn request_inspection_keeps_valid_json_when_large() {
+        let mut display = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "x".repeat(MAX_INSPECTION_CHARS)}],
+            "tools": [{"name": "lookup", "description": "y".repeat(MAX_INSPECTION_CHARS)}]
+        });
+        truncate_inspection_display(&mut display);
+        let json = serde_json::to_string_pretty(&display).expect("json");
+        assert!(json.chars().count() <= MAX_INSPECTION_CHARS);
+        assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok());
+        assert!(json.contains("truncated"));
+    }
+
+    #[test]
+    fn request_inspection_counts_tokens_before_redaction() {
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "x".repeat(400)}]
+        });
+        let original = inspect_tokens(&body);
+        let mut redacted = body.clone();
+        redact_request_value(&mut redacted);
+        assert!(inspect_tokens(&redacted) < original);
+        assert!(original > 0);
+    }
+
+    #[test]
+    fn request_inspection_counts_each_tool_definition() {
+        let body = serde_json::json!({
+            "tools": [
+                {"type": "function", "function": {"name": "alpha", "description": "A"}},
+                {"type": "function", "function": {"name": "beta", "description": "B"}}
+            ]
+        });
+        let tools = inspected_tools(&body);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "alpha");
+        assert!(tools.iter().all(|tool| tool.tokens > 0));
+    }
 
     #[test]
     fn attached_documents_do_not_feed_the_explicit_save_gate() {
@@ -4274,12 +4665,12 @@ mod tests {
             "scoped to the document"
         );
     }
+    use crate::test_support::{fixture_provider, fixture_text};
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn serve_script(script: Vec<(&'static str, &'static str, &'static str)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -4320,7 +4711,10 @@ mod tests {
     }
 
     fn test_client() -> reqwest::Client {
-        reqwest::Client::builder().build().expect("test client")
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("test client")
     }
 
     fn body() -> serde_json::Value {
@@ -4363,57 +4757,6 @@ mod tests {
         req
     }
 
-    fn serve_sse(
-        first: &'static str,
-        rest: Vec<&'static str>,
-        gate: std::sync::mpsc::Receiver<()>,
-        connections: Arc<AtomicUsize>,
-    ) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-        let addr = listener.local_addr().expect("test server addr");
-        std::thread::spawn(move || {
-            let Ok((stream, _)) = listener.accept() else {
-                return;
-            };
-            connections.fetch_add(1, AtomicOrdering::SeqCst);
-            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
-            let mut content_length = 0usize;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
-                let trimmed = line.trim_end();
-                if trimmed.is_empty() {
-                    break;
-                }
-                if let Some((name, value)) = trimmed.split_once(':')
-                    && name.eq_ignore_ascii_case("Content-Length")
-                {
-                    content_length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut request_body = vec![0u8; content_length];
-            let _ = reader.read_exact(&mut request_body);
-            let mut stream = reader.into_inner();
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
-            );
-            let _ = stream.flush();
-            let _ = stream.write_all(first.as_bytes());
-            let _ = stream.flush();
-            let _ = gate.recv();
-            for chunk in rest {
-                if stream.write_all(chunk.as_bytes()).is_err() {
-                    return;
-                }
-                let _ = stream.flush();
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        });
-        format!("http://{addr}")
-    }
-
     #[test]
     fn retryable_status_covers_429_and_5xx_only() {
         assert!(retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
@@ -4442,7 +4785,7 @@ mod tests {
             (
                 "429 Too Many Requests",
                 "Retry-After: 0\r\n",
-                r#"{"error":"slow down"}"#,
+                include_str!("../tests/fixtures/rate_limit.json"),
             ),
             ("200 OK", "", r#"{"choices":[]}"#),
         ]);
@@ -4557,16 +4900,8 @@ mod tests {
 
     #[tokio::test]
     async fn stream_error_mid_flight_is_not_retried() {
-        let connections = Arc::new(AtomicUsize::new(0));
-        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
-        gate_tx.send(()).expect("pre-release the gate");
-        let url = serve_sse(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
-            vec!["data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n"],
-            gate_rx,
-            connections.clone(),
-        );
-        let req = stream_request(&url);
+        let provider = fixture_provider("mid_error", 17, false);
+        let req = stream_request(&provider.base_url);
         let (channel, seen) = collect_events();
         let cancel = Notify::new();
         let error = stream_completion(
@@ -4580,26 +4915,91 @@ mod tests {
         .await
         .expect_err("a mid-stream error is not retried");
         assert!(
-            matches!(error, AppError::Upstream(message) if message.contains("upstream exploded"))
+            matches!(error, AppError::Upstream(message) if message.contains("upstream overloaded"))
         );
-        assert_eq!(delta_texts(&seen), vec!["one"]);
-        assert_eq!(connections.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(delta_texts(&seen), vec!["partial"]);
+        assert_eq!(provider.connections(), 1);
+    }
+
+    #[tokio::test]
+    async fn smoke_send_plain_fixture_streams_to_done() {
+        let provider = fixture_provider("plain", 11, false);
+        let req = stream_request(&provider.base_url);
+        let (channel, seen) = collect_events();
+        let text = stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![serde_json::json!({"role": "user", "content": "hi"})],
+            &channel,
+            &Notify::new(),
+        )
+        .await
+        .expect("plain fixture streams");
+        let deltas = delta_texts(&seen);
+        let events = seen.lock().expect("events");
+        assert_eq!(text, "Hello world");
+        assert_eq!(deltas, vec!["Hello", " world"]);
+        assert!(events.iter().any(|event| event["type"] == "finish"));
+        assert!(events.iter().any(|event| event["type"] == "done"));
+        assert_eq!(provider.connections(), 1);
+    }
+
+    #[tokio::test]
+    async fn smoke_stream_fixture_emits_reasoning_and_usage() {
+        let reasoning_provider = fixture_provider("reasoning", 13, false);
+        let req = stream_request(&reasoning_provider.base_url);
+        let (channel, reasoning_seen) = collect_events();
+        let text = stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![],
+            &channel,
+            &Notify::new(),
+        )
+        .await
+        .expect("reasoning fixture streams");
+        assert_eq!(text, "42");
+        assert!(
+            reasoning_seen
+                .lock()
+                .expect("reasoning events")
+                .iter()
+                .any(|event| event["type"] == "reasoning")
+        );
+
+        let usage_provider = fixture_provider("usage", 9, false);
+        let req = stream_request(&usage_provider.base_url);
+        let (channel, usage_seen) = collect_events();
+        stream_completion(
+            &test_client(),
+            &req,
+            "key".to_string(),
+            vec![],
+            &channel,
+            &Notify::new(),
+        )
+        .await
+        .expect("usage fixture streams");
+        assert!(
+            usage_seen
+                .lock()
+                .expect("usage events")
+                .iter()
+                .any(|event| {
+                    event["type"] == "usage"
+                        && event["prompt_tokens"] == 44
+                        && event["completion_tokens"] == 6
+                        && event["total_tokens"] == 50
+                })
+        );
     }
 
     #[tokio::test]
     async fn cancel_mid_stream_keeps_the_text_already_sent() {
-        let connections = Arc::new(AtomicUsize::new(0));
-        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
-        let url = serve_sse(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
-            vec![
-                "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
-                "data: [DONE]\n\n",
-            ],
-            gate_rx,
-            connections.clone(),
-        );
-        let req = stream_request(&url);
+        let mut provider = fixture_provider("plain", 7, true);
+        let req = stream_request(&provider.base_url);
         let (channel, seen) = collect_events();
         let cancel = Arc::new(Notify::new());
         let client = test_client();
@@ -4619,12 +5019,12 @@ mod tests {
         }
         assert_eq!(
             delta_texts(&seen),
-            vec!["one"],
+            vec!["Hello"],
             "the first delta must arrive before the cancel"
         );
         cancel.notify_one();
         let result = tokio::time::timeout(Duration::from_secs(5), turn).await;
-        gate_tx.send(()).expect("release the rest of the stream");
+        provider.release();
         let result = result
             .expect("the turn must resolve after a cancel")
             .expect("stream task");
@@ -4632,7 +5032,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(
             delta_texts(&seen),
-            vec!["one"],
+            vec!["Hello"],
             "later chunks never arrive after a cancel"
         );
     }
@@ -4729,19 +5129,37 @@ mod tests {
         assert_eq!(history[0]["reasoning_content"], "");
     }
 
-    enum FakeStep {
-        Text(&'static str),
-        Tool,
+    fn fixture_iteration(name: &str) -> Iteration {
+        let mut parser = sse::SseParser::new();
+        let mut accumulator = sse::ToolCallAccumulator::new();
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        for item in parser.feed(fixture_text(name).as_bytes()) {
+            if let sse::SseItem::Payload(payload) = item {
+                let value: serde_json::Value =
+                    serde_json::from_str(&payload).expect("fixture payload");
+                let chunk = sse::map_chunk(&value);
+                text.push_str(&chunk.text);
+                reasoning.push_str(&chunk.reasoning);
+                accumulator.apply(chunk.tool_deltas);
+            }
+        }
+        Iteration {
+            text,
+            calls: accumulator.calls(),
+            reasoning,
+            responses_items: Vec::new(),
+        }
     }
 
-    struct FakeModel {
-        script: RefCell<VecDeque<FakeStep>>,
+    struct FixtureModel {
+        script: RefCell<VecDeque<&'static str>>,
         calls: Cell<usize>,
         tools_flags: RefCell<Vec<bool>>,
     }
 
-    impl FakeModel {
-        fn new(script: Vec<FakeStep>) -> Self {
+    impl FixtureModel {
+        fn new(script: Vec<&'static str>) -> Self {
             Self {
                 script: RefCell::new(script.into()),
                 calls: Cell::new(0),
@@ -4758,7 +5176,7 @@ mod tests {
         }
     }
 
-    impl ModelClient for FakeModel {
+    impl ModelClient for FixtureModel {
         async fn stream_step(
             &self,
             _messages: &[serde_json::Value],
@@ -4766,29 +5184,12 @@ mod tests {
         ) -> AppResult<Option<Iteration>> {
             self.calls.set(self.calls.get() + 1);
             self.tools_flags.borrow_mut().push(use_tools);
-            let step = self
-                .script
-                .borrow_mut()
-                .pop_front()
-                .unwrap_or(FakeStep::Tool);
-            Ok(Some(match step {
-                FakeStep::Text(text) => Iteration {
-                    text: text.to_string(),
-                    calls: Vec::new(),
-                    reasoning: String::new(),
-                    responses_items: Vec::new(),
-                },
-                FakeStep::Tool => Iteration {
-                    text: String::new(),
-                    calls: vec![serde_json::json!({
-                        "id": "call-1",
-                        "type": "function",
-                        "function": { "name": "get_time", "arguments": "{}" },
-                    })],
-                    reasoning: String::new(),
-                    responses_items: Vec::new(),
-                },
-            }))
+            let name = if use_tools {
+                self.script.borrow_mut().pop_front().unwrap_or("tools")
+            } else {
+                "plain"
+            };
+            Ok(Some(fixture_iteration(name)))
         }
     }
 
@@ -4815,8 +5216,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_loop_runs_one_tool_round_then_answers() {
-        let model = FakeModel::new(vec![FakeStep::Tool, FakeStep::Text("done")]);
+    async fn agent_loop_runs_fixture_tool_round_then_answers() {
+        let model = FixtureModel::new(vec!["tools", "plain"]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4832,7 +5233,7 @@ mod tests {
         .await
         .expect("loop");
         assert_eq!(model.call_count(), 2);
-        assert_eq!(tools.runs.get(), 1);
+        assert_eq!(tools.runs.get(), 2);
         assert_eq!(model.tools_flags(), vec![true, true]);
         assert_eq!(step_events(&sink), vec![1]);
         assert!(history_has_tool_message(&history));
@@ -4840,7 +5241,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_loop_answers_immediately_without_calling_tools() {
-        let model = FakeModel::new(vec![FakeStep::Text("hi")]);
+        let model = FixtureModel::new(vec!["plain"]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4863,7 +5264,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_loop_falls_back_without_tools_after_max_iterations() {
-        let model = FakeModel::new(Vec::new());
+        let model = FixtureModel::new(Vec::new());
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4879,13 +5280,13 @@ mod tests {
         .await
         .expect("loop");
         assert_eq!(model.call_count(), 4);
-        assert_eq!(tools.runs.get(), 3);
+        assert_eq!(tools.runs.get(), 6);
         assert_eq!(model.tools_flags(), vec![true, true, true, false]);
     }
 
     #[tokio::test]
     async fn agent_loop_returns_the_final_answer_when_the_time_budget_is_gone() {
-        let model = FakeModel::new(vec![FakeStep::Text("final answer")]);
+        let model = FixtureModel::new(vec!["plain"]);
         let mut tools = FakeTools::new();
         let mut history = Vec::new();
         let sink = RecordingSink(Mutex::new(Vec::new()));
@@ -4901,7 +5302,7 @@ mod tests {
         .await
         .expect("loop");
         assert!(exhausted);
-        assert_eq!(text, "final answer");
+        assert_eq!(text, "Hello world");
         assert_eq!(model.tools_flags(), vec![false]);
     }
 

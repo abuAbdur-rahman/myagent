@@ -12,6 +12,7 @@ import {
   findChatDoc,
   listChatDocs,
   listMemories,
+  listMessages,
   listPendingMemories,
   restorePendingMemory,
   updateMessageAttachments,
@@ -180,6 +181,7 @@ describe("pending memory", () => {
     await approvePendingMemory("p1");
     const statements = execute.mock.calls.map(([sql]) => sql as string);
     expect(statements[0]).toContain("INSERT OR IGNORE INTO memories");
+    expect(statements[0]).toContain("trust");
     expect(statements[1]).toBe("DELETE FROM pending_memories WHERE id = $1");
   });
 
@@ -188,6 +190,7 @@ describe("pending memory", () => {
     await restorePendingMemory("p1");
     const statements = execute.mock.calls.map(([sql]) => sql as string);
     expect(statements[0]).toContain("INSERT OR IGNORE INTO pending_memories");
+    expect(statements[0]).toContain("trust");
     expect(statements[1]).toBe("DELETE FROM memories WHERE id = $1");
   });
 
@@ -225,6 +228,24 @@ describe("pending memory", () => {
 });
 
 describe("listMemories", () => {
+  it("maps legacy trust into the prompt-facing untrusted flag", async () => {
+    select.mockResolvedValueOnce([
+      {
+        id: "m1",
+        scope: "global",
+        project_id: null,
+        kind: "fact",
+        content: "tool-derived note",
+        trust: "untrusted",
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    await expect(listMemories("global", null)).resolves.toMatchObject([
+      { id: "m1", untrusted: true },
+    ]);
+  });
+
   it("asks for one project's notes only", async () => {
     select.mockClear();
     await listMemories("project", "pa");
@@ -247,5 +268,25 @@ describe("listMemories", () => {
     select.mockClear();
     await expect(listMemories("project", null)).resolves.toEqual([]);
     expect(select).not.toHaveBeenCalled();
+  });
+});
+
+describe("listMessages", () => {
+  it("returns only the path to the current leaf", async () => {
+    const original = select.getMockImplementation();
+    select.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM conversations")) return [{ current_leaf_id: "b" }];
+      if (sql.includes("FROM messages")) {
+        return [
+          { id: "a", conversation_id: "c1", parent_id: null, role: "user", content: "a", created_at: 1 },
+          { id: "b", conversation_id: "c1", parent_id: "a", role: "assistant", content: "b", created_at: 2 },
+          { id: "c", conversation_id: "c1", parent_id: "a", role: "assistant", content: "c", created_at: 3 },
+        ];
+      }
+      return [];
+    });
+    const rows = await listMessages("c1");
+    expect(rows.map((row) => row.id)).toEqual(["a", "b"]);
+    if (original) select.mockImplementation(original);
   });
 });

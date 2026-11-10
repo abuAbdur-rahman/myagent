@@ -71,7 +71,14 @@ function OutputCard({ output }: { output: SessionOutput }) {
     <button
       type="button"
       onClick={() =>
-        openArtifact({ id: output.key, title: output.title, lang: output.lang, code: output.code })
+        openArtifact({
+          id: output.artifactId ?? output.key,
+          title: output.title,
+          lang: output.lang,
+          code: output.code,
+          messageId: output.messageId,
+          locator: output.locator,
+        })
       }
       className="flex w-full flex-col gap-1.5 rounded-card border border-line-subtle bg-surface p-1.5 text-left hover:border-accent/60 hover:bg-fill-2"
     >
@@ -106,7 +113,14 @@ function OutputRow({ output }: { output: SessionOutput }) {
     <button
       type="button"
       onClick={() =>
-        openArtifact({ id: output.key, title: output.title, lang: output.lang, code: output.code })
+        openArtifact({
+          id: output.artifactId ?? output.key,
+          title: output.title,
+          lang: output.lang,
+          code: output.code,
+          messageId: output.messageId,
+          locator: output.locator,
+        })
       }
       className="flex w-full items-center gap-2 rounded-control px-1 py-1 text-left text-xs hover:bg-fill-2"
     >

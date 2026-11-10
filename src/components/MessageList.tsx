@@ -4,6 +4,7 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Copy,
   FileCode,
@@ -35,15 +36,20 @@ import { speakMessage, stopSpeaking, stopSpeakingFor, useSpeakingId, canReadAlou
 import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
+import type { ArtifactLocator } from "../lib/artifact-versions";
+import { hasUntrustedProvenance } from "../lib/memory-rollup";
 import { splitOpenUISegments, type OpenUISegment } from "../lib/openui/segments";
+import { splitVizSegments, type VizSegment } from "../lib/viz";
 import { OpenUIRenderer } from "./openui/OpenUIRenderer";
+import { InlineVisual } from "./InlineVisual";
 import { parseDocAttachments, parseImageAttachments } from "../lib/attachments";
 import { DocAttachmentCard } from "./AttachmentCard";
 import { isKnownTool } from "../lib/tools";
 import { isBinaryArtifact, selectOutputFiles } from "../lib/session";
 import { copyWithToast } from "./ChatHeader";
 import { Logo } from "./Logo";
-import { Button, IconButton } from "./ui";
+import { Button, Dialog, IconButton } from "./ui";
+import { confirmDialog } from "./ConfirmDialog";
 import { cn } from "../lib/utils";
 import { parseToolLog, parseDeclaredArtifacts } from "../lib/db";
 import { groupToolEntries } from "../lib/tool-groups";
@@ -196,7 +202,7 @@ export function ToolLogView({
             row.kind === "single" ? (
               <ToolEntryRow key={row.entry.id} entry={row.entry} />
             ) : (
-              <details key={`group-${row.name}`} className="group text-[13px]">
+              <details key={row.key} className="group text-[13px]">
                 <summary className="flex cursor-pointer list-none items-center gap-2 rounded-chip py-0.5 text-fg-3 hover:text-fg">
                   <ToolIcon name={row.name} />
                   <span className="truncate">{row.label}</span>
@@ -263,7 +269,101 @@ function ToolEntryRow({ entry }: { entry: ToolLogEntry }) {
           {entry.preview}
         </pre>
       )}
+      <CheckpointActions entry={entry} />
     </details>
+  );
+}
+
+function CheckpointActions({ entry }: { entry: ToolLogEntry }) {
+  const checkpoint =
+    /checkpoint:\s*(refs\/myagent\/pre-exec\/[A-Za-z0-9-]+)/.exec(entry.preview ?? "")?.[1] ?? null;
+  const paths = useMemo(() => {
+    const found = new Set<string>(entry.files ?? []);
+    const summaryPath = /^(?:Write|Edit|Delete):\s*(.+)$/.exec(entry.summary)?.[1]?.trim();
+    if (summaryPath) found.add(summaryPath);
+    const section = /created files:\n([\s\S]*?)(?:\n\n|$)/.exec(entry.preview ?? "")?.[1] ?? "";
+    for (const line of section.split("\n")) {
+      const path = line.trim();
+      if (path) found.add(path);
+    }
+    return [...found];
+  }, [entry.files, entry.preview, entry.summary]);
+  const [open, setOpen] = useState(false);
+  const [diff, setDiff] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  if (!checkpoint || entry.status !== "ok") return null;
+
+  const show = async () => {
+    setOpen(true);
+    setLoading(true);
+    setDiff(null);
+    try {
+      setDiff(await api.sandboxCheckpointDiff(checkpoint));
+    } catch (error) {
+      setDiff(errorText(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const restore = async () => {
+    if (paths.length === 0) {
+      toast("No file paths recorded for this step.");
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: "Restore these files?",
+      body: `${paths.length} file${paths.length === 1 ? "" : "s"} will return to their state before this step. Later changes to them are lost.`,
+      ok: "Restore",
+      danger: true,
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      const count = await api.sandboxCheckpointRestore(checkpoint, paths);
+      toast(`Restored ${count} file${count === 1 ? "" : "s"}`);
+      setOpen(false);
+    } catch (error) {
+      toast(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="mt-1 flex items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={() => void show()}>
+          Changes
+        </Button>
+        {paths.length > 0 && (
+          <span className="text-xs text-fg-3">
+            {paths.length} file{paths.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      <Dialog open={open} onClose={() => setOpen(false)} title="Changes before this step" wide>
+        <div className="flex min-h-0 flex-col gap-3">
+          <pre className="m-0 max-h-[50vh] overflow-auto rounded-field bg-code p-3 font-mono text-xs text-fg-2">
+            {loading ? "Loading…" : diff}
+          </pre>
+          <div className="flex justify-end gap-2">
+            <Button variant="default" onClick={() => setOpen(false)}>
+              Close
+            </Button>
+            <Button
+              variant="dangerFill"
+              disabled={busy || paths.length === 0}
+              onClick={() => void restore()}
+            >
+              {busy ? "Restoring…" : "Restore files"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    </>
   );
 }
 
@@ -379,20 +479,23 @@ function UserMessage({
       <div className="max-w-[80%] break-words rounded-composer bg-raised px-4 py-2.5 shadow-[var(--shadow-sm)]">
         <Markdown content={message.content} />
       </div>
-      <div className="mt-0.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-        <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
-          <Copy size={14} />
-        </ActionButton>
-        <ActionButton
-          label="Edit"
-          title="Edit"
-          onClick={() => {
-            setDraft(message.content);
-            setEditing(true);
-          }}
-        >
-          <Pencil size={14} />
-        </ActionButton>
+      <div className="mt-0.5 flex items-center gap-1">
+        <VersionSwitcher messageId={message.id} />
+        <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
+            <Copy size={14} />
+          </ActionButton>
+          <ActionButton
+            label="Edit"
+            title="Edit"
+            onClick={() => {
+              setDraft(message.content);
+              setEditing(true);
+            }}
+          >
+            <Pencil size={14} />
+          </ActionButton>
+        </div>
       </div>
     </div>
   );
@@ -429,18 +532,22 @@ function ThinkingBlock({
       >
         {title}
       </button>
-      {open && <Markdown content={message.reasoning} />}
+      {open && <Markdown content={message.reasoning} streaming={live} />}
     </div>
   );
 }
 
 function ArtifactCard({
   id,
+  messageId,
+  locator,
   title,
   lang,
   code,
 }: {
   id: string;
+  messageId: string;
+  locator: ArtifactLocator;
   title: string;
   lang: string;
   code: string;
@@ -450,7 +557,9 @@ function ArtifactCard({
   return (
     <button
       type="button"
-      onClick={() => (isOpen ? closePanel() : openArtifact({ id, title, lang, code }))}
+      onClick={() =>
+        isOpen ? closePanel() : openArtifact({ id, messageId, locator, title, lang, code })
+      }
       className="my-1 flex w-full items-center gap-3 rounded-card bg-raised px-3 py-2.5 text-left shadow-[inset_0_0_0_1px_var(--line)] hover:shadow-[inset_0_0_0_1px_var(--line-strong)]"
     >
       <span className="grid h-9 w-9 flex-none place-items-center rounded-field bg-fill-2 text-fg-2">
@@ -526,10 +635,19 @@ function AssistantMessage({
   const { canRetry } = useApp();
   const baseSegments = useMemo(() => splitArtifactSegments(message.content), [message.content]);
   const segments = useMemo(() => {
-    const out: (ContentSegment | OpenUISegment)[] = [];
+    const out: (ContentSegment | OpenUISegment | VizSegment)[] = [];
     for (const segment of baseSegments) {
-      if (segment.kind === "text") out.push(...splitOpenUISegments(segment.text, live));
-      else out.push(segment);
+      if (segment.kind !== "text") {
+        out.push(segment);
+        continue;
+      }
+      for (const ui of splitOpenUISegments(segment.text, live)) {
+        if (ui.kind !== "text") {
+          out.push(ui);
+          continue;
+        }
+        out.push(...splitVizSegments(ui.text, live));
+      }
     }
     return out;
   }, [baseSegments, live]);
@@ -577,10 +695,16 @@ function AssistantMessage({
           <>
             {segments.map((segment, i) =>
               segment.kind === "text" ? (
-                <Markdown key={i} content={segment.text} />
+                <Markdown key={i} content={segment.text} streaming={live} />
               ) : segment.kind === "openui" ? (
                 <OpenUIRenderer
                   key={`openui-${i}`}
+                  code={segment.code}
+                  isStreaming={live && !segment.closed}
+                />
+              ) : segment.kind === "viz" ? (
+                <InlineVisual
+                  key={`viz-${i}`}
                   code={segment.code}
                   isStreaming={live && !segment.closed}
                 />
@@ -588,6 +712,8 @@ function AssistantMessage({
                 <ArtifactCard
                   key={`fence-${segment.artifact.index}`}
                   id={`${message.id}:fence:${segment.artifact.index}`}
+                  messageId={message.id}
+                  locator={{ kind: "fence", index: segment.artifact.index }}
                   title={`${segment.artifact.title}.html`}
                   lang={segment.artifact.lang}
                   code={segment.artifact.code}
@@ -595,17 +721,20 @@ function AssistantMessage({
               ),
             )}
             {declared
+              .map((artifact, position) => ({ artifact, position }))
               .filter(
-                (artifact) =>
+                ({ artifact }) =>
                   !isBinaryArtifact(artifact.lang) ||
                   !outputFiles.some((path) =>
                     path.toLowerCase().endsWith(`.${artifact.lang}`),
                   ),
               )
-              .map((artifact, position) => (
+              .map(({ artifact, position }) => (
               <ArtifactCard
                 key={`tool-${position}`}
                 id={`${message.id}:tool:${position}`}
+                messageId={message.id}
+                locator={{ kind: "tool", index: position }}
                 title={artifact.title}
                 lang={artifact.lang}
                 code={artifact.code}
@@ -647,6 +776,7 @@ function AssistantMessage({
             </div>
           )}
           <div className="mt-1.5 flex items-center gap-1">
+            <VersionSwitcher messageId={message.id} />
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               <ActionButton label="Copy" title="Copy" onClick={() => void copyWithToast(message.content)}>
                 <Copy size={14} />
@@ -727,6 +857,37 @@ function BranchButton({ messageId }: { messageId: string }) {
     <ActionButton label="Branch" title="Branch" onClick={() => void branchFrom(messageId)}>
       <GitBranch size={14} />
     </ActionButton>
+  );
+}
+
+function VersionSwitcher({ messageId }: { messageId: string }) {
+  const { messageVersions, switchVersion, streaming } = useApp();
+  const info = messageVersions[messageId];
+  if (!info || streaming) return null;
+  return (
+    <div
+      className="flex items-center gap-0.5 text-xs text-fg-3"
+      role="group"
+      aria-label="Message versions"
+    >
+      <ActionButton
+        label="Previous version"
+        title="Previous version"
+        onClick={() => void switchVersion(messageId, -1)}
+      >
+        <ChevronLeft size={14} />
+      </ActionButton>
+      <span className="tabular-nums">
+        {info.index}/{info.total}
+      </span>
+      <ActionButton
+        label="Next version"
+        title="Next version"
+        onClick={() => void switchVersion(messageId, 1)}
+      >
+        <ChevronRight size={14} />
+      </ActionButton>
+    </div>
   );
 }
 
@@ -822,7 +983,11 @@ export function MessageList() {
         toast("No durable notes found in this reply.");
         return false;
       }
-      const rows = await queueMemories(notes);
+      const rows = await queueMemories(
+        notes,
+        "fact",
+        hasUntrustedProvenance([message]) ? "untrusted" : "trusted",
+      );
       toast(`${rows.length} ${rows.length === 1 ? "note" : "notes"} queued for review.`);
       return rows.length > 0;
     },

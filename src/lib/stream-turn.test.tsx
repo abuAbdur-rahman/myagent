@@ -84,7 +84,7 @@ vi.mock("./api", () => ({
   listModelCaps: async () => [],
   listCommands: async () => [],
   skillIndex: async () => [],
-  cancelStream: async () => undefined,
+  cancelStream: vi.fn(async () => undefined),
   approvalReply: async () => undefined,
   questionAnswer: async () => undefined,
   deleteApiKey: async () => undefined,
@@ -125,6 +125,7 @@ const events: StreamEvent[] = [
 ];
 
 beforeEach(() => {
+  app = null;
   vi.clearAllMocks();
   localStorage.clear();
   localStorage.setItem("model", "test/model");
@@ -195,5 +196,49 @@ describe("streamTurn", () => {
     expect(app?.error).toBeNull();
     expect(app?.streaming).toBe(false);
     expect(app?.canRetry).toBe(true);
+  });
+
+  it("stops a live fixture stream and ignores later events", async () => {
+    let emit: ((event: StreamEvent) => void) | null = null;
+    let finish: (() => void) | null = null;
+    vi.mocked(api.chatStream).mockImplementation(
+      (_args, onEvent) =>
+        new Promise<void>((resolve) => {
+          emit = onEvent;
+          finish = resolve;
+        }),
+    );
+    render(createElement(AppProvider, null, createElement(Probe)));
+    await waitFor(() => expect(app?.ready).toBe(true));
+
+    let send: Promise<boolean> | null = null;
+    act(() => {
+      send = app?.sendMessage("hello") ?? null;
+    });
+    await waitFor(() => expect(app?.streaming).toBe(true));
+    act(() => {
+      const event: StreamEvent = { type: "delta", text: "Hello" };
+      emit?.(event);
+    });
+    await waitFor(() =>
+      expect(app?.messages[app.messages.length - 1]?.content).toBe("Hello"),
+    );
+
+    act(() => app?.stopStream());
+    await waitFor(() =>
+      expect(app?.messages[app.messages.length - 1]?.finish_reason).toBe("stopped"),
+    );
+    const [args] = vi.mocked(api.chatStream).mock.calls[0];
+    expect(api.cancelStream).toHaveBeenCalledWith(args.requestId);
+    expect(app?.streaming).toBe(false);
+
+    act(() => {
+      const event: StreamEvent = { type: "delta", text: " ignored" };
+      emit?.(event);
+      finish?.();
+    });
+    if (send) await act(async () => void (await send));
+    expect(app?.messages[app.messages.length - 1]?.content).toBe("Hello");
+    expect(app?.messages[app.messages.length - 1]?.finish_reason).toBe("stopped");
   });
 });

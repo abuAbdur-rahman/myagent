@@ -8,6 +8,8 @@ import {
   type McpServerRow,
 } from "./api";
 import { newId } from "./utils";
+import { descendantsOf, latestLeaf, messagePath } from "./message-tree";
+import { ftsQuery } from "./search";
 import type {
   AuditLog,
   Connection,
@@ -126,10 +128,19 @@ export async function listConversations(): Promise<Conversation[]> {
   return rows.map((row) => ({ ...row, title: plainTitle(row.title) || "New chat" }));
 }
 
+export async function sweepTemporaryConversations(): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<{ id: string }[]>(
+    "SELECT id FROM conversations WHERE temporary = 1",
+  );
+  for (const row of rows) await deleteConversation(row.id);
+}
+
 export async function createConversation(
   connectionId: string | null,
   model: string | null,
   projectId: string | null,
+  temporary = false,
 ): Promise<Conversation> {
   const db = await getDb();
   const now = Date.now();
@@ -143,11 +154,12 @@ export async function createConversation(
     model,
     summary: null,
     summary_through: null,
+    temporary: temporary ? 1 : 0,
     created_at: now,
     updated_at: now,
   };
   await db.execute(
-    "INSERT INTO conversations (id, title, connection_id, project_id, pinned, compacted, model, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    "INSERT INTO conversations (id, title, connection_id, project_id, pinned, compacted, model, temporary, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     [
       conversation.id,
       conversation.title,
@@ -156,6 +168,7 @@ export async function createConversation(
       conversation.pinned,
       conversation.compacted,
       conversation.model,
+      conversation.temporary,
       conversation.created_at,
       conversation.updated_at,
     ],
@@ -240,7 +253,7 @@ export async function exportBundle(scope: ExportScope): Promise<ExportBundle> {
     memories: [],
   };
   if (scope !== "memory") {
-    const conversations = await listConversations();
+    const conversations = (await listConversations()).filter((conversation) => !conversation.temporary);
     bundle.conversations = await Promise.all(
       conversations.map(async (conversation) => ({
         ...conversation,
@@ -471,11 +484,74 @@ export async function listTodos(conversationId: string): Promise<Todo[]> {
     .map((parsed) => parsed.data);
 }
 
+type Db = Awaited<ReturnType<typeof getDb>>;
+
+async function allMessages(db: Db, conversationId: string): Promise<Message[]> {
+  return db.select<Message[]>(
+    "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC, id ASC",
+    [conversationId],
+  );
+}
+
+async function leafOf(db: Db, conversationId: string): Promise<string | null> {
+  const rows = await db.select<{ current_leaf_id: string | null }[]>(
+    "SELECT current_leaf_id FROM conversations WHERE id = $1",
+    [conversationId],
+  );
+  return rows[0]?.current_leaf_id ?? null;
+}
+
 export async function listMessages(conversationId: string): Promise<Message[]> {
   const db = await getDb();
-  return db.select<Message[]>(
-    "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
-    [conversationId],
+  const rows = await allMessages(db, conversationId);
+  if (rows.length === 0) return [];
+  const leaf = (await leafOf(db, conversationId)) ?? latestLeaf(rows);
+  return messagePath(leaf, new Map(rows.map((row) => [row.id, row])));
+}
+
+export async function listMessageTree(conversationId: string): Promise<Message[]> {
+  const db = await getDb();
+  return allMessages(db, conversationId);
+}
+
+export async function setCurrentLeaf(
+  conversationId: string,
+  leafId: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE conversations SET current_leaf_id = $1 WHERE id = $2", [
+    leafId,
+    conversationId,
+  ]);
+}
+
+export interface MessageSearchHit {
+  conversation_id: string;
+  title: string;
+  message_id: string;
+  role: Role;
+  snippet: string;
+  created_at: number;
+}
+
+export async function searchMessages(
+  query: string,
+  limit = 12,
+): Promise<MessageSearchHit[]> {
+  const match = ftsQuery(query);
+  if (!match) return [];
+  const db = await getDb();
+  return db.select<MessageSearchHit[]>(
+    `SELECT m.conversation_id, c.title, m.id AS message_id, m.role,
+            snippet(message_fts, 0, '[', ']', '…', 16) AS snippet, m.created_at
+       FROM message_fts
+       JOIN messages m ON m.rowid = message_fts.rowid
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE message_fts MATCH $1
+        AND c.temporary = 0
+      ORDER BY rank
+      LIMIT $2`,
+    [match, limit],
   );
 }
 
@@ -484,6 +560,7 @@ export async function addMessage(
   role: Role,
   content: string,
   model?: string | null,
+  parentId?: string | null,
 ): Promise<Message> {
   const db = await getDb();
   const message: Message = {
@@ -492,19 +569,22 @@ export async function addMessage(
     role,
     content,
     model: model ?? null,
+    parent_id: parentId ?? null,
     created_at: Date.now(),
   };
   await db.execute(
-    "INSERT INTO messages (id, conversation_id, role, content, model, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    "INSERT INTO messages (id, conversation_id, role, content, model, parent_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     [
       message.id,
       message.conversation_id,
       message.role,
       message.content,
       message.model,
+      message.parent_id,
       message.created_at,
     ],
   );
+  await setCurrentLeaf(conversationId, message.id);
   return message;
 }
 
@@ -527,6 +607,22 @@ export async function updateMessageAttachments(
   ]);
 }
 
+export async function copyMessageAttachments(fromId: string, toId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE messages SET attachments = (SELECT attachments FROM messages WHERE id = $1) WHERE id = $2",
+    [fromId, toId],
+  );
+}
+
+export async function setMessageParent(
+  id: string,
+  parentId: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE messages SET parent_id = $1 WHERE id = $2", [parentId, id]);
+}
+
 export interface FullMessageInput {
   role: Role;
   content: string;
@@ -543,6 +639,7 @@ export interface FullMessageInput {
   durationMs?: number | null;
   completedAt?: number | null;
   createdAt?: number | null;
+  parentId?: string | null;
 }
 
 export async function insertMessageFull(
@@ -556,19 +653,22 @@ export async function insertMessageFull(
     role: input.role,
     content: input.content,
     model: sqlNull(input.model),
+    parent_id: sqlNull(input.parentId),
     created_at: input.createdAt ?? Date.now(),
   };
   await db.execute(
-    "INSERT INTO messages (id, conversation_id, role, content, model, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    "INSERT INTO messages (id, conversation_id, role, content, model, parent_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     [
       message.id,
       message.conversation_id,
       message.role,
       message.content,
       message.model,
+      message.parent_id,
       message.created_at,
     ],
   );
+  await setCurrentLeaf(conversationId, message.id);
   await updateMessageMeta(message.id, {
     reasoning: sqlNull(input.reasoning),
     thinkingMs: sqlNull(input.thinkingMs),
@@ -622,7 +722,23 @@ export async function updateMessageMeta(id: string, meta: MessageMeta): Promise<
 
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDb();
-  await db.execute("DELETE FROM messages WHERE id = $1", [id]);
+  const targets = await db.select<
+    { id: string; conversation_id: string; parent_id: string | null }[]
+  >("SELECT id, conversation_id, parent_id FROM messages WHERE id = $1", [id]);
+  const root = targets[0];
+  if (!root) return;
+  const rows = await db.select<{ id: string; parent_id: string | null }[]>(
+    "SELECT id, parent_id FROM messages WHERE conversation_id = $1",
+    [root.conversation_id],
+  );
+  const doomed = new Set([root.id, ...descendantsOf(root.id, rows)]);
+  const leaf = await leafOf(db, root.conversation_id);
+  for (const doomedId of doomed) {
+    await db.execute("DELETE FROM messages WHERE id = $1", [doomedId]);
+  }
+  if (leaf && doomed.has(leaf)) {
+    await setCurrentLeaf(root.conversation_id, root.parent_id);
+  }
 }
 
 export async function setMessageRating(id: string, rating: number | null): Promise<void> {
@@ -632,26 +748,11 @@ export async function setMessageRating(id: string, rating: number | null): Promi
 
 export { continueDigest, parseDeclaredArtifacts, parseToolLog, withLiveTurn } from "./message-parse";
 
-export async function truncateConversation(
-  conversationId: string,
-  keepThroughId: string,
-): Promise<void> {
-  const db = await getDb();
-  const rows = await db.select<{ id: string }[]>(
-    "SELECT id FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
-    [conversationId],
-  );
-  const index = rows.findIndex((row) => row.id === keepThroughId);
-  const after = index >= 0 ? rows.slice(index + 1) : rows;
-  for (const row of after) {
-    await db.execute("DELETE FROM messages WHERE id = $1", [row.id]);
-  }
-}
-
 export async function clearConversation(conversationId: string): Promise<void> {
   const db = await getDb();
   const shas = await conversationDocShas(conversationId);
   await db.execute("DELETE FROM messages WHERE conversation_id = $1", [conversationId]);
+  await setCurrentLeaf(conversationId, null);
   await db.execute("DELETE FROM todos WHERE chat_id = $1", [conversationId]);
   await db.execute("DELETE FROM chat_docs WHERE conversation_id = $1", [conversationId]);
   await wipeUnreferencedDocs(shas);
@@ -692,17 +793,18 @@ export async function branchConversation(
       branched.updated_at,
     ],
   );
-  const rows = await db.select<Message[]>(
-    "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
-    [sourceId],
-  );
+  const all = await allMessages(db, sourceId);
+  const sourceLeaf = (await leafOf(db, sourceId)) ?? latestLeaf(all);
+  const rows = messagePath(sourceLeaf, new Map(all.map((row) => [row.id, row])));
   const index = rows.findIndex((m) => m.id === upToMessageId);
   const keep = index >= 0 ? rows.slice(0, index + 1) : rows;
+  let previousId: string | null = null;
   for (const m of keep) {
+    const copyId = newId();
     await db.execute(
-      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, duration_ms, completed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+      "INSERT INTO messages (id, conversation_id, role, content, reasoning, thinking_ms, prompt_tokens, completion_tokens, total_tokens, finish_reason, tool_log, artifacts, attachments, model, error, duration_ms, completed_at, created_at, parent_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
       [
-        newId(),
+        copyId,
         branched.id,
         m.role,
         m.content,
@@ -720,9 +822,13 @@ export async function branchConversation(
         sqlNull(m.duration_ms),
         sqlNull(m.completed_at),
         m.created_at,
+        previousId,
       ],
     );
+    previousId = copyId;
   }
+  await setCurrentLeaf(branched.id, previousId);
+  branched.current_leaf_id = previousId;
   return branched;
 }
 
@@ -821,16 +927,22 @@ export async function listMemories(
   projectId: string | null,
 ): Promise<Memory[]> {
   const db = await getDb();
+  let rows: (Omit<Memory, "untrusted"> & { trust: string })[];
   if (scope === "project") {
     if (!projectId) return [];
-    return db.select<Memory[]>(
+    rows = await db.select<(Omit<Memory, "untrusted"> & { trust: string })[]>(
       "SELECT * FROM memories WHERE scope = 'project' AND project_id = $1 ORDER BY created_at DESC",
       [projectId],
     );
+  } else {
+    rows = await db.select<(Omit<Memory, "untrusted"> & { trust: string })[]>(
+      "SELECT * FROM memories WHERE scope = 'global' ORDER BY created_at DESC",
+    );
   }
-  return db.select<Memory[]>(
-    "SELECT * FROM memories WHERE scope = 'global' ORDER BY created_at DESC",
-  );
+  return rows.map(({ trust, ...memory }) => ({
+    ...memory,
+    untrusted: trust === "untrusted",
+  }));
 }
 
 export async function createMemory(input: MemoryInput): Promise<Memory> {
@@ -888,7 +1000,7 @@ export async function listPendingMemories(): Promise<PendingMemory[]> {
 export async function approvePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) SELECT id, scope, project_id, kind, content, conversation_id, created_at, created_at FROM pending_memories WHERE id = $1",
+    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at, trust) SELECT id, scope, project_id, kind, content, conversation_id, created_at, created_at, trust FROM pending_memories WHERE id = $1",
     [id],
   );
   await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
@@ -938,7 +1050,7 @@ export async function addPendingMemories(memories: PendingMemory[]): Promise<voi
 export async function restorePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) SELECT id, scope, project_id, kind, content, source_conversation_id, created_at FROM memories WHERE id = $1",
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) SELECT id, scope, project_id, kind, content, source_conversation_id, created_at, trust FROM memories WHERE id = $1",
     [id],
   );
   await db.execute("DELETE FROM memories WHERE id = $1", [id]);

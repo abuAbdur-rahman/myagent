@@ -189,8 +189,12 @@ pub async fn documents_wipe_unreferenced(
 #[tauri::command]
 pub async fn documents_wipe_all(app: AppHandle) -> Result<(), ExtractFailure> {
     let dir = documents_dir(&app).map_err(failed)?;
+    wipe_dir(&dir)
+}
+
+fn wipe_dir(dir: &std::path::Path) -> Result<(), ExtractFailure> {
     if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        std::fs::remove_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
     }
     Ok(())
 }
@@ -290,6 +294,17 @@ mod tests {
                 sha256: "b".repeat(64),
             },
         ]
+    }
+
+    #[test]
+    fn wipe_dir_removes_nested_files() {
+        let dir = std::env::temp_dir().join(format!("myagent-wipe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("nested")).expect("nested dir");
+        std::fs::write(dir.join("a.txt"), b"x").expect("file a");
+        std::fs::write(dir.join("nested/b.txt"), b"y").expect("file b");
+        wipe_dir(&dir).expect("wipe");
+        assert!(!dir.exists());
+        wipe_dir(&dir).expect("wipe is idempotent");
     }
 
     #[test]

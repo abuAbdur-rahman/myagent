@@ -75,23 +75,6 @@ fn parse_provider_keys(raw: &str) -> Vec<String> {
     }
 }
 
-fn store_provider_keys(connection_id: &str, keys: &[String]) -> AppResult<()> {
-    match keys {
-        [] => delete_secret(connection_id),
-        [key] => set_secret(connection_id, key),
-        _ => {
-            let raw = serde_json::to_string(keys).map_err(|e| AppError::Vault(e.to_string()))?;
-            set_secret(connection_id, &raw)
-        }
-    }
-}
-
-pub fn read_provider_keys(connection_id: &str) -> AppResult<Vec<String>> {
-    Ok(read_secret(connection_id)?
-        .map(|raw| parse_provider_keys(&raw))
-        .unwrap_or_default())
-}
-
 pub fn first_available_provider_key(connection_id: &str) -> AppResult<Option<String>> {
     let keys = read_provider_keys(connection_id)?;
     for key in keys {
@@ -142,50 +125,125 @@ pub fn earliest_provider_key_cooldown(connection_id: &str) -> AppResult<Option<u
         .min())
 }
 
-fn entry(key: &str) -> AppResult<Entry> {
-    Entry::new(SERVICE, key).map_err(|e| AppError::Vault(e.to_string()))
+trait SecretBackend: Send + Sync {
+    fn set(&self, key: &str, secret: &str) -> AppResult<()>;
+    fn get(&self, key: &str) -> AppResult<Option<String>>;
+    fn delete(&self, key: &str) -> AppResult<()>;
+}
+
+struct CredentialManagerBackend;
+
+impl CredentialManagerBackend {
+    fn entry(key: &str) -> AppResult<Entry> {
+        Entry::new(SERVICE, key).map_err(|e| AppError::Vault(e.to_string()))
+    }
+}
+
+impl SecretBackend for CredentialManagerBackend {
+    fn set(&self, key: &str, secret: &str) -> AppResult<()> {
+        Self::entry(key)?
+            .set_password(secret)
+            .map_err(|e| AppError::Vault(e.to_string()))
+    }
+
+    fn get(&self, key: &str) -> AppResult<Option<String>> {
+        match Self::entry(key)?.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(AppError::Vault(e.to_string())),
+        }
+    }
+
+    fn delete(&self, key: &str) -> AppResult<()> {
+        match Self::entry(key)?.delete_credential() {
+            Ok(_) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(AppError::Vault(e.to_string())),
+        }
+    }
+}
+
+fn secrets() -> &'static dyn SecretBackend {
+    static BACKEND: OnceLock<CredentialManagerBackend> = OnceLock::new();
+    BACKEND.get_or_init(|| CredentialManagerBackend)
+}
+
+fn set_secret_with(backend: &dyn SecretBackend, key: &str, secret: &str) -> AppResult<()> {
+    backend.set(key, secret)
+}
+
+fn read_secret_with(backend: &dyn SecretBackend, key: &str) -> AppResult<Option<String>> {
+    backend.get(key)
+}
+
+fn delete_secret_with(backend: &dyn SecretBackend, key: &str) -> AppResult<()> {
+    backend.delete(key)
 }
 
 pub fn set_secret(key: &str, secret: &str) -> AppResult<()> {
-    entry(key)?
-        .set_password(secret)
-        .map_err(|e| AppError::Vault(e.to_string()))
+    set_secret_with(secrets(), key, secret)
 }
 
 pub fn read_secret(key: &str) -> AppResult<Option<String>> {
-    match entry(key)?.get_password() {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(AppError::Vault(e.to_string())),
-    }
+    read_secret_with(secrets(), key)
 }
 
 pub fn delete_secret(key: &str) -> AppResult<()> {
-    match entry(key)?.delete_credential() {
-        Ok(_) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(AppError::Vault(e.to_string())),
+    delete_secret_with(secrets(), key)
+}
+
+fn store_provider_keys_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+    keys: &[String],
+) -> AppResult<()> {
+    match keys {
+        [] => delete_secret_with(backend, connection_id),
+        [key] => set_secret_with(backend, connection_id, key),
+        _ => {
+            let raw = serde_json::to_string(keys).map_err(|e| AppError::Vault(e.to_string()))?;
+            set_secret_with(backend, connection_id, &raw)
+        }
     }
 }
 
-#[tauri::command]
-pub fn set_api_key(connection_id: String, api_key: String) -> AppResult<()> {
-    let key = api_key.trim().to_string();
-    clear_connection_cooldowns(&connection_id);
+fn read_provider_keys_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+) -> AppResult<Vec<String>> {
+    Ok(read_secret_with(backend, connection_id)?
+        .map(|raw| parse_provider_keys(&raw))
+        .unwrap_or_default())
+}
+
+pub fn read_provider_keys(connection_id: &str) -> AppResult<Vec<String>> {
+    read_provider_keys_with(secrets(), connection_id)
+}
+
+fn set_api_key_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+    api_key: &str,
+) -> AppResult<()> {
+    let key = api_key.trim();
+    clear_connection_cooldowns(connection_id);
     if key.is_empty() {
-        delete_secret(&connection_id)
+        delete_secret_with(backend, connection_id)
     } else {
-        set_secret(&connection_id, &key)
+        set_secret_with(backend, connection_id, key)
     }
 }
 
-#[tauri::command]
-pub fn add_provider_key(connection_id: String, api_key: String) -> AppResult<usize> {
+fn add_provider_key_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+    api_key: &str,
+) -> AppResult<usize> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err(AppError::Vault("empty provider key".to_string()));
     }
-    let mut keys = read_provider_keys(&connection_id)?;
+    let mut keys = read_provider_keys_with(backend, connection_id)?;
     if !keys.iter().any(|existing| existing == key) {
         if keys.len() >= MAX_PROVIDER_KEYS {
             return Err(AppError::Vault(format!(
@@ -194,13 +252,16 @@ pub fn add_provider_key(connection_id: String, api_key: String) -> AppResult<usi
         }
         keys.push(key.to_string());
     }
-    store_provider_keys(&connection_id, &keys)?;
+    store_provider_keys_with(backend, connection_id, &keys)?;
     Ok(keys.len())
 }
 
-#[tauri::command]
-pub fn remove_provider_key(connection_id: String, index: usize) -> AppResult<usize> {
-    let mut keys = read_provider_keys(&connection_id)?;
+fn remove_provider_key_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+    index: usize,
+) -> AppResult<usize> {
+    let mut keys = read_provider_keys_with(backend, connection_id)?;
     if index >= keys.len() {
         return Err(AppError::Vault(
             "no provider key at that position".to_string(),
@@ -210,41 +271,78 @@ pub fn remove_provider_key(connection_id: String, index: usize) -> AppResult<usi
     cooldowns()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&cooldown_key(&connection_id, &removed));
-    store_provider_keys(&connection_id, &keys)?;
+        .remove(&cooldown_key(connection_id, &removed));
+    store_provider_keys_with(backend, connection_id, &keys)?;
     Ok(keys.len())
 }
 
-#[tauri::command]
-pub fn provider_key_hints(connection_id: String) -> AppResult<Vec<ProviderKeyInfo>> {
-    let keys = read_provider_keys(&connection_id)?;
+fn provider_key_hints_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+) -> AppResult<Vec<ProviderKeyInfo>> {
+    let keys = read_provider_keys_with(backend, connection_id)?;
     Ok(keys
         .into_iter()
         .enumerate()
         .map(|(index, key)| ProviderKeyInfo {
             index,
             hint: crate::websearch::mask_key(&key),
-            cooldown_secs: cooldown_remaining(&connection_id, &key),
+            cooldown_secs: cooldown_remaining(connection_id, &key),
         })
         .collect())
 }
 
-#[tauri::command]
-pub fn has_api_key(connection_id: String) -> AppResult<bool> {
-    Ok(!read_provider_keys(&connection_id)?.is_empty())
+fn has_api_key_with(backend: &dyn SecretBackend, connection_id: &str) -> AppResult<bool> {
+    Ok(!read_provider_keys_with(backend, connection_id)?.is_empty())
 }
 
-#[tauri::command]
-pub fn api_key_hint(connection_id: String) -> AppResult<Option<String>> {
-    Ok(read_provider_keys(&connection_id)?
+fn api_key_hint_with(
+    backend: &dyn SecretBackend,
+    connection_id: &str,
+) -> AppResult<Option<String>> {
+    Ok(read_provider_keys_with(backend, connection_id)?
         .first()
         .map(|secret| crate::websearch::mask_key(secret)))
 }
 
+fn delete_api_key_with(backend: &dyn SecretBackend, connection_id: &str) -> AppResult<()> {
+    clear_connection_cooldowns(connection_id);
+    delete_secret_with(backend, connection_id)
+}
+
+#[tauri::command]
+pub fn set_api_key(connection_id: String, api_key: String) -> AppResult<()> {
+    set_api_key_with(secrets(), &connection_id, &api_key)
+}
+
+#[tauri::command]
+pub fn add_provider_key(connection_id: String, api_key: String) -> AppResult<usize> {
+    add_provider_key_with(secrets(), &connection_id, &api_key)
+}
+
+#[tauri::command]
+pub fn remove_provider_key(connection_id: String, index: usize) -> AppResult<usize> {
+    remove_provider_key_with(secrets(), &connection_id, index)
+}
+
+#[tauri::command]
+pub fn provider_key_hints(connection_id: String) -> AppResult<Vec<ProviderKeyInfo>> {
+    provider_key_hints_with(secrets(), &connection_id)
+}
+
+#[tauri::command]
+pub fn has_api_key(connection_id: String) -> AppResult<bool> {
+    has_api_key_with(secrets(), &connection_id)
+}
+
+#[tauri::command]
+pub fn api_key_hint(connection_id: String) -> AppResult<Option<String>> {
+    api_key_hint_with(secrets(), &connection_id)
+}
+
 #[tauri::command]
 pub fn delete_api_key(connection_id: String) -> AppResult<()> {
-    clear_connection_cooldowns(&connection_id);
-    delete_secret(&connection_id)
+    delete_api_key_with(secrets(), &connection_id)
 }
 
 pub fn get_api_key(connection_id: &str) -> AppResult<String> {
@@ -304,6 +402,110 @@ mod tests {
         assert_eq!(
             next_available_key(&keys, "sk-one", |_| true),
             Some("sk-two".to_string())
+        );
+    }
+
+    const SENTINEL: &str = "sk-or-v1-sentinel-secret-value-9f3a";
+
+    #[derive(Default)]
+    struct MemoryBackend {
+        entries: Mutex<HashMap<String, String>>,
+    }
+
+    impl SecretBackend for MemoryBackend {
+        fn set(&self, key: &str, secret: &str) -> AppResult<()> {
+            self.entries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key.to_string(), secret.to_string());
+            Ok(())
+        }
+
+        fn get(&self, key: &str) -> AppResult<Option<String>> {
+            Ok(self
+                .entries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(key)
+                .cloned())
+        }
+
+        fn delete(&self, key: &str) -> AppResult<()> {
+            self.entries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(key);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn api_key_round_trip_keeps_the_secret_out_of_every_read() {
+        let backend = MemoryBackend::default();
+        set_api_key_with(&backend, "conn-1", &format!("  {SENTINEL}  ")).expect("store key");
+
+        assert_eq!(
+            read_provider_keys_with(&backend, "conn-1").expect("read keys"),
+            vec![SENTINEL.to_string()]
+        );
+        assert!(has_api_key_with(&backend, "conn-1").expect("has key"));
+
+        let hint = api_key_hint_with(&backend, "conn-1")
+            .expect("hint")
+            .expect("stored key");
+        assert_eq!(hint, "••••9f3a");
+        assert!(!hint.contains("sentinel"));
+
+        let hints = provider_key_hints_with(&backend, "conn-1").expect("hints");
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].index, 0);
+        assert_eq!(hints[0].cooldown_secs, None);
+        assert!(!hints[0].hint.contains("sentinel"));
+    }
+
+    #[test]
+    fn provider_keys_round_trip_as_a_list_and_remove_by_position() {
+        let backend = MemoryBackend::default();
+        add_provider_key_with(&backend, "conn-1", "sk-one-aaaaaaaa").expect("first");
+        add_provider_key_with(&backend, "conn-1", "sk-two-bbbbbbbb").expect("second");
+        add_provider_key_with(&backend, "conn-1", "sk-two-bbbbbbbb").expect("duplicate");
+        assert_eq!(
+            read_provider_keys_with(&backend, "conn-1").expect("read keys"),
+            vec!["sk-one-aaaaaaaa", "sk-two-bbbbbbbb"]
+        );
+
+        assert_eq!(
+            remove_provider_key_with(&backend, "conn-1", 0).expect("remove"),
+            1
+        );
+        assert_eq!(
+            read_provider_keys_with(&backend, "conn-1").expect("read keys"),
+            vec!["sk-two-bbbbbbbb"]
+        );
+        assert!(remove_provider_key_with(&backend, "conn-1", 5).is_err());
+    }
+
+    #[test]
+    fn deleting_a_key_leaves_no_hint_or_secret_behind() {
+        let backend = MemoryBackend::default();
+        set_api_key_with(&backend, "conn-1", SENTINEL).expect("store key");
+        delete_api_key_with(&backend, "conn-1").expect("delete");
+
+        assert!(
+            read_provider_keys_with(&backend, "conn-1")
+                .expect("read keys")
+                .is_empty()
+        );
+        assert!(!has_api_key_with(&backend, "conn-1").expect("has key"));
+        assert!(
+            api_key_hint_with(&backend, "conn-1")
+                .expect("hint")
+                .is_none()
+        );
+        assert!(
+            provider_key_hints_with(&backend, "conn-1")
+                .expect("hints")
+                .is_empty()
         );
     }
 }

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { marked } from "marked";
+import markedKatex from "marked-katex-extension";
 import DOMPurify from "dompurify";
+import "katex/dist/katex.min.css";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
@@ -56,6 +58,8 @@ function getHighlighter(): Promise<HighlighterCore> {
   return highlighterPromise;
 }
 
+marked.use(markedKatex({ throwOnError: false, output: "html", nonStandard: true }));
+
 function unescapeMarked(text: string): string {
   return text
     .replace(/&amp;/g, "&")
@@ -74,7 +78,11 @@ function renderMarkdownFence(source: string): string {
   return `<div class="md-fence">${DOMPurify.sanitize(html)}</div>`;
 }
 
-function renderHtml(content: string, highlighter: HighlighterCore | null, theme: ThemeName): string {
+function renderHtml(
+  content: string,
+  highlighter: HighlighterCore | null,
+  theme: ThemeName,
+): string {
   const raw = marked.parse(content, { async: false, breaks: true }) as string;
   let html = DOMPurify.sanitize(raw);
 
@@ -88,6 +96,10 @@ function renderHtml(content: string, highlighter: HighlighterCore | null, theme:
         ?.slice("language-".length);
       const fence = (languageClass ?? "").trim();
       const plain = unescapeMarked(escaped).replace(/\n$/, "");
+
+      if (fence === "mermaid") {
+        return `<div class="mermaid-src" data-src="${encodeURIComponent(plain)}"><span>Rendering diagram…</span></div>`;
+      }
 
       if (
         fence === "md" ||
@@ -115,7 +127,15 @@ function renderHtml(content: string, highlighter: HighlighterCore | null, theme:
   return DOMPurify.sanitize(html);
 }
 
-export function Markdown({ content, compact }: { content: string; compact?: boolean }) {
+export function Markdown({
+  content,
+  compact,
+  streaming,
+}: {
+  content: string;
+  compact?: boolean;
+  streaming?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [highlighter, setHighlighter] = useState<HighlighterCore | null>(null);
   const theme = useThemeName();
@@ -135,9 +155,44 @@ export function Markdown({ content, compact }: { content: string; compact?: bool
   }, []);
 
   const html = useMemo(
-    () => renderHtml(content, highlighter, theme),
-    [content, highlighter, theme],
+    () => renderHtml(content, streaming ? null : highlighter, theme),
+    [content, highlighter, theme, streaming],
   );
+
+  const mermaidSeq = useRef(0);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>(".mermaid-src"));
+    if (nodes.length === 0) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void import("mermaid")
+        .then(async ({ default: mermaid }) => {
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: theme === "dark" ? "dark" : "default",
+          });
+          for (const node of nodes) {
+            if (!live) return;
+            const source = decodeURIComponent(node.dataset.src ?? "");
+            try {
+              const { svg } = await mermaid.render(`mermaid-${mermaidSeq.current++}`, source);
+              if (live) node.innerHTML = svg;
+            } catch {
+              node.textContent = source;
+              node.classList.add("mermaid-error");
+            }
+          }
+        })
+        .catch((error: unknown) => console.warn("Mermaid unavailable", error));
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [html, theme]);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;

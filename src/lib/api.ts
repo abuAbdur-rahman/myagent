@@ -383,6 +383,27 @@ export interface ChatStreamArgs {
   childSystem?: string | null;
 }
 
+function chatRequestPayload(args: ChatStreamArgs) {
+  return {
+    request_id: args.requestId,
+    connection_id: args.connectionId,
+    model: args.model,
+    messages: args.messages,
+    temperature: args.temperature,
+    enable_tools: args.enableTools ?? false,
+    max_iterations: args.maxIterations ?? null,
+    project_id: args.projectId ?? null,
+    conversation_id: args.conversationId ?? null,
+    reasoning_effort: args.reasoningEffort ?? null,
+    connection_kind: args.connectionKind ?? null,
+    search_backend: args.searchBackend ?? null,
+    search_endpoint: args.searchEndpoint ?? null,
+    vision_fallback_model: args.visionFallbackModel ?? null,
+    vision_fallback_connection: args.visionFallbackConnection ?? null,
+    child_system: args.childSystem ?? null,
+  };
+}
+
 export async function chatStream(
   args: ChatStreamArgs,
   onEvent: (event: StreamEvent) => void,
@@ -390,26 +411,25 @@ export async function chatStream(
   const channel = new Channel<StreamEvent>();
   channel.onmessage = onEvent;
   await invoke("chat_stream", {
-    req: {
-      request_id: args.requestId,
-      connection_id: args.connectionId,
-      model: args.model,
-      messages: args.messages,
-      temperature: args.temperature,
-      enable_tools: args.enableTools ?? false,
-      max_iterations: args.maxIterations ?? null,
-      project_id: args.projectId ?? null,
-      conversation_id: args.conversationId ?? null,
-      reasoning_effort: args.reasoningEffort ?? null,
-          connection_kind: args.connectionKind ?? null,
-          search_backend: args.searchBackend ?? null,
-          search_endpoint: args.searchEndpoint ?? null,
-          vision_fallback_model: args.visionFallbackModel ?? null,
-          vision_fallback_connection: args.visionFallbackConnection ?? null,
-          child_system: args.childSystem ?? null,
-    },
+    req: chatRequestPayload(args),
     onEvent: channel,
   });
+}
+
+export interface ToolInspection {
+  name: string;
+  tokens: number;
+}
+
+export interface RequestInspection {
+  json: string;
+  total_tokens: number;
+  message_tokens: number;
+  tools: ToolInspection[];
+}
+
+export function inspectRequest(args: ChatStreamArgs) {
+  return invoke<RequestInspection>("inspect_request", { req: chatRequestPayload(args) });
 }
 
 export function deleteSpill(conversationId: string) {
@@ -499,6 +519,21 @@ export function artifactExport(path: string, destination: string) {
   return invoke<string>("artifact_export", { path, destination });
 }
 
+export function artifactZipExport(
+  destination: string,
+  entries: { name: string; content: string }[],
+) {
+  return invoke<number>("artifact_zip_export", { destination, entries });
+}
+
+export function sandboxCheckpointDiff(checkpoint: string) {
+  return invoke<string>("sandbox_checkpoint_diff", { checkpoint });
+}
+
+export function sandboxCheckpointRestore(checkpoint: string, paths: string[]) {
+  return invoke<number>("sandbox_checkpoint_restore", { checkpoint, paths });
+}
+
 export interface ArtifactPreviewHandle {
   id: string;
   url: string;
@@ -508,8 +543,24 @@ export function artifactPreviewUrl(html: string): Promise<ArtifactPreviewHandle>
   return invoke<ArtifactPreviewHandle>("artifact_preview_url", { html });
 }
 
+export function artifactInlineUrl(html: string): Promise<ArtifactPreviewHandle> {
+  return invoke<ArtifactPreviewHandle>("artifact_inline_url", { html });
+}
+
 export function artifactPreviewDrop(id: string) {
   return invoke<void>("artifact_preview_drop", { id });
+}
+
+export function debugLogAppend(line: string) {
+  return invoke<void>("debug_log_append", { line });
+}
+
+export function debugLogPath() {
+  return invoke<string>("debug_log_path");
+}
+
+export function wipeAppFiles() {
+  return invoke<number>("wipe_app_files");
 }
 
 export function todoFinish(conversationId: string, complete: boolean) {
@@ -803,6 +854,7 @@ export function extractMemory(
   model: string,
   text: string,
   connectionKind?: string,
+  mode: "reply" | "project_rollup" = "reply",
 ) {
   return invoke<string>("extract_memory", {
     req: {
@@ -810,6 +862,7 @@ export function extractMemory(
       model,
       text,
       connection_kind: connectionKind ?? null,
+      mode,
     },
   });
 }
@@ -968,6 +1021,10 @@ export function memoryRead(projectId: string | null) {
   return invoke<MemoryReadView>("memory_read", { projectId });
 }
 
+export function memoryValidate(text: string) {
+  return invoke<void>("memory_validate", { text });
+}
+
 export function memoryAppend(input: {
   scope: "global" | "project";
   projectId: string | null;
@@ -1037,6 +1094,16 @@ export interface MemoryModelStatus {
 
 export function memorySearch(query: string, projectId: string | null, limit = 8) {
   return invoke<MemorySearchHit[]>("memory_search", { query, projectId, limit });
+}
+
+interface MemoryPromptView {
+  items: MemorySearchHit[];
+  omitted: number;
+  chars: number;
+}
+
+export function memoryPrompt(query: string, projectId: string | null) {
+  return invoke<MemoryPromptView>("memory_prompt", { query, projectId });
 }
 
 export function memoryReindex() {

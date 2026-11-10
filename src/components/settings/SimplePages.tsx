@@ -42,6 +42,7 @@ import { DropdownMenu, Select, type MenuEntry } from "../ui/select";
 import { confirmDialog } from "../ConfirmDialog";
 import { downloadText, errorText, copyText } from "../../lib/utils";
 import { toast } from "../../lib/toast";
+import { debugReport } from "../../lib/debug";
 import { timeAgo } from "../../lib/grouping";
 import { ACCENT_PRESETS, accentSwatch } from "../../lib/accent";
 import { cn } from "../../lib/utils";
@@ -4240,7 +4241,7 @@ export function MemoryPage() {
             emptyHint={
               query.trim() || kindFilter !== "all"
                 ? "Nothing matches these filters."
-                : "No global memory yet. These notes are sent with every chat."
+                : "No global memory yet. Relevant notes are ranked for each turn."
             }
             meta={(memory) => memoryMeta(memory)}
             onAdd={async (draft) => {
@@ -4305,14 +4306,14 @@ export function MemoryPage() {
           <div className="flex items-baseline justify-between gap-2">
             <b className="text-sm">Memory health</b>
             <span className="text-xs text-muted">
-              {sent}/{memories.length} sent
+              {sent}/{memories.length} selected
             </span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-active">
             <div className="h-full bg-accent" style={{ width: `${budgetPct}%` }} />
           </div>
           <label className="mt-3 flex items-center justify-between gap-2 text-xs">
-            <span className="text-muted">Send memory with chats</span>
+            <span className="text-muted">Send relevant memory with chats</span>
             <input
               type="checkbox"
               className="h-4 w-4"
@@ -4332,21 +4333,21 @@ export function MemoryPage() {
           <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-xs">
             <dt className="text-muted">Stored notes</dt>
             <dd className="m-0">{memories.length}</dd>
-            <dt className="text-muted">Sent every turn</dt>
+            <dt className="text-muted">Selected last turn</dt>
             <dd className="m-0">{sent}</dd>
             <dt className="text-muted">Waiting for review</dt>
             <dd className="m-0">{pendingMemories.length}</dd>
-            <dt className="text-muted">Over budget</dt>
+            <dt className="text-muted">Not selected</dt>
             <dd className={memoryOmitted > 0 ? "m-0 text-warn" : "m-0"}>{memoryOmitted}</dd>
           </dl>
           {memoryOmitted > 0 ? (
             <p className="mt-2 text-xs text-warn">
-              Each scope sends at most 2,500 characters. Shorten or merge notes, or move
-              reference material into project documents.
+              Selection keeps only notes relevant to the latest message, within 2,500
+              characters. Use Recall memory when you need a broader search.
             </p>
           ) : (
             <p className="mt-2 text-xs text-muted">
-              Every saved note fits in the current send budget.
+              Every saved note relevant to the latest message fit the send budget.
             </p>
           )}
         </div>
@@ -4641,13 +4642,8 @@ export function DataPage() {
     if (!confirmed) return;
     try {
       stopStream();
-      const spillLeftovers: string[] = [];
-      for (const conversation of conversations) {
-        await api.deleteSpill(conversation.id).catch(() => {
-          spillLeftovers.push(conversation.id);
-        });
-      }
       await db.wipeAll();
+      await api.wipeAppFiles();
       await api.memoryReset();
       await api.memoryMigrate();
       await selectConversation(null);
@@ -4656,11 +4652,7 @@ export function DataPage() {
       await refreshProjects();
       await refreshMemories();
       await refresh();
-      toast(
-        spillLeftovers.length > 0
-          ? "Deleted, but some spill files remain on disk"
-          : "Everything deleted",
-      );
+      toast("Everything deleted");
     } catch (e) {
       toast(errorText(e));
     }
@@ -4810,8 +4802,33 @@ export function ShortcutsPage() {
 }
 
 export function AboutPage() {
-  const { setSettingsPage } = useApp();
+  const { setSettingsPage, activeConnection, model } = useApp();
   const { version, update, checking, progress, status, checkNow, install } = useAppUpdate();
+
+  const copyDiagnostics = async () => {
+    const report = debugReport({
+      version,
+      connection: activeConnection
+        ? `${activeConnection.name} (${activeConnection.kind})`
+        : "none",
+      model: model || "none",
+      theme:
+        typeof document === "undefined"
+          ? "unknown"
+          : (document.documentElement.getAttribute("data-theme") ?? "unknown"),
+    });
+    const copied = await copyText(report);
+    toast(copied ? "Debug info copied" : "Couldn't copy debug info");
+  };
+
+  const copyLogPath = async () => {
+    try {
+      const copied = await copyText(await api.debugLogPath());
+      toast(copied ? "Log path copied" : "Couldn't copy the log path");
+    } catch (error) {
+      toast(errorText(error));
+    }
+  };
 
   return (
     <div>
@@ -4855,6 +4872,19 @@ export function AboutPage() {
           {status}
         </p>
       )}
+      <SettingRow
+        label="Diagnostics"
+        description="Version, OS, model and recent events. No keys or prompts."
+      >
+        <div className="flex gap-2">
+          <Button variant="default" size="sm" onClick={() => void copyDiagnostics()}>
+            Copy debug info
+          </Button>
+          <Button variant="default" size="sm" onClick={() => void copyLogPath()}>
+            Copy log path
+          </Button>
+        </div>
+      </SettingRow>
       <SettingRow label="What's new" description="Every release, newest first">
         <Button variant="default" size="sm" onClick={() => setSettingsPage("changelog")}>
           Changelog

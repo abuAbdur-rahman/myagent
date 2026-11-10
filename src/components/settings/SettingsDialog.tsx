@@ -168,7 +168,7 @@ export function SettingsDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-[var(--scrim)] p-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[100] grid place-items-center bg-[var(--scrim)] px-4 py-6 backdrop-blur-[3px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setSettingsPage(null);
       }}
@@ -179,11 +179,11 @@ export function SettingsDialog() {
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="flex h-[min(620px,86vh)] w-[min(900px,92vw)] overflow-hidden rounded-composer bg-raised shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
+        className="flex h-[min(800px,92dvh)] w-[min(1200px,96vw)] overflow-hidden rounded-composer bg-raised shadow-[var(--shadow-lg)] ring-1 ring-line-strong"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <nav
-          className="flex w-[208px] flex-none flex-col gap-1 overflow-y-auto border-r border-line-subtle bg-sunken p-3"
+          className="flex w-[224px] flex-none flex-col gap-1 overflow-y-auto border-r border-line-subtle bg-sunken px-3 py-5"
           aria-label="Settings sections"
         >
           <input
@@ -233,36 +233,43 @@ export function SettingsDialog() {
             </div>
           )}
         </nav>
-        <section className="relative min-w-0 flex-1 overflow-y-auto px-6 pb-6 pt-5">
-          <button
-            type="button"
-            aria-label="Close settings"
-            onClick={() => setSettingsPage(null)}
-            className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
-          >
-            <X size={16} />
-          </button>
-          <header className="mb-4 mt-0 pr-10">
-            <h2 className="text-[18px] font-semibold leading-snug">{TITLES[page]}</h2>
-            <p className="mt-0.5 text-[13px] text-fg-3">{SUBTITLES[page]}</p>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex flex-none items-start gap-4 border-b border-line-subtle px-8 pb-4 pt-6">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-[18px] font-semibold leading-snug">{TITLES[page]}</h2>
+              <p className="mt-0.5 text-[13px] text-fg-3">{SUBTITLES[page]}</p>
+            </div>
+            <button
+              type="button"
+              aria-label="Close settings"
+              onClick={() => setSettingsPage(null)}
+              className="grid h-8 w-8 flex-none place-items-center rounded-field text-fg-2 hover:bg-fill-2 hover:text-fg"
+            >
+              <X size={16} />
+            </button>
           </header>
-          {page === "general" && <GeneralPage />}
-          {page === "appearance" && <AppearancePage />}
-          {page === "providers" && <ProvidersPage />}
-          {page === "models" && <ModelsPage />}
-          {page === "search" && <SearchPage />}
-          {page === "mcp" && <McpPage />}
-          {page === "computer" && <ComputerUsePage />}
-          {page === "sandbox" && <SandboxPage />}
-          {page === "skills" && <SkillsPage />}
-          {page === "voice" && <VoicePage />}
-          {page === "audit" && <AuditPage />}
-          {page === "memory" && <MemoryPage />}
-          {page === "data" && <DataPage />}
-          {page === "shortcuts" && <ShortcutsPage />}
-          {page === "changelog" && <ChangelogPage />}
-          {page === "about" && <AboutPage />}
-        </section>
+          <section
+            aria-label="Settings content"
+            className="min-h-0 flex-1 overflow-y-auto px-8 py-6"
+          >
+            {page === "general" && <GeneralPage />}
+            {page === "appearance" && <AppearancePage />}
+            {page === "providers" && <ProvidersPage />}
+            {page === "models" && <ModelsPage />}
+            {page === "search" && <SearchPage />}
+            {page === "mcp" && <McpPage />}
+            {page === "computer" && <ComputerUsePage />}
+            {page === "sandbox" && <SandboxPage />}
+            {page === "skills" && <SkillsPage />}
+            {page === "voice" && <VoicePage />}
+            {page === "audit" && <AuditPage />}
+            {page === "memory" && <MemoryPage />}
+            {page === "data" && <DataPage />}
+            {page === "shortcuts" && <ShortcutsPage />}
+            {page === "changelog" && <ChangelogPage />}
+            {page === "about" && <AboutPage />}
+          </section>
+        </div>
       </div>
     </div>
   );

@@ -1,12 +1,158 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
+use serde::Deserialize;
 use tauri::http::{Request, Response, StatusCode, header};
 use tauri::{Manager, Runtime, UriSchemeContext};
 
 const MAX_ARTIFACT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 16;
+const MAX_ZIP_ARTIFACTS: usize = 64;
+const MAX_ZIP_BYTES: usize = 16 * 1024 * 1024;
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; worker-src blob:; form-action 'none'; base-uri 'none'; frame-src 'self'";
+
+#[derive(Debug, Deserialize)]
+pub struct ArtifactZipEntry {
+    name: String,
+    content: String,
+}
+
+fn invisible(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+fn reserved_stem(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    lower == "con"
+        || lower == "prn"
+        || lower == "aux"
+        || lower == "nul"
+        || ["com", "lpt"].iter().any(|prefix| {
+            lower.strip_prefix(prefix).is_some_and(|rest| {
+                rest.len() == 1 && ('1'..='9').contains(&rest.chars().next().unwrap_or('0'))
+            })
+        })
+}
+
+fn zip_entry_name(raw: &str, index: usize, used: &mut HashSet<String>) -> String {
+    let leaf = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
+    let cleaned = leaf
+        .chars()
+        .map(|value| {
+            if invisible(value)
+                || matches!(value, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                ' '
+            } else {
+                value
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(['.', ' '])
+        .chars()
+        .take(100)
+        .collect::<String>();
+    let base = if cleaned.is_empty() {
+        format!("artifact-{}", index + 1)
+    } else {
+        cleaned
+    };
+    let (stem, extension) = match base.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
+            (stem.to_string(), format!(".{extension}"))
+        }
+        _ => (base, String::new()),
+    };
+    let stem = if reserved_stem(&stem) {
+        format!("artifact-{stem}")
+    } else {
+        stem
+    };
+    let mut candidate = format!("{stem}{extension}");
+    let mut suffix = 2;
+    while !used.insert(candidate.to_ascii_lowercase()) {
+        candidate = format!("{stem}-{suffix}{extension}");
+        suffix += 1;
+    }
+    candidate
+}
+
+#[tauri::command]
+pub fn artifact_zip_export(
+    destination: String,
+    entries: Vec<ArtifactZipEntry>,
+) -> Result<usize, String> {
+    if entries.is_empty() || entries.len() > MAX_ZIP_ARTIFACTS {
+        return Err(format!("artifact zip needs 1-{MAX_ZIP_ARTIFACTS} versions"));
+    }
+    let bytes = entries
+        .iter()
+        .map(|entry| entry.content.len())
+        .sum::<usize>();
+    if bytes > MAX_ZIP_BYTES
+        || entries
+            .iter()
+            .any(|entry| entry.content.len() > MAX_ARTIFACT_BYTES)
+    {
+        return Err("artifact zip is too large".to_string());
+    }
+    let path = PathBuf::from(destination);
+    if path.as_os_str().is_empty() || path.is_dir() {
+        return Err("choose a zip file destination".to_string());
+    }
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        return Err("choose a .zip file destination".to_string());
+    }
+    let parent = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let temp = parent.join(format!(".myagent-{}.zip.part", uuid::Uuid::new_v4()));
+    let written = write_zip(&temp, &entries);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    std::fs::rename(&temp, &path).map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
+        format!("save zip: {error}")
+    })?;
+    Ok(entries.len())
+}
+
+fn write_zip(path: &std::path::Path, entries: &[ArtifactZipEntry]) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|error| format!("create zip: {error}"))?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut used = HashSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let name = zip_entry_name(&entry.name, index, &mut used);
+        archive
+            .start_file(name, options)
+            .map_err(|error| format!("start zip entry: {error}"))?;
+        archive
+            .write_all(entry.content.as_bytes())
+            .map_err(|error| format!("write zip entry: {error}"))?;
+    }
+    archive
+        .finish()
+        .map_err(|error| format!("finish zip: {error}"))?;
+    Ok(())
+}
 
 const SHELL: &str = r#"<!doctype html>
 <html lang="en">
@@ -19,13 +165,46 @@ iframe { display: block; width: 100%; height: 100%; border: 0; }
 </style>
 </head>
 <body>
-<iframe id="artifact-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe>
+<iframe id="artifact-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'"></iframe>
 <script>
 const artifact = __ARTIFACT__;
 document.getElementById("artifact-frame").srcdoc = artifact;
 </script>
 </body>
 </html>"#;
+
+const INLINE_REPORTER: &str = r#"<script>
+(function () {
+  var last = 0;
+  function report() {
+    var root = document.documentElement;
+    var body = document.body;
+    var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
+    height = Math.max(80, Math.min(2000, Math.round(height)));
+    if (Math.abs(height - last) < 2) return;
+    last = height;
+    parent.postMessage({ type: "myagent:height", height: height }, "*");
+  }
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || data.type !== "myagent:theme" || !data.tokens) return;
+    var root = document.documentElement;
+    Object.keys(data.tokens).forEach(function (name) {
+      var value = data.tokens[name];
+      if (typeof value === "string" && /^[\w#(),.%\s-]{1,80}$/.test(value)) {
+        root.style.setProperty(name, value);
+      }
+    });
+  });
+  window.addEventListener("load", report);
+  window.addEventListener("resize", report);
+  if (window.ResizeObserver && document.body) {
+    new ResizeObserver(report).observe(document.body);
+  }
+  setTimeout(report, 50);
+  setTimeout(report, 400);
+})();
+</script>"#;
 
 pub struct ArtifactStore {
     entries: Mutex<VecDeque<(String, String)>>,
@@ -97,7 +276,7 @@ fn secure_headers(builder: tauri::http::response::Builder) -> tauri::http::respo
         .header("Content-Security-Policy", CSP)
         .header(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(), clipboard-write=()",
+            "camera=(), microphone=(), geolocation=(), display-capture=(), clipboard-write=()",
         )
 }
 
@@ -121,6 +300,18 @@ fn shell_response(html: &str) -> Response<Vec<u8>> {
     }
 }
 
+fn inline_html(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    match lower.rfind("</body>") {
+        Some(index) => format!("{}{}{}", &html[..index], INLINE_REPORTER, &html[index..]),
+        None => format!("{html}{INLINE_REPORTER}"),
+    }
+}
+
+fn inline_response(html: &str) -> Response<Vec<u8>> {
+    build_response(StatusCode::OK, inline_html(html).into_bytes())
+}
+
 fn internal_error() -> Response<Vec<u8>> {
     build_response(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,7 +332,18 @@ pub fn serve<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
-    let Some(id) = requested_id(request.uri().path()) else {
+    let path = request.uri().path();
+    if let Some(id) = path
+        .strip_prefix("/i/")
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+    {
+        return match ctx.app_handle().state::<ArtifactStore>().get(id) {
+            Ok(Some(html)) => inline_response(&html),
+            Ok(None) => not_found(),
+            Err(_) => internal_error(),
+        };
+    }
+    let Some(id) = requested_id(path) else {
         return not_found();
     };
     match ctx.app_handle().state::<ArtifactStore>().get(id) {
@@ -170,6 +372,18 @@ pub fn artifact_preview_url(
 }
 
 #[tauri::command]
+pub fn artifact_inline_url(
+    app: tauri::AppHandle,
+    html: String,
+) -> Result<ArtifactPreviewHandle, String> {
+    let id = app.state::<ArtifactStore>().put(&html)?;
+    Ok(ArtifactPreviewHandle {
+        url: format!("http://artifact.localhost/i/{id}"),
+        id,
+    })
+}
+
+#[tauri::command]
 pub fn artifact_preview_drop(app: tauri::AppHandle, id: String) {
     app.state::<ArtifactStore>().remove(&id);
 }
@@ -177,6 +391,7 @@ pub fn artifact_preview_drop(app: tauri::AppHandle, id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     fn header_value(response: &Response<Vec<u8>>, name: &str) -> String {
         response
@@ -231,6 +446,20 @@ mod tests {
     }
 
     #[test]
+    fn artifact_frames_deny_device_capture_and_geolocation() {
+        let response = shell_response("<h1>ok</h1>");
+        assert_eq!(
+            header_value(&response, "permissions-policy"),
+            "camera=(), microphone=(), geolocation=(), display-capture=(), clipboard-write=()"
+        );
+        let body = shell("<h1>ok</h1>").unwrap();
+        assert!(body.contains(
+            "allow=\"camera 'none'; microphone 'none'; geolocation 'none'; display-capture 'none'\""
+        ));
+        assert!(!body.contains("allow-same-origin"));
+    }
+
+    #[test]
     fn unknown_artifacts_are_not_found() {
         assert_eq!(not_found().status(), StatusCode::NOT_FOUND);
         assert_eq!(requested_id("/s/"), None);
@@ -244,5 +473,137 @@ mod tests {
         let csp = header_value(&shell_response("<h1>ok</h1>"), "content-security-policy");
         assert!(csp.contains("frame-src 'self'"));
         assert!(!csp.contains("frame-src 'none'"));
+    }
+
+    #[test]
+    fn inline_html_injects_the_reporter_before_body() {
+        let html = inline_html("<html><body><p>x</p></body></html>");
+        let reporter = html.find(INLINE_REPORTER).expect("reporter present");
+        let body = html.find("</body>").expect("body present");
+        assert!(reporter < body);
+        assert!(html.contains("myagent:height"));
+        assert!(html.contains("myagent:theme"));
+    }
+
+    #[test]
+    fn inline_html_appends_the_reporter_without_a_body() {
+        let html = inline_html("<h1>x</h1>");
+        assert!(html.ends_with(INLINE_REPORTER));
+    }
+
+    #[test]
+    fn inline_response_keeps_the_artifact_csp() {
+        let response = inline_response("<h1>ok</h1>");
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = header_value(&response, "content-security-policy");
+        assert!(csp.contains("connect-src 'none'"));
+        assert!(csp.contains("script-src 'unsafe-inline' 'unsafe-eval' https:"));
+        assert!(csp.contains("default-src 'none'"));
+    }
+
+    #[test]
+    fn zip_export_writes_every_version_with_safe_unique_names() {
+        let path = std::env::temp_dir().join(format!(
+            "myagent-artifact-versions-{}.zip",
+            uuid::Uuid::new_v4()
+        ));
+        let count = artifact_zip_export(
+            path.to_string_lossy().to_string(),
+            vec![
+                ArtifactZipEntry {
+                    name: "../Page.html".to_string(),
+                    content: "<h1>one</h1>".to_string(),
+                },
+                ArtifactZipEntry {
+                    name: "Page.html".to_string(),
+                    content: "<h1>two</h1>".to_string(),
+                },
+            ],
+        )
+        .expect("zip export");
+        assert_eq!(count, 2);
+
+        let file = std::fs::File::open(&path).expect("open zip");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+        assert_eq!(archive.len(), 2);
+        assert_eq!(archive.by_index(0).expect("first").name(), "Page.html");
+        assert_eq!(archive.by_index(1).expect("second").name(), "Page-2.html");
+        let mut content = String::new();
+        archive
+            .by_name("Page-2.html")
+            .expect("named entry")
+            .read_to_string(&mut content)
+            .expect("entry text");
+        assert_eq!(content, "<h1>two</h1>");
+        drop(archive);
+        std::fs::remove_file(&path).expect("remove zip");
+    }
+
+    #[test]
+    fn zip_entry_names_avoid_device_stems_and_invisible_characters() {
+        let mut used = HashSet::new();
+        assert_eq!(
+            zip_entry_name("CON.html", 0, &mut used),
+            "artifact-CON.html"
+        );
+        assert_eq!(zip_entry_name("LPT9", 1, &mut used), "artifact-LPT9");
+        assert_eq!(
+            zip_entry_name("invoice\u{202e}exe.html", 2, &mut used),
+            "invoice exe.html"
+        );
+        assert_eq!(zip_entry_name("console.html", 3, &mut used), "console.html");
+    }
+
+    #[test]
+    fn zip_export_requires_a_zip_destination_and_keeps_the_old_file_on_error() {
+        let dir =
+            std::env::temp_dir().join(format!("myagent-artifact-dest-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        assert!(
+            artifact_zip_export(
+                dir.join("versions.html").to_string_lossy().to_string(),
+                vec![ArtifactZipEntry {
+                    name: "a.html".to_string(),
+                    content: "<h1>a</h1>".to_string(),
+                }],
+            )
+            .is_err()
+        );
+
+        let path = dir.join("versions.zip");
+        std::fs::write(&path, "keep me").expect("seed file");
+        let result = artifact_zip_export(
+            path.to_string_lossy().to_string(),
+            vec![ArtifactZipEntry {
+                name: "a.html".to_string(),
+                content: "<h1>a</h1>".to_string(),
+            }],
+        );
+        assert!(result.is_ok());
+        let entries = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .count();
+        assert_eq!(entries, 1, "no .part file is left behind");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn zip_export_rejects_empty_and_oversized_sets() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "myagent-artifact-empty-{}.zip",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .to_string();
+        assert!(artifact_zip_export(path.clone(), Vec::new()).is_err());
+        let entries = (0..=MAX_ZIP_ARTIFACTS)
+            .map(|index| ArtifactZipEntry {
+                name: format!("{index}.txt"),
+                content: String::new(),
+            })
+            .collect();
+        assert!(artifact_zip_export(path, entries).is_err());
     }
 }
