@@ -48,8 +48,11 @@ export function groupToolEntries(entries: ToolLogEntry[]): ToolLogRow[] {
   const runs: ToolLogEntry[][] = [];
   for (const entry of entries) {
     const current = runs[runs.length - 1];
-    if (current?.[0]?.name === entry.name) current.push(entry);
-    else runs.push([entry]);
+    if (current && toolGroupLabel(current[0].name) === toolGroupLabel(entry.name)) {
+      current.push(entry);
+    } else {
+      runs.push([entry]);
+    }
   }
   return runs.map((list) => {
     if (list.length === 1) return { kind: "single", entry: list[0] };

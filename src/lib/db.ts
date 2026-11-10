@@ -927,16 +927,22 @@ export async function listMemories(
   projectId: string | null,
 ): Promise<Memory[]> {
   const db = await getDb();
+  let rows: (Omit<Memory, "untrusted"> & { trust: string })[];
   if (scope === "project") {
     if (!projectId) return [];
-    return db.select<Memory[]>(
+    rows = await db.select<(Omit<Memory, "untrusted"> & { trust: string })[]>(
       "SELECT * FROM memories WHERE scope = 'project' AND project_id = $1 ORDER BY created_at DESC",
       [projectId],
     );
+  } else {
+    rows = await db.select<(Omit<Memory, "untrusted"> & { trust: string })[]>(
+      "SELECT * FROM memories WHERE scope = 'global' ORDER BY created_at DESC",
+    );
   }
-  return db.select<Memory[]>(
-    "SELECT * FROM memories WHERE scope = 'global' ORDER BY created_at DESC",
-  );
+  return rows.map(({ trust, ...memory }) => ({
+    ...memory,
+    untrusted: trust === "untrusted",
+  }));
 }
 
 export async function createMemory(input: MemoryInput): Promise<Memory> {
@@ -994,7 +1000,7 @@ export async function listPendingMemories(): Promise<PendingMemory[]> {
 export async function approvePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at) SELECT id, scope, project_id, kind, content, conversation_id, created_at, created_at FROM pending_memories WHERE id = $1",
+    "INSERT OR IGNORE INTO memories (id, scope, project_id, kind, content, source_conversation_id, created_at, updated_at, trust) SELECT id, scope, project_id, kind, content, conversation_id, created_at, created_at, trust FROM pending_memories WHERE id = $1",
     [id],
   );
   await db.execute("DELETE FROM pending_memories WHERE id = $1", [id]);
@@ -1044,7 +1050,7 @@ export async function addPendingMemories(memories: PendingMemory[]): Promise<voi
 export async function restorePendingMemory(id: string): Promise<void> {
   const db = await getDb();
   await db.execute(
-    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at) SELECT id, scope, project_id, kind, content, source_conversation_id, created_at FROM memories WHERE id = $1",
+    "INSERT OR IGNORE INTO pending_memories (id, scope, project_id, kind, content, conversation_id, created_at, trust) SELECT id, scope, project_id, kind, content, source_conversation_id, created_at, trust FROM memories WHERE id = $1",
     [id],
   );
   await db.execute("DELETE FROM memories WHERE id = $1", [id]);

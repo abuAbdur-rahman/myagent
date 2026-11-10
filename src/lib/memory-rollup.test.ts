@@ -77,6 +77,12 @@ describe("rollupTranscript", () => {
     expect(text).toBe("Assistant: lasting decision");
     expect(text).not.toContain("hidden");
   });
+
+  it("keeps a truncated newest line when it alone exceeds the cap", () => {
+    const text = rollupTranscript([message("m1", "user", "decision ".repeat(30))], 60);
+    expect(text).toMatch(/^User: decision/);
+    expect(text.length).toBeLessThanOrEqual(60);
+  });
 });
 
 describe("hasUntrustedProvenance", () => {
@@ -94,6 +100,18 @@ describe("hasUntrustedProvenance", () => {
     ]);
     expect(hasUntrustedProvenance([message("m1", "assistant", "done", toolLog)])).toBe(true);
   });
+
+  it("treats chat search and attachments as outside input", () => {
+    const toolLog = JSON.stringify([
+      { id: "t1", name: "conversation_search", summary: "search", status: "ok", preview: null },
+    ]);
+    const attachment = {
+      ...message("m2", "user", "see this"),
+      attachments: '[{"kind":"image","dataUrl":"data:image/png;base64,AAAA"}]',
+    };
+    expect(hasUntrustedProvenance([message("m1", "assistant", "done", toolLog)])).toBe(true);
+    expect(hasUntrustedProvenance([attachment])).toBe(true);
+  });
 });
 
 describe("projectScopedNotes", () => {
@@ -103,9 +121,14 @@ describe("projectScopedNotes", () => {
         "Release builds use NSIS and run on Windows only",
         "The user prefers short answers",
         "The user's editor is VS Code",
+        "Alice’s email is alice@example.com",
         "I will keep the changelog short",
+        "The user interface uses React",
       ]),
-    ).toEqual(["Release builds use NSIS and run on Windows only"]);
+    ).toEqual([
+      "Release builds use NSIS and run on Windows only",
+      "The user interface uses React",
+    ]);
   });
 });
 
@@ -117,5 +140,14 @@ describe("uniqueRollupNotes", () => {
         ["Uses NSIS for releases"],
       ),
     ).toEqual(["Windows only"]);
+  });
+
+  it("drops near-duplicate paraphrases but keeps negated facts", () => {
+    expect(
+      uniqueRollupNotes(
+        ["Releases use NSIS on Windows", "Releases never use NSIS on Windows"],
+        ["Windows releases use the NSIS installer"],
+      ),
+    ).toEqual(["Releases never use NSIS on Windows"]);
   });
 });

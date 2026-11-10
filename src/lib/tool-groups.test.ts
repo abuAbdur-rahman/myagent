@@ -47,6 +47,19 @@ describe("groupToolEntries", () => {
 
     expect(rows.map((row) => row.key)).toEqual(["s1", "s3"]);
   });
+
+  it("groups adjacent tools from the same display category", () => {
+    const rows = groupToolEntries([
+      entry("t1", "todo_write"),
+      entry("t2", "todo_set"),
+      entry("s1", "web_search"),
+    ]);
+    expect(rows[0].kind).toBe("group");
+    if (rows[0].kind === "group") {
+      expect(rows[0].entries.map((item) => item.id)).toEqual(["t1", "t2"]);
+      expect(rows[0].label).toBe("Updated the checklist");
+    }
+  });
 });
 
 describe("toolGroupLabel", () => {

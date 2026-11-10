@@ -42,6 +42,7 @@ function Section({
 export function ContextInspector() {
   const {
     messages,
+    streaming,
     activeProject,
     globalSentMemories,
     projectSentMemories,
@@ -83,17 +84,21 @@ export function ContextInspector() {
     let live = true;
     setInspection(null);
     setInspectionError(null);
-    void inspectContext()
-      .then((value) => {
-        if (live) setInspection(value);
-      })
-      .catch((error: unknown) => {
-        if (live) setInspectionError(errorText(error));
-      });
+    if (streaming) return;
+    const timeout = window.setTimeout(() => {
+      void inspectContext()
+        .then((value) => {
+          if (live) setInspection(value);
+        })
+        .catch((error: unknown) => {
+          if (live) setInspectionError(errorText(error));
+        });
+    }, 150);
     return () => {
       live = false;
+      window.clearTimeout(timeout);
     };
-  }, [inspectContext, messages.length, contextInfo.prompt]);
+  }, [inspectContext, messages, contextInfo.prompt, streaming]);
 
   const docs = useMemo(
     () => messages.flatMap((message) => parseDocAttachments(message.attachments)),

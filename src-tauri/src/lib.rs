@@ -458,6 +458,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE conversations ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 37,
+            description: "add_memory_trust",
+            sql: "ALTER TABLE memories ADD COLUMN trust TEXT NOT NULL DEFAULT 'trusted';",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -866,6 +872,13 @@ mod migration_tests {
                 .await
                 .expect("pending survives");
         assert_eq!(trust, "trusted");
+        let memory_trust: String = sqlx::query_scalar(
+            "SELECT trust FROM memories WHERE id = 'aaaaaaaa-1111-2222-3333-444444444444'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("memory trust defaults");
+        assert_eq!(memory_trust, "trusted");
 
         let again = crate::memory::migrate::run(&pool, &dir, "0.5.0")
             .await

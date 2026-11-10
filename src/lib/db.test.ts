@@ -181,6 +181,7 @@ describe("pending memory", () => {
     await approvePendingMemory("p1");
     const statements = execute.mock.calls.map(([sql]) => sql as string);
     expect(statements[0]).toContain("INSERT OR IGNORE INTO memories");
+    expect(statements[0]).toContain("trust");
     expect(statements[1]).toBe("DELETE FROM pending_memories WHERE id = $1");
   });
 
@@ -189,6 +190,7 @@ describe("pending memory", () => {
     await restorePendingMemory("p1");
     const statements = execute.mock.calls.map(([sql]) => sql as string);
     expect(statements[0]).toContain("INSERT OR IGNORE INTO pending_memories");
+    expect(statements[0]).toContain("trust");
     expect(statements[1]).toBe("DELETE FROM memories WHERE id = $1");
   });
 
@@ -226,6 +228,24 @@ describe("pending memory", () => {
 });
 
 describe("listMemories", () => {
+  it("maps legacy trust into the prompt-facing untrusted flag", async () => {
+    select.mockResolvedValueOnce([
+      {
+        id: "m1",
+        scope: "global",
+        project_id: null,
+        kind: "fact",
+        content: "tool-derived note",
+        trust: "untrusted",
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    await expect(listMemories("global", null)).resolves.toMatchObject([
+      { id: "m1", untrusted: true },
+    ]);
+  });
+
   it("asks for one project's notes only", async () => {
     select.mockClear();
     await listMemories("project", "pa");

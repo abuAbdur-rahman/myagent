@@ -1,8 +1,14 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { AppProvider, seedToolLog, settleToolLog, toolLogPatch } from "./store";
-import type { ToolLogEntry } from "./types";
+import {
+  AppProvider,
+  orderedSentMemories,
+  seedToolLog,
+  settleToolLog,
+  toolLogPatch,
+} from "./store";
+import type { Memory, ToolLogEntry } from "./types";
 
 const memory = new Map<string, string>();
 
@@ -80,5 +86,30 @@ describe("tool log memo on the message", () => {
     );
     expect(seeded.map((item) => item.id)).toEqual(["msg-1#0", "msg-1#1"]);
     expect(new Set(seeded.map((item) => item.id)).size).toBe(2);
+  });
+});
+
+describe("orderedSentMemories", () => {
+  it("preserves rank across global and project scopes", () => {
+    const global = {
+      id: "global",
+      scope: "global",
+      project_id: null,
+      kind: "fact",
+      content: "global",
+      created_at: 1,
+      updated_at: 1,
+    } satisfies Memory;
+    const project = {
+      ...global,
+      id: "project",
+      scope: "project",
+      project_id: "p1",
+      content: "project",
+    } satisfies Memory;
+    expect(orderedSentMemories([global], [project], ["project", "global"]).map((row) => row.id)).toEqual([
+      "project",
+      "global",
+    ]);
   });
 });

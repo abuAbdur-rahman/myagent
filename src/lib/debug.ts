@@ -5,7 +5,8 @@ const MAX_EVENTS = 300;
 const events: string[] = [];
 
 const KEY =
-  "api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd|pwd|credential|authorization";
+  "api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?access[_-]?key|token|secret|password|passwd|pwd|credential|authorization";
+const KEY_NAME = `[A-Za-z0-9_-]*(?:${KEY})`;
 
 const REDACTIONS: Array<[RegExp, string]> = [
   [/\bsk-[A-Za-z0-9_-]{6,}/g, "sk-[redacted]"],
@@ -16,9 +17,18 @@ const REDACTIONS: Array<[RegExp, string]> = [
   [/\bAKIA[0-9A-Z]{16}\b/g, "AKIA[redacted]"],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, "AIza[redacted]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]"],
-  [new RegExp(`("(?:${KEY})"\\s*:\\s*")[^"]*(")`, "gi"), "$1[redacted]$2"],
-  [new RegExp(`\\b(${KEY})(["']?\\s*[:=]\\s*["']?)[^\\s"'&<>,}]+`, "gi"), "$1$2[redacted]"],
-  [new RegExp(`\\b(${KEY})\\s+(?:is|was)\\s+\\S{12,}`, "gi"), "$1 is [redacted]"],
+  [
+    /((?:authorization\s*[:=]\s*)basic\s+)[A-Za-z0-9+/=]{8,}/gi,
+    "$1[redacted]",
+  ],
+  [
+    new RegExp(
+      `((?:\\\\?["']?)${KEY_NAME}(?:\\\\?["']?)\\s*(?::|=)\\s*(?:\\\\?["']?))[^\\s"'\\\\&<>,}]+`,
+      "gi",
+    ),
+    "$1[redacted]",
+  ],
+  [new RegExp(`\\b(${KEY_NAME})\\s+(?:is|was)\\s+\\S{12,}`, "gi"), "$1 is [redacted]"],
 ];
 
 function redact(text: string): string {

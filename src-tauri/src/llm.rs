@@ -1680,27 +1680,42 @@ fn inspect_tokens(value: &serde_json::Value) -> usize {
 }
 
 fn sensitive_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace('-', "_");
-    if normalized == "auth"
-        || normalized.ends_with("_auth")
-        || normalized == "private_key"
-        || normalized == "passwd"
-        || normalized == "pwd"
-        || normalized == "credential"
-    {
-        return true;
+    let mut normalized = String::with_capacity(key.len());
+    let mut previous_lower_or_digit = false;
+    for value in key.chars() {
+        if value == '-' || value == ' ' {
+            normalized.push('_');
+            previous_lower_or_digit = false;
+            continue;
+        }
+        if value.is_ascii_uppercase() && previous_lower_or_digit {
+            normalized.push('_');
+        }
+        normalized.push(value.to_ascii_lowercase());
+        previous_lower_or_digit = value.is_ascii_lowercase() || value.is_ascii_digit();
     }
-    [
+    let names = [
+        "auth",
         "api_key",
         "apikey",
         "authorization",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "client_secret",
+        "private_key",
+        "secret_access_key",
         "token",
         "secret",
         "password",
+        "passwd",
+        "pwd",
         "credential",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
+        "credentials",
+    ];
+    names
+        .iter()
+        .any(|name| normalized == *name || normalized.ends_with(&format!("_{name}")))
 }
 
 fn redact_request_value(value: &mut serde_json::Value) {
@@ -1729,11 +1744,20 @@ fn redact_request_value(value: &mut serde_json::Value) {
 fn mask_inline_images(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
-            if let Some(serde_json::Value::Object(image)) = map.get_mut("image_url")
-                && let Some(serde_json::Value::String(url)) = image.get_mut("url")
-                && url.starts_with("data:")
-            {
-                *url = "[inline image]".to_string();
+            if let Some(image_url) = map.get_mut("image_url") {
+                match image_url {
+                    serde_json::Value::Object(image) => {
+                        if let Some(serde_json::Value::String(url)) = image.get_mut("url")
+                            && url.starts_with("data:")
+                        {
+                            *url = "[inline image]".to_string();
+                        }
+                    }
+                    serde_json::Value::String(url) if url.starts_with("data:") => {
+                        *url = "[inline image]".to_string();
+                    }
+                    _ => {}
+                }
             }
             for item in map.values_mut() {
                 mask_inline_images(item);
@@ -1745,6 +1769,44 @@ fn mask_inline_images(value: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+fn inspection_chars(value: &serde_json::Value) -> usize {
+    serde_json::to_string_pretty(value)
+        .map(|json| json.chars().count())
+        .unwrap_or(usize::MAX)
+}
+
+fn truncate_inspection_display(value: &mut serde_json::Value) {
+    if inspection_chars(value) <= MAX_INSPECTION_CHARS {
+        return;
+    }
+    if let serde_json::Value::Object(map) = value {
+        map.insert(
+            "_myagent_truncated".to_string(),
+            serde_json::Value::String(
+                "Request display truncated to 400,000 characters".to_string(),
+            ),
+        );
+    }
+    for key in ["messages", "input", "tools"] {
+        if inspection_chars(value) <= MAX_INSPECTION_CHARS {
+            return;
+        }
+        if let serde_json::Value::Object(map) = value
+            && map.contains_key(key)
+        {
+            map.insert(
+                key.to_string(),
+                serde_json::json!([{ "_truncated": format!("{key} omitted from display") }]),
+            );
+        }
+    }
+    if inspection_chars(value) > MAX_INSPECTION_CHARS {
+        *value = serde_json::json!({
+            "_myagent_truncated": "Request display exceeded 400,000 characters"
+        });
     }
 }
 
@@ -1804,7 +1866,7 @@ pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<
     } else {
         None
     };
-    let mut body = if responses::only(&req.base_url, &req.model) {
+    let body = if responses::only(&req.base_url, &req.model) {
         responses::body(
             &req.model,
             &prune_tool_history(&history),
@@ -1843,7 +1905,6 @@ pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<
         }
         body
     };
-    mask_inline_images(&mut body);
     let tools = inspected_tools(&body);
     let message_tokens = body
         .get("messages")
@@ -1852,13 +1913,11 @@ pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<
         .unwrap_or(0);
     let total_tokens = inspect_tokens(&body);
     let mut display = body;
+    mask_inline_images(&mut display);
     redact_request_value(&mut display);
-    let mut json = serde_json::to_string_pretty(&display)
+    truncate_inspection_display(&mut display);
+    let json = serde_json::to_string_pretty(&display)
         .map_err(|error| AppError::Internal(format!("inspect request json: {error}")))?;
-    if json.chars().count() > MAX_INSPECTION_CHARS {
-        json = json.chars().take(MAX_INSPECTION_CHARS).collect();
-        json.push_str("\n… truncated for display");
-    }
     Ok(RequestInspection {
         json,
         total_tokens,
@@ -3925,16 +3984,21 @@ mod tests {
             "x-api-key",
             "passwd",
             "credential",
+            "privateKey",
+            "OPENAI_API_KEY",
         ] {
             assert!(sensitive_key(key), "{key} should be sensitive");
         }
         assert!(!sensitive_key("author"));
         assert!(!sensitive_key("description"));
+        assert!(!sensitive_key("max_tokens"));
+        assert!(!sensitive_key("token_count"));
 
         let mut value = serde_json::json!({
             "note": "password: hunter2hunter2 and api_key=\"quoted-value\" and AKIAIOSFODNN7EXAMPLE",
             "nested": [{"client_secret": "nested-secret"}],
-            "image": {"image_url": {"url": "data:image/png;base64,AAAA"}}
+            "image": {"image_url": {"url": "data:image/png;base64,AAAA"}},
+            "response_image": {"type": "input_image", "image_url": "data:image/png;base64,BBBB"}
         });
         mask_inline_images(&mut value);
         redact_request_value(&mut value);
@@ -3944,6 +4008,21 @@ mod tests {
         assert!(!text.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!text.contains("nested-secret"));
         assert!(!text.contains("base64,AAAA"));
+        assert!(!text.contains("base64,BBBB"));
+    }
+
+    #[test]
+    fn request_inspection_keeps_valid_json_when_large() {
+        let mut display = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "x".repeat(MAX_INSPECTION_CHARS)}],
+            "tools": [{"name": "lookup", "description": "y".repeat(MAX_INSPECTION_CHARS)}]
+        });
+        truncate_inspection_display(&mut display);
+        let json = serde_json::to_string_pretty(&display).expect("json");
+        assert!(json.chars().count() <= MAX_INSPECTION_CHARS);
+        assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok());
+        assert!(json.contains("truncated"));
     }
 
     #[test]

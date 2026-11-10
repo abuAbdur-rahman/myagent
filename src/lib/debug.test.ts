@@ -67,6 +67,19 @@ describe("logEvent", () => {
     expect(line).toContain("password=[redacted]");
   });
 
+  it("redacts environment, escaped JSON and Basic authorization values", async () => {
+    logEvent(
+      "error",
+      String.raw`OPENAI_API_KEY=env-secret AWS_SECRET_ACCESS_KEY=aws-secret {\"access_token\":\"escaped-secret\"} Authorization: Basic dXNlcjpwYXNz`,
+    );
+    await vi.waitFor(() => expect(append).toHaveBeenCalled());
+
+    const line = lastLine();
+    for (const secret of ["env-secret", "aws-secret", "escaped-secret", "dXNlcjpwYXNz"]) {
+      expect(line).not.toContain(secret);
+    }
+  });
+
   it("keeps the newest events when the buffer is full", async () => {
     for (let index = 0; index <= 320; index += 1) {
       logEvent("window.error", `failure ${index}`);
