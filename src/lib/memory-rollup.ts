@@ -1,6 +1,47 @@
+import { parseToolLog } from "./message-parse";
 import type { Message } from "./types";
 
 export type RollupReason = "close" | "explicit" | "interval";
+
+const UNTRUSTED_TOOLS: ReadonlySet<string> = new Set([
+  "web_search",
+  "web_fetch",
+  "research_run",
+  "run_powershell",
+  "sandbox_run",
+  "sandbox_read",
+  "sandbox_glob",
+  "sandbox_grep",
+  "read_document",
+  "describe_image",
+  "delegate_task",
+]);
+
+function toolNames(message: Message): string[] {
+  return parseToolLog(message.tool_log).map((entry) => entry.name);
+}
+
+export function hasUntrustedProvenance(messages: Message[]): boolean {
+  return messages.some((message) =>
+    toolNames(message).some(
+      (name) => UNTRUSTED_TOOLS.has(name) || name.startsWith("mcp__"),
+    ),
+  );
+}
+
+function personScoped(note: string): boolean {
+  const value = note.trim();
+  return (
+    /^(the |this )?(user|person|persona|author)\b/i.test(value) ||
+    /\bthe user('s)?\b/i.test(value) ||
+    /^(i|i'm|i've|i'd|i'll|my|me|mine)\b/i.test(value) ||
+    /^you(r)?\b/i.test(value)
+  );
+}
+
+export function projectScopedNotes(notes: string[]): string[] {
+  return notes.filter((note) => !personScoped(note));
+}
 
 function explicitRequest(text: string): boolean {
   const value = text.trim();

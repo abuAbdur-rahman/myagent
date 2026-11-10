@@ -19,7 +19,7 @@ static SECRET: OnceLock<Regex> = OnceLock::new();
 fn secret_pattern() -> &'static Regex {
     SECRET.get_or_init(|| {
         Regex::new(
-            r"(?i)(sk-[a-z0-9_-]{16,}|gh[opsu]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|glpat-[a-z0-9_-]{20,}|xox[bpoas]-[a-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}|aws_?secret(?:_access_key)?\s*[:=]\s*\S{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer\s+[A-Za-z0-9\-._~+/]{16,}|(password|passwd|pwd|api[_-]?key|secret|token)\s*[:=]\s*\S{6,})",
+            r"(?i)(sk-[a-z0-9_-]{16,}|gh[opsu]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|glpat-[a-z0-9_-]{20,}|xox[bpoas]-[a-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}|aws_?secret(?:_access_key)?\s*[:=]\s*\S{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer\s+[A-Za-z0-9\-._~+/]{16,}|(password|passwd|pwd|api[_-]?key|secret|token)\s*[:=]\s*\S{6,}|(password|passwd|pwd|api[_-]?key|secret|token)\s+(?:is|was)\s+\S{12,})",
         )
         .expect("secret pattern compiles")
     })
@@ -28,6 +28,12 @@ fn secret_pattern() -> &'static Regex {
 pub fn looks_secret(text: &str) -> bool {
     let lower = text.to_lowercase();
     if secret_pattern().is_match(text) {
+        return true;
+    }
+    if text
+        .split(|value: char| !(value.is_ascii_alphanumeric() || value == '_' || value == '-'))
+        .any(mixed_token)
+    {
         return true;
     }
     text.split(|value: char| !value.is_ascii_hexdigit())
@@ -42,6 +48,42 @@ pub fn looks_secret(text: &str) -> bool {
                 && trimmed.chars().any(|value| value.is_ascii_lowercase())
         })
         || lower.contains("authorization: basic ")
+}
+
+static LONG_RUN: OnceLock<Regex> = OnceLock::new();
+
+fn long_run_pattern() -> &'static Regex {
+    LONG_RUN.get_or_init(|| {
+        Regex::new(r"[A-Za-z0-9+/_-]{60,}={0,2}|[0-9a-fA-F]{64,}")
+            .expect("long run pattern compiles")
+    })
+}
+
+static TOKEN_RUN: OnceLock<Regex> = OnceLock::new();
+
+fn token_run_pattern() -> &'static Regex {
+    TOKEN_RUN.get_or_init(|| Regex::new(r"[A-Za-z0-9_-]{32,}").expect("token run pattern compiles"))
+}
+
+fn mixed_token(value: &str) -> bool {
+    value.len() >= 32
+        && value.chars().any(|item| item.is_ascii_uppercase())
+        && value.chars().any(|item| item.is_ascii_lowercase())
+        && value.chars().any(|item| item.is_ascii_digit())
+}
+
+pub fn redact_secrets(text: &str) -> String {
+    let matched = secret_pattern().replace_all(text, "[redacted]");
+    let matched = long_run_pattern().replace_all(&matched, "[redacted]");
+    token_run_pattern()
+        .replace_all(&matched, |run: &regex::Captures<'_>| {
+            if mixed_token(&run[0]) {
+                "[redacted]".to_string()
+            } else {
+                run[0].to_string()
+            }
+        })
+        .to_string()
 }
 
 pub fn secret_message() -> &'static str {
@@ -147,6 +189,8 @@ mod tests {
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
         ));
         assert!(looks_secret("gho_abcdefghijklmnopqrstuvwxyz"));
+        assert!(looks_secret("The deploy token is hunter2hunter2"));
+        assert!(looks_secret("service key AbC9xY2zK7mN4pQ8rS3tU6vW1xY5zA0b"));
     }
 
     #[test]
@@ -158,6 +202,10 @@ mod tests {
             "commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         ));
         assert!(!looks_secret("Password managers are fine to discuss."));
+        assert!(!looks_secret("the token is rotated monthly"));
+        assert!(!looks_secret(
+            "crates/tauri-plugin-sqlite-migrations-and-schema-loader"
+        ));
     }
 
     #[test]

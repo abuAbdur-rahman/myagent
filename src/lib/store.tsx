@@ -33,6 +33,8 @@ import {
 } from "./artifact-versions";
 import { parseExtractedNotes } from "./memory-extract";
 import {
+  hasUntrustedProvenance,
+  projectScopedNotes,
   rollupReason,
   rollupTranscript,
   uniqueRollupNotes,
@@ -240,28 +242,6 @@ const MEMORY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "delete_memory",
 ]);
 
-const UNTRUSTED_MEMORY_TOOLS: ReadonlySet<string> = new Set([
-  "web_search",
-  "web_fetch",
-  "research_run",
-  "run_powershell",
-  "sandbox_run",
-  "sandbox_read",
-  "sandbox_glob",
-  "sandbox_grep",
-  "read_document",
-  "describe_image",
-  "delegate_task",
-]);
-
-function hasUntrustedMemorySource(messages: Message[]): boolean {
-  return messages.some((message) =>
-    db
-      .parseToolLog(message.tool_log)
-      .some((entry) => UNTRUSTED_MEMORY_TOOLS.has(entry.name) || entry.name.startsWith("mcp__")),
-  );
-}
-
 export function settleToolLog(entries: ToolEntry[]): ToolEntry[] {
   return entries.map((entry) =>
     entry.status === "running"
@@ -457,7 +437,11 @@ interface AppContextValue {
   refreshPendingMemories: () => Promise<PendingMemory[]>;
   loadMemories: (scope: MemoryScope, projectId: string | null) => Promise<Memory[]>;
   addMemory: (input: MemoryInput) => Promise<void>;
-  queueMemories: (notes: string[], kind?: MemoryKind) => Promise<PendingMemory[]>;
+  queueMemories: (
+    notes: string[],
+    kind?: MemoryKind,
+    trust?: "trusted" | "untrusted",
+  ) => Promise<PendingMemory[]>;
   editMemory: (
     id: string,
     draft: MemoryDraft,
@@ -1784,7 +1768,11 @@ setKnowledgeSummary([]);
   );
 
   const queueMemories = useCallback(
-    async (notes: string[], kind: MemoryKind = "fact"): Promise<PendingMemory[]> => {
+    async (
+      notes: string[],
+      kind: MemoryKind = "fact",
+      trust: "trusted" | "untrusted" = "trusted",
+    ): Promise<PendingMemory[]> => {
       const scope: MemoryScope = activeProject ? "project" : "global";
       const projectId = activeProject ? activeProject.id : null;
       const now = Date.now();
@@ -1801,7 +1789,7 @@ setKnowledgeSummary([]);
           content,
           conversation_id: activeConversationId,
           created_at: now,
-          trust: "trusted",
+          trust,
         });
       }
       if (rows.length > 0) {
@@ -1854,7 +1842,9 @@ setKnowledgeSummary([]);
             .filter((memory) => memory.project_id === projectId)
             .map((memory) => memory.content),
         ];
-        const proposals = uniqueRollupNotes(parseExtractedNotes(raw), existing);
+        const proposals = projectScopedNotes(
+          uniqueRollupNotes(parseExtractedNotes(raw), existing),
+        );
         const safe: string[] = [];
         for (const proposal of proposals) {
           try {
@@ -1866,7 +1856,7 @@ setKnowledgeSummary([]);
         }
         if (safe.length > 0) {
           const createdAt = Date.now();
-          const trust = hasUntrustedMemorySource(messages) ? "untrusted" : "trusted";
+          const trust = hasUntrustedProvenance(messages) ? "untrusted" : "trusted";
           await db.addPendingMemories(
             safe.map((content, index): PendingMemory => ({
               id: newId(),
@@ -1956,7 +1946,7 @@ setKnowledgeSummary([]);
           kind: row.kind,
           id: row.id,
           date: undefined,
-          trust: "trusted",
+          trust: row.trust,
         });
         approvedMemoryRef.current.set(id, { ...row, content: text });
         await db.dismissPendingMemory(id);
@@ -1988,7 +1978,7 @@ setKnowledgeSummary([]);
             kind: row.kind,
             id: row.id,
             date: undefined,
-            trust: "trusted",
+            trust: row.trust,
           });
           approvedMemoryRef.current.set(row.id, row);
           await db.dismissPendingMemory(row.id);

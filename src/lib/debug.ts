@@ -4,11 +4,21 @@ const MAX_EVENTS = 300;
 
 const events: string[] = [];
 
+const KEY =
+  "api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd|pwd|credential|authorization";
+
 const REDACTIONS: Array<[RegExp, string]> = [
   [/\bsk-[A-Za-z0-9_-]{6,}/g, "sk-[redacted]"],
+  [/\bgh[opsu]_[A-Za-z0-9]{12,}/g, "gh_[redacted]"],
+  [/\bgithub_pat_[A-Za-z0-9_]{12,}/g, "github_pat_[redacted]"],
+  [/\bglpat-[A-Za-z0-9_-]{12,}/g, "glpat-[redacted]"],
+  [/\bxox[bpoas]-[A-Za-z0-9-]{8,}/g, "xox-[redacted]"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "AKIA[redacted]"],
+  [/\bAIza[0-9A-Za-z_-]{30,}/g, "AIza[redacted]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]"],
-  [/\b(api[_-]?key|token|access[_-]?token)=([^&\s"'<>]+)/gi, "$1=[redacted]"],
-  [/("(?:api[_-]?key|apiKey|token|secret|password)"\s*:\s*")[^"]*(")/gi, "$1[redacted]$2"],
+  [new RegExp(`("(?:${KEY})"\\s*:\\s*")[^"]*(")`, "gi"), "$1[redacted]$2"],
+  [new RegExp(`\\b(${KEY})(["']?\\s*[:=]\\s*["']?)[^\\s"'&<>,}]+`, "gi"), "$1$2[redacted]"],
+  [new RegExp(`\\b(${KEY})\\s+(?:is|was)\\s+\\S{12,}`, "gi"), "$1 is [redacted]"],
 ];
 
 function redact(text: string): string {

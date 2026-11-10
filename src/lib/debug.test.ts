@@ -45,6 +45,28 @@ describe("logEvent", () => {
     expect(line).not.toContain("opaque-value");
   });
 
+  it("redacts tokens that are not shaped like an API key", async () => {
+    logEvent(
+      "error",
+      'auth failed {"access_token":"opaque-access","client_secret":"opaque-client"} password=hunter2 password: hunter2hunter2 github_pat_11ABCDEFGHIJKLMNOPQRSTUV xoxb-1234567890-abcdef deploy token is hunter3hunter3',
+    );
+    await vi.waitFor(() => expect(append).toHaveBeenCalled());
+
+    const line = lastLine();
+    for (const secret of [
+      "opaque-access",
+      "opaque-client",
+      "hunter2hunter2",
+      "github_pat_11ABCDEFGHIJKLMNOPQRSTUV",
+      "xoxb-1234567890-abcdef",
+      "hunter3hunter3",
+    ]) {
+      expect(line).not.toContain(secret);
+    }
+    expect(line).toContain('"access_token":"[redacted]"');
+    expect(line).toContain("password=[redacted]");
+  });
+
   it("keeps the newest events when the buffer is full", async () => {
     for (let index = 0; index <= 320; index += 1) {
       logEvent("window.error", `failure ${index}`);

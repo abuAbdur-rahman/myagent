@@ -455,9 +455,13 @@ async fn request_tool_specs(app: &AppHandle, req: &ChatRequest) -> serde_json::V
     if req.subagent {
         strip_tool_spec(&mut specs, "delegate_task");
     }
-    let mcp_tools = crate::mcp::flush(app, req.project_id.as_deref())
-        .await
-        .unwrap_or_default();
+    let mcp_tools = match crate::mcp::flush(app, req.project_id.as_deref()).await {
+        Ok(tools) => tools,
+        Err(error) => {
+            eprintln!("mcp: tool specs unavailable: {error}");
+            Vec::new()
+        }
+    };
     if let Some(list) = specs.as_array_mut() {
         for definition in &mcp_tools {
             list.push(crate::mcp::spec_for(definition));
@@ -1653,6 +1657,8 @@ pub async fn chat_stream(
     result
 }
 
+const MAX_INSPECTION_CHARS: usize = 400_000;
+
 #[derive(Debug, Serialize)]
 pub struct ToolInspection {
     pub name: String,
@@ -1673,28 +1679,35 @@ fn inspect_tokens(value: &serde_json::Value) -> usize {
         .unwrap_or(0)
 }
 
-fn request_secret_pattern() -> &'static regex::Regex {
-    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?i)(sk-[a-z0-9_-]{8,}|gh[opsu]_[a-z0-9]{12,}|Bearer\s+[A-Za-z0-9\-._~+/=]{8,}|(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;}"]+)"#,
-        )
-        .expect("request secret pattern compiles")
-    })
+fn sensitive_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace('-', "_");
+    if normalized == "auth"
+        || normalized.ends_with("_auth")
+        || normalized == "private_key"
+        || normalized == "passwd"
+        || normalized == "pwd"
+        || normalized == "credential"
+    {
+        return true;
+    }
+    [
+        "api_key",
+        "apikey",
+        "authorization",
+        "token",
+        "secret",
+        "password",
+        "credential",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 fn redact_request_value(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, item) in map {
-                let key = key.to_ascii_lowercase();
-                if key.contains("api_key")
-                    || key.contains("apikey")
-                    || key.contains("authorization")
-                    || key == "token"
-                    || key == "password"
-                    || key == "secret"
-                {
+                if sensitive_key(key) {
                     *item = serde_json::Value::String("[redacted]".to_string());
                 } else {
                     redact_request_value(item);
@@ -1707,9 +1720,29 @@ fn redact_request_value(value: &mut serde_json::Value) {
             }
         }
         serde_json::Value::String(text) => {
-            *text = request_secret_pattern()
-                .replace_all(text, "[redacted]")
-                .to_string();
+            *text = crate::memory::redact_secrets(text);
+        }
+        _ => {}
+    }
+}
+
+fn mask_inline_images(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::Object(image)) = map.get_mut("image_url")
+                && let Some(serde_json::Value::String(url)) = image.get_mut("url")
+                && url.starts_with("data:")
+            {
+                *url = "[inline image]".to_string();
+            }
+            for item in map.values_mut() {
+                mask_inline_images(item);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                mask_inline_images(item);
+            }
         }
         _ => {}
     }
@@ -1789,6 +1822,9 @@ pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<
         if let Some(specs) = specs {
             body["tools"] = specs;
         }
+        if wants_stream_usage(req.connection_kind.as_deref()) {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
         if let Some(temperature) = req.temperature {
             body["temperature"] = serde_json::json!(temperature);
         }
@@ -1807,7 +1843,7 @@ pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<
         }
         body
     };
-    redact_request_value(&mut body);
+    mask_inline_images(&mut body);
     let tools = inspected_tools(&body);
     let message_tokens = body
         .get("messages")
@@ -1815,8 +1851,14 @@ pub async fn inspect_request(mut req: ChatRequest, app: AppHandle) -> AppResult<
         .map(inspect_tokens)
         .unwrap_or(0);
     let total_tokens = inspect_tokens(&body);
-    let json = serde_json::to_string_pretty(&body)
+    let mut display = body;
+    redact_request_value(&mut display);
+    let mut json = serde_json::to_string_pretty(&display)
         .map_err(|error| AppError::Internal(format!("inspect request json: {error}")))?;
+    if json.chars().count() > MAX_INSPECTION_CHARS {
+        json = json.chars().take(MAX_INSPECTION_CHARS).collect();
+        json.push_str("\n… truncated for display");
+    }
     Ok(RequestInspection {
         json,
         total_tokens,
@@ -3862,13 +3904,58 @@ mod tests {
         let mut value = serde_json::json!({
             "authorization": "Bearer abcdefghijklmnop",
             "messages": [{"role": "user", "content": "key sk-abcdefghijklmnop123"}],
-            "nested": {"api_key": "plain-secret"}
+            "nested": {"api_key": "plain-secret", "X-Api-Key": "header-secret"}
         });
         redact_request_value(&mut value);
         let text = serde_json::to_string(&value).expect("json");
         assert!(!text.contains("abcdefghijklmnop"));
         assert!(!text.contains("plain-secret"));
+        assert!(!text.contains("header-secret"));
         assert!(text.contains("[redacted]"));
+    }
+
+    #[test]
+    fn request_inspection_redacts_common_credential_shapes() {
+        for key in [
+            "access_token",
+            "refresh_token",
+            "client_secret",
+            "private_key",
+            "auth",
+            "x-api-key",
+            "passwd",
+            "credential",
+        ] {
+            assert!(sensitive_key(key), "{key} should be sensitive");
+        }
+        assert!(!sensitive_key("author"));
+        assert!(!sensitive_key("description"));
+
+        let mut value = serde_json::json!({
+            "note": "password: hunter2hunter2 and api_key=\"quoted-value\" and AKIAIOSFODNN7EXAMPLE",
+            "nested": [{"client_secret": "nested-secret"}],
+            "image": {"image_url": {"url": "data:image/png;base64,AAAA"}}
+        });
+        mask_inline_images(&mut value);
+        redact_request_value(&mut value);
+        let text = serde_json::to_string(&value).expect("json");
+        assert!(!text.contains("hunter2hunter2"));
+        assert!(!text.contains("quoted-value"));
+        assert!(!text.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!text.contains("nested-secret"));
+        assert!(!text.contains("base64,AAAA"));
+    }
+
+    #[test]
+    fn request_inspection_counts_tokens_before_redaction() {
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "x".repeat(400)}]
+        });
+        let original = inspect_tokens(&body);
+        let mut redacted = body.clone();
+        redact_request_value(&mut redacted);
+        assert!(inspect_tokens(&redacted) < original);
+        assert!(original > 0);
     }
 
     #[test]

@@ -37,6 +37,7 @@ import { Markdown } from "./Markdown";
 import { TipTapEditor } from "./composer/TipTapEditor";
 import { splitArtifactSegments, type ContentSegment } from "../lib/artifacts";
 import type { ArtifactLocator } from "../lib/artifact-versions";
+import { hasUntrustedProvenance } from "../lib/memory-rollup";
 import { splitOpenUISegments, type OpenUISegment } from "../lib/openui/segments";
 import { splitVizSegments, type VizSegment } from "../lib/viz";
 import { OpenUIRenderer } from "./openui/OpenUIRenderer";
@@ -982,7 +983,11 @@ export function MessageList() {
         toast("No durable notes found in this reply.");
         return false;
       }
-      const rows = await queueMemories(notes);
+      const rows = await queueMemories(
+        notes,
+        "fact",
+        hasUntrustedProvenance([message]) ? "untrusted" : "trusted",
+      );
       toast(`${rows.length} ${rows.length === 1 ? "note" : "notes"} queued for review.`);
       return rows.length > 0;
     },

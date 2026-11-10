@@ -55,6 +55,28 @@ function fileStem(title: string, ext: string): string {
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name) ? `${name}-artifact` : name;
 }
 
+const MAX_ZIP_VERSIONS = 64;
+const MAX_ZIP_ENTRY_BYTES = 2 * 1024 * 1024;
+const MAX_ZIP_BYTES = 16 * 1024 * 1024;
+
+function bytesOf(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+function zipLimitProblem(versions: { code: string }[]): string | null {
+  if (versions.length > MAX_ZIP_VERSIONS) {
+    return `A zip holds up to ${MAX_ZIP_VERSIONS} versions. Save an earlier one on its own first.`;
+  }
+  const sizes = versions.map((version) => bytesOf(version.code));
+  if (sizes.some((size) => size > MAX_ZIP_ENTRY_BYTES)) {
+    return "One version is over 2 MB, so it cannot go in a zip. Download it on its own.";
+  }
+  if (sizes.reduce((total, size) => total + size, 0) > MAX_ZIP_BYTES) {
+    return "These versions are over 16 MB together, so they cannot go in one zip.";
+  }
+  return null;
+}
+
 function tabsFor(lang: string): { id: PanelTab; label: string }[] {
   const normalized = lang.toLowerCase();
   if (normalized === "html" || normalized === "htm") {
@@ -151,6 +173,11 @@ export function ArtifactsPanel() {
   };
 
   const downloadVersions = async () => {
+    const limit = zipLimitProblem(panelArtifactVersions);
+    if (limit) {
+      toast(limit);
+      return;
+    }
     try {
       const destination = await save({
         defaultPath: `${fileStem(panelArtifact.title, ext)}-versions.zip`,

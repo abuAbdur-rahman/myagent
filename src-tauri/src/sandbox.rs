@@ -1671,13 +1671,18 @@ pub(crate) async fn run_inner(
 }
 
 pub fn configured_project_root(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let root = config(app).project_root?;
-    let root = std::fs::canonicalize(root).ok()?;
-    root.is_dir().then_some(root)
+    project_root(app).ok()
 }
 
 pub fn project_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    configured_project_root(app).ok_or_else(|| "sandbox has no project folder".to_string())
+    let root = config(app)
+        .project_root
+        .ok_or("sandbox has no project folder")?;
+    let root = std::fs::canonicalize(root).map_err(|error| format!("project folder: {error}"))?;
+    if !root.is_dir() {
+        return Err("project folder is not a directory".to_string());
+    }
+    Ok(root)
 }
 
 fn relative_path(rel: &str) -> Result<PathBuf, String> {

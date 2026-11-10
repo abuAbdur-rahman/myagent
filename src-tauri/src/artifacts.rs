@@ -19,12 +19,33 @@ pub struct ArtifactZipEntry {
     content: String,
 }
 
+fn invisible(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+fn reserved_stem(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    lower == "con"
+        || lower == "prn"
+        || lower == "aux"
+        || lower == "nul"
+        || ["com", "lpt"].iter().any(|prefix| {
+            lower.strip_prefix(prefix).is_some_and(|rest| {
+                rest.len() == 1 && ('1'..='9').contains(&rest.chars().next().unwrap_or('0'))
+            })
+        })
+}
+
 fn zip_entry_name(raw: &str, index: usize, used: &mut HashSet<String>) -> String {
     let leaf = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     let cleaned = leaf
         .chars()
         .map(|value| {
-            if value.is_control()
+            if invisible(value)
                 || matches!(value, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
             {
                 ' '
@@ -50,6 +71,11 @@ fn zip_entry_name(raw: &str, index: usize, used: &mut HashSet<String>) -> String
             (stem.to_string(), format!(".{extension}"))
         }
         _ => (base, String::new()),
+    };
+    let stem = if reserved_stem(&stem) {
+        format!("artifact-{stem}")
+    } else {
+        stem
     };
     let mut candidate = format!("{stem}{extension}");
     let mut suffix = 2;
@@ -83,7 +109,32 @@ pub fn artifact_zip_export(
     if path.as_os_str().is_empty() || path.is_dir() {
         return Err("choose a zip file destination".to_string());
     }
-    let file = std::fs::File::create(&path).map_err(|error| format!("create zip: {error}"))?;
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        return Err("choose a .zip file destination".to_string());
+    }
+    let parent = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let temp = parent.join(format!(".myagent-{}.zip.part", uuid::Uuid::new_v4()));
+    let written = write_zip(&temp, &entries);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    std::fs::rename(&temp, &path).map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
+        format!("save zip: {error}")
+    })?;
+    Ok(entries.len())
+}
+
+fn write_zip(path: &std::path::Path, entries: &[ArtifactZipEntry]) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|error| format!("create zip: {error}"))?;
     let mut archive = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -100,7 +151,7 @@ pub fn artifact_zip_export(
     archive
         .finish()
         .map_err(|error| format!("finish zip: {error}"))?;
-    Ok(entries.len())
+    Ok(())
 }
 
 const SHELL: &str = r#"<!doctype html>
@@ -486,6 +537,55 @@ mod tests {
         assert_eq!(content, "<h1>two</h1>");
         drop(archive);
         std::fs::remove_file(&path).expect("remove zip");
+    }
+
+    #[test]
+    fn zip_entry_names_avoid_device_stems_and_invisible_characters() {
+        let mut used = HashSet::new();
+        assert_eq!(
+            zip_entry_name("CON.html", 0, &mut used),
+            "artifact-CON.html"
+        );
+        assert_eq!(zip_entry_name("LPT9", 1, &mut used), "artifact-LPT9");
+        assert_eq!(
+            zip_entry_name("invoice\u{202e}exe.html", 2, &mut used),
+            "invoice exe.html"
+        );
+        assert_eq!(zip_entry_name("console.html", 3, &mut used), "console.html");
+    }
+
+    #[test]
+    fn zip_export_requires_a_zip_destination_and_keeps_the_old_file_on_error() {
+        let dir =
+            std::env::temp_dir().join(format!("myagent-artifact-dest-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        assert!(
+            artifact_zip_export(
+                dir.join("versions.html").to_string_lossy().to_string(),
+                vec![ArtifactZipEntry {
+                    name: "a.html".to_string(),
+                    content: "<h1>a</h1>".to_string(),
+                }],
+            )
+            .is_err()
+        );
+
+        let path = dir.join("versions.zip");
+        std::fs::write(&path, "keep me").expect("seed file");
+        let result = artifact_zip_export(
+            path.to_string_lossy().to_string(),
+            vec![ArtifactZipEntry {
+                name: "a.html".to_string(),
+                content: "<h1>a</h1>".to_string(),
+            }],
+        );
+        assert!(result.is_ok());
+        let entries = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .count();
+        assert_eq!(entries, 1, "no .part file is left behind");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

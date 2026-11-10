@@ -1,18 +1,31 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { openArtifact, exportZip, save } = vi.hoisted(() => ({
+type Version = {
+  id: string;
+  messageId: string;
+  locator: { kind: "tool" | "fence"; index: number };
+  title: string;
+  lang: string;
+  code: string;
+  index: number;
+  total: number;
+};
+
+const h = vi.hoisted(() => ({
   openArtifact: vi.fn(),
   exportZip: vi.fn(async () => 2),
   save: vi.fn(async () => "D:\\versions.zip"),
+  toast: vi.fn(),
+  state: { versions: [] as unknown[] },
 }));
 
-const versions = [
+const versions: Version[] = [
   {
     id: "a1:tool:0",
     messageId: "a1",
-    locator: { kind: "tool" as const, index: 0 },
+    locator: { kind: "tool", index: 0 },
     title: "Page.html",
     lang: "html",
     code: "<h1>one</h1>",
@@ -22,7 +35,7 @@ const versions = [
   {
     id: "a2:tool:0",
     messageId: "a2",
-    locator: { kind: "tool" as const, index: 0 },
+    locator: { kind: "tool", index: 0 },
     title: "Page.html",
     lang: "html",
     code: "<h1>two</h1>",
@@ -34,8 +47,8 @@ const versions = [
 vi.mock("../lib/store", () => ({
   useApp: () => ({
     panelOpen: true,
-    panelArtifact: versions[1],
-    panelArtifactVersions: versions,
+    panelArtifact: (h.state.versions as Version[])[1],
+    panelArtifactVersions: h.state.versions,
     panelTab: "preview",
     panelMode: "dock",
     panelView: "artifact",
@@ -45,15 +58,20 @@ vi.mock("../lib/store", () => ({
     setPanelWidth: vi.fn(),
     showSessionView: vi.fn(),
     closePanel: vi.fn(),
-    openArtifact,
+    openArtifact: h.openArtifact,
   }),
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ save }));
-vi.mock("../lib/api", () => ({ artifactZipExport: exportZip }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: h.save }));
+vi.mock("../lib/api", () => ({ artifactZipExport: h.exportZip }));
+vi.mock("../lib/toast", () => ({ toast: h.toast }));
 vi.mock("./ArtifactPreview", () => ({ ArtifactPreview: () => <div>Preview</div> }));
 
 import { ArtifactsPanel } from "./ArtifactsPanel";
+
+beforeEach(() => {
+  h.state.versions = versions;
+});
 
 afterEach(() => {
   cleanup();
@@ -68,7 +86,7 @@ describe("ArtifactsPanel versions", () => {
       target: { value: "a1:tool:0" },
     });
 
-    expect(openArtifact).toHaveBeenCalledWith(versions[0]);
+    expect(h.openArtifact).toHaveBeenCalledWith(versions[0]);
   });
 
   it("exports every version as a named zip entry", async () => {
@@ -77,10 +95,23 @@ describe("ArtifactsPanel versions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download all artifact versions" }));
 
     await waitFor(() =>
-      expect(exportZip).toHaveBeenCalledWith("D:\\versions.zip", [
+      expect(h.exportZip).toHaveBeenCalledWith("D:\\versions.zip", [
         { name: "01-Page.html", content: "<h1>one</h1>" },
         { name: "02-Page.html", content: "<h1>two</h1>" },
       ]),
     );
+  });
+
+  it("refuses a history the backend cannot zip before asking for a path", () => {
+    h.state.versions = [
+      { ...versions[0], code: "x".repeat(2 * 1024 * 1024 + 1) },
+      versions[1],
+    ];
+    render(<ArtifactsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Download all artifact versions" }));
+
+    expect(h.save).not.toHaveBeenCalled();
+    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining("2 MB"));
   });
 });
