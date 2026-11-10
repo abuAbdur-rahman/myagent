@@ -15,11 +15,12 @@ IDs match `features.md`. `[x]` = do now. `[ ]` = later.
 
 ## Current
 
-- Shipped: through 0.11.0 (UI overhaul, artifact CDN previews, read-aloud, reply
-  timing); 0.11.0 is a release candidate with no tag yet.
+- Release candidate: 0.12.0 (message versions, queued turns, inline visuals,
+  trusted context, checkpoints, diagnostics and artifact version export).
 - Next: 1.0.0. The 0.8.0 plan and the old v1 wishlist are history, not a gate.
-- Status audit 2026-11-08: `features.md` was stale. D8-D10, G7, J4, J10 and H1
-  were corrected in place. Verify a row in code before trusting it.
+- Status audit 2026-11-10: every formerly partial entry was verified and closed.
+  Eleven catalogue entries remain Missing; J14 is separately unshipped. Verify
+  a row in code before trusting it.
 - Scope decision 2026-11-08: 1.0.0 is data safety, daily-driver polish and the
   security gate. Cost control, compare, quick-ask, folders, scheduled runs,
   branch tree and code mode move past 1.0.0.
@@ -48,9 +49,10 @@ closed and the installer passes on a clean Windows machine.
 | [x] | — | Hardening: MCP alias collision, untrusted framing, `SKILL.md` cap, document decompression | Have (0.12.0; PDF streams still uncapped) | M | none |
 | [ ] | — | Clean-machine MCP + computer-use eval, security review, installer check | Planned | M | 0.11.0 |
 
-Deferred past 1.0.0: J2 cost cap, J3 compare, J5 cheap-model routing, J6
-quick-ask, J7 branch tree, J11 scheduled runs, B6 folders, D20/D21 code mode,
-J14 local navigator.
+Deferred past 1.0.0: B6 folders, D6 permission modes, D20 result handles and
+on-demand tool definitions, D21 code mode, E4 project instruction files, J2
+cost cap, J3 compare, J5 cheap-model routing, J6 quick-ask, J7 branch tree, J11
+scheduled runs and J14 local navigator.
 
 ## Now
 

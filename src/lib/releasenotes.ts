@@ -22,6 +22,54 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.12.0",
+    date: "2026-11-10",
+    summary:
+      "Replies keep their regeneration history, turns can queue while streaming, trusted memory is ranked per request, and inline visuals, request inspection, checkpoints and safer artifact exports make daily work easier to understand and recover.",
+    changes: [
+      {
+        kind: "new",
+        text: "Editing or regenerating creates a sibling message version instead of replacing history. Version arrows switch the active thread, and artifacts follow the same regeneration history with a chronological selector and a safe Download all versions ZIP export.",
+      },
+      {
+        kind: "new",
+        text: "Sending while a reply streams queues the next turn. Queued messages stay with their chat and can be expanded, reordered, edited, sent next or removed before they drain one at a time.",
+      },
+      {
+        kind: "new",
+        text: "The /visualize command and viz fences render inline interactive visuals in the artifact sandbox. Mermaid diagrams and KaTeX math render in chat, and /skill opens a searchable enabled-skill picker.",
+      },
+      {
+        kind: "new",
+        text: "Ctrl+K searches message text as well as chats. Temporary chats stay out of search and the sidebar, are visibly badged, and are discarded when left or swept at launch.",
+      },
+      {
+        kind: "improved",
+        text: "Trusted global and project memories are ranked against each turn under one 2,500-character cap. Project chats propose private-safe, deduplicated shared-memory roll-ups on request, every tenth user turn and thread exit.",
+      },
+      {
+        kind: "new",
+        text: "The context inspector shows a redacted estimate of the next provider request, masks inline images and reports request, message and per-tool token estimates. Large inspections remain valid JSON.",
+      },
+      {
+        kind: "new",
+        text: "Sandbox writes capture a checkpoint with a Changes view and confirmed undo. PowerShell starts in the configured project folder, and artifacts can deny screen capture while keeping their existing sandbox.",
+      },
+      {
+        kind: "improved",
+        text: "Global shortcuts cover stop, search, new chat, settings, sidebar and panel. Completion notifications appear while the app is unfocused, and About copies rotating diagnostics with credentials and prompts excluded.",
+      },
+      {
+        kind: "fixed",
+        text: "Credential redaction now covers serialized, escaped, environment and authorization forms; memory trust survives approval and undo; project refresh and roll-up races cannot cross scopes; and oversized request inspection no longer returns broken JSON.",
+      },
+      {
+        kind: "improved",
+        text: "The unified test command runs Vitest, TypeScript and Rust. Recorded SSE fixtures cover success, tools, reasoning, usage and failures, and Delete everything is proven across every database and app-file store.",
+      },
+    ],
+  },
+  {
     version: "0.11.0",
     date: "2026-11-08",
     summary:
