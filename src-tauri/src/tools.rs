@@ -2875,22 +2875,23 @@ mod tests {
 
     #[tokio::test]
     async fn powershell_starts_in_the_resolved_directory() {
-        let dir = std::env::temp_dir();
-        let output = powershell_child(&dir, "Get-Location")
+        let dir =
+            std::env::temp_dir().join(format!("myagent-powershell-cwd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create working directory");
+        std::fs::write(dir.join("cwd-marker"), b"cwd").expect("write marker");
+        let output = powershell_child(&dir, "Test-Path -LiteralPath 'cwd-marker'")
             .output()
             .await
-            .expect("run powershell");
+            .expect("check working directory");
+        std::fs::remove_dir_all(&dir).expect("remove working directory");
         assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-        let expected = dir
-            .display()
-            .to_string()
-            .trim_end_matches(['\\', '/'])
-            .to_lowercase();
         assert!(
-            stdout.contains(&expected),
-            "expected {stdout} to name {}",
-            dir.display()
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .eq_ignore_ascii_case("true"),
+            "PowerShell did not start in {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
