@@ -33,6 +33,19 @@ describe("catalog smoke", () => {
     expect(modelCanSeeImages(caps, "blind")).toBe(false);
   });
 
+  it("trusts a known vision family over a wrong provider flag", () => {
+    const caps = parseBackendCaps([
+      { id: "gpt-5.6-sol", supports_vision: false },
+      { id: "anthropic/claude-sonnet-4", supports_vision: false },
+      { id: "some-new-model", supports_vision: false },
+    ]);
+    expect(lookupVisionSupport(caps, "gpt-5.6-sol")).toBe("yes");
+    expect(lookupVisionSupport(caps, "anthropic/claude-sonnet-4")).toBe("yes");
+    expect(modelCanSeeImages(caps, "gpt-5.6-sol")).toBe(true);
+    expect(lookupVisionSupport(caps, "some-new-model")).toBe("no");
+    expect(modelCanSeeImages(caps, "gpt-5.6-sol", "no")).toBe(false);
+  });
+
   it("reads a known family when the provider reports no modality", () => {
     expect(knownModelVision("gpt-4o")).toBe("yes");
     expect(knownModelVision("anthropic/claude-sonnet-4")).toBe("yes");

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "../lib/api";
+import { readVisualTheme } from "../lib/theme-prompt";
 import { useThemeName } from "../lib/useThemeName";
 import { errorText } from "../lib/utils";
 
@@ -9,18 +10,9 @@ type State =
   | { status: "ready"; url: string }
   | { status: "error"; message: string };
 
-function themeTokens(): Record<string, string> {
-  const style = getComputedStyle(document.documentElement);
-  const read = (name: string) => style.getPropertyValue(name).trim();
-  return {
-    "--myagent-bg": read("--background"),
-    "--myagent-fg": read("--foreground"),
-    "--myagent-muted": read("--muted-foreground"),
-    "--myagent-border": read("--border"),
-    "--myagent-accent": read("--primary"),
-    "--myagent-card": read("--card"),
-    "--myagent-radius": read("--radius"),
-  };
+function themePayload(): { mode: string; tokens: Record<string, string> } {
+  const theme = readVisualTheme();
+  return { mode: theme.mode, tokens: theme.tokens };
 }
 
 export function InlineVisual({ code, isStreaming }: { code: string; isStreaming: boolean }) {
@@ -76,13 +68,20 @@ export function InlineVisual({ code, isStreaming }: { code: string; isStreaming:
 
   const sendTheme = useCallback(() => {
     frameRef.current?.contentWindow?.postMessage(
-      { type: "myagent:theme", tokens: themeTokens() },
+      { type: "myagent:theme", ...themePayload() },
       "*",
     );
   }, []);
 
   useEffect(() => {
-    if (state.status === "ready") sendTheme();
+    if (state.status !== "ready") return;
+    sendTheme();
+    const observer = new MutationObserver(() => sendTheme());
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-accent"],
+    });
+    return () => observer.disconnect();
   }, [state.status, themeName, sendTheme]);
 
   if (isStreaming) {

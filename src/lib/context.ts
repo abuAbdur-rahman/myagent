@@ -46,6 +46,7 @@ export interface ContextInput {
   standingPrompt?: string;
   chatPrompt?: string;
   openuiPrompt?: string;
+  themePrompt?: string;
   /** Model context window in tokens; scales the memory budget. */
   contextLimit?: number;
   /** Local clock shown to the model instead of making it call get_time. */
@@ -155,6 +156,7 @@ function collectBlocks(
   input: ContextInput,
   relevantText: string,
   openuiBlock: string | null,
+  themeBlock: string | null,
 ): Block[] {
   const project = input.project;
   const blocks: (Block | null)[] = [
@@ -168,6 +170,7 @@ function collectBlocks(
     block(input.episodicBlock?.trim() ?? null, "data", 2),
     block(input.knowledgeBlock?.trim() ?? null, "data", 6),
     block(input.skillIndexBlock?.trim() ?? null, "data", 5),
+    block(themeBlock, "instruction"),
     block(openuiBlock, "instruction"),
   ];
   return blocks.filter((entry): entry is Block => entry !== null);
@@ -260,9 +263,13 @@ export function buildSystemPrompt(input: ContextInput): string | null {
     ? "When Generative UI is available, prefer a fenced openui-lang block for visual answers. Use a fenced html page only when the user asks for a standalone page.\n\n" +
       input.openuiPrompt.trim()
     : null;
+  const themeBlock = input.themePrompt?.trim() || null;
   const base = promptBudget(input.contextLimit).total;
-  const budget = base + (openuiBlock ? openuiBlock.length + 2 : 0);
-  return fitBlocks(collectBlocks(input, relevantText, openuiBlock), budget);
+  const budget =
+    base +
+    (openuiBlock ? openuiBlock.length + 2 : 0) +
+    (themeBlock ? themeBlock.length + 2 : 0);
+  return fitBlocks(collectBlocks(input, relevantText, openuiBlock, themeBlock), budget);
 }
 
 export function buildChildSystemPrompt(

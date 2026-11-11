@@ -16,6 +16,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
+    "@lobehub/icons": "^6.15.0",
     "@openuidev/react-lang": "1.1.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "~2.7.3",

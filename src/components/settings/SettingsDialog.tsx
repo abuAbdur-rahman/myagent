@@ -183,7 +183,7 @@ export function SettingsDialog() {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <nav
-          className="flex w-[224px] flex-none flex-col gap-1 overflow-y-auto border-r border-line-subtle bg-sunken px-3 py-5"
+          className="flex w-[224px] flex-none flex-col overflow-y-auto border-r border-line-subtle bg-sunken px-3 pb-8 pt-5"
           aria-label="Settings sections"
         >
           <input
@@ -192,7 +192,7 @@ export function SettingsDialog() {
             placeholder="Search settings"
             aria-label="Search settings"
             autoComplete="off"
-            className="h-8 w-full rounded-field bg-fill-1 px-2.5 text-sm text-fg shadow-[inset_0_0_0_1px_var(--line)] outline-none placeholder:text-fg-3 focus:shadow-[inset_0_0_0_1px_var(--accent-line),0_0_0_3px_var(--accent-ring)]"
+            className="mb-4 h-8 w-full flex-none rounded-field bg-fill-1 px-2.5 text-sm text-fg shadow-[inset_0_0_0_1px_var(--line)] outline-none placeholder:text-fg-3 focus:shadow-[inset_0_0_0_1px_var(--accent-line),0_0_0_3px_var(--accent-ring)]"
           />
           <div className="flex flex-col gap-0.5">
             {navPages.map(({ id, label, icon }) => (
@@ -227,7 +227,7 @@ export function SettingsDialog() {
                   className="flex h-8 items-center gap-2 rounded-field px-2.5 text-left text-sm text-fg-2 hover:bg-fill-2 hover:text-fg"
                 >
                   <span className="min-w-0 truncate">{hit.term}</span>
-                  <span className="ml-auto flex-none text-[11px] text-fg-3">{hit.pageLabel}</span>
+                  <span className="ml-auto flex-none text-xs text-fg-3">{hit.pageLabel}</span>
                 </button>
               ))}
             </div>

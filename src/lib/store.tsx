@@ -12,6 +12,7 @@ import * as db from "./db";
 import * as api from "./api";
 import { applyCompactWindow, applySummaryWindow, buildChildSystemPrompt, buildSystemPrompt, DEFAULT_MODEL_CONTEXT, estimateContext, promptBudget, summarySystemTurn } from "./context";
 import { OPENUI_SYSTEM_PROMPT } from "./openui/prompt";
+import { readVisualTheme, visualThemePrompt } from "./theme-prompt";
 import { buildUserContent, resolveImageSend, searchKnowledgeWithHits, withFinalTurnImages } from "./knowledge";
 import { buildEpisodeBlock, selectEpisodeHits } from "./episodes";
 import {
@@ -79,6 +80,7 @@ import {
 import { KEYLESS_KINDS, fileCommandSchema, memoryInputSchema } from "./types";
 import { errorText, newId } from "./utils";
 import { deriveFallbackTitle, plainTitle } from "./title";
+import { useThemeName } from "./useThemeName";
 import type {
   Connection,
   ConnectionInput,
@@ -432,7 +434,12 @@ interface AppContextValue {
   selectProject: (id: string | null) => void;
   view: View;
   setView: (view: View) => void;
-  startProjectChat: (projectId: string, text: string) => Promise<boolean>;
+  startProjectChat: (
+    projectId: string,
+    text: string,
+    images?: { dataUrl: string }[],
+    docs?: ChatDocument[],
+  ) => Promise<boolean>;
   saveProject: (input: ProjectInput, id?: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
   refreshProjects: () => Promise<void>;
@@ -582,6 +589,7 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const resolvedThemeName = useThemeName();
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
@@ -1679,6 +1687,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
       openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
+      themePrompt: visualThemePrompt(
+        readVisualTheme({ mode: resolvedThemeName, accentId: accent }),
+      ),
       contextLimit: modelContextLimit ?? DEFAULT_MODEL_CONTEXT,
       now: new Date(),
     });
@@ -1730,6 +1741,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     activeConversationId,
     modelContextLimit,
     generativeUi,
+    resolvedThemeName,
+    accent,
   ]);
 
   const resolveEffort = useCallback((): string | null => {
@@ -2442,6 +2455,7 @@ setKnowledgeSummary([]);
       knowledgeBlock: knowledgeBlockRef.current || undefined,
       skillIndexBlock: skillIndexRef.current || undefined,
       openuiPrompt: generativeUi ? OPENUI_SYSTEM_PROMPT : undefined,
+      themePrompt: visualThemePrompt(readVisualTheme()),
       contextLimit: contextLimitRef.current,
       now: new Date(),
     });
@@ -3634,15 +3648,39 @@ setKnowledgeSummary([]);
   );
 
   const startProjectChat = useCallback(
-    async (projectId: string, text: string): Promise<boolean> => {
+    async (
+      projectId: string,
+      text: string,
+      images?: { dataUrl: string }[],
+      docs?: ChatDocument[],
+    ): Promise<boolean> => {
       const connection = connRef.current;
       if (!connection || !modelRef.current || streamConversationId !== null) return false;
+      if (!KEYLESS_KINDS.has(connection.kind)) {
+        let hasKey = false;
+        try {
+          hasKey = await api.hasApiKey(connection.id);
+        } catch (error) {
+          setError(`Couldn't read the saved key for ${connection.name}: ${errorText(error)}`);
+          return false;
+        }
+        if (!hasKey) {
+          setError(`Add an API key for ${connection.name} in Settings → Providers before sending.`);
+          return false;
+        }
+      }
       const trimmed = text.trim();
-      if (!trimmed) return false;
+      if (!trimmed && (images?.length ?? 0) === 0 && (docs?.length ?? 0) === 0) {
+        return false;
+      }
       setError(null);
+      const previousConversationId = convIdRef.current;
+      let createdId: string | null = null;
+      let enteredChat = false;
       try {
         const created = await db.createConversation(connection.id, modelRef.current, projectId);
-        const userMsg = await db.addMessage(created.id, "user", trimmed);
+        createdId = created.id;
+        let userMsg = await db.addMessage(created.id, "user", trimmed);
         const assistantMsg = await db.addMessage(
           created.id,
           "assistant",
@@ -3657,9 +3695,62 @@ setKnowledgeSummary([]);
         setConversations((prev) => [titled, ...prev]);
         setActiveConversationId(created.id);
         setActiveProjectId(projectId);
-        setView("chat");
-        setMessages([userMsg, assistantMsg]);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
+
+        const vision = canSeeImages(connection.id, modelRef.current);
+        const fallback = knownVisionFallback(visionFallbackRef.current, connections);
+        const routed =
+          !vision && fallback !== null && resolveTools() && (images?.length ?? 0) > 0;
+        const gated = resolveImageSend(vision || routed, images ?? []);
+        const fit = fitImageBudget(gated.kept);
+        if (gated.dropped) {
+          toast(imageDropToast(fallback !== null));
+        } else if (fit.dropped > 0) {
+          toast(`${fit.dropped} image(s) dropped to fit the turn budget.`);
+        } else if (routed) {
+          toast("Reading images with the fallback vision model…");
+        }
+        let imagesForPayload = fit.kept;
+        if (imagesForPayload.length > 0) {
+          try {
+            const stamp = Date.now();
+            await Promise.all(
+              imagesForPayload.map((image, index) =>
+                api.spillImageWrite(created.id, `img-${stamp}-${index}`, image.dataUrl),
+              ),
+            );
+          } catch (error) {
+            reportError(error);
+            if (routed) {
+              toast("Couldn't hand images to the vision model — sending text only.");
+              imagesForPayload = [];
+            }
+          }
+        }
+        let documents: ChatDocument[] = [];
+        if ((docs?.length ?? 0) > 0) {
+          const committed = await commitChatDocs(created.id, docs ?? [], projectId);
+          documents = committed.committed;
+          if (committed.failed.length > 0) {
+            toast(`Could not attach: ${committed.failed.join(", ")}`);
+          }
+        }
+        const attachments = [...documents.map(toAttachment), ...imagesForPayload];
+        if (attachments.length > 0) {
+          await db.updateMessageAttachments(userMsg.id, attachments);
+          userMsg = { ...userMsg, attachments: JSON.stringify(attachments) };
+        }
+        setMessages([userMsg, assistantMsg]);
+        enteredChat = true;
+        setView("chat");
+
+        const documentBlock = await buildDocumentBlock(documents, projectId);
+        const userContent = prependDocumentBlock(
+          imagesForPayload.length > 0
+            ? buildUserContent(trimmed, imagesForPayload)
+            : trimmed,
+          documentBlock,
+        );
         const recalled = await recallFor(trimmed, projectId);
         const episodes = await recallEpisodes(trimmed, projectId, created.id);
         const found = await searchKnowledgeWithHits(
@@ -3670,10 +3761,18 @@ setKnowledgeSummary([]);
           console.warn("knowledge: first-turn search failed", error);
           return { block: "", hits: [] as api.KnowledgeHit[] };
         });
-        knowledgeBlockRef.current = found.block;
+        knowledgeBlockRef.current =
+          gated.dropped || fit.dropped > 0
+            ? [
+                found.block,
+                "[Some attached images were removed: no vision support or over budget.]",
+              ]
+                .filter(Boolean)
+                .join("\n\n")
+            : found.block;
         setKnowledgeSummary(found.hits);
         auditTurn(created.id, trimmed, recalled, found.hits, episodes);
-        const firstTurns = [{ role: "user", content: trimmed }];
+        const firstTurns = [{ role: "user", content: userContent }];
         await streamTurn(
           created.id,
           connection,
@@ -3685,15 +3784,31 @@ setKnowledgeSummary([]);
         scheduleTurnRollup(created.id, projectId, 1, trimmed);
         return true;
       } catch (e) {
+        if (createdId && !enteredChat) {
+          await db.deleteConversation(createdId).catch((cleanupError) => {
+            console.warn("project chat: rollback failed", cleanupError);
+          });
+          await api.deleteSpill(createdId).catch(() => undefined);
+          conversationsRef.current = conversationsRef.current.filter(
+            (conversation) => conversation.id !== createdId,
+          );
+          setConversations((current) =>
+            current.filter((conversation) => conversation.id !== createdId),
+          );
+          setActiveConversationId(previousConversationId);
+        }
         reportError(e);
         return false;
       }
     },
     [
       projects,
+      canSeeImages,
+      connections,
       streamConversationId,
       streamTurn,
       buildPayload,
+      resolveTools,
       maybeGenerateTitle,
       recallFor,
       recallEpisodes,

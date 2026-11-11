@@ -173,9 +173,49 @@ document.getElementById("artifact-frame").srcdoc = artifact;
 </body>
 </html>"#;
 
+const INLINE_BASE_STYLE: &str = r#"<style>
+:root {
+  color-scheme: dark;
+  --myagent-bg: #232220;
+  --myagent-card: #2b2a27;
+  --myagent-raised: #32312d;
+  --myagent-fg: #ebe8e2;
+  --myagent-muted: #b4afa6;
+  --myagent-border: rgba(255, 248, 235, 0.12);
+  --myagent-accent: oklch(0.55 0.14 38);
+  --myagent-accent-text: oklch(0.78 0.12 38);
+  --myagent-accent-soft: oklch(0.7 0.14 38 / 0.16);
+  --myagent-success: #6cc48a;
+  --myagent-warning: #e6b055;
+  --myagent-danger: #f0757c;
+  --myagent-info: #7db1f0;
+  --myagent-radius: 12px;
+  --myagent-font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+html {
+  background: transparent;
+}
+body {
+  visibility: hidden;
+  margin: 0;
+  background: var(--myagent-bg);
+  color: var(--myagent-fg);
+  font-family: var(--myagent-font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+</style>"#;
+
 const INLINE_REPORTER: &str = r#"<script>
 (function () {
   var last = 0;
+  var revealed = false;
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    if (document.body) document.body.style.visibility = "";
+  }
   function report() {
     var root = document.documentElement;
     var body = document.body;
@@ -189,12 +229,17 @@ const INLINE_REPORTER: &str = r#"<script>
     var data = event.data;
     if (!data || data.type !== "myagent:theme" || !data.tokens) return;
     var root = document.documentElement;
+    if (data.mode === "light" || data.mode === "dark") {
+      root.style.colorScheme = data.mode;
+    }
     Object.keys(data.tokens).forEach(function (name) {
       var value = data.tokens[name];
-      if (typeof value === "string" && /^[\w#(),.%\s-]{1,80}$/.test(value)) {
+      if (typeof value === "string" && /^[\w#'"(),.%\/\s-]{1,120}$/.test(value)) {
         root.style.setProperty(name, value);
       }
     });
+    reveal();
+    report();
   });
   window.addEventListener("load", report);
   window.addEventListener("resize", report);
@@ -203,6 +248,7 @@ const INLINE_REPORTER: &str = r#"<script>
   }
   setTimeout(report, 50);
   setTimeout(report, 400);
+  setTimeout(reveal, 300);
 })();
 </script>"#;
 
@@ -300,11 +346,34 @@ fn shell_response(html: &str) -> Response<Vec<u8>> {
     }
 }
 
-fn inline_html(html: &str) -> String {
+fn with_base_style(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
+    if let Some(start) = lower.find("<head")
+        && let Some(offset) = html[start..].find('>')
+    {
+        let at = start + offset + 1;
+        return format!("{}{}{}", &html[..at], INLINE_BASE_STYLE, &html[at..]);
+    }
+    if let Some(start) = lower.find("<body")
+        && let Some(offset) = html[start..].find('>')
+    {
+        let at = start + offset + 1;
+        return format!("{}{}{}", &html[..at], INLINE_BASE_STYLE, &html[at..]);
+    }
+    format!("{INLINE_BASE_STYLE}{html}")
+}
+
+fn inline_html(html: &str) -> String {
+    let styled = with_base_style(html);
+    let lower = styled.to_ascii_lowercase();
     match lower.rfind("</body>") {
-        Some(index) => format!("{}{}{}", &html[..index], INLINE_REPORTER, &html[index..]),
-        None => format!("{html}{INLINE_REPORTER}"),
+        Some(index) => format!(
+            "{}{}{}",
+            &styled[..index],
+            INLINE_REPORTER,
+            &styled[index..]
+        ),
+        None => format!("{styled}{INLINE_REPORTER}"),
     }
 }
 
@@ -483,12 +552,33 @@ mod tests {
         assert!(reporter < body);
         assert!(html.contains("myagent:height"));
         assert!(html.contains("myagent:theme"));
+        assert!(html.contains(r#".%\/\s-"#));
     }
 
     #[test]
     fn inline_html_appends_the_reporter_without_a_body() {
         let html = inline_html("<h1>x</h1>");
         assert!(html.ends_with(INLINE_REPORTER));
+    }
+
+    #[test]
+    fn inline_html_adds_theme_defaults_before_the_page_styles() {
+        let styled = inline_html(
+            "<html><head><style>body { color: red }</style></head><body><p>x</p></body></html>",
+        );
+        let base = styled.find(INLINE_BASE_STYLE).expect("base style present");
+        let page = styled.find("color: red").expect("page style present");
+        assert!(base < page);
+        assert!(styled.contains("--myagent-accent"));
+        assert!(styled.contains("visibility: hidden"));
+
+        let fragment = inline_html("<h1>x</h1>");
+        assert!(fragment.starts_with(INLINE_BASE_STYLE));
+
+        let no_head = inline_html("<body class=\"x\"><p>y</p></body>");
+        let base = no_head.find(INLINE_BASE_STYLE).expect("base style present");
+        let body = no_head.find("<p>y</p>").expect("content present");
+        assert!(base < body);
     }
 
     #[test]

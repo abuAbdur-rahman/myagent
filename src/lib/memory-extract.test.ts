@@ -31,6 +31,38 @@ describe("parseExtractedNotes", () => {
     expect(parseExtractedNotes(JSON.stringify(["1", "2", "3", "4", "5", "6"]))).toHaveLength(5);
   });
 
+  it("keeps only candidates scored 0.75 or higher", () => {
+    expect(
+      parseExtractedNotes(
+        JSON.stringify([
+          { text: "Ships on Fridays", score: 0.91 },
+          { text: "Debugged a regex today", score: 0.4 },
+          { text: "Prefers pnpm", score: "0.8" },
+          { content: "Uses Windows", confidence: 0.75 },
+          { note: "Likes tea", score: 0.2 },
+        ]),
+      ),
+    ).toEqual(["Ships on Fridays", "Prefers pnpm", "Uses Windows"]);
+  });
+
+  it("returns nothing when every candidate scores below the bar", () => {
+    expect(
+      parseExtractedNotes(JSON.stringify([{ text: "One-off detail", score: 0.5 }])),
+    ).toEqual([]);
+  });
+
+  it("requires object candidates to provide a numeric score", () => {
+    expect(
+      parseExtractedNotes(
+        JSON.stringify([
+          { text: "Missing score" },
+          { text: "Boolean score", score: true },
+          { text: "Out of range", score: 2 },
+        ]),
+      ),
+    ).toEqual(["Out of range"]);
+  });
+
   it("finds the array after prose or another bracket", () => {
     expect(parseExtractedNotes('Notes [see below]: ["Keeps vim"]')).toEqual(["Keeps vim"]);
     expect(parseExtractedNotes('See [1] then ["Uses pnpm"]')).toEqual(["Uses pnpm"]);

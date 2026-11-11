@@ -504,7 +504,7 @@ pub fn tool_specs(
             "type": "function",
             "function": {
                 "name": "remember",
-                "description": "Propose a durable fact about the user. Use only when the user asks to remember something or states a lasting preference. An explicit request is saved immediately and the user can undo it; anything else waits for approval in an inline card, so do not claim it is saved.",
+                "description": "Propose a durable fact about the user. Use only when the user asks to remember something, states a lasting preference, or shares a stable fact likely to matter again (score it at least 0.75 out of 1 before proposing). Never propose one-off requests, task narration, transient details or facts the user has not stated. An explicit request is saved immediately and the user can undo it; anything else waits for approval in an inline card, so do not claim it is saved.",
                 "parameters": {
                     "type": "object",
                     "properties": {

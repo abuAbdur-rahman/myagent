@@ -111,9 +111,11 @@ export function lookupVisionSupport(
   modelId: string,
 ): VisionSupport {
   const entry = catalog?.find((m) => m.id === modelId);
+  const known = knownModelVision(modelId);
   if (entry?.supportsVision === true) return "yes";
+  if (known === "yes") return "yes";
   if (entry?.supportsVision === false) return "no";
-  return knownModelVision(modelId);
+  return known;
 }
 
 export function modelCanSeeImages(
