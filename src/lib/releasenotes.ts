@@ -22,6 +22,46 @@ export const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 export const RELEASES: readonly Release[] = [
   {
+    version: "0.13.0",
+    date: "2026-11-12",
+    summary:
+      "Projects and providers get card grids built for scanning, project chats send files and voice notes without leaving the page, and visuals, memory, vision and theme handling no longer guess wrong.",
+    changes: [
+      {
+        kind: "new",
+        text: "Projects open as a card grid with review and activity chips, and a project page splits into the chat and a context rail. Starting a project chat stays on the page: attach files or images, dictate with the mic, and the first turn carries the attachments.",
+      },
+      {
+        kind: "improved",
+        text: "Attached files are deduplicated per project, extracted text follows the project, and images that arrive without a MIME type are read from their extension instead of being refused.",
+      },
+      {
+        kind: "new",
+        text: "Providers are listed as cards with OpenRouter, DeepSeek and Ollama brand marks, and the add-provider dialog is a tile picker. The provider picker moves focus with the arrow keys, so Space and Enter no longer reopen the previous provider.",
+      },
+      {
+        kind: "fixed",
+        text: "Inline visuals render again: the injected frame report reveals the page body instead of leaving the default hidden style in force.",
+      },
+      {
+        kind: "improved",
+        text: "Memory extraction asks for scored facts and keeps only what clears the salience threshold, so vague notes stay out of durable memory.",
+      },
+      {
+        kind: "fixed",
+        text: "Vision follows the model families the app already knows and honours the manual override instead of trusting a catalog that reports no image support.",
+      },
+      {
+        kind: "new",
+        text: "Inline frames receive the app mode, accent and token names, so visuals match the theme they are opened in. The same theme block is bounded and counted in the context budget.",
+      },
+      {
+        kind: "fixed",
+        text: "A project-chat start can no longer hijack a later selection or restore a stale project over it, late attachment results are discarded after a switch, and a failed start rolls back only while it still owns the selection.",
+      },
+    ],
+  },
+  {
     version: "0.12.0",
     date: "2026-11-10",
     summary:
