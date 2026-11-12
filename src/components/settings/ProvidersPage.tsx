@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, CircleAlert, Eye, EyeOff, Pencil, PlugZap, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { useApp } from "../../lib/store";
 import * as api from "../../lib/api";
@@ -57,9 +57,11 @@ function ProviderKindPicker({
   onChange: (kind: ProviderKind) => void;
 }) {
   const activeIndex = PROVIDER_KINDS.indexOf(value);
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
   const move = (step: number) => {
     const next = (activeIndex + step + PROVIDER_KINDS.length) % PROVIDER_KINDS.length;
     onChange(PROVIDER_KINDS[next]);
+    buttons.current[next]?.focus();
   };
   return (
     <div role="radiogroup" aria-label="Provider type" className="grid grid-cols-2 gap-2">
@@ -68,6 +70,9 @@ function ProviderKindPicker({
         return (
           <button
             key={kind}
+            ref={(node) => {
+              buttons.current[position] = node;
+            }}
             type="button"
             role="radio"
             aria-checked={active}

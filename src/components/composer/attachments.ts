@@ -44,12 +44,27 @@ const EXTENSION_MIMES: Record<string, string> = {
   ods: "application/vnd.oasis.opendocument.spreadsheet",
 };
 
+const IMAGE_EXTENSION_MIMES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
 function mimeForFile(name: string, declared: string): string {
   if (declared) return declared;
   const dot = name.lastIndexOf(".");
   if (dot < 0) return "";
   const ext = name.slice(dot + 1).toLowerCase();
   return EXTENSION_MIMES[ext] ?? "";
+}
+
+function imageTypeOf(file: File): string {
+  if (file.type) return file.type;
+  const dot = file.name.lastIndexOf(".");
+  if (dot < 0) return "";
+  return IMAGE_EXTENSION_MIMES[file.name.slice(dot + 1).toLowerCase()] ?? "";
 }
 
 export interface DocChip {
@@ -75,7 +90,7 @@ export function isDocChip(chip: AttachChip): chip is DocChip {
 }
 
 export function isDocFile(file: File): boolean {
-  return !isSupportedImage(file.type);
+  return !isSupportedImage(imageTypeOf(file));
 }
 
 async function buildImageChip(file: File, index: number): Promise<ImageChip | null> {
@@ -85,7 +100,10 @@ async function buildImageChip(file: File, index: number): Promise<ImageChip | nu
     return null;
   }
   try {
-    const downscaled = await downscaleImage(file);
+    const typed = file.type
+      ? file
+      : new File([file], file.name, { type: imageTypeOf(file) });
+    const downscaled = await downscaleImage(typed);
     return {
       key: `img-${index}-${Date.now()}`,
       kind: "image",
@@ -144,7 +162,7 @@ async function pickChip(
   conversationId: string | null,
   docsLeft: number,
 ): Promise<AttachChip | null> {
-  if (isSupportedImage(file.type)) return buildImageChip(file, index);
+  if (isSupportedImage(imageTypeOf(file))) return buildImageChip(file, index);
   if (docsLeft <= 0) return null;
   return buildDocChip(file, index, conversationId);
 }

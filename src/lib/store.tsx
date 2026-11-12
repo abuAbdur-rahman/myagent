@@ -3675,6 +3675,7 @@ setKnowledgeSummary([]);
       }
       setError(null);
       const previousConversationId = convIdRef.current;
+      const previousProject = projectRef.current;
       let createdId: string | null = null;
       let enteredChat = false;
       try {
@@ -3740,6 +3741,19 @@ setKnowledgeSummary([]);
           await db.updateMessageAttachments(userMsg.id, attachments);
           userMsg = { ...userMsg, attachments: JSON.stringify(attachments) };
         }
+        if (convIdRef.current !== created.id) {
+          await db.deleteConversation(created.id).catch((cleanupError) => {
+            console.warn("project chat: abandoned start cleanup failed", cleanupError);
+          });
+          await api.deleteSpill(created.id).catch(() => undefined);
+          conversationsRef.current = conversationsRef.current.filter(
+            (conversation) => conversation.id !== createdId,
+          );
+          setConversations((current) =>
+            current.filter((conversation) => conversation.id !== createdId),
+          );
+          return false;
+        }
         setMessages([userMsg, assistantMsg]);
         enteredChat = true;
         setView("chat");
@@ -3796,6 +3810,8 @@ setKnowledgeSummary([]);
             current.filter((conversation) => conversation.id !== createdId),
           );
           setActiveConversationId(previousConversationId);
+          setActiveProjectId(previousProject?.id ?? null);
+          projectRef.current = previousProject;
         }
         reportError(e);
         return false;

@@ -214,7 +214,7 @@ const INLINE_REPORTER: &str = r#"<script>
   function reveal() {
     if (revealed) return;
     revealed = true;
-    if (document.body) document.body.style.visibility = "";
+    if (document.body) document.body.style.visibility = "visible";
   }
   function report() {
     var root = document.documentElement;
@@ -571,6 +571,10 @@ mod tests {
         assert!(base < page);
         assert!(styled.contains("--myagent-accent"));
         assert!(styled.contains("visibility: hidden"));
+        assert!(
+            INLINE_REPORTER.contains(r#"document.body.style.visibility = "visible""#),
+            "the reporter must override the base hidden rule"
+        );
 
         let fragment = inline_html("<h1>x</h1>");
         assert!(fragment.starts_with(INLINE_BASE_STYLE));

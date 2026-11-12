@@ -175,11 +175,35 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachingRef = useRef(false);
   const startingChatRef = useRef(false);
-  const chipsRef = useRef(chips);
-  chipsRef.current = chips;
+  const chipsRef = useRef<AttachChip[]>([]);
+  const mountedRef = useRef(true);
+  const projectIdRef = useRef<string | null>(activeProject?.id ?? null);
+
+  useEffect(() => {
+    chipsRef.current = chips;
+  }, [chips]);
+
+  useEffect(() => {
+    projectIdRef.current = activeProject?.id ?? null;
+  }, [activeProject?.id]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const voice = useVoiceInput((text) => {
     setDraft((current) => `${current}${current.trim() ? " " : ""}${text}`);
   }, streaming || attaching || startingChat);
+
+  useEffect(() => {
+    if (!voice.recording) return;
+    const stopLost = () => voice.cancel();
+    window.addEventListener("blur", stopLost);
+    return () => window.removeEventListener("blur", stopLost);
+  }, [voice.recording, voice.cancel]);
 
   useEffect(() => {
     setName(activeProject?.name ?? "");
@@ -334,22 +358,30 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
 
   const attachFiles = async (files: File[]) => {
     if (files.length === 0 || attachingRef.current || startingChatRef.current) return;
+    const origin = project.id;
     attachingRef.current = true;
     setAttaching(true);
     try {
       const room = MAX_DOCS_PER_TURN - docChipsIn(chipsRef.current);
       const added = await collectChips(files, null, room);
+      if (!mountedRef.current || projectIdRef.current !== origin) {
+        for (const chip of added) {
+          if (isDocChip(chip)) void releaseChatDoc(chip.doc, []);
+        }
+        return;
+      }
       setChips((current) => [...current, ...added]);
       if (files.filter(isDocFile).length > room) {
         toast(`Up to ${MAX_DOCS_PER_TURN} documents per message.`);
       }
     } finally {
       attachingRef.current = false;
-      setAttaching(false);
+      if (mountedRef.current) setAttaching(false);
     }
   };
 
   const removeChip = (key: string) => {
+    if (startingChatRef.current) return;
     const chip = chipsRef.current.find((item) => item.key === key);
     const remaining = chipsRef.current.filter((item) => item.key !== key);
     setChips(remaining);
@@ -446,8 +478,9 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
                       <button
                         type="button"
                         onClick={() => removeChip(chip.key)}
+                        disabled={startingChat}
                         aria-label={`Remove ${chip.name}`}
-                        className="grid h-5 w-5 flex-none place-items-center rounded-chip text-fg-3 hover:bg-fill-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line"
+                        className="grid h-5 w-5 flex-none place-items-center rounded-chip text-fg-3 hover:bg-fill-2 hover:text-fg disabled:text-text-off focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line"
                       >
                         <X size={12} />
                       </button>
@@ -510,6 +543,7 @@ export function ProjectDetail({ onBack }: { onBack: () => void }) {
                   onPointerUp={() => void voice.stop()}
                   onPointerCancel={voice.cancel}
                   onLostPointerCapture={voice.cancel}
+                  onBlur={voice.cancel}
                   onKeyDown={(event) => {
                     if (event.repeat) return;
                     if (event.key === " " || event.key === "Enter") {

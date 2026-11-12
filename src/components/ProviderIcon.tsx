@@ -1,10 +1,8 @@
-import DeepSeek from "@lobehub/icons/es/DeepSeek/components/Mono";
-import Ollama from "@lobehub/icons/es/Ollama/components/Mono";
-import OpenRouter from "@lobehub/icons/es/OpenRouter/components/Mono";
 import type { ComponentType } from "react";
 
 import type { ProviderKind } from "../lib/types";
 import { cn } from "../lib/utils";
+import { DeepSeekMark, OllamaMark, OpenRouterMark } from "./ProviderMarks";
 
 interface BrandGlyphProps {
   size?: number | string;
@@ -19,22 +17,22 @@ interface Brand {
 
 const BRANDS: Partial<Record<ProviderKind, Brand>> = {
   openrouter: {
-    Icon: OpenRouter,
+    Icon: OpenRouterMark,
     tint: "var(--provider-openrouter)",
     soft: "var(--provider-openrouter-soft)",
   },
   deepseek: {
-    Icon: DeepSeek,
+    Icon: DeepSeekMark,
     tint: "var(--provider-deepseek)",
     soft: "var(--provider-deepseek-soft)",
   },
   ollama: {
-    Icon: Ollama,
+    Icon: OllamaMark,
     tint: "var(--text)",
     soft: "var(--fill-2)",
   },
   "ollama-cloud": {
-    Icon: Ollama,
+    Icon: OllamaMark,
     tint: "var(--warning)",
     soft: "var(--warning-soft)",
   },
@@ -60,18 +58,14 @@ export function ProviderIcon({
 }) {
   const brand = BRANDS[kind];
   const glyph = Math.max(12, Math.round(size * 0.56));
-  const shared = {
-    width: size,
-    height: size,
-    "aria-hidden": true,
-  } as const;
+  const box = { width: size, height: size } as const;
 
   if (brand) {
     return (
       <span
-        {...shared}
+        aria-hidden
         className={cn("grid flex-none place-items-center rounded-field", className)}
-        style={{ background: brand.soft }}
+        style={{ ...box, background: brand.soft }}
       >
         <brand.Icon size={glyph} color={brand.tint} />
       </span>
@@ -80,12 +74,12 @@ export function ProviderIcon({
 
   return (
     <span
-      {...shared}
+      aria-hidden
       className={cn(
         "grid flex-none place-items-center rounded-field bg-fill-2 font-semibold text-fg-2",
         className,
       )}
-      style={{ fontSize: Math.max(10, Math.round(size * 0.34)) }}
+      style={{ ...box, fontSize: Math.max(10, Math.round(size * 0.34)) }}
     >
       {monogramOf(kind)}
     </span>
