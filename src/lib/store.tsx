@@ -3694,6 +3694,7 @@ setKnowledgeSummary([]);
         const titled = { ...created, title };
         conversationsRef.current = [titled, ...conversationsRef.current];
         setConversations((prev) => [titled, ...prev]);
+        convIdRef.current = created.id;
         setActiveConversationId(created.id);
         setActiveProjectId(projectId);
         projectRef.current = projects.find((item) => item.id === projectId) ?? null;
@@ -3799,6 +3800,7 @@ setKnowledgeSummary([]);
         return true;
       } catch (e) {
         if (createdId && !enteredChat) {
+          const owned = convIdRef.current === createdId;
           await db.deleteConversation(createdId).catch((cleanupError) => {
             console.warn("project chat: rollback failed", cleanupError);
           });
@@ -3809,9 +3811,12 @@ setKnowledgeSummary([]);
           setConversations((current) =>
             current.filter((conversation) => conversation.id !== createdId),
           );
-          setActiveConversationId(previousConversationId);
-          setActiveProjectId(previousProject?.id ?? null);
-          projectRef.current = previousProject;
+          if (owned && convIdRef.current === createdId) {
+            convIdRef.current = previousConversationId;
+            projectRef.current = previousProject;
+            setActiveConversationId(previousConversationId);
+            setActiveProjectId(previousProject?.id ?? null);
+          }
         }
         reportError(e);
         return false;
