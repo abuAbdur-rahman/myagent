@@ -1296,8 +1296,8 @@ pub struct ExtractMemoryRequest {
     pub mode: Option<String>,
 }
 
-const MEMORY_SYSTEM: &str = "You extract durable memory from an assistant reply. Reply with ONLY a JSON array of 1-5 short strings: facts, preferences, decisions or constraints worth remembering in future conversations. No task narration, no code, no markdown fences, no commentary. Each string under 240 characters. If nothing is durable, reply with [].";
-const PROJECT_ROLLUP_SYSTEM: &str = "You extract durable shared project memory from a private chat transcript. Reply with ONLY a JSON array of 1-5 short strings. Include only lasting project facts, decisions, constraints, or stable conventions useful in another project thread. Exclude personal details, transcript quotes, task narration, temporary status, speculation, credentials, and secrets. Paraphrase rather than copying sentences. Each string must be factual and under 240 characters. If nothing belongs in shared project memory, reply with [].";
+const MEMORY_SYSTEM: &str = "You extract durable memory from an assistant reply. Reply with ONLY a JSON array of 0-5 objects shaped {\"text\": \"...\", \"score\": 0.0}. Each text is one short fact, preference, decision or constraint the user would still want remembered in a later conversation. Score how likely that is true and durable, from 0 to 1. Include only candidates scored 0.75 or higher; return [] when nothing clears that bar. Exclude task narration, code, one-off details, restatements of the question, speculation, credentials and secrets. No markdown fences, no commentary. Each text under 240 characters.";
+const PROJECT_ROLLUP_SYSTEM: &str = "You extract durable shared project memory from a private chat transcript. Reply with ONLY a JSON array of 0-5 objects shaped {\"text\": \"...\", \"score\": 0.0}. Each text is one lasting project fact, decision, constraint or stable convention useful in another project thread. Score how likely that is durable and reusable, from 0 to 1. Include only candidates scored 0.75 or higher; return [] when nothing clears that bar. Exclude personal details, transcript quotes, task narration, temporary status, speculation, credentials and secrets. Paraphrase rather than copying sentences. Each text must be factual and under 240 characters.";
 
 fn memory_system(mode: Option<&str>) -> AppResult<&'static str> {
     match mode {
@@ -3955,6 +3955,7 @@ mod tests {
         assert!(prompt.contains("shared project memory"));
         assert!(prompt.contains("Exclude personal details"));
         assert!(prompt.contains("transcript quotes"));
+        assert!(prompt.contains("0.75"));
         assert!(memory_system(Some("unknown")).is_err());
     }
 

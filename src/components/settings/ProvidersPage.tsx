@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, CircleAlert, Eye, EyeOff, Pencil, PlugZap, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { useApp } from "../../lib/store";
 import * as api from "../../lib/api";
@@ -14,11 +14,10 @@ import {
   type ProviderKind,
 } from "../../lib/types";
 import { Button, Dialog, IconButton, Input, Pill, Spinner, type PillTone } from "../ui";
-import { Select } from "../ui/select";
 import { ProviderIcon } from "../ProviderIcon";
 import { confirmDialog } from "../ConfirmDialog";
 import { toast } from "../../lib/toast";
-import { errorText, rollbackConnection } from "../../lib/utils";
+import { cn, errorText, rollbackConnection } from "../../lib/utils";
 import { timeAgo } from "../../lib/grouping";
 import { KEY_STATUS_TEXT, keyStatus, type KeyStatus } from "../../lib/providers";
 
@@ -37,6 +36,78 @@ const STATUS_TONE: Record<KeyStatus, PillTone> = {
   untested: "warn",
   connected: "success",
 };
+
+const PROVIDER_BLURBS: Record<ProviderKind, string> = {
+  openrouter: "One key for many hosted models",
+  agentrouter: "Agent Router proxy endpoint",
+  deepseek: "DeepSeek's own API",
+  "ollama-cloud": "Hosted Ollama models",
+  ollama: "Models running on this PC",
+  custom: "Any OpenAI-compatible API",
+};
+
+const PICKER_FOCUS =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line focus-visible:ring-offset-2 focus-visible:ring-offset-overlay";
+
+function ProviderKindPicker({
+  value,
+  onChange,
+}: {
+  value: ProviderKind;
+  onChange: (kind: ProviderKind) => void;
+}) {
+  const activeIndex = PROVIDER_KINDS.indexOf(value);
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const move = (step: number) => {
+    const next = (activeIndex + step + PROVIDER_KINDS.length) % PROVIDER_KINDS.length;
+    onChange(PROVIDER_KINDS[next]);
+    buttons.current[next]?.focus();
+  };
+  return (
+    <div role="radiogroup" aria-label="Provider type" className="grid grid-cols-2 gap-2">
+      {PROVIDER_KINDS.map((kind, position) => {
+        const active = kind === value;
+        return (
+          <button
+            key={kind}
+            ref={(node) => {
+              buttons.current[position] = node;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active || (activeIndex < 0 && position === 0) ? 0 : -1}
+            onClick={() => onChange(kind)}
+            onKeyDown={(event) => {
+              const step =
+                event.key === "ArrowRight" || event.key === "ArrowDown"
+                  ? 1
+                  : event.key === "ArrowLeft" || event.key === "ArrowUp"
+                    ? -1
+                    : 0;
+              if (!step) return;
+              event.preventDefault();
+              move(step);
+            }}
+            className={cn(
+              "flex min-w-0 items-center gap-2.5 rounded-card px-2.5 py-2 text-left transition-colors",
+              active
+                ? "bg-accent-soft text-fg shadow-[inset_0_0_0_1px_var(--accent-line)]"
+                : "bg-fill-1 text-fg-2 shadow-[inset_0_0_0_1px_var(--line-subtle)] hover:bg-fill-2 hover:text-fg",
+              PICKER_FOCUS,
+            )}
+          >
+            <ProviderIcon kind={kind} size={28} />
+            <span className="min-w-0 flex-1">
+              <b className="block truncate text-xs font-medium">{PROVIDER_LABELS[kind]}</b>
+              <span className="block truncate text-xs text-fg-3">{PROVIDER_BLURBS[kind]}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function KeyPill({
   connection,
@@ -94,6 +165,7 @@ function ProviderKeyField({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={connection ? "Leave blank, or add another key" : "sk-…"}
+            aria-label="API key"
             autoComplete="off"
           />
           <Button
@@ -330,9 +402,9 @@ export function ProviderDialog({
   return (
     <Dialog open={open} onClose={onClose} title={connection ? "Edit provider" : "Add provider"}>
       <div className="flex flex-col gap-2.5">
-        <label className="flex flex-col gap-1 text-xs text-fg-3">
-          Type
-          <Select
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs text-fg-3">Provider type</span>
+          <ProviderKindPicker
             value={kind}
             onChange={(next) => {
               setKind(next);
@@ -342,23 +414,19 @@ export function ProviderDialog({
                 setName(PROVIDER_LABELS[next]);
               }
             }}
-            options={PROVIDER_KINDS.map((value) => ({
-              value,
-              label: PROVIDER_LABELS[value],
-              icon: <ProviderIcon kind={value} size={18} />,
-            }))}
           />
-        </label>
+        </div>
         <label className="flex flex-col gap-1 text-xs text-fg-3">
           Name
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
+          <Input aria-label="Provider name" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
         <label className="flex flex-col gap-1 text-xs text-fg-3">
           Base URL
-          <Input
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://"
+           <Input
+             value={baseUrl}
+             onChange={(e) => setBaseUrl(e.target.value)}
+             placeholder="https://"
+             aria-label="Base URL"
           />
         </label>
         <ProviderKeyField
@@ -371,10 +439,11 @@ export function ProviderDialog({
         />
         <label className="flex flex-col gap-1 text-xs text-fg-3">
           Default model <span className="text-fg-3">(optional)</span>
-          <Input
-            value={defaultModel}
-            onChange={(e) => setDefaultModel(e.target.value)}
-            placeholder="e.g. anthropic/claude-sonnet-4"
+           <Input
+             value={defaultModel}
+             onChange={(e) => setDefaultModel(e.target.value)}
+             placeholder="e.g. anthropic/claude-sonnet-4"
+             aria-label="Default model"
           />
         </label>
         {status && (
@@ -657,127 +726,143 @@ export function ProvidersPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-end">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="m-0 text-xs text-fg-3">
+          {connections.length} provider{connections.length === 1 ? "" : "s"} · keys stay on this
+          device
+        </p>
         <Button variant="primary" onClick={() => setDialog({ open: true, connection: null })}>
           <Plus size={16} /> Add provider
         </Button>
       </div>
 
       {connections.length === 0 && (
-        <div className="flex flex-col items-center gap-2.5 py-6 text-center">
-          <PlugZap size={40} className="text-fg-3" />
-          <h3 className="m-0 text-sm font-semibold">No providers yet</h3>
+        <div className="flex flex-col items-center gap-3 rounded-card bg-raised px-6 py-10 text-center shadow-[inset_0_0_0_1px_var(--line)]">
+          <span className="grid h-12 w-12 place-items-center rounded-full bg-fill-2 text-fg-3">
+            <PlugZap size={22} />
+          </span>
+          <div>
+            <h3 className="m-0 text-sm font-semibold">No providers yet</h3>
+            <p className="mb-0 mt-1 text-xs text-fg-3">
+              Add OpenRouter, DeepSeek, Ollama or any OpenAI-compatible API.
+            </p>
+          </div>
           <Button variant="primary" onClick={() => setDialog({ open: true, connection: null })}>
             Add your first provider
           </Button>
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        {connections.map((connection) => {
-          const state = keyState[connection.id];
-          const tested = connection.key_tested_at;
-          return (
-            <div
-              key={connection.id}
-              className="rounded-card bg-fill-1 p-4 shadow-[inset_0_0_0_1px_var(--line-subtle)]"
-              data-setting-term={connection.name}
-            >
-              <div className="flex items-center gap-3">
-                <ProviderIcon kind={connection.kind} size={36} title={connection.name} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <b className="truncate text-sm font-semibold">{connection.name}</b>
-                    <KeyPill connection={connection} state={state} />
-                  </div>
-                  <div className="truncate font-mono text-xs text-fg-3">{connection.base_url}</div>
-                </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={testingId === connection.id}
-                  onClick={() => void test(connection)}
-                >
-                  {testingId === connection.id ? <Spinner label="Testing…" /> : "Test"}
-                </Button>
-                {state && state.keys.length > 0 && (
-                  <IconButton
-                    label={`Remove all stored keys for ${connection.name}`}
-                    title="Remove all stored keys"
-                    size={28}
-                    onClick={() => void removeKey(connection)}
-                  >
-                    <RotateCcw size={14} />
-                  </IconButton>
-                )}
-                <IconButton
-                  label={`Edit ${connection.name}`}
-                  size={28}
-                  onClick={() => setDialog({ open: true, connection })}
-                >
-                  <Pencil size={14} />
-                </IconButton>
-                <IconButton
-                  label={`Delete ${connection.name}`}
-                  size={28}
-                  className="hover:bg-danger-soft hover:text-danger"
-                  onClick={() => void remove(connection)}
-                >
-                  <Trash2 size={14} />
-                </IconButton>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-subtle pt-2.5 text-xs text-fg-3">
-                {state && state.keys.length > 1 && <span>{state.keys.length} keys</span>}
-                {state?.error && <span className="text-danger">{state.error}</span>}
-                {tested ? (
-                  <span>Tested {timeAgo(tested)}</span>
-                ) : state?.hint ? (
-                  <span>Never tested</span>
-                ) : null}
-              </div>
-
-              {state && state.keys.length > 0 && (
-                <div className="mt-2 flex flex-col gap-1">
-                  {state.keys.map((key) => (
-                    <div
-                      key={key.index}
-                      className="flex items-center gap-2 text-xs text-fg-3"
-                    >
-                      <span className="font-mono text-fg-2">{key.hint}</span>
-                      {key.cooldown_secs !== null && (
-                        <span className="text-warning">
-                          Cooling down {Math.ceil(key.cooldown_secs / 60)} min
-                        </span>
-                      )}
-                      <IconButton
-                        label={`Remove key ${key.hint} for ${connection.name}`}
-                        title="Remove this key"
-                        size={24}
-                        onClick={() => void removeOneKey(connection, key.index)}
-                      >
-                        <X size={12} />
-                      </IconButton>
+      <div className="@container">
+        <div className="grid grid-cols-1 gap-3 @[640px]:grid-cols-2">
+          {connections.map((connection) => {
+            const state = keyState[connection.id];
+            const tested = connection.key_tested_at;
+            return (
+              <div
+                key={connection.id}
+                className="flex flex-col rounded-card bg-raised p-4 shadow-[inset_0_0_0_1px_var(--line)]"
+                data-setting-term={connection.name}
+              >
+                <div className="flex items-start gap-3">
+                  <ProviderIcon kind={connection.kind} size={38} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <b className="truncate text-sm font-semibold">{connection.name}</b>
+                      <KeyPill connection={connection} state={state} />
                     </div>
-                  ))}
+                    <div className="truncate font-mono text-xs text-fg-3">{connection.base_url}</div>
+                  </div>
                 </div>
-              )}
-              {testState[connection.id] && (
-                <p
-                  className={
-                    testState[connection.id].ok
-                      ? "mt-1.5 text-xs text-success"
-                      : "mt-1.5 text-xs text-danger"
-                  }
-                  role="status"
-                >
-                  {testState[connection.id].text}
-                </p>
-              )}
-              <ProviderModels connection={connection} />
-            </div>
-          );
-        })}
+  
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-3">
+                  {state && state.keys.length > 1 && <span>{state.keys.length} keys</span>}
+                  {state?.error && <span className="text-danger">{state.error}</span>}
+                  {tested ? (
+                    <span>Tested {timeAgo(tested)}</span>
+                  ) : state?.hint ? (
+                    <span>Never tested</span>
+                  ) : null}
+                </div>
+  
+                {state && state.keys.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {state.keys.map((key) => (
+                      <div
+                        key={key.index}
+                        className="flex items-center gap-2 text-xs text-fg-3"
+                      >
+                        <span className="font-mono text-fg-2">{key.hint}</span>
+                        {key.cooldown_secs !== null && (
+                          <span className="text-warning">
+                            Cooling down {Math.ceil(key.cooldown_secs / 60)} min
+                          </span>
+                        )}
+                        <IconButton
+                          label={`Remove key ${key.hint} for ${connection.name}`}
+                          title="Remove this key"
+                          size={24}
+                          onClick={() => void removeOneKey(connection, key.index)}
+                        >
+                          <X size={12} />
+                        </IconButton>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {testState[connection.id] && (
+                  <p
+                    className={
+                      testState[connection.id].ok
+                        ? "mt-1.5 text-xs text-success"
+                        : "mt-1.5 text-xs text-danger"
+                    }
+                    role="status"
+                  >
+                    {testState[connection.id].text}
+                  </p>
+                )}
+                <ProviderModels connection={connection} />
+  
+                <div className="mt-auto flex items-center justify-end gap-1 border-t border-line-subtle pt-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={testingId === connection.id}
+                    onClick={() => void test(connection)}
+                  >
+                    {testingId === connection.id ? <Spinner label="Testing…" /> : "Test"}
+                  </Button>
+                  {state && state.keys.length > 0 && (
+                    <IconButton
+                      label={`Remove all stored keys for ${connection.name}`}
+                      title="Remove all stored keys"
+                      size={28}
+                      onClick={() => void removeKey(connection)}
+                    >
+                      <RotateCcw size={14} />
+                    </IconButton>
+                  )}
+                  <IconButton
+                    label={`Edit ${connection.name}`}
+                    size={28}
+                    onClick={() => setDialog({ open: true, connection })}
+                  >
+                    <Pencil size={14} />
+                  </IconButton>
+                  <IconButton
+                    label={`Delete ${connection.name}`}
+                    size={28}
+                    className="hover:bg-danger-soft hover:text-danger"
+                    onClick={() => void remove(connection)}
+                  >
+                    <Trash2 size={14} />
+                  </IconButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <p className="mt-3 flex items-center gap-1.5 text-xs text-fg-3">

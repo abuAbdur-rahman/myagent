@@ -1,11 +1,34 @@
 const MAX_NOTES = 5;
 const MAX_LENGTH = 240;
+const MIN_SCORE = 0.75;
 
 class MemoryParseError extends Error {
   constructor() {
     super("Could not read the extracted notes");
     this.name = "MemoryParseError";
   }
+}
+
+interface Candidate {
+  text: string;
+  score: number;
+}
+
+function candidateOf(item: unknown): Candidate | null {
+  if (typeof item === "string") return { text: item, score: 1 };
+  if (item === null || typeof item !== "object" || Array.isArray(item)) return null;
+  const record = item as Record<string, unknown>;
+  const text = record.text ?? record.content ?? record.note;
+  if (typeof text !== "string") return null;
+  const raw = record.score ?? record.confidence;
+  const parsed =
+    typeof raw === "number" ? raw : typeof raw === "string" ? Number.parseFloat(raw) : 0;
+  const score = Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : 0;
+  return { text, score };
+}
+
+function looksLikeCandidates(value: unknown[]): boolean {
+  return value.length === 0 || value.some((item) => candidateOf(item) !== null);
 }
 
 function findArray(text: string): unknown[] | null | undefined {
@@ -16,10 +39,7 @@ function findArray(text: string): unknown[] | null | undefined {
     while (end !== -1) {
       try {
         const value: unknown = JSON.parse(text.slice(start, end + 1));
-        if (
-          Array.isArray(value) &&
-          (value.length === 0 || value.some((item) => typeof item === "string"))
-        ) {
+        if (Array.isArray(value) && looksLikeCandidates(value)) {
           return value;
         }
       } catch {
@@ -40,8 +60,9 @@ export function parseExtractedNotes(raw: string): string[] {
   const seen = new Set<string>();
   const notes: string[] = [];
   for (const item of parsed) {
-    if (typeof item !== "string") continue;
-    const note = item.replace(/\s+/g, " ").trim().slice(0, MAX_LENGTH);
+    const candidate = candidateOf(item);
+    if (!candidate || candidate.score < MIN_SCORE) continue;
+    const note = candidate.text.replace(/\s+/g, " ").trim().slice(0, MAX_LENGTH);
     if (!note) continue;
     const key = note.toLowerCase();
     if (seen.has(key)) continue;
